@@ -1,0 +1,9 @@
+{
+  "environment": "test",
+  "apiEndpoint": "https://sandbox.zenopay.example/v1",
+  "apiKey": "",
+  "webhookUrl": "https://admin.osmani.tv/webhooks/zenopay",
+  "lastTestAt": null,
+  "lastTestOk": null,
+  "lastTestMessage": ""
+}

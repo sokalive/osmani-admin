@@ -1,0 +1,43 @@
+import { useMemo } from 'react'
+import { Eye } from 'lucide-react'
+
+/**
+ * Full channel list + red watcher pills — uses global `.dashboard-card` sizing.
+ */
+function MostWatchedChannelsListCard({ channels, className = 'dashboard-card' }) {
+  const sorted = useMemo(
+    () => [...channels].sort((a, b) => b.watchers - a.watchers),
+    [channels],
+  )
+
+  return (
+    <article
+      className={`border border-slate-600/35 shadow-[0_12px_28px_rgba(0,0,0,0.22)] ${className}`}
+      style={{
+        background: 'linear-gradient(180deg, #0f172a 0%, #020617 100%)',
+      }}
+    >
+      <div className="card-header flex items-center gap-2 border-b border-slate-700/60 pb-3">
+        <Eye className="h-5 w-5 shrink-0 text-white" aria-hidden />
+        <h2 className="text-base font-bold tracking-tight text-white">Most Watched Channels</h2>
+      </div>
+
+      <div className="card-content">
+        <ul className="channel-list">
+          {sorted.map((row) => (
+            <li key={row.id} className="channel-item min-h-0">
+              <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-white">
+                {row.name}
+              </span>
+              <span className="watcher-badge shrink-0 tabular-nums">
+                {row.watchers.toLocaleString()} watchers
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </article>
+  )
+}
+
+export default MostWatchedChannelsListCard

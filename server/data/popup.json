@@ -1,0 +1,12 @@
+{
+  "mode": "once",
+  "title": "Welcome to Osmani TV",
+  "greeting": "Hello!",
+  "introduction": "Discover live sports, movies, and family channels in one place.",
+  "bullets": [
+    "HD streams where available",
+    "Manage subscriptions anytime",
+    "Support via WhatsApp"
+  ],
+  "disclaimer": "Content availability may vary by region."
+}

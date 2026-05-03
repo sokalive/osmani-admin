@@ -1,0 +1,8 @@
+{
+  "transferMode": "confirmation",
+  "dailyLimit": 5,
+  "weeklyLimit": 15,
+  "cooldownMinutes": 60,
+  "pending": [],
+  "logs": []
+}

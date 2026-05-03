@@ -1,0 +1,105 @@
+import { Pencil, Trash2 } from 'lucide-react'
+import ToggleSwitch from './ToggleSwitch'
+
+function ChannelRow({
+  channel,
+  selected,
+  onToggleSelected,
+  onToggleAccess,
+  onEdit,
+  onDelete,
+  justAdded = false,
+}) {
+  const premium = channel.accessPremium === true
+
+  return (
+    <tr
+      className={`group border-b border-white/[0.06] transition-colors duration-300 last:border-b-0 hover:bg-white/[0.045] ${
+        justAdded
+          ? 'bg-amber-500/[0.12] shadow-[0_0_24px_rgba(251,191,36,0.12)] ring-1 ring-amber-400/40 ring-inset'
+          : ''
+      }`}
+    >
+      <td className="w-12 px-5 py-5 align-middle">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelected()}
+          className="h-4 w-4 rounded border-slate-500/80 bg-slate-900/80 text-emerald-500 focus:ring-emerald-500/40 focus:ring-offset-0 focus:ring-offset-transparent"
+          aria-label={`Select ${channel.name}`}
+        />
+      </td>
+      <td className="min-w-[200px] px-5 py-5 align-middle">
+        <div className="flex min-w-0 items-center gap-4">
+          <div
+            className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-base font-bold text-white shadow-md ring-1 ring-white/15 ${channel.logoGradient}`}
+          >
+            {channel.logoLetter}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-[15px] font-bold leading-tight tracking-tight text-white">
+              {channel.name}
+            </p>
+            <p className="mt-1 truncate text-xs font-medium text-slate-500 lg:hidden">
+              {channel.category}
+            </p>
+          </div>
+        </div>
+      </td>
+      <td className="hidden px-5 py-5 align-middle lg:table-cell">
+        <span className="text-sm text-slate-500">{channel.category}</span>
+      </td>
+      <td className="px-5 py-5 align-middle">
+        <div className="flex flex-wrap items-center gap-3">
+          <ToggleSwitch
+            checked={premium}
+            onChange={(next) => onToggleAccess(next)}
+            aria-label={`${premium ? 'Premium' : 'Free'} access for ${channel.name}`}
+          />
+          {premium ? (
+            <span className="inline-flex items-center rounded-lg bg-yellow-500/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-yellow-300 ring-1 ring-yellow-400/35 shadow-[0_0_12px_rgba(234,179,8,0.12)]">
+              Premium
+            </span>
+          ) : (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Free
+            </span>
+          )}
+        </div>
+      </td>
+      <td className="px-5 py-5 align-middle">
+        {channel.live ? (
+          <span className="inline-flex items-center rounded-lg bg-emerald-500/20 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-emerald-300 shadow-[0_0_16px_rgba(34,197,94,0.25)] ring-1 ring-emerald-400/45">
+            Live
+          </span>
+        ) : (
+          <span className="inline-flex items-center rounded-lg bg-slate-700/50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400 ring-1 ring-slate-600/50">
+            Offline
+          </span>
+        )}
+      </td>
+      <td className="w-28 px-5 py-5 align-middle">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-xl p-2.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-amber-300"
+            aria-label={`Edit ${channel.name}`}
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="rounded-xl p-2.5 text-slate-400 transition-colors hover:bg-red-500/15 hover:text-red-400"
+            aria-label={`Delete ${channel.name}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+export default ChannelRow

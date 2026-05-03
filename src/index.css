@@ -1,0 +1,260 @@
+@import 'tailwindcss';
+
+:root {
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    'Fira Sans',
+    'Droid Sans',
+    'Helvetica Neue',
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0b0f1a;
+}
+
+@keyframes live-badge-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+  }
+  50% {
+    opacity: 0.92;
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.15);
+  }
+}
+
+.live-badge {
+  animation: live-badge-pulse 2s ease-in-out infinite;
+}
+
+/* Side status badges — breathing pulse (inner element; entry animation stays on parent) */
+@keyframes pulseGlowFree {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+    box-shadow: 0 0 25px rgba(34, 197, 94, 0.6);
+  }
+}
+
+@keyframes pulseGlowEmergency {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+    box-shadow: 0 0 25px rgba(239, 68, 68, 0.6);
+  }
+}
+
+@keyframes pulseGlowMaintenance {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+    box-shadow: 0 0 25px rgba(245, 158, 11, 0.6);
+  }
+}
+
+.status-badge-pulse-free {
+  animation: pulseGlowFree 1.8s ease-in-out infinite;
+  transform-origin: center;
+  will-change: transform, opacity, box-shadow;
+}
+
+.status-badge-pulse-emergency {
+  animation: pulseGlowEmergency 1.8s ease-in-out infinite;
+  transform-origin: center;
+  will-change: transform, opacity, box-shadow;
+}
+
+.status-badge-pulse-maintenance {
+  animation: pulseGlowMaintenance 1.8s ease-in-out infinite;
+  transform-origin: center;
+  will-change: transform, opacity, box-shadow;
+}
+
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(71, 85, 105, 0.6) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgba(71, 85, 105, 0.55);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.65);
+}
+
+/* Dashboard — unified card grid + fixed-size cards */
+.dashboard-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: stretch;
+}
+
+.dashboard-card {
+  box-sizing: border-box;
+  width: 320px;
+  height: 520px;
+  min-width: 320px;
+  max-width: 320px;
+  min-height: 520px;
+  max-height: 520px;
+  flex-shrink: 0;
+  border-radius: 20px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: hidden;
+  transition: none;
+}
+
+.card-header {
+  flex: 0 0 auto;
+}
+
+.card-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: #22c55e transparent;
+}
+
+.card-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.card-content::-webkit-scrollbar-thumb {
+  background: #22c55e;
+  border-radius: 10px;
+}
+
+.card-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Stat cards — stack from top (Total App Installs, Peak Viewers) */
+.card-total {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.card-total-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: #ffffff;
+  opacity: 0.7;
+}
+
+.card-total-number {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #ffffff;
+}
+
+.channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.channel-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.channel-item:last-child {
+  border-bottom: none;
+}
+
+/* Live User Locations (Peak Viewers slot) */
+.live-locations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.live-location-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.live-location-row:last-child {
+  border-bottom: none;
+}
+
+.watcher-badge,
+.dashboard-mwc-watchers-pill {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #ff3b3b;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow: 0 0 10px rgba(255, 59, 59, 0.6);
+}

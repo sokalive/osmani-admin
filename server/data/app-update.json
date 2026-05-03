@@ -1,0 +1,8 @@
+{
+  "softUpdate": true,
+  "forceUpdate": false,
+  "autoDownload": true,
+  "source": "inapp",
+  "apkUrl": "https://cdn.osmani.tv/releases/osmani-latest.apk",
+  "sha256": ""
+}
