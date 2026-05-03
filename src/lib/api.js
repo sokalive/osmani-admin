@@ -1,6 +1,6 @@
 const ORIGIN =
   (import.meta.env.VITE_API_BASE_URL && String(import.meta.env.VITE_API_BASE_URL).replace(/\/$/, '')) ||
-  'https://osmani-tv.onrender.com'
+  'https://osmani-admin-api.onrender.com'
 
 export const API_ORIGIN = ORIGIN
 export const API_BASE = `${ORIGIN}/api`
@@ -74,6 +74,12 @@ export async function apiDelete(path) {
   return body
 }
 
+async function parseJsonSafeResponse(res) {
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
 /** --- Channels --- */
 export async function getChannels() {
   const data = await apiGet('/channels')
@@ -86,6 +92,20 @@ export function addChannel(data) {
 
 export function updateChannel(id, data) {
   return apiPut(`/channels/${encodeURIComponent(id)}`, data)
+}
+
+export function addChannelFormData(formData) {
+  return fetch(joinPath('/channels'), {
+    method: 'POST',
+    body: formData,
+  }).then(parseJsonSafeResponse)
+}
+
+export function updateChannelFormData(id, formData) {
+  return fetch(joinPath(`/channels/${encodeURIComponent(id)}`), {
+    method: 'PUT',
+    body: formData,
+  }).then(parseJsonSafeResponse)
 }
 
 export function deleteChannel(id) {

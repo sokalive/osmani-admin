@@ -4,12 +4,14 @@ import ChannelRow from '../components/ChannelRow'
 import ChannelsToolbar from '../components/ChannelsToolbar'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { addChannel, deleteChannel, getChannels, updateChannel } from '../lib/api'
 import {
-  apiBodyFromFormSubmit,
-  apiBodyFromUiChannel,
-  uiFromApiRow,
-} from '../lib/channelApiModel'
+  addChannelFormData,
+  deleteChannel,
+  getChannels,
+  updateChannel,
+  updateChannelFormData,
+} from '../lib/api'
+import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '../lib/channelApiModel'
 
 function ChannelsPage() {
   const { showToast } = useToast()
@@ -110,11 +112,11 @@ function ChannelsPage() {
 
   async function handleModalSubmit(submitPayload) {
     try {
-      const body = apiBodyFromFormSubmit(submitPayload)
+      const fd = channelFormDataFromSubmit(submitPayload)
       if (editingChannel) {
-        await updateChannel(editingChannel.id, body)
+        await updateChannelFormData(editingChannel.id, fd)
       } else {
-        await addChannel(body)
+        await addChannelFormData(fd)
       }
       await loadChannels()
       closeModal()

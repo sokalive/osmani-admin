@@ -8,9 +8,29 @@ const CATEGORY_GRADIENTS = {
   General: 'from-indigo-600 to-purple-700',
 }
 
+const API_ORIGIN =
+  (import.meta.env.VITE_API_BASE_URL && String(import.meta.env.VITE_API_BASE_URL).replace(/\/$/, '')) ||
+  'https://osmani-admin-api.onrender.com'
+
+function resolveThumbnailUrl(c) {
+  const rel = c?.thumbnail
+  const abs = c?.thumbnailUrl
+  if (typeof abs === 'string' && abs.startsWith('http')) return abs
+  if (typeof rel === 'string' && rel.startsWith('http')) return rel
+  if (typeof rel === 'string' && rel.startsWith('/')) return `${API_ORIGIN}${rel}`
+  return null
+}
+
 /** API row → UI channel object for table + modal */
 export function uiFromApiRow(c) {
   const category = c.category || 'General'
+  const accessPremium =
+    c.accessType === 'premium' || Boolean(c.accessPremium === true || c.access_premium === true)
+  const live = c.isLive !== undefined ? Boolean(c.isLive) : Boolean(c.live)
+  const hd = c.isHD !== undefined ? Boolean(c.isHD) : c.hd !== false
+  const active = c.isActive !== undefined ? Boolean(c.isActive) : c.active !== false
+  const showInApp = c.showInApp !== undefined ? Boolean(c.showInApp) : c.show_in_app !== false
+
   return {
     id: String(c.id),
     name: c.name ?? '',
@@ -19,11 +39,11 @@ export function uiFromApiRow(c) {
     bottomTabsDisplay: c.bottomTabsDisplay ?? category,
     logoLetter: (c.name?.[0] ?? '?').toUpperCase(),
     logoGradient: CATEGORY_GRADIENTS[category] || 'from-indigo-600 to-purple-700',
-    accessPremium: Boolean(c.accessPremium),
-    live: Boolean(c.live),
-    hd: c.hd !== false,
-    active: c.active !== false,
-    showInApp: c.showInApp !== false,
+    accessPremium,
+    live,
+    hd,
+    active,
+    showInApp,
     streamUrlPrimary: c.url ?? '',
     backupStream1: c.backupStream1 ?? '',
     backupStream2: c.backupStream2 ?? '',
@@ -31,11 +51,43 @@ export function uiFromApiRow(c) {
     referer: c.referer ?? '',
     userAgent: c.userAgent ?? '',
     playerType: c.playerType ?? 'Exo',
-    thumbnailUrl: c.thumbnailUrl ?? null,
+    thumbnailUrl: resolveThumbnailUrl(c),
   }
 }
 
-/** Modal submit payload → JSON body for POST/PUT */
+/** Build multipart FormData for POST/PUT /api/channels */
+export function channelFormDataFromSubmit(submitPayload) {
+  const s = submitPayload
+  const fd = new FormData()
+  fd.append('name', (s.name ?? '').trim())
+  fd.append('url', (s.streamUrlPrimary ?? '').trim())
+  fd.append('category', ((s.displaySection ?? 'General').trim() || 'General'))
+  fd.append('isLive', String(Boolean(s.live)))
+  fd.append('isHD', String(s.hd !== false))
+  fd.append('isActive', String(s.active !== false))
+  fd.append('showInApp', String(s.showInApp !== false))
+  fd.append('accessType', s.accessPremium ? 'premium' : 'free')
+  fd.append('backupStream1', (s.backupStream1 ?? '').trim())
+  fd.append('backupStream2', (s.backupStream2 ?? '').trim())
+  fd.append('origin', (s.origin ?? '').trim())
+  fd.append('referer', (s.referer ?? '').trim())
+  fd.append('userAgent', (s.userAgent ?? '').trim())
+  fd.append('playerType', ((s.playerType ?? 'Exo').trim() || 'Exo'))
+
+  if (s.thumbnailFile instanceof Blob) {
+    fd.append('thumbnail', s.thumbnailFile, s.thumbnailFile.name || 'thumbnail.jpg')
+  } else if (
+    typeof s.thumbnailPreviewUrl === 'string' &&
+    s.thumbnailPreviewUrl &&
+    !s.thumbnailPreviewUrl.startsWith('blob:')
+  ) {
+    fd.append('existingThumbnail', s.thumbnailPreviewUrl)
+  }
+
+  return fd
+}
+
+/** Modal submit payload → JSON body (quick toggles / non-file updates) */
 export function apiBodyFromFormSubmit(s) {
   return {
     name: s.name?.trim() ?? '',
@@ -47,18 +99,19 @@ export function apiBodyFromFormSubmit(s) {
     referer: (s.referer ?? '').trim(),
     userAgent: (s.userAgent ?? '').trim(),
     playerType: (s.playerType ?? 'Exo').trim() || 'Exo',
-    accessPremium: Boolean(s.accessPremium),
-    live: Boolean(s.live),
-    hd: s.hd !== false,
-    active: s.active !== false,
+    accessType: s.accessPremium ? 'premium' : 'free',
+    isLive: Boolean(s.live),
+    isHD: s.hd !== false,
+    isActive: s.active !== false,
     showInApp: s.showInApp !== false,
-    thumbnailUrl: typeof s.thumbnailPreviewUrl === 'string' && !s.thumbnailPreviewUrl.startsWith('blob:')
-      ? s.thumbnailPreviewUrl
-      : null,
+    thumbnailUrl:
+      typeof s.thumbnailPreviewUrl === 'string' && !s.thumbnailPreviewUrl.startsWith('blob:')
+        ? s.thumbnailPreviewUrl
+        : null,
   }
 }
 
-/** UI channel → API body (e.g. toggle access / quick PATCH-style update) */
+/** UI channel → API JSON body (e.g. toggle access) */
 export function apiBodyFromUiChannel(ch) {
   return {
     name: ch.name ?? '',
@@ -70,10 +123,10 @@ export function apiBodyFromUiChannel(ch) {
     referer: ch.referer ?? '',
     userAgent: ch.userAgent ?? '',
     playerType: ch.playerType ?? 'Exo',
-    accessPremium: Boolean(ch.accessPremium),
-    live: Boolean(ch.live),
-    hd: ch.hd !== false,
-    active: ch.active !== false,
+    accessType: ch.accessPremium ? 'premium' : 'free',
+    isLive: Boolean(ch.live),
+    isHD: ch.hd !== false,
+    isActive: ch.active !== false,
     showInApp: ch.showInApp !== false,
     thumbnailUrl: ch.thumbnailUrl ?? null,
   }
