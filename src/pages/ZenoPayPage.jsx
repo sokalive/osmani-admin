@@ -3,14 +3,17 @@ import { CheckCircle2, Loader2, Wifi, XCircle } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
+import { API_ORIGIN } from '../lib/api'
 import { getZenopaySettings, postZenopayTest, putZenopaySettings } from '../lib/api'
 
 function defaultSettings() {
   return {
-    environment: 'test',
+    environment: 'sandbox',
     apiEndpoint: '',
     accountId: '',
     apiKey: '',
+    hasApiKey: false,
+    apiKeyMasked: '',
     webhookUrl: '',
     lastTestAt: null,
     lastTestOk: null,
@@ -35,19 +38,31 @@ function ZenoPayPage() {
   const { showToast } = useToast()
   const [cfg, setCfg] = useState(() => defaultSettings())
   const [draft, setDraft] = useState(() => ({ ...defaultSettings() }))
+  const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [flash, setFlash] = useState(null)
+
+  const defaultWebhook = `${String(API_ORIGIN).replace(/\/$/, '')}/api/webhooks/zenopay`
 
   const loadSettings = useCallback(async () => {
     try {
       const s = await getZenopaySettings()
-      const merged = { ...defaultSettings(), ...s }
+      const merged = {
+        ...defaultSettings(),
+        ...s,
+        environment: String(s?.environment || 'sandbox').toLowerCase(),
+        apiEndpoint: s?.apiEndpoint ?? s?.api_endpoint ?? '',
+        accountId: s?.accountId ?? s?.account_id ?? '',
+        webhookUrl: s?.webhookUrl ?? s?.webhook_url ?? defaultWebhook,
+        hasApiKey: Boolean(s?.hasApiKey),
+        apiKeyMasked: String(s?.apiKeyMasked || '******'),
+      }
       setCfg(merged)
-      setDraft(merged)
+      setDraft({ ...merged, apiKey: '' })
     } catch (e) {
       showToast('error', e?.message || 'Could not load ZenoPay settings')
     }
-  }, [showToast])
+  }, [defaultWebhook, showToast])
 
   useEffect(() => {
     let cancelled = false
@@ -65,8 +80,8 @@ function ZenoPayPage() {
       draft.environment !== cfg.environment ||
       draft.apiEndpoint !== cfg.apiEndpoint ||
       draft.accountId !== cfg.accountId ||
-      draft.apiKey !== cfg.apiKey ||
-      draft.webhookUrl !== cfg.webhookUrl,
+      draft.webhookUrl !== cfg.webhookUrl ||
+      draft.apiKey.trim() !== '',
     [draft, cfg],
   )
 
@@ -77,40 +92,48 @@ function ZenoPayPage() {
 
   async function handleSave(e) {
     e.preventDefault()
+    setSaving(true)
     try {
-      const saved = await putZenopaySettings(draft)
+      const payload = {
+        environment: draft.environment,
+        apiEndpoint: draft.apiEndpoint.trim(),
+        accountId: draft.accountId.trim(),
+        webhookUrl: draft.webhookUrl.trim() || defaultWebhook,
+      }
+      if (draft.apiKey.trim()) payload.apiKey = draft.apiKey.trim()
+      const saved = await putZenopaySettings(payload)
       setCfg(saved)
-      setDraft(saved)
+      setDraft((prev) => ({ ...saved, apiKey: prev.apiKey }))
       showFlash('success', 'ZenoPay settings saved.')
+      showToast('success', 'ZenoPay settings saved.')
     } catch (err) {
       showToast('error', err?.message || 'Save failed')
+    } finally {
+      setSaving(false)
     }
   }
 
   async function handleTestConnection() {
     setTesting(true)
     try {
-      const result = await postZenopayTest({
-        apiEndpoint: draft.apiEndpoint,
-        apiKey: draft.apiKey,
-        accountId: draft.accountId,
-      })
-      const ok = result?.ok === true
+      const result = await postZenopayTest({})
+      const ok = result?.success === true
       const msg = String(result?.message || (ok ? 'OK' : 'Failed'))
       const next = {
-        ...draft,
+        ...cfg,
         lastTestAt: new Date().toISOString(),
         lastTestOk: ok,
         lastTestMessage: msg,
       }
-      setDraft(next)
-      const saved = await putZenopaySettings(next)
-      setCfg(saved)
+      setCfg(next)
+      setDraft((prev) => ({ ...prev, ...next }))
       showFlash(ok ? 'success' : 'error', msg)
+      showToast(ok ? 'success' : 'error', msg)
     } catch (err) {
       showToast('error', err?.message || 'Test failed')
+    } finally {
+      setTesting(false)
     }
-    setTesting(false)
   }
 
   const connected = cfg.lastTestOk === true
@@ -175,8 +198,8 @@ function ZenoPayPage() {
                 onChange={(e) => setDraft((d) => ({ ...d, environment: e.target.value }))}
                 className={inputClass()}
               >
-                <option value="production">Production</option>
-                <option value="test">Test</option>
+                <option value="live">Live</option>
+                <option value="sandbox">Sandbox</option>
               </select>
             </div>
 
@@ -238,16 +261,14 @@ function ZenoPayPage() {
               <p className="mt-2 text-xs text-slate-500">
                 Stored preview:{' '}
                 <span className="font-mono text-slate-400">
-                  {cfg.apiKeyMasked || maskKey(cfg.apiKey)}
+                  {cfg.hasApiKey ? cfg.apiKeyMasked || '******' : maskKey(cfg.apiKey)}
                 </span>
+                {cfg.hasApiKey ? (
+                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+                    Saved
+                  </span>
+                ) : null}
               </p>
-            </div>
-
-            <div>
-              <label className={labelClass()} htmlFor="zp-url">
-                Endpoint URL
-              </label>
-              <input id="zp-url" value={draft.apiEndpoint} readOnly className={`${inputClass()} opacity-80`} />
             </div>
 
             <div>
@@ -266,18 +287,18 @@ function ZenoPayPage() {
           <div className="xl:col-span-2 flex justify-end gap-3">
             <button
               type="button"
-              onClick={() => setDraft({ ...cfg })}
-              disabled={!dirty}
+              onClick={() => setDraft({ ...cfg, apiKey: '' })}
+              disabled={!dirty || saving || testing}
               className="rounded-xl border border-slate-600 px-6 py-3 text-sm font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-40"
             >
               Reset
             </button>
             <button
               type="submit"
-              disabled={!dirty}
+              disabled={!dirty || saving || testing}
               className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-8 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] disabled:opacity-40"
             >
-              Save settings
+              {saving ? 'Saving…' : 'Save settings'}
             </button>
           </div>
         </form>

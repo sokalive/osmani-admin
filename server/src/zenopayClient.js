@@ -15,7 +15,11 @@ export function resolveZenopayCredentials(row) {
  */
 export async function testZenopayConnection(cred) {
   if (!cred.apiEndpoint || !cred.apiKey) {
-    return { ok: false, message: 'Missing API endpoint or API key (configure in admin or .env).' }
+    return {
+      ok: false,
+      message: 'Missing API endpoint or API key (configure in admin or .env).',
+      httpStatus: 0,
+    }
   }
   const base = cred.apiEndpoint.replace(/\/$/, '')
   const url = (process.env.ZENO_TEST_URL || `${base}/health`).trim()
@@ -34,13 +38,13 @@ export async function testZenopayConnection(cred) {
     clearTimeout(t)
     const text = await res.text()
     if (res.ok) {
-      return { ok: true, message: `OK (${res.status})` }
+      return { ok: true, message: `OK (${res.status})`, httpStatus: res.status }
     }
-    return { ok: false, message: `HTTP ${res.status}: ${text.slice(0, 240)}` }
+    return { ok: false, message: `HTTP ${res.status}: ${text.slice(0, 240)}`, httpStatus: res.status }
   } catch (e) {
     clearTimeout(t)
     const msg = e?.name === 'AbortError' ? 'Request timed out' : String(e.message || e)
-    return { ok: false, message: msg }
+    return { ok: false, message: msg, httpStatus: 0 }
   }
 }
 
