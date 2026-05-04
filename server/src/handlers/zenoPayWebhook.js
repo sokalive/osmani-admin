@@ -4,13 +4,6 @@ import { formatPhone } from '../zenopayClient.js'
 
 const USERS_FILE = 'users.json'
 
-function subscriptionExpiresAt(plan, from = new Date()) {
-  const d = new Date(from.getTime())
-  const days = Math.max(1, Number(plan?.duration_days) || 30)
-  d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString()
-}
-
 /** ZenoPay often sends `payment_status: "COMPLETED"` under `data` — read all layers. */
 function statusStringsFromWebhook(body) {
   const nested = [body, body?.data, body?.payload, body?.payment, body?.transaction].filter(
@@ -201,7 +194,7 @@ export async function handleZenoPayWebhook(req, res) {
         if (!phone) {
           console.warn('ZENO WEBHOOK: cannot resolve phone for subscription', orderId)
         } else {
-          const expiresAt = subscriptionExpiresAt(plan)
+          const expiresAt = await billing.subscriptionExpiresAtEndOfDay(plan.duration_days)
           await billing.upsertSubscriptionAfterPayment(phone, txn.plan_id, expiresAt)
           const planName = plan.name != null ? String(plan.name) : ''
           const { userId } = await findUserIdAndSyncUsersJson(

@@ -185,6 +185,25 @@ export async function updateTransactionByOrderId(orderId, { status, external_id,
 
 /** --- Subscriptions --- */
 
+/**
+ * Expiry at end-of-window: start of calendar day after N days from now, then +18:00 (server TZ / UTC per DB).
+ * Same shape as: DATE_TRUNC('day', now() + interval 'N days') + interval '18 hours'
+ */
+export async function subscriptionExpiresAtEndOfDay(durationDays) {
+  const pool = requirePool()
+  const days = Math.max(1, Number(durationDays) || 30)
+  const { rows } = await pool.query(
+    `SELECT (
+       date_trunc('day', now() + ($1::int * interval '1 day'))
+       + interval '18 hours'
+     )::timestamptz AS expires_at`,
+    [days],
+  )
+  const exp = rows[0]?.expires_at
+  if (!exp) throw new Error('subscriptionExpiresAtEndOfDay: no result')
+  return exp instanceof Date ? exp.toISOString() : String(exp)
+}
+
 export async function upsertSubscriptionAfterPayment(phone, planId, expiresAt) {
   const pool = requirePool()
   await pool.query(
