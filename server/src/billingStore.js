@@ -188,11 +188,13 @@ export async function updateTransactionByOrderId(orderId, { status, external_id,
 export async function upsertSubscriptionAfterPayment(phone, planId, expiresAt) {
   const pool = requirePool()
   await pool.query(
-    `INSERT INTO subscriptions (phone, plan_id, expires_at, updated_at)
-     VALUES ($1, $2, $3::timestamptz, now())
+    `INSERT INTO subscriptions (phone, plan_id, expires_at, is_active, started_at, updated_at)
+     VALUES ($1, $2, $3::timestamptz, true, now(), now())
      ON CONFLICT (phone) DO UPDATE SET
        plan_id = EXCLUDED.plan_id,
        expires_at = EXCLUDED.expires_at,
+       is_active = true,
+       started_at = now(),
        updated_at = now()`,
     [String(phone).trim(), Number(planId), expiresAt],
   )

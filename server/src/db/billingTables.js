@@ -53,6 +53,12 @@ export async function ensureBillingTables(client) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `)
+  await client.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+  `)
+  await client.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+  `)
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS zenopay_settings (

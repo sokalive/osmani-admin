@@ -1,4 +1,8 @@
 import * as billing from '../billingStore.js'
+import { readJson, writeJsonAtomic } from '../lib/jsonFile.js'
+import { formatPhone } from '../zenopayClient.js'
+
+const USERS_FILE = 'users.json'
 
 function subscriptionExpiresAt(plan, from = new Date()) {
   const d = new Date(from.getTime())
@@ -7,20 +11,106 @@ function subscriptionExpiresAt(plan, from = new Date()) {
   return d.toISOString()
 }
 
+/** ZenoPay often sends `payment_status: "COMPLETED"` under `data` — read all layers. */
+function statusStringsFromWebhook(body) {
+  const nested = [body, body?.data, body?.payload, body?.payment, body?.transaction].filter(
+    (x) => x && typeof x === 'object',
+  )
+  const keys = ['payment_status', 'status', 'state', 'result']
+  const out = []
+  const seen = new Set()
+  for (const o of nested) {
+    for (const k of keys) {
+      const v = o[k]
+      if (v == null || v === '') continue
+      const s = String(v).trim()
+      if (s && !seen.has(s)) {
+        seen.add(s)
+        out.push(s)
+      }
+    }
+  }
+  return out
+}
+
 function webhookSuccess(body) {
-  const status = String(
-    body?.status ?? body?.payment_status ?? body?.state ?? body?.result ?? '',
-  ).toLowerCase()
-  if (['completed', 'success', 'paid', 'successful', 'ok'].includes(status)) return true
+  for (const raw of statusStringsFromWebhook(body)) {
+    const s = raw.toLowerCase()
+    if (['completed', 'success', 'paid', 'successful', 'ok'].includes(s)) return true
+  }
   if (body?.success === true || body?.paid === true) return true
+  const d = body?.data
+  if (d && typeof d === 'object' && (d.success === true || d.paid === true)) return true
   return false
 }
 
 function webhookExplicitFailure(body) {
-  const status = String(body?.status ?? body?.payment_status ?? '').toLowerCase()
-  if (['failed', 'error', 'declined', 'cancelled', 'rejected'].includes(status)) return true
+  for (const raw of statusStringsFromWebhook(body)) {
+    const s = raw.toLowerCase()
+    if (['failed', 'error', 'declined', 'cancelled', 'rejected'].includes(s)) return true
+  }
   if (body?.success === false || body?.paid === false) return true
+  const d = body?.data
+  if (d && typeof d === 'object' && (d.success === false || d.paid === false)) return true
   return false
+}
+
+function phoneComparable(raw) {
+  const d = String(raw ?? '').replace(/\D/g, '')
+  if (!d) return ''
+  if (d.startsWith('255')) return d
+  if (d.startsWith('0')) return `255${d.slice(1)}`
+  return d
+}
+
+function webhookBuyerPhoneRaw(body) {
+  const nested = [body, body?.data, body?.payload, body?.payment].filter(
+    (x) => x && typeof x === 'object',
+  )
+  const keys = ['buyer_phone', 'phone', 'msisdn', 'customer_phone', 'mobile', 'payer_phone']
+  for (const o of nested) {
+    for (const k of keys) {
+      const v = o[k]
+      if (v != null && String(v).trim()) return String(v).trim()
+    }
+  }
+  return ''
+}
+
+function resolveSubscriptionPhone(body, txn) {
+  const w = webhookBuyerPhoneRaw(body)
+  const formatted = w ? formatPhone(w) : ''
+  const fromTxn = String(txn?.phone ?? '').trim()
+  if (fromTxn.startsWith('+255')) return fromTxn
+  if (formatted.startsWith('+255')) return formatted
+  return fromTxn || formatted || ''
+}
+
+async function findUserIdAndSyncUsersJson(phoneE164, planId, planName, expiresAtIso) {
+  const key = phoneComparable(phoneE164)
+  if (!key) return { userId: null }
+  const users = await readJson(USERS_FILE, [])
+  if (!Array.isArray(users)) return { userId: null }
+  let userId = null
+  const startDateIso = new Date().toISOString()
+  const next = users.map((u) => {
+    const uk = phoneComparable(u.phone)
+    if (uk && uk === key) {
+      userId = u.id ?? u.userId ?? null
+      return {
+        ...u,
+        planId: Number.isFinite(Number(planId)) ? Number(planId) : u.planId,
+        planName: planName || u.planName,
+        startDate: startDateIso,
+        expiryDate: expiresAtIso,
+      }
+    }
+    return u
+  })
+  if (userId != null) {
+    await writeJsonAtomic(USERS_FILE, next)
+  }
+  return { userId }
 }
 
 function normalizeWebhookBody(raw) {
@@ -107,10 +197,20 @@ export async function handleZenoPayWebhook(req, res) {
     if (ok && txn.plan_id) {
       const plan = await billing.getPlanRowByIdAny(txn.plan_id)
       if (plan) {
-        const phone = String(txn.phone ?? '').trim()
-        if (phone) {
-          const exp = subscriptionExpiresAt(plan)
-          await billing.upsertSubscriptionAfterPayment(phone, txn.plan_id, exp)
+        const phone = resolveSubscriptionPhone(body, txn)
+        if (!phone) {
+          console.warn('ZENO WEBHOOK: cannot resolve phone for subscription', orderId)
+        } else {
+          const expiresAt = subscriptionExpiresAt(plan)
+          await billing.upsertSubscriptionAfterPayment(phone, txn.plan_id, expiresAt)
+          const planName = plan.name != null ? String(plan.name) : ''
+          const { userId } = await findUserIdAndSyncUsersJson(
+            phone,
+            txn.plan_id,
+            planName,
+            expiresAt,
+          )
+          console.log('SUBSCRIPTION ACTIVATED:', { userId, phone, expiresAt })
         }
       }
     }
