@@ -7,6 +7,7 @@ export function resolveZenopayCredentials(row) {
     apiKey: String(process.env.ZENO_API_KEY || r.api_key || '').trim(),
     accountId: String(process.env.ZENO_ACCOUNT_ID || r.account_id || '').trim(),
     apiEndpoint: String(process.env.ZENO_ENDPOINT || r.api_endpoint || '').trim(),
+    webhookUrl: String(process.env.ZENO_WEBHOOK_URL || r.webhook_url || '').trim(),
   }
 }
 
@@ -124,36 +125,114 @@ function resolveZenopayCollectionPostUrl(cred) {
   }
 }
 
+function isValidHttpsUrl(s) {
+  if (!s || typeof s !== 'string') return false
+  try {
+    const u = new URL(s.trim())
+    return u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/** ZenoPay requires strict E.164-style +255XXXXXXXXX (digits only, then + prefix). */
+export function formatPhone(phone) {
+  let p = String(phone ?? '')
+    .trim()
+    .replace(/\D/g, '')
+  if (!p) return ''
+  if (p.startsWith('0')) {
+    p = '255' + p.slice(1)
+  }
+  if (!p.startsWith('+')) {
+    p = '+' + p
+  }
+  return p
+}
+
 /**
  * Initiate provider collection request (ZenoPay mobile money Tanzania).
  */
-export async function zenopayCreateCollection(cred, { phone, amount, reference, currency = 'TZS' }) {
+export async function zenopayCreateCollection(cred, { phone, amount, reference }) {
   const url = resolveZenopayCollectionPostUrl(cred)
   if (!url) {
     return { ok: false, status: 0, body: { error: 'Invalid or missing ZenoPay API endpoint' } }
   }
-  const body = {
-    phone: String(phone).replace(/\s+/g, ''),
-    amount: Number(amount),
-    reference: String(reference),
-    currency,
-    account_id: cred.accountId || undefined,
+  const buyerPhone = formatPhone(phone)
+  console.log('FINAL PHONE SENT TO ZENO:', buyerPhone)
+  if (!buyerPhone || !buyerPhone.startsWith('+255')) {
+    return {
+      ok: false,
+      status: 0,
+      body: { error: 'buyer_phone is required and must be in +255… format' },
+    }
   }
+
+  const accountId = String(process.env.ZENO_ACCOUNT_ID || cred.accountId || '').trim()
+  if (!accountId) {
+    return {
+      ok: false,
+      status: 0,
+      body: {
+        error:
+          'account_id is required and cannot be empty (set ZENO_ACCOUNT_ID or ZenoPay account id in admin)',
+      },
+    }
+  }
+
+  const webhookUrl = String(process.env.ZENO_WEBHOOK_URL || cred.webhookUrl || '').trim()
+  if (!isValidHttpsUrl(webhookUrl)) {
+    return {
+      ok: false,
+      status: 0,
+      body: {
+        error:
+          'webhook_url must be a valid https URL (set ZENO_WEBHOOK_URL or ZenoPay webhook URL in admin)',
+      },
+    }
+  }
+
+  const amountInt = Math.round(Number(amount))
+  if (!Number.isFinite(amountInt) || amountInt <= 0) {
+    return {
+      ok: false,
+      status: 0,
+      body: { error: 'amount must be a positive integer' },
+    }
+  }
+
+  const payload = {
+    order_id: String(reference),
+    buyer_name: 'Customer',
+    buyer_phone: buyerPhone,
+    buyer_email: 'noreply@example.com',
+    amount: amountInt,
+    account_id: accountId,
+    webhook_url: webhookUrl,
+  }
+
   const ac = new AbortController()
   const t = setTimeout(() => ac.abort(), 30_000)
+  const options = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': cred.apiKey,
+    },
+    body: JSON.stringify(payload),
+    signal: ac.signal,
+  }
   try {
     console.log('ZENO URL:', url)
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': cred.apiKey,
-      },
-      body: JSON.stringify(body),
-      signal: ac.signal,
+    console.log('ZENO FINAL PAYLOAD:', payload)
+    console.log('ZENO HEADERS:', {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ZENO_API_KEY,
     })
+    const res = await fetch(url, options)
     clearTimeout(t)
     const text = await res.text()
+    console.log('ZENO STATUS:', res.status)
     console.log('ZENO RAW RESPONSE:', text)
     let json = null
     try {

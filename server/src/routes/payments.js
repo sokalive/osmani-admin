@@ -2,7 +2,11 @@ import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { handleZenoPayWebhook } from '../handlers/zenoPayWebhook.js'
-import { resolveZenopayCredentials, zenopayCreateCollection } from '../zenopayClient.js'
+import {
+  formatPhone,
+  resolveZenopayCredentials,
+  zenopayCreateCollection,
+} from '../zenopayClient.js'
 
 export const paymentsRouter = Router()
 
@@ -26,6 +30,10 @@ paymentsRouter.post('/create-payment', async (req, res) => {
     if (!phone || !Number.isFinite(planId)) {
       return res.status(400).json({ error: 'phone and planId are required' })
     }
+    const phoneE164 = formatPhone(phone)
+    if (!phoneE164.startsWith('+255') || phoneE164.length < 13) {
+      return res.status(400).json({ error: 'phone must be a valid Tanzania number (+255…)' })
+    }
     const plan = await billing.getPlanById(planId)
     if (!plan || !plan.is_active) {
       return res.status(400).json({ error: 'Plan not found or inactive' })
@@ -40,7 +48,7 @@ paymentsRouter.post('/create-payment', async (req, res) => {
     const tx = await billing.insertTransaction({
       order_id: orderId,
       plan_id: planId,
-      phone: phoneRaw.startsWith('+') ? phoneRaw : `+${phone}`,
+      phone: phoneE164,
       amount,
       currency: 'TZS',
       status: 'pending',
@@ -50,7 +58,6 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       phone,
       amount,
       reference: orderId,
-      currency: 'TZS',
     })
     const prevPayload =
       tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}
