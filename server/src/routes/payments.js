@@ -57,7 +57,7 @@ paymentsRouter.post('/create-payment', async (req, res) => {
     const z = await zenopayCreateCollection(cred, {
       phone,
       amount,
-      reference: orderId,
+      orderId,
     })
     const prevPayload =
       tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}

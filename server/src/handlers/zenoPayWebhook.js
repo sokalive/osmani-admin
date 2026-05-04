@@ -36,6 +36,34 @@ function normalizeWebhookBody(raw) {
   return typeof raw === 'object' ? raw : {}
 }
 
+/** Collect possible merchant order ids (same string as `transactions.order_id`) from flat + nested bodies. */
+function webhookOrderIdCandidates(body) {
+  const nested = [body?.data, body?.payload, body?.payment, body?.transaction].filter(
+    (x) => x && typeof x === 'object',
+  )
+  const objs = [body, ...nested].filter((x) => x && typeof x === 'object')
+  const keys = [
+    'order_id',
+    'reference',
+    'orderId',
+    'tx_ref',
+    'merchant_reference',
+    'order',
+  ]
+  const seen = new Set()
+  const out = []
+  for (const obj of objs) {
+    for (const k of keys) {
+      const s = String(obj[k] ?? '').trim()
+      if (s && !seen.has(s)) {
+        seen.add(s)
+        out.push(s)
+      }
+    }
+  }
+  return out
+}
+
 /**
  * ZenoPay → POST /api/zeno-webhook (and legacy paths). Always HTTP 200 so the provider does not retry storms.
  */
@@ -43,16 +71,23 @@ export async function handleZenoPayWebhook(req, res) {
   const body = normalizeWebhookBody(req.body)
   console.log('ZENO WEBHOOK:', body)
   try {
-    const orderId = String(
-      body.reference ?? body.order_id ?? body.orderId ?? body.order ?? body.merchant_reference ?? '',
-    ).trim()
-    if (!orderId) {
-      console.warn('ZENO WEBHOOK: missing order_id / reference')
-      return res.sendStatus(200)
+    const candidates = webhookOrderIdCandidates(body)
+    let txn = null
+    let orderId = ''
+    for (const c of candidates) {
+      const row = await billing.getTransactionByOrderId(c)
+      if (row) {
+        txn = row
+        orderId = c
+        break
+      }
     }
-    const txn = await billing.getTransactionByOrderId(orderId)
-    if (!txn) {
-      console.warn('ZENO WEBHOOK: unknown order', orderId)
+    console.log('WEBHOOK ORDER ID:', orderId || '(none matched DB)')
+    if (candidates.length) {
+      console.log('WEBHOOK ORDER ID CANDIDATES (transactions.order_id):', candidates)
+    }
+    if (!orderId || !txn) {
+      console.warn('ZENO WEBHOOK: unknown order — no candidate matched transactions.order_id')
       return res.sendStatus(200)
     }
     const ok = webhookSuccess(body)

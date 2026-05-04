@@ -152,11 +152,16 @@ export function formatPhone(phone) {
 
 /**
  * Initiate provider collection request (ZenoPay mobile money Tanzania).
+ * `orderId` must match `transactions.order_id` — same value is sent as `order_id` and `reference` (ZenoPay may echo either).
  */
-export async function zenopayCreateCollection(cred, { phone, amount, reference }) {
+export async function zenopayCreateCollection(cred, { phone, amount, orderId }) {
   const url = resolveZenopayCollectionPostUrl(cred)
   if (!url) {
     return { ok: false, status: 0, body: { error: 'Invalid or missing ZenoPay API endpoint' } }
+  }
+  const merchantOrderId = String(orderId ?? '').trim()
+  if (!merchantOrderId) {
+    return { ok: false, status: 0, body: { error: 'order_id is required' } }
   }
   const buyerPhone = formatPhone(phone)
   console.log('FINAL PHONE SENT TO ZENO:', buyerPhone)
@@ -202,7 +207,8 @@ export async function zenopayCreateCollection(cred, { phone, amount, reference }
   }
 
   const payload = {
-    order_id: String(reference),
+    order_id: merchantOrderId,
+    reference: merchantOrderId,
     buyer_name: 'Customer',
     buyer_phone: buyerPhone,
     buyer_email: 'noreply@example.com',
@@ -210,6 +216,7 @@ export async function zenopayCreateCollection(cred, { phone, amount, reference }
     account_id: accountId,
     webhook_url: webhookUrl,
   }
+  console.log('ZENO MERCHANT ORDER ID (must match DB transactions.order_id):', merchantOrderId)
 
   const ac = new AbortController()
   const t = setTimeout(() => ac.abort(), 30_000)
