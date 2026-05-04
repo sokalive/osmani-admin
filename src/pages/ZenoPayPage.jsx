@@ -8,9 +8,10 @@ import { getZenopaySettings, postZenopayTest, putZenopaySettings } from '../lib/
 function defaultSettings() {
   return {
     environment: 'test',
-    apiEndpoint: 'https://sandbox.zenopay.example/v1',
+    apiEndpoint: '',
+    accountId: '',
     apiKey: '',
-    webhookUrl: 'https://admin.osmani.tv/webhooks/zenopay',
+    webhookUrl: '',
     lastTestAt: null,
     lastTestOk: null,
     lastTestMessage: '',
@@ -49,13 +50,21 @@ function ZenoPayPage() {
   }, [showToast])
 
   useEffect(() => {
-    loadSettings()
+    let cancelled = false
+    const raf = requestAnimationFrame(() => {
+      if (!cancelled) void loadSettings()
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+    }
   }, [loadSettings])
 
   const dirty = useMemo(
     () =>
       draft.environment !== cfg.environment ||
       draft.apiEndpoint !== cfg.apiEndpoint ||
+      draft.accountId !== cfg.accountId ||
       draft.apiKey !== cfg.apiKey ||
       draft.webhookUrl !== cfg.webhookUrl,
     [draft, cfg],
@@ -81,7 +90,11 @@ function ZenoPayPage() {
   async function handleTestConnection() {
     setTesting(true)
     try {
-      const result = await postZenopayTest({ apiEndpoint: draft.apiEndpoint })
+      const result = await postZenopayTest({
+        apiEndpoint: draft.apiEndpoint,
+        apiKey: draft.apiKey,
+        accountId: draft.accountId,
+      })
       const ok = result?.ok === true
       const msg = String(result?.message || (ok ? 'OK' : 'Failed'))
       const next = {
@@ -169,12 +182,26 @@ function ZenoPayPage() {
 
             <div>
               <label className={labelClass()} htmlFor="zp-end">
-                Endpoint
+                API endpoint (ZENO_ENDPOINT)
               </label>
               <input
                 id="zp-end"
                 value={draft.apiEndpoint}
                 onChange={(e) => setDraft((d) => ({ ...d, apiEndpoint: e.target.value }))}
+                placeholder="https://api.example.com/v1"
+                className={inputClass()}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass()} htmlFor="zp-acct">
+                Account ID (ZENO_ACCOUNT_ID)
+              </label>
+              <input
+                id="zp-acct"
+                value={draft.accountId}
+                onChange={(e) => setDraft((d) => ({ ...d, accountId: e.target.value }))}
+                placeholder="Merchant / account identifier"
                 className={inputClass()}
               />
             </div>
@@ -209,7 +236,10 @@ function ZenoPayPage() {
                 className={inputClass()}
               />
               <p className="mt-2 text-xs text-slate-500">
-                Stored preview: <span className="font-mono text-slate-400">{maskKey(cfg.apiKey)}</span>
+                Stored preview:{' '}
+                <span className="font-mono text-slate-400">
+                  {cfg.apiKeyMasked || maskKey(cfg.apiKey)}
+                </span>
               </p>
             </div>
 

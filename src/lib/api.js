@@ -137,8 +137,18 @@ export const postUser = (body) => apiPost('/users', body)
 export const putUser = (id, body) => apiPut(`/users/${encodeURIComponent(id)}`, body)
 export const deleteUser = (id) => apiDelete(`/users/${encodeURIComponent(id)}`)
 
-/** --- Transactions --- */
-export const getTransactions = () => apiGet('/transactions')
+/** --- Transactions --- (optional server-side filters) */
+export function getTransactions(params = {}) {
+  const q = new URLSearchParams()
+  if (params.status && params.status !== 'all') q.set('status', params.status)
+  if (params.from) q.set('from', params.from)
+  if (params.to) q.set('to', params.to)
+  const s = q.toString()
+  return apiGet(s ? `/transactions?${s}` : '/transactions')
+}
+
+/** Initiate ZenoPay collection (uses server-stored credentials + env overrides). */
+export const postCreatePayment = (body) => apiPost('/payments/create-payment', body)
 
 /** --- Notifications --- */
 export const getNotifications = () => apiGet('/notifications')

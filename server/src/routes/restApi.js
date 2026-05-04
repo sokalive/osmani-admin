@@ -1,19 +1,22 @@
-import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
 import { bannersRouter } from './banners.js'
 import { channelsRouter } from './channels.js'
 import { ensureGlobalAppSettingsFile, globalAppSettingsRouter } from './globalAppSettings.js'
-import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
+import { ensureJsonFile } from '../lib/jsonFile.js'
+import { usersRouter } from './users.js'
 import { ensureBannersStorage } from '../bannerStore.js'
 import { ensureDataFile as ensureChannelsStorage } from '../store.js'
+import { ensureBillingStorage } from '../billingStore.js'
+import { paymentsRouter } from './payments.js'
+import { plansRouter } from './plans.js'
+import { transactionsRouter } from './transactions.js'
+import { webhooksRouter } from './webhooks.js'
+import { zenopaySettingsRouter } from './zenopaySettings.js'
 
 const FILES = {
-  plans: 'plans.json',
   users: 'users.json',
-  transactions: 'transactions.json',
   notifications: 'notifications.json',
   transferCodes: 'transfer-codes.json',
-  zenopay: 'zenopay.json',
   whatsapp: 'whatsapp.json',
   appUpdate: 'app-update.json',
   popup: 'popup.json',
@@ -25,19 +28,26 @@ const FILES = {
 
 export const restApi = Router()
 
-/* =========================
-   ✅ IMPORTANT HEALTH FIX
-========================= */
-
-// root ya /api
 restApi.get('/', (_req, res) => {
   res.json({
     message: 'API is working 🚀',
-    endpoints: ['/health', '/channels', '/banners', '/settings', '/dashboard'],
+    endpoints: [
+      '/health',
+      '/users',
+      '/channels',
+      '/banners',
+      '/settings',
+      '/settings/zenopay',
+      '/plans',
+      '/transactions',
+      '/payments/create-payment',
+      '/payments/zeno-webhook',
+      '/webhooks/zenopay',
+      '/dashboard',
+    ],
   })
 })
 
-// health endpoint
 restApi.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -46,23 +56,21 @@ restApi.get('/health', (_req, res) => {
   })
 })
 
-/* ========================= */
-
+restApi.use('/users', usersRouter)
 restApi.use('/channels', channelsRouter)
 restApi.use('/banners', bannersRouter)
+restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings', globalAppSettingsRouter)
+restApi.use('/plans', plansRouter)
+restApi.use('/transactions', transactionsRouter)
+restApi.use('/payments', paymentsRouter)
+restApi.use('/webhooks', webhooksRouter)
 
-/* =========================
-   ⚠️ GLOBAL ERROR HANDLER
-========================= */
 restApi.use((err, _req, res, _next) => {
   console.error(err)
   res.status(500).json({ error: 'Internal server error' })
 })
 
-/* =========================
-   ⚠️ NOT FOUND HANDLER
-========================= */
 restApi.use((req, res) => {
   res.status(404).json({
     error: 'Route not found',
@@ -70,17 +78,12 @@ restApi.use((req, res) => {
   })
 })
 
-/* =========================
-   FILE INIT
-========================= */
-
 export async function ensureAllApiDataFiles() {
   await ensureChannelsStorage()
   await ensureBannersStorage()
   await ensureGlobalAppSettingsFile()
-  await ensureJsonFile(FILES.plans, '[]\n')
+  await ensureBillingStorage()
   await ensureJsonFile(FILES.users, '[]\n')
-  await ensureJsonFile(FILES.transactions, '[]\n')
   await ensureJsonFile(FILES.notifications, '[]\n')
   await ensureJsonFile(FILES.transferCodes, '[]\n')
   await ensureJsonFile(FILES.securityLogs, '[]\n')

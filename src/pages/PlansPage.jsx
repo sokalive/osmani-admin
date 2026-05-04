@@ -92,7 +92,14 @@ function PlansPage() {
   }, [showToast])
 
   useEffect(() => {
-    loadAll()
+    let cancelled = false
+    const raf = requestAnimationFrame(() => {
+      if (!cancelled) void loadAll()
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+    }
   }, [loadAll])
 
   const [draft, setDraft] = useState(() => emptyDraft())
@@ -367,7 +374,10 @@ function PlansPage() {
           <h2 className="mb-4 text-lg font-semibold text-white">All plans</h2>
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
             {plans.map((p) => {
-              const subs = countActiveSubs(p.id, users)
+              const subs =
+                p.activeSubscriberCount != null
+                  ? Number(p.activeSubscriberCount)
+                  : countActiveSubs(p.id, users)
               const isSelected = editingPlanId === p.id
               const activeGlow = p.isActive
                 ? 'border-amber-400/35 shadow-[0_0_24px_rgba(251,191,36,0.12)] ring-1 ring-amber-500/20'
