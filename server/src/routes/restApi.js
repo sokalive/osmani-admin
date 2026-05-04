@@ -3,6 +3,7 @@ import { Router } from 'express'
 import { channelsRouter } from './channels.js'
 import { ensureGlobalAppSettingsFile, globalAppSettingsRouter } from './globalAppSettings.js'
 import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
+import { ensureDataFile as ensureChannelsStorage } from '../store.js'
 
 const FILES = {
   banners: 'banners.json',
@@ -72,7 +73,7 @@ restApi.use((req, res) => {
 ========================= */
 
 export async function ensureAllApiDataFiles() {
-  await ensureJsonFile('channels.json', '[]\n')
+  await ensureChannelsStorage()
   await ensureGlobalAppSettingsFile()
   await ensureJsonFile(FILES.banners, '[]\n')
   await ensureJsonFile(FILES.plans, '[]\n')

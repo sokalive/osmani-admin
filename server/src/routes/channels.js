@@ -9,7 +9,14 @@ import {
   uploadsFilePathFromThumbnail,
 } from '../channelNormalize.js'
 import { UPLOADS_DIR, uploadThumbnail } from '../multerUpload.js'
-import { readChannels, writeChannels } from '../store.js'
+import {
+  deleteChannelById,
+  getChannelById,
+  getNextChannelId,
+  insertChannel,
+  readChannels,
+  updateChannel,
+} from '../store.js'
 
 export const channelsRouter = Router()
 
@@ -54,13 +61,10 @@ channelsRouter.post('/', maybeUpload, async (req, res) => {
       }
       return res.status(400).json({ error: 'name and url (stream URL) are required' })
     }
-    const list = await readChannels()
-    const nextId =
-      list.length === 0 ? 1 : Math.max(...list.map((c) => Number(c.id)), 0) + 1
+    const nextId = await getNextChannelId()
     const now = new Date().toISOString()
     const created = mergeChannelRecord(null, parsed, nextId, now)
-    list.push(created)
-    await writeChannels(list)
+    await insertChannel(created)
     res.status(201).json(channelToResponse(created, req))
   } catch {
     res.status(500).json({ error: 'Failed to create channel' })
@@ -74,13 +78,12 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
       if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
       return res.status(400).json({ error: 'Invalid id' })
     }
-    const list = await readChannels()
-    const idx = list.findIndex((c) => Number(c.id) === id)
-    if (idx === -1) {
+    const existingRow = await getChannelById(id)
+    if (!existingRow) {
       if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
       return res.status(404).json({ error: 'Channel not found' })
     }
-    const existing = migrateStoredChannel(list[idx])
+    const existing = migrateStoredChannel(existingRow)
     const parsed = parseChannelInput(req.body, req.file, existing)
     if (!parsed.name || !parsed.url) {
       if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
@@ -95,8 +98,7 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
     }
 
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
-    list[idx] = updated
-    await writeChannels(list)
+    await updateChannel(updated)
     res.json(channelToResponse(updated, req))
   } catch {
     res.status(500).json({ error: 'Failed to update channel' })
@@ -109,10 +111,8 @@ channelsRouter.delete('/:id', async (req, res) => {
     if (Number.isNaN(id)) {
       return res.status(400).json({ error: 'Invalid id' })
     }
-    const list = await readChannels()
-    const found = list.find((c) => Number(c.id) === id)
-    const next = list.filter((c) => Number(c.id) !== id)
-    if (next.length === list.length) {
+    const found = await getChannelById(id)
+    if (!found) {
       return res.status(404).json({ error: 'Channel not found' })
     }
     const m = migrateStoredChannel(found)
@@ -120,7 +120,7 @@ channelsRouter.delete('/:id', async (req, res) => {
       const f = uploadsFilePathFromThumbnail(m.thumbnail)
       if (f) await fs.unlink(path.join(UPLOADS_DIR, f)).catch(() => {})
     }
-    await writeChannels(next)
+    await deleteChannelById(id)
     res.status(204).send()
   } catch {
     res.status(500).json({ error: 'Failed to delete channel' })
