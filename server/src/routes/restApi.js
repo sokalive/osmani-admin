@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
+import { bannersRouter } from './banners.js'
 import { channelsRouter } from './channels.js'
 import { ensureGlobalAppSettingsFile, globalAppSettingsRouter } from './globalAppSettings.js'
 import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
+import { ensureBannersStorage } from '../bannerStore.js'
 import { ensureDataFile as ensureChannelsStorage } from '../store.js'
 
 const FILES = {
-  banners: 'banners.json',
   plans: 'plans.json',
   users: 'users.json',
   transactions: 'transactions.json',
@@ -32,7 +33,7 @@ export const restApi = Router()
 restApi.get('/', (_req, res) => {
   res.json({
     message: 'API is working 🚀',
-    endpoints: ['/health', '/channels', '/settings', '/dashboard'],
+    endpoints: ['/health', '/channels', '/banners', '/settings', '/dashboard'],
   })
 })
 
@@ -48,6 +49,7 @@ restApi.get('/health', (_req, res) => {
 /* ========================= */
 
 restApi.use('/channels', channelsRouter)
+restApi.use('/banners', bannersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 
 /* =========================
@@ -74,8 +76,8 @@ restApi.use((req, res) => {
 
 export async function ensureAllApiDataFiles() {
   await ensureChannelsStorage()
+  await ensureBannersStorage()
   await ensureGlobalAppSettingsFile()
-  await ensureJsonFile(FILES.banners, '[]\n')
   await ensureJsonFile(FILES.plans, '[]\n')
   await ensureJsonFile(FILES.users, '[]\n')
   await ensureJsonFile(FILES.transactions, '[]\n')

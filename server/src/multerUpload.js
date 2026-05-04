@@ -38,3 +38,10 @@ export const uploadThumbnail = multer({
   fileFilter,
   limits: { fileSize: 6 * 1024 * 1024 },
 })
+
+/** Banner hero image — multipart field name `image` */
+export const uploadBannerImage = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 8 * 1024 * 1024 },
+})

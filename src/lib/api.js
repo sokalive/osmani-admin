@@ -117,7 +117,10 @@ export const getAppGlobalSettings = () => apiGet('/settings')
 export const putAppGlobalSettings = (body) => apiPut('/settings', body)
 
 /** --- Banners --- */
+/** Public list (active + enabled + schedule). */
 export const getBanners = () => apiGet('/banners')
+/** Full list for admin CMS. */
+export const getBannersManage = () => apiGet('/banners/manage')
 export const postBanner = (body) => apiPost('/banners', body)
 export const putBanner = (id, body) => apiPut(`/banners/${encodeURIComponent(id)}`, body)
 export const deleteBanner = (id) => apiDelete(`/banners/${encodeURIComponent(id)}`)

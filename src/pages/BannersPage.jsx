@@ -4,7 +4,7 @@ import { Pencil, Plus, Trash2 } from 'lucide-react'
 import BannerFormModal from '../components/BannerFormModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { deleteBanner, getBanners, postBanner, putBanner } from '../lib/api'
+import { deleteBanner, getBannersManage, postBanner, putBanner } from '../lib/api'
 import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
@@ -28,7 +28,7 @@ function BannersPage() {
 
   const loadBanners = useCallback(async () => {
     try {
-      const raw = await getBanners()
+      const raw = await getBannersManage()
       const list = Array.isArray(raw) ? raw : []
       setBanners(list.map(normalizeBanner).filter(Boolean))
     } catch (e) {
