@@ -14,51 +14,47 @@ export async function ensureBannersStorage() {
   }
 }
 
+/** Admin / detail: full row + optional channel name for CMS. */
 const SELECT_BASE = `
   SELECT b.id, b.title, b.description, b.image, b.active, b.enabled, b.badge,
          b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
          b.enable_countdown, b.event_start, b.event_end,
-         b.redirect_channel_id, b.sort_order, b.event_timer, b.daily_start, b.daily_end, b.created_at,
+         b.redirect_channel_id, b.sort_order, b.event_timer, b.daily_start, b.daily_end,
+         b.created_at, b.updated_at,
          c.name AS redirect_channel_name
   FROM banners b
   LEFT JOIN channels c ON c.id = b.redirect_channel_id
 `
 
-const DAILY_WINDOW_SQL = `
-  (
-    b.event_timer = false
-    OR (
-      b.daily_start IS NOT NULL
-      AND b.daily_end IS NOT NULL
-      AND (
-        (b.daily_start <= b.daily_end AND CURRENT_TIME >= b.daily_start AND CURRENT_TIME <= b.daily_end)
-        OR
-        (b.daily_start > b.daily_end AND (CURRENT_TIME >= b.daily_start OR CURRENT_TIME <= b.daily_end))
-      )
-    )
-  )
+/** Public list: spec fields only (no join). */
+const SELECT_PUBLIC = `
+  SELECT b.id, b.title, b.description, b.image,
+         b.active, b.badge, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
+         b.enable_countdown, b.event_start, b.event_end,
+         b.redirect_channel_id, b.sort_order, b.created_at, b.updated_at
+  FROM banners b
 `
 
-/** Event range: no bounds → pass; partial bounds → open-ended; both → closed interval. */
-const EVENT_RANGE_SQL = `
-  (
+/**
+ * Visibility: active AND (no event bounds OR within [event_start, event_end) style window).
+ * Matches: (event_start IS NULL AND event_end IS NULL)
+ *       OR (event_start <= NOW() AND (event_end IS NULL OR NOW() < event_end))
+ */
+const PUBLIC_VISIBILITY_WHERE = `
+  b.active = true
+  AND (
     (b.event_start IS NULL AND b.event_end IS NULL)
-    OR (
-      (b.event_start IS NULL OR NOW() >= b.event_start)
-      AND (b.event_end IS NULL OR NOW() <= b.event_end)
-    )
+    OR (b.event_start <= NOW() AND (b.event_end IS NULL OR NOW() < b.event_end))
   )
 `
 
-/** Public list: active + enabled + event window + legacy daily timer when event_timer is on. */
+/** Public GET /api/banners — production spec only (no enabled / daily timer filter). */
 export async function listBannersPublic() {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required.')
   const { rows } = await pool.query(`
-    ${SELECT_BASE}
-    WHERE b.active = true AND b.enabled = true
-      AND ${EVENT_RANGE_SQL}
-      AND ${DAILY_WINDOW_SQL}
+    ${SELECT_PUBLIC}
+    WHERE ${PUBLIC_VISIBILITY_WHERE}
     ORDER BY b.sort_order ASC, b.created_at DESC
   `)
   return rows
@@ -124,7 +120,8 @@ export async function updateBanner(id, payload) {
        badge_enabled = $8, badge_color = $9, badge_blink = $10, badge_priority = $11,
        enable_countdown = $12, event_start = $13::timestamptz, event_end = $14::timestamptz,
        redirect_channel_id = $15, sort_order = $16, event_timer = $17,
-       daily_start = $18::time, daily_end = $19::time
+       daily_start = $18::time, daily_end = $19::time,
+       updated_at = now()
      WHERE id = $1
      RETURNING id`,
     [

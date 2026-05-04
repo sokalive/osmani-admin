@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
-import { bannerToResponse } from '../bannerNormalize.js'
+import { bannerToPublicResponse, bannerToResponse } from '../bannerNormalize.js'
 import * as bannerStore from '../bannerStore.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
 
@@ -148,11 +148,11 @@ async function unlinkUploadIfAny(imagePath) {
   await fs.unlink(path.join(UPLOADS_DIR, base)).catch(() => {})
 }
 
-/** Public: active + enabled + event range + legacy daily schedule; sorted */
+/** Public: spec visibility + shape only (DB rows, no demo fallbacks). */
 bannersRouter.get('/', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersPublic()
-    res.json(rows.map((r) => bannerToResponse(r, req)))
+    res.json(rows.map((r) => bannerToPublicResponse(r, req)))
   } catch {
     res.status(500).json({ error: 'Failed to load banners' })
   }

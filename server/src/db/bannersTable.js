@@ -23,7 +23,8 @@ export async function ensureBannersTable(client) {
       event_timer BOOLEAN NOT NULL DEFAULT false,
       daily_start TIME,
       daily_end TIME,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `)
   await client.query(`
@@ -42,4 +43,8 @@ export async function ensureBannersTable(client) {
   for (const sql of alters) {
     await client.query(sql)
   }
+
+  await client.query(`
+    ALTER TABLE banners ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+  `)
 }
