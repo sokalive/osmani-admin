@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Loader2, Wifi, XCircle } from 'lucide-react'
+import { CheckCircle2, Loader2, Smartphone, Wifi, XCircle } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { API_ORIGIN } from '../lib/api'
-import { getZenopaySettings, postZenopayTest, putZenopaySettings } from '../lib/api'
+import {
+  getPaymentStatus,
+  getPlans,
+  getZenopaySettings,
+  postCreatePayment,
+  postZenopayTest,
+  putZenopaySettings,
+} from '../lib/api'
 
 function defaultSettings() {
   return {
@@ -42,7 +49,14 @@ function ZenoPayPage() {
   const [testing, setTesting] = useState(false)
   const [flash, setFlash] = useState(null)
 
-  const defaultWebhook = `${String(API_ORIGIN).replace(/\/$/, '')}/api/webhooks/zenopay`
+  const [checkoutPlans, setCheckoutPlans] = useState([])
+  const [payPhone, setPayPhone] = useState('')
+  const [payPlanId, setPayPlanId] = useState('')
+  const [checkoutOrderId, setCheckoutOrderId] = useState(null)
+  const [checkoutStatus, setCheckoutStatus] = useState(null)
+  const [checkoutBusy, setCheckoutBusy] = useState(false)
+
+  const defaultWebhook = `${String(API_ORIGIN).replace(/\/$/, '')}/api/zeno-webhook`
 
   const loadSettings = useCallback(async () => {
     try {
@@ -74,6 +88,55 @@ function ZenoPayPage() {
       cancelAnimationFrame(raf)
     }
   }, [loadSettings])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const list = await getPlans()
+        if (cancelled) return
+        setCheckoutPlans(Array.isArray(list) ? list.filter((p) => p.isActive !== false) : [])
+      } catch {
+        if (!cancelled) setCheckoutPlans([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!checkoutOrderId) return
+    if (checkoutStatus === 'SUCCESS' || checkoutStatus === 'FAILED') return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const r = await getPaymentStatus(checkoutOrderId)
+        if (cancelled) return
+        const st = String(r?.status ?? 'PENDING')
+        setCheckoutStatus((prev) => {
+          if (prev !== 'SUCCESS' && st === 'SUCCESS') {
+            showToast(
+              'success',
+              'Payment confirmed. Subscription updated for that phone — consumer app can unlock channels.',
+            )
+          }
+          if (prev !== 'FAILED' && st === 'FAILED') {
+            showToast('error', 'Payment failed or was declined.')
+          }
+          return st
+        })
+      } catch {
+        /* network blips: keep polling */
+      }
+    }
+    void poll()
+    const id = window.setInterval(poll, 4000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [checkoutOrderId, checkoutStatus, showToast])
 
   const dirty = useMemo(
     () =>
@@ -111,6 +174,36 @@ function ZenoPayPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  async function handleCheckoutPay(e) {
+    e.preventDefault()
+    const pid = Number(payPlanId)
+    if (!payPhone.trim() || !Number.isFinite(pid)) {
+      showToast('error', 'Enter phone and choose a plan')
+      return
+    }
+    setCheckoutBusy(true)
+    try {
+      const data = await postCreatePayment({ phone: payPhone.trim(), planId: pid })
+      const oid = data?.orderId ?? data?.order_id
+      if (!oid) {
+        showToast('error', 'No order id returned from server')
+        return
+      }
+      setCheckoutOrderId(String(oid))
+      setCheckoutStatus('PENDING')
+      showToast('success', 'Payment started — waiting for ZenoPay confirmation…')
+    } catch (err) {
+      showToast('error', err?.message || 'Payment could not be started')
+    } finally {
+      setCheckoutBusy(false)
+    }
+  }
+
+  function clearCheckout() {
+    setCheckoutOrderId(null)
+    setCheckoutStatus(null)
   }
 
   async function handleTestConnection() {
@@ -302,6 +395,94 @@ function ZenoPayPage() {
             </button>
           </div>
         </form>
+
+        <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
+          <div className="flex items-start gap-3">
+            <Smartphone className="mt-0.5 h-5 w-5 shrink-0 text-amber-400/90" />
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-400/90">
+                Test checkout &amp; status poll
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Starts a real collection, then polls{' '}
+                <code className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-300">
+                  GET /api/payment-status/:order_id
+                </code>{' '}
+                every 4s until status is SUCCESS or FAILED (same flow a consumer app should use).
+              </p>
+            </div>
+          </div>
+          <form onSubmit={handleCheckoutPay} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="sm:col-span-1">
+              <label className={labelClass()} htmlFor="zp-pay-phone">
+                Phone (customer)
+              </label>
+              <input
+                id="zp-pay-phone"
+                value={payPhone}
+                onChange={(e) => setPayPhone(e.target.value)}
+                placeholder="07XXXXXXXX"
+                className={inputClass()}
+                autoComplete="tel"
+              />
+            </div>
+            <div className="sm:col-span-1">
+              <label className={labelClass()} htmlFor="zp-pay-plan">
+                Plan
+              </label>
+              <select
+                id="zp-pay-plan"
+                value={payPlanId}
+                onChange={(e) => setPayPlanId(e.target.value)}
+                className={inputClass()}
+              >
+                <option value="">— Select plan —</option>
+                {checkoutPlans.map((p) => (
+                  <option key={p.id} value={String(p.id)}>
+                    {p.name} — {p.price != null ? `${p.price} TZS` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col justify-end gap-2 sm:col-span-2 lg:col-span-1">
+              <button
+                type="submit"
+                disabled={checkoutBusy}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                {checkoutBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Pay with ZenoPay
+              </button>
+            </div>
+          </form>
+          {checkoutOrderId ? (
+            <div className="mt-4 rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3 text-sm text-slate-300">
+              <p className="font-mono text-xs text-slate-400">order_id: {checkoutOrderId}</p>
+              <p className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-slate-500">Status:</span>
+                {checkoutStatus === 'PENDING' || checkoutStatus == null ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
+                    <span className="text-amber-200">Waiting for confirmation…</span>
+                  </>
+                ) : checkoutStatus === 'SUCCESS' ? (
+                  <span className="font-medium text-emerald-300">SUCCESS — done</span>
+                ) : checkoutStatus === 'FAILED' ? (
+                  <span className="font-medium text-red-300">FAILED</span>
+                ) : (
+                  <span>{checkoutStatus}</span>
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={clearCheckout}
+                className="mt-3 text-xs font-medium text-slate-500 underline hover:text-slate-300"
+              >
+                Clear session
+              </button>
+            </div>
+          ) : null}
+        </section>
       </main>
     </>
   )

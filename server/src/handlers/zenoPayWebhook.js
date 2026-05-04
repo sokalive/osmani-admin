@@ -23,18 +23,37 @@ function webhookExplicitFailure(body) {
   return false
 }
 
+function normalizeWebhookBody(raw) {
+  if (raw == null) return {}
+  if (typeof raw === 'string') {
+    try {
+      const o = JSON.parse(raw)
+      return o && typeof o === 'object' ? o : {}
+    } catch {
+      return {}
+    }
+  }
+  return typeof raw === 'object' ? raw : {}
+}
+
+/**
+ * ZenoPay → POST /api/zeno-webhook (and legacy paths). Always HTTP 200 so the provider does not retry storms.
+ */
 export async function handleZenoPayWebhook(req, res) {
+  const body = normalizeWebhookBody(req.body)
+  console.log('ZENO WEBHOOK:', body)
   try {
-    const body = req.body && typeof req.body === 'object' ? req.body : {}
     const orderId = String(
       body.reference ?? body.order_id ?? body.orderId ?? body.order ?? body.merchant_reference ?? '',
     ).trim()
     if (!orderId) {
-      return res.status(400).json({ error: 'Missing order reference' })
+      console.warn('ZENO WEBHOOK: missing order_id / reference')
+      return res.sendStatus(200)
     }
     const txn = await billing.getTransactionByOrderId(orderId)
     if (!txn) {
-      return res.status(404).json({ error: 'Unknown order' })
+      console.warn('ZENO WEBHOOK: unknown order', orderId)
+      return res.sendStatus(200)
     }
     const ok = webhookSuccess(body)
     const fail = webhookExplicitFailure(body)
@@ -60,8 +79,9 @@ export async function handleZenoPayWebhook(req, res) {
         }
       }
     }
-    res.json({ ok: true, orderId, status: nextStatus })
+    return res.sendStatus(200)
   } catch (e) {
-    res.status(500).json({ error: String(e.message || e) })
+    console.error('ZENO WEBHOOK error:', e)
+    return res.sendStatus(200)
   }
 }

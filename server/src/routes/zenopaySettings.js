@@ -5,9 +5,15 @@ import { resolveZenopayCredentials, testZenopayConnection } from '../zenopayClie
 
 export const zenopaySettingsRouter = Router()
 
+const DEFAULT_PUBLIC_API = 'https://osmani-admin-api.onrender.com'
+
 function defaultWebhookUrl(req) {
-  const base = (process.env.BASE_URL || `${req.protocol}://${req.get('host') || ''}`).replace(/\/$/, '')
-  return `${base}/api/webhooks/zenopay`
+  const base = (
+    process.env.BASE_URL ||
+    DEFAULT_PUBLIC_API ||
+    `${req.protocol}://${req.get('host') || ''}`
+  ).replace(/\/$/, '')
+  return `${base}/api/zeno-webhook`
 }
 
 function normalizeEnvironment(v) {

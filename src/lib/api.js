@@ -150,6 +150,10 @@ export function getTransactions(params = {}) {
 /** Initiate ZenoPay collection (uses server-stored credentials + env overrides). */
 export const postCreatePayment = (body) => apiPost('/payments/create-payment', body)
 
+/** Poll payment status: { order_id, status } where status is SUCCESS | PENDING | FAILED */
+export const getPaymentStatus = (orderId) =>
+  apiGet(`/payment-status/${encodeURIComponent(String(orderId ?? ''))}`)
+
 /** --- Notifications --- */
 export const getNotifications = () => apiGet('/notifications')
 export const postNotification = (body) => apiPost('/notifications', body)

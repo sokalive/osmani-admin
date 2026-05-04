@@ -7,6 +7,8 @@ import { usersRouter } from './users.js'
 import { ensureBannersStorage } from '../bannerStore.js'
 import { ensureDataFile as ensureChannelsStorage } from '../store.js'
 import { ensureBillingStorage } from '../billingStore.js'
+import * as billing from '../billingStore.js'
+import { handleZenoPayWebhook } from '../handlers/zenoPayWebhook.js'
 import { paymentsRouter } from './payments.js'
 import { plansRouter } from './plans.js'
 import { transactionsRouter } from './transactions.js'
@@ -42,6 +44,8 @@ restApi.get('/', (_req, res) => {
       '/transactions',
       '/payments/create-payment',
       '/payments/zeno-webhook',
+      '/zeno-webhook',
+      '/payment-status/:order_id',
       '/webhooks/zenopay',
       '/dashboard',
     ],
@@ -54,6 +58,26 @@ restApi.get('/health', (_req, res) => {
     service: 'osmani-admin-api',
     time: new Date().toISOString(),
   })
+})
+
+restApi.post('/zeno-webhook', handleZenoPayWebhook)
+
+restApi.get('/payment-status/:order_id', async (req, res) => {
+  try {
+    const orderId = String(req.params.order_id ?? '').trim()
+    if (!orderId) {
+      return res.status(400).json({ error: 'order_id is required' })
+    }
+    const txn = await billing.getTransactionByOrderId(orderId)
+    if (!txn) {
+      return res.status(404).json({ error: 'Unknown order' })
+    }
+    const status =
+      txn.status === 'completed' ? 'SUCCESS' : txn.status === 'failed' ? 'FAILED' : 'PENDING'
+    res.json({ order_id: txn.order_id, status })
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) })
+  }
 })
 
 restApi.use('/users', usersRouter)
