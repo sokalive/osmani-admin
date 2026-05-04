@@ -93,15 +93,45 @@ export async function testZenopayConnection(cred) {
   }
 }
 
-const COLLECT_SUFFIX = process.env.ZENO_COLLECT_PATH || '/collections'
+const ZENO_DEFAULT_PAYMENT_PATH = '/api/payments/mobile_money_tanzania'
+
+/** POST target for collections — no /create suffix; honors ZENO_PAYMENT_URL or endpoint + path. */
+function resolveZenopayCollectionPostUrl(cred) {
+  const envFull = String(process.env.ZENO_PAYMENT_URL || '').trim()
+  if (envFull) return envFull.replace(/\/+$/, '')
+
+  const ep = String(cred?.apiEndpoint || '').trim()
+  if (!ep) return ''
+
+  const configured = String(process.env.ZENO_COLLECT_PATH || ZENO_DEFAULT_PAYMENT_PATH).trim()
+  if (/^https?:\/\//i.test(configured)) {
+    return configured.replace(/\/+$/, '')
+  }
+
+  const pathSuffix = (configured.startsWith('/') ? configured : `/${configured}`).replace(/\/+$/, '')
+
+  try {
+    const u = new URL(ep)
+    let pathname = (u.pathname || '/').replace(/\/+$/, '') || ''
+    const atMobileMoney = pathname.endsWith('/api/payments/mobile_money_tanzania')
+    if (atMobileMoney) {
+      return `${u.origin}${pathname}`.replace(/\/+$/, '')
+    }
+    const base = !pathname || pathname === '/' ? u.origin : `${u.origin}${pathname}`
+    return `${base.replace(/\/+$/, '')}${pathSuffix}`
+  } catch {
+    return ''
+  }
+}
 
 /**
- * Initiate provider collection request. Body shape can be overridden via env-driven JSON template later.
+ * Initiate provider collection request (ZenoPay mobile money Tanzania).
  */
 export async function zenopayCreateCollection(cred, { phone, amount, reference, currency = 'TZS' }) {
-  const base = cred.apiEndpoint.replace(/\/$/, '')
-  const path = COLLECT_SUFFIX.startsWith('/') ? COLLECT_SUFFIX : `/${COLLECT_SUFFIX}`
-  const url = `${base}${path}`
+  const url = resolveZenopayCollectionPostUrl(cred)
+  if (!url) {
+    return { ok: false, status: 0, body: { error: 'Invalid or missing ZenoPay API endpoint' } }
+  }
   const body = {
     phone: String(phone).replace(/\s+/g, ''),
     amount: Number(amount),
@@ -112,18 +142,19 @@ export async function zenopayCreateCollection(cred, { phone, amount, reference, 
   const ac = new AbortController()
   const t = setTimeout(() => ac.abort(), 30_000)
   try {
+    console.log('ZENO URL:', url)
     const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${cred.apiKey}`,
-        ...(cred.accountId ? { 'X-Account-Id': cred.accountId } : {}),
+        'x-api-key': cred.apiKey,
       },
       body: JSON.stringify(body),
       signal: ac.signal,
     })
     clearTimeout(t)
     const text = await res.text()
+    console.log('ZENO RAW RESPONSE:', text)
     let json = null
     try {
       json = text ? JSON.parse(text) : null
