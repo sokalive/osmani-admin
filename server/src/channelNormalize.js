@@ -166,18 +166,45 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
   }
 }
 
+const DEFAULT_PUBLIC_BASE = 'https://osmani-admin-api.onrender.com'
+
+/**
+ * Absolute thumbnail URL for API clients (DB stores `/uploads/...`).
+ * Uses `process.env.BASE_URL` when set, else {@link DEFAULT_PUBLIC_BASE}.
+ */
+export function resolveThumbnailForApi(thumbnail, req) {
+  if (thumbnail == null) return null
+  const rel = String(thumbnail).trim()
+  if (rel === '') return null
+  if (rel.startsWith('http://') || rel.startsWith('https://')) return rel
+
+  const baseUrl = (process.env.BASE_URL || DEFAULT_PUBLIC_BASE).replace(/\/$/, '')
+
+  if (rel.startsWith('/uploads')) {
+    return `${baseUrl}${rel}`
+  }
+
+  const host = req ? `${req.protocol}://${req.get('host') || ''}`.replace(/\/$/, '') : ''
+  if (rel.startsWith('/') && host) {
+    return `${host}${rel}`
+  }
+  if (rel.startsWith('/')) {
+    return `${baseUrl}${rel}`
+  }
+  return `${baseUrl}/${rel.replace(/^\/+/, '')}`
+}
+
 /** Public API shape (+ legacy aliases for older clients) */
 export function channelToResponse(c, req) {
   const m = migrateStoredChannel({ ...c })
-  const host = req ? `${req.protocol}://${req.get('host') || ''}` : ''
   const rel = m.thumbnail || null
-  const thumbFull = rel && !rel.startsWith('http') ? `${host}${rel}` : rel
+  const thumbFull = resolveThumbnailForApi(rel, req)
 
   return {
     id: m.id,
     name: m.name,
     url: m.url,
-    thumbnail: rel,
+    thumbnail: thumbFull,
     isLive: Boolean(m.isLive),
     isHD: Boolean(m.isHD),
     isActive: Boolean(m.isActive),
