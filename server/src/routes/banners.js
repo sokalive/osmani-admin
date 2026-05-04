@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import { bannerToPublicResponse, bannerToResponse } from '../bannerNormalize.js'
 import * as bannerStore from '../bannerStore.js'
+import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
 
 export const bannersRouter = Router()
@@ -37,10 +38,19 @@ function parseBool(v, defaultVal) {
 }
 
 function parseRedirectChannelId(b) {
-  const raw = b.redirect_channel_id ?? b.redirectChannelId ?? b.redirectChannel
-  if (raw === '' || raw == null) return null
-  const n = Number.parseInt(String(raw), 10)
-  return Number.isNaN(n) ? null : n
+  const idRaw = b.redirect_channel_id ?? b.redirectChannelId
+  if (idRaw !== undefined && idRaw !== null && idRaw !== '') {
+    const n = Number.parseInt(String(idRaw), 10)
+    return Number.isNaN(n) ? null : n
+  }
+  const legacy = b.redirectChannel
+  if (legacy === '' || legacy == null) return null
+  const s = String(legacy).trim()
+  if (/^\d+$/.test(s)) {
+    const n = Number.parseInt(s, 10)
+    return Number.isNaN(n) ? null : n
+  }
+  return null
 }
 
 /** Normalize HH:mm or HH:mm:ss for PostgreSQL TIME */
@@ -118,6 +128,13 @@ function validateBannerFields(fields) {
   return errors
 }
 
+async function validateRedirectChannelExists(redirectChannelId) {
+  if (redirectChannelId == null) return null
+  const row = await getChannelById(redirectChannelId)
+  if (!row) return 'redirect_channel_id does not refer to an existing channel'
+  return null
+}
+
 async function resolveImagePath({ body, file, existingImage }) {
   if (file) return `/uploads/${file.filename}`
   const raw = body?.image ?? body?.imageUrl
@@ -176,6 +193,11 @@ bannersRouter.post('/', maybeUploadBanner, async (req, res) => {
       if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
       return res.status(400).json({ error: vErrs.join('; ') })
     }
+    const redirErr = await validateRedirectChannelExists(fields.redirect_channel_id)
+    if (redirErr) {
+      if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
+      return res.status(400).json({ error: redirErr })
+    }
     let imagePath
     try {
       imagePath = await resolveImagePath({
@@ -222,6 +244,11 @@ bannersRouter.put('/:id', maybeUploadBanner, async (req, res) => {
     if (vErrs.length) {
       if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
       return res.status(400).json({ error: vErrs.join('; ') })
+    }
+    const redirErr = await validateRedirectChannelExists(fields.redirect_channel_id)
+    if (redirErr) {
+      if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
+      return res.status(400).json({ error: redirErr })
     }
 
     let imagePath

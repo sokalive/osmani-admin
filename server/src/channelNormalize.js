@@ -200,6 +200,9 @@ export function channelToResponse(c, req) {
   const rel = m.thumbnail || null
   const thumbFull = resolveThumbnailForApi(rel, req)
 
+  const isActive = Boolean(m.isActive)
+  const showInApp = Boolean(m.showInApp)
+
   return {
     id: m.id,
     name: m.name,
@@ -207,8 +210,10 @@ export function channelToResponse(c, req) {
     thumbnail: thumbFull,
     isLive: Boolean(m.isLive),
     isHD: Boolean(m.isHD),
-    isActive: Boolean(m.isActive),
-    showInApp: Boolean(m.showInApp),
+    isActive,
+    showInApp,
+    is_active: isActive,
+    show_in_app: showInApp,
     accessType: m.accessType === 'premium' ? 'premium' : 'free',
     category: m.category || 'General',
     bottomTab: (m.bottomTab || m.category || 'General').trim() || 'General',

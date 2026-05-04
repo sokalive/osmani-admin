@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
 import ToggleSwitch from './ToggleSwitch'
+import { getChannels } from '../lib/api'
 import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
@@ -10,15 +11,28 @@ import {
   parseTimeToMinutes,
 } from '../utils/bannerSchedule'
 
-const CHANNEL_REDIRECT_OPTIONS = [
-  '',
-  'Sports Live HD',
-  'Africa News 24',
-  'Movies Premiere',
-  'Kids Zone',
-  'Music Hits TV',
-  'Documentary Plus',
-]
+function isChannelEligible(c) {
+  if (!c || typeof c !== 'object') return false
+  const active = c.isActive !== false && c.is_active !== false
+  const show = c.showInApp !== false && c.show_in_app !== false
+  return Boolean(active && show)
+}
+
+/** Eligible channels for the picker; include current redirect if it is inactive/hidden so edits stay valid. */
+function channelsForRedirectSelect(allList, savedIdRaw) {
+  const all = Array.isArray(allList) ? allList : []
+  const picked = all.filter(isChannelEligible)
+  const sid =
+    savedIdRaw === '' || savedIdRaw == null ? null : Number.parseInt(String(savedIdRaw), 10)
+  if (sid != null && !Number.isNaN(sid)) {
+    const inPicked = picked.some((ch) => Number(ch.id) === sid)
+    if (!inPicked) {
+      const extra = all.find((ch) => Number(ch.id) === sid)
+      if (extra) return [extra, ...picked]
+    }
+  }
+  return picked.slice().sort((a, b) => Number(a.id) - Number(b.id))
+}
 
 function inputClassName() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25 transition-[border-color,box-shadow] duration-200'
@@ -55,7 +69,7 @@ function emptyForm() {
     enableCountdown: false,
     eventStartLocal: '',
     eventEndLocal: '',
-    redirectChannel: '',
+    redirectChannelId: '',
     sortOrder: 0,
     isActive: true,
     isEnabled: true,
@@ -82,7 +96,11 @@ function bannerToForm(banner) {
     enableCountdown: Boolean(banner.enableCountdown ?? banner.enable_countdown),
     eventStartLocal: isoToDatetimeLocal(es),
     eventEndLocal: isoToDatetimeLocal(ee),
-    redirectChannel: banner.redirectChannel ?? '',
+    redirectChannelId: (() => {
+      const rid = banner.redirectChannelId ?? banner.redirect_channel_id
+      if (rid == null || rid === '') return ''
+      return String(rid)
+    })(),
     sortOrder: Number.isFinite(Number(banner.sortOrder)) ? Number(banner.sortOrder) : 0,
     isActive: banner.isActive !== false,
     isEnabled: banner.isEnabled !== false,
@@ -118,11 +136,46 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
   const [submitError, setSubmitError] = useState(null)
   /** Wall clock for preview / countdown (updated while modal is open). */
   const [clock, setClock] = useState(() => Date.now())
+  const [channelsAll, setChannelsAll] = useState([])
+  const [channelsLoading, setChannelsLoading] = useState(false)
+  const [channelsLoadError, setChannelsLoadError] = useState(null)
+
+  const redirectOptions = useMemo(
+    () => channelsForRedirectSelect(channelsAll, form.redirectChannelId),
+    [channelsAll, form.redirectChannelId],
+  )
 
   useEffect(() => {
     if (!isOpen) return
     const id = window.setInterval(() => setClock(Date.now()), 1000)
     return () => window.clearInterval(id)
+  }, [isOpen])
+
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return
+      setChannelsLoadError(null)
+      setChannelsLoading(true)
+      getChannels()
+        .then((raw) => {
+          if (cancelled) return
+          setChannelsAll(Array.isArray(raw) ? raw : [])
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setChannelsAll([])
+          setChannelsLoadError(e?.message || 'Failed to load channels')
+        })
+        .finally(() => {
+          if (!cancelled) setChannelsLoading(false)
+        })
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+    }
   }, [isOpen])
 
   useEffect(() => {
@@ -257,6 +310,30 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
       }
     }
 
+    if (channelsLoading) {
+      setSubmitError('Channels are still loading. Try again in a moment.')
+      return
+    }
+    if (channelsLoadError) {
+      setSubmitError('Channels could not be loaded. Fix the error below, then retry.')
+      return
+    }
+
+    const redirectId =
+      form.redirectChannelId === '' || form.redirectChannelId == null
+        ? null
+        : Number.parseInt(String(form.redirectChannelId), 10)
+    if (redirectId != null) {
+      if (Number.isNaN(redirectId)) {
+        setSubmitError('Invalid redirect channel.')
+        return
+      }
+      if (!redirectOptions.some((ch) => Number(ch.id) === redirectId)) {
+        setSubmitError('Selected channel does not exist or is no longer available.')
+        return
+      }
+    }
+
     const payload = {
       title,
       description,
@@ -269,7 +346,7 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
       enableCountdown: form.enableCountdown,
       eventStart: startIso,
       eventEnd: endIso,
-      redirectChannel: form.redirectChannel.trim(),
+      redirectChannelId: redirectId,
       sortOrder: Number.isFinite(Number(form.sortOrder)) ? Number(form.sortOrder) : 0,
       isActive: form.isActive,
       isEnabled: form.isEnabled,
@@ -610,16 +687,30 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                     </label>
                     <select
                       id={`${formId}-redirect`}
-                      value={form.redirectChannel}
-                      onChange={(e) => setForm((f) => ({ ...f, redirectChannel: e.target.value }))}
+                      value={form.redirectChannelId}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, redirectChannelId: e.target.value }))
+                      }
                       className={inputClassName()}
+                      disabled={channelsLoading}
                     >
-                      {CHANNEL_REDIRECT_OPTIONS.map((name) => (
-                        <option key={name || 'none'} value={name}>
-                          {name || '— None —'}
+                      <option value="">
+                        {channelsLoading ? 'Loading channels…' : '— None —'}
+                      </option>
+                      {redirectOptions.map((ch) => (
+                        <option key={ch.id} value={String(ch.id)}>
+                          {ch.name?.trim() ? ch.name : `Channel ${ch.id}`}
                         </option>
                       ))}
                     </select>
+                    {channelsLoadError ? (
+                      <p className="mt-1.5 text-xs text-red-300">{channelsLoadError}</p>
+                    ) : (
+                      <p className="mt-1.5 text-[11px] text-slate-500">
+                        Only active channels shown in app. Inactive targets on existing banners stay
+                        selectable until you clear them.
+                      </p>
+                    )}
                   </div>
 
                   <div>

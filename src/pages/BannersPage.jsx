@@ -35,7 +35,12 @@ function bannerPayloadForApi(b, overrides = {}) {
     enableCountdown: Boolean(m.enableCountdown ?? m.enable_countdown),
     eventStart: m.eventStart ?? m.event_start ?? null,
     eventEnd: m.eventEnd ?? m.event_end ?? null,
-    redirectChannel: m.redirectChannel ?? '',
+    redirectChannelId: (() => {
+      const v = m.redirectChannelId ?? m.redirect_channel_id
+      if (v === '' || v == null) return null
+      const n = Number(v)
+      return Number.isFinite(n) ? n : null
+    })(),
     sortOrder,
     isActive: m.isActive !== false && m.is_active !== false,
     isEnabled: m.isEnabled !== false && m.enabled !== false,
