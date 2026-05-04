@@ -10,37 +10,82 @@ export function resolveZenopayCredentials(row) {
   }
 }
 
+function summarizeProviderHttpError(res, text) {
+  const ct = (res.headers.get('content-type') || '').toLowerCase()
+  const body = String(text || '').trim()
+  const looksHtml =
+    ct.includes('text/html') ||
+    body.startsWith('<!') ||
+    body.toLowerCase().startsWith('<html')
+  if (looksHtml) {
+    const st = res.statusText ? ` ${res.statusText}`.trim() : ''
+    return `HTTP ${res.status}${st ? ` (${st})` : ''}. The provider returned a non-JSON response (HTML or web page), not an API error body.`
+  }
+  const snippet = body.replace(/\s+/g, ' ').slice(0, 200)
+  return snippet ? `HTTP ${res.status}: ${snippet}` : `HTTP ${res.status}`
+}
+
 /**
- * Lightweight connectivity check (adjust ZENO_TEST_URL if your provider uses a different path).
+ * Config / connectivity check only — does not POST to collection or payment routes.
+ * Probes the API host (HEAD, then GET on 405) so POST-only paths are never called.
  */
 export async function testZenopayConnection(cred) {
-  if (!cred.apiEndpoint || !cred.apiKey) {
+  if (!cred.apiKey) {
+    return { ok: false, message: 'Missing API key (configure in admin or .env).', httpStatus: 0 }
+  }
+  if (!cred.apiEndpoint) {
+    return { ok: false, message: 'Missing API endpoint (configure in admin or .env).', httpStatus: 0 }
+  }
+
+  let probeUrl
+  try {
+    const parsed = new URL(String(cred.apiEndpoint).trim())
+    if (!/^https?:$/i.test(parsed.protocol)) {
+      return { ok: false, message: 'API endpoint must use http or https.', httpStatus: 0 }
+    }
+    const envProbe = String(process.env.ZENO_CONNECTIVITY_PROBE_URL || '').trim()
+    probeUrl = envProbe || parsed.origin
+  } catch {
     return {
       ok: false,
-      message: 'Missing API endpoint or API key (configure in admin or .env).',
+      message: 'Invalid API endpoint URL (use a full URL including https://).',
       httpStatus: 0,
     }
   }
-  const base = cred.apiEndpoint.replace(/\/$/, '')
-  const url = (process.env.ZENO_TEST_URL || `${base}/health`).trim()
+
+  const headers = {
+    Authorization: `Bearer ${cred.apiKey}`,
+    ...(cred.accountId ? { 'X-Account-Id': cred.accountId } : {}),
+    Accept: 'application/json, */*',
+  }
+
   const ac = new AbortController()
   const t = setTimeout(() => ac.abort(), 15_000)
+
   try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${cred.apiKey}`,
-        ...(cred.accountId ? { 'X-Account-Id': cred.accountId } : {}),
-        Accept: 'application/json, */*',
-      },
-      signal: ac.signal,
-    })
+    let res = await fetch(probeUrl, { method: 'HEAD', headers, signal: ac.signal })
+    if (res.status === 405) {
+      res = await fetch(probeUrl, { method: 'GET', headers, signal: ac.signal })
+    }
     clearTimeout(t)
     const text = await res.text()
-    if (res.ok) {
-      return { ok: true, message: `OK (${res.status})`, httpStatus: res.status }
+
+    if (res.status === 401) {
+      return {
+        ok: false,
+        message: 'Authentication failed (HTTP 401). Check your API key.',
+        httpStatus: res.status,
+      }
     }
-    return { ok: false, message: `HTTP ${res.status}: ${text.slice(0, 240)}`, httpStatus: res.status }
+    if (res.status >= 500) {
+      return { ok: false, message: summarizeProviderHttpError(res, text), httpStatus: res.status }
+    }
+
+    return {
+      ok: true,
+      message: `Connected (HTTP ${res.status}). API host is reachable and credentials are present.`,
+      httpStatus: res.status,
+    }
   } catch (e) {
     clearTimeout(t)
     const msg = e?.name === 'AbortError' ? 'Request timed out' : String(e.message || e)
