@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
 import ToggleSwitch from './ToggleSwitch'
@@ -6,6 +6,7 @@ import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
   isNowInDailyWindow,
+  isNowInEventWindow,
   parseTimeToMinutes,
 } from '../utils/bannerSchedule'
 
@@ -27,11 +28,33 @@ function labelClassName() {
   return 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400'
 }
 
+function isoToDatetimeLocal(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function datetimeLocalToIso(local) {
+  if (!local || !String(local).trim()) return null
+  const d = new Date(local)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
+}
+
 function emptyForm() {
   return {
     title: '',
     description: '',
     badge: '',
+    badgeEnabled: true,
+    badgeColor: '#FBBF24',
+    badgeBlink: false,
+    badgePriority: 0,
+    enableCountdown: false,
+    eventStartLocal: '',
+    eventEndLocal: '',
     redirectChannel: '',
     sortOrder: 0,
     isActive: true,
@@ -44,10 +67,21 @@ function emptyForm() {
 
 function bannerToForm(banner) {
   if (!banner) return emptyForm()
+  const es = banner.eventStart ?? banner.event_start
+  const ee = banner.eventEnd ?? banner.event_end
   return {
     title: banner.title ?? '',
     description: banner.description ?? '',
     badge: banner.badge ?? '',
+    badgeEnabled: banner.badgeEnabled ?? banner.badge_enabled ?? true,
+    badgeColor: banner.badgeColor ?? banner.badge_color ?? '#FBBF24',
+    badgeBlink: Boolean(banner.badgeBlink ?? banner.badge_blink),
+    badgePriority: Number.isFinite(Number(banner.badgePriority ?? banner.badge_priority))
+      ? Number(banner.badgePriority ?? banner.badge_priority)
+      : 0,
+    enableCountdown: Boolean(banner.enableCountdown ?? banner.enable_countdown),
+    eventStartLocal: isoToDatetimeLocal(es),
+    eventEndLocal: isoToDatetimeLocal(ee),
     redirectChannel: banner.redirectChannel ?? '',
     sortOrder: Number.isFinite(Number(banner.sortOrder)) ? Number(banner.sortOrder) : 0,
     isActive: banner.isActive !== false,
@@ -56,6 +90,20 @@ function bannerToForm(banner) {
     startTime: typeof banner.startTime === 'string' && banner.startTime ? banner.startTime : '09:00',
     endTime: typeof banner.endTime === 'string' && banner.endTime ? banner.endTime : '17:00',
   }
+}
+
+function formatCountdown(ms) {
+  if (ms <= 0) return '0s'
+  const s = Math.floor(ms / 1000)
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  const parts = []
+  if (d) parts.push(`${d}d`)
+  if (d || h) parts.push(`${h}h`)
+  parts.push(`${m}m ${sec}s`)
+  return parts.join(' ')
 }
 
 /**
@@ -68,19 +116,35 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
   /** Base64 or remote URL for API (blob previews are not persistable). */
   const [imageDataUrl, setImageDataUrl] = useState(null)
   const [submitError, setSubmitError] = useState(null)
+  /** Wall clock for preview / countdown (updated while modal is open). */
+  const [clock, setClock] = useState(() => Date.now())
 
   useEffect(() => {
     if (!isOpen) return
-    setSubmitError(null)
-    if (variant === 'edit' && banner) {
-      setForm(bannerToForm(banner))
-      setImagePreview(banner.image ?? null)
-      setImageDataUrl(null)
-    }
-    if (variant === 'add') {
-      setForm(emptyForm())
-      setImagePreview(null)
-      setImageDataUrl(null)
+    const id = window.setInterval(() => setClock(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [isOpen])
+
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return
+      setSubmitError(null)
+      if (variant === 'edit' && banner) {
+        setForm(bannerToForm(banner))
+        setImagePreview(banner.image ?? null)
+        setImageDataUrl(null)
+      }
+      if (variant === 'add') {
+        setForm(emptyForm())
+        setImagePreview(null)
+        setImageDataUrl(null)
+      }
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
     }
   }, [isOpen, variant, banner])
 
@@ -122,6 +186,27 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
     reader.readAsDataURL(file)
   }
 
+  const countdownPreviewText = useMemo(() => {
+    if (!form.enableCountdown) return null
+    const startIso = datetimeLocalToIso(form.eventStartLocal)
+    const endIso = datetimeLocalToIso(form.eventEndLocal)
+    const now = clock
+    if (startIso) {
+      const t0 = new Date(startIso).getTime()
+      if (!Number.isNaN(t0) && now < t0) {
+        return `Starts in ${formatCountdown(t0 - now)}`
+      }
+    }
+    if (endIso) {
+      const t1 = new Date(endIso).getTime()
+      if (!Number.isNaN(t1) && now < t1) {
+        return `Ends in ${formatCountdown(t1 - now)}`
+      }
+    }
+    if (startIso || endIso) return 'Event window (preview)'
+    return 'Set event times for countdown'
+  }, [form.enableCountdown, form.eventStartLocal, form.eventEndLocal, clock])
+
   function handleSubmit(e) {
     e.preventDefault()
     setSubmitError(null)
@@ -132,9 +217,19 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
       setSubmitError('Title is required.')
       return
     }
-    if (!description) {
-      setSubmitError('Description is required.')
+
+    if (form.enableCountdown && !form.eventStartLocal?.trim()) {
+      setSubmitError('Event start is required when countdown is enabled.')
       return
+    }
+
+    const startIso = datetimeLocalToIso(form.eventStartLocal)
+    const endIso = datetimeLocalToIso(form.eventEndLocal)
+    if (startIso && endIso) {
+      if (new Date(endIso).getTime() <= new Date(startIso).getTime()) {
+        setSubmitError('Event end must be after event start.')
+        return
+      }
     }
 
     const isEdit = variant === 'edit'
@@ -167,6 +262,13 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
       description,
       image: imageUrl,
       badge: form.badge.trim(),
+      badgeEnabled: form.badgeEnabled,
+      badgeColor: form.badgeColor.trim() || '#FBBF24',
+      badgeBlink: form.badgeBlink,
+      badgePriority: Number.isFinite(Number(form.badgePriority)) ? Number(form.badgePriority) : 0,
+      enableCountdown: form.enableCountdown,
+      eventStart: startIso,
+      eventEnd: endIso,
       redirectChannel: form.redirectChannel.trim(),
       sortOrder: Number.isFinite(Number(form.sortOrder)) ? Number(form.sortOrder) : 0,
       isActive: form.isActive,
@@ -181,9 +283,36 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
     onSubmit(payload)
   }
 
+  const isEdit = variant === 'edit'
+  const eventStartIso = datetimeLocalToIso(form.eventStartLocal)
+  const eventEndIso = datetimeLocalToIso(form.eventEndLocal)
+  const previewNow = new Date(clock)
+  const previewSlot = {
+    isActive: form.isActive,
+    useTimer: form.useTimer,
+    startTime: form.startTime,
+    endTime: form.endTime,
+    eventStart: eventStartIso,
+    eventEnd: eventEndIso,
+  }
+  const slotWouldShow = isBannerShownInCarousel(previewSlot, previewNow)
+  const tapsWouldWork = canBannerReceiveInteractions(
+    { ...previewSlot, isEnabled: form.isEnabled },
+    previewNow,
+  )
+  const timerWindowNow = form.useTimer
+    ? isNowInDailyWindow(form.startTime, form.endTime, previewNow)
+    : true
+  const eventWindowNow = isNowInEventWindow(eventStartIso, eventEndIso, previewNow)
+
+  const previewBadgeVisible = form.badgeEnabled && form.badge.trim().length > 0
+  const previewImageSrc =
+    imageDataUrl ||
+    (typeof imagePreview === 'string' && !imagePreview.startsWith('blob:') ? imagePreview : null) ||
+    (isEdit && banner?.image ? banner.image : null)
+
   if (!isOpen) return null
 
-  const isEdit = variant === 'edit'
   const subtitle = isEdit ? 'Edit banner' : 'New banner'
   const titleHeading = isEdit ? form.title || 'Banner' : 'Add Banner'
   const submitLabel = isEdit ? 'Update Banner' : 'Add Banner'
@@ -191,21 +320,6 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
   const activeToggleWrap = form.isActive
     ? 'border-emerald-500/45 bg-emerald-950/25 shadow-[0_0_28px_rgba(16,185,129,0.18)] ring-1 ring-emerald-400/35'
     : 'border-slate-600/60 bg-slate-900/30 ring-1 ring-slate-600/40'
-
-  const previewSlot = {
-    isActive: form.isActive,
-    useTimer: form.useTimer,
-    startTime: form.startTime,
-    endTime: form.endTime,
-  }
-  const slotWouldShow = isBannerShownInCarousel(previewSlot)
-  const tapsWouldWork = canBannerReceiveInteractions(
-    { ...previewSlot, isEnabled: form.isEnabled },
-    new Date(),
-  )
-  const timerWindowNow = form.useTimer
-    ? isNowInDailyWindow(form.startTime, form.endTime, new Date())
-    : true
 
   return (
     <div
@@ -268,8 +382,7 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                   onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                   rows={3}
                   className={`${inputClassName()} min-h-[88px] resize-y`}
-                  placeholder="Short description…"
-                  required
+                  placeholder="Short description (optional)"
                 />
               </div>
 
@@ -291,6 +404,38 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                       Upload a banner image
                     </div>
                   )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-600/50 bg-slate-900/40 p-4">
+                <p className={labelClassName()}>Preview card</p>
+                <div className="relative aspect-[21/9] overflow-hidden rounded-xl border border-slate-600/60 bg-slate-800">
+                  {previewImageSrc ? (
+                    <img src={previewImageSrc} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                      Add an image to preview
+                    </div>
+                  )}
+                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                  {previewBadgeVisible ? (
+                    <span
+                      className={`absolute left-3 top-3 rounded-md px-2 py-0.5 text-[10px] font-black uppercase tracking-wider shadow-lg ${
+                        form.badgeBlink ? 'animate-pulse' : ''
+                      }`}
+                      style={{
+                        backgroundColor: form.badgeColor,
+                        color: '#0f172a',
+                      }}
+                    >
+                      {form.badge.trim()}
+                    </span>
+                  ) : null}
+                  {form.enableCountdown && countdownPreviewText ? (
+                    <div className="absolute bottom-2 left-2 right-2 rounded-lg bg-black/55 px-2 py-1.5 text-center text-[11px] font-semibold text-amber-100 ring-1 ring-amber-400/30">
+                      {countdownPreviewText}
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -344,7 +489,7 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                 <div className="space-y-4 rounded-xl border border-slate-700/60 bg-slate-900/35 p-4">
                   <div>
                     <label htmlFor={`${formId}-badge`} className={labelClassName()}>
-                      Badge
+                      Badge text
                     </label>
                     <input
                       id={`${formId}-badge`}
@@ -354,6 +499,109 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                       className={inputClassName()}
                       placeholder='e.g. "LIVE NOW"'
                     />
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-2">
+                    <span className="text-sm text-slate-300">Badge enabled</span>
+                    <ToggleSwitch
+                      checked={form.badgeEnabled}
+                      onChange={(next) => setForm((f) => ({ ...f, badgeEnabled: next }))}
+                      aria-label="Badge enabled"
+                    />
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor={`${formId}-badge-color`} className={labelClassName()}>
+                        Badge color
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          id={`${formId}-badge-color`}
+                          type="color"
+                          value={/^#[0-9A-Fa-f]{6}$/i.test(form.badgeColor) ? form.badgeColor : '#FBBF24'}
+                          onChange={(e) => setForm((f) => ({ ...f, badgeColor: e.target.value }))}
+                          className="h-11 w-14 cursor-pointer rounded-lg border border-slate-600 bg-slate-900"
+                          aria-label="Badge color"
+                        />
+                        <input
+                          type="text"
+                          value={form.badgeColor}
+                          onChange={(e) => setForm((f) => ({ ...f, badgeColor: e.target.value }))}
+                          className={inputClassName()}
+                          placeholder="#FBBF24"
+                          maxLength={7}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-col justify-end">
+                      <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-2">
+                        <span className="text-sm text-slate-300">Badge blink</span>
+                        <ToggleSwitch
+                          checked={form.badgeBlink}
+                          onChange={(next) => setForm((f) => ({ ...f, badgeBlink: next }))}
+                          aria-label="Badge blink"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label htmlFor={`${formId}-badge-prio`} className={labelClassName()}>
+                      Badge priority
+                    </label>
+                    <input
+                      id={`${formId}-badge-prio`}
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={form.badgePriority}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, badgePriority: Number(e.target.value) || 0 }))
+                      }
+                      className={inputClassName()}
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-2">
+                    <div>
+                      <span className="text-sm text-slate-300">Countdown</span>
+                      <p className="mt-0.5 text-[11px] text-slate-500">
+                        Show a timer in the app; requires event start when enabled.
+                      </p>
+                    </div>
+                    <ToggleSwitch
+                      checked={form.enableCountdown}
+                      onChange={(next) => setForm((f) => ({ ...f, enableCountdown: next }))}
+                      aria-label="Countdown enabled"
+                    />
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor={`${formId}-ev-start`} className={labelClassName()}>
+                        Event start
+                      </label>
+                      <input
+                        id={`${formId}-ev-start`}
+                        type="datetime-local"
+                        value={form.eventStartLocal}
+                        onChange={(e) => setForm((f) => ({ ...f, eventStartLocal: e.target.value }))}
+                        className={inputClassName()}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor={`${formId}-ev-end`} className={labelClassName()}>
+                        Event end
+                      </label>
+                      <input
+                        id={`${formId}-ev-end`}
+                        type="datetime-local"
+                        value={form.eventEndLocal}
+                        onChange={(e) => setForm((f) => ({ ...f, eventEndLocal: e.target.value }))}
+                        className={inputClassName()}
+                      />
+                    </div>
                   </div>
 
                   <div>
@@ -389,6 +637,9 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                       }
                       className={inputClassName()}
                     />
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      You can also reorder banners on the Banners page via drag-and-drop.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -455,20 +706,39 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                               : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50'
                         }`}
                       >
-                        {!form.useTimer
-                          ? 'Timer off — visibility follows Active only; taps require Enabled.'
-                          : !timerWindowNow
-                            ? 'Outside today’s daily window — slot hidden while timer is on.'
+                        {!timerWindowNow
+                          ? 'Outside today’s daily window — slot hidden while timer is on.'
+                          : !eventWindowNow
+                            ? 'Outside event date window — slot hidden.'
                             : tapsWouldWork
-                              ? 'Inside window — slot visible and taps enabled.'
+                              ? 'Inside windows — slot visible and taps enabled.'
                               : slotWouldShow && !form.isEnabled
-                                ? 'Inside window — slot would show; taps disabled (enable off).'
-                                : 'Inside window but inactive — slot hidden.'}
+                                ? 'Inside windows — slot would show; taps disabled (enable off).'
+                                : 'Inside windows but inactive — slot hidden.'}
                       </p>
                     </div>
                   </motion.div>
                 ) : null}
               </AnimatePresence>
+              {!form.useTimer ? (
+                <p
+                  className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors duration-300 ${
+                    tapsWouldWork
+                      ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30'
+                      : slotWouldShow && !form.isEnabled
+                        ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-400/30'
+                        : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50'
+                  }`}
+                >
+                  {!eventWindowNow
+                    ? 'Outside event date window — slot hidden.'
+                    : tapsWouldWork
+                      ? 'Visible (no daily timer) — taps follow Enabled.'
+                      : slotWouldShow && !form.isEnabled
+                        ? 'Would show; taps disabled.'
+                        : 'Not shown (inactive or other rules).'}
+                </p>
+              ) : null}
 
               {submitError ? (
                 <p className="rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-200 ring-1 ring-red-400/30">

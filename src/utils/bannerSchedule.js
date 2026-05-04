@@ -24,9 +24,29 @@ export function isNowInDailyWindow(startTime, endTime, now = new Date()) {
   return cur >= start || cur < end
 }
 
-/** Active + schedule: banner appears in the carousel / hero strip. */
+/** Event range from API (ISO strings or null). Open-ended when one bound missing. */
+export function isNowInEventWindow(eventStart, eventEnd, now = new Date()) {
+  const startRaw = eventStart ?? null
+  const endRaw = eventEnd ?? null
+  if ((startRaw == null || startRaw === '') && (endRaw == null || endRaw === '')) return true
+  const t = now.getTime()
+  if (startRaw != null && startRaw !== '') {
+    const s = new Date(startRaw).getTime()
+    if (!Number.isNaN(s) && t < s) return false
+  }
+  if (endRaw != null && endRaw !== '') {
+    const e = new Date(endRaw).getTime()
+    if (!Number.isNaN(e) && t > e) return false
+  }
+  return true
+}
+
+/** Active + event window + legacy daily schedule: banner appears in the carousel / hero strip. */
 export function isBannerShownInCarousel(banner, now = new Date()) {
   if (!banner?.isActive) return false
+  const es = banner.eventStart ?? banner.event_start
+  const ee = banner.eventEnd ?? banner.event_end
+  if (!isNowInEventWindow(es, ee, now)) return false
   if (!banner?.useTimer) return true
   return isNowInDailyWindow(banner.startTime, banner.endTime, now)
 }

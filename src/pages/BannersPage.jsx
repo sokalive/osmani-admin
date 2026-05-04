@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { GripVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 import BannerFormModal from '../components/BannerFormModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
@@ -18,6 +18,43 @@ function normalizeBanner(b) {
   }
 }
 
+/** Full body for PUT so omitted fields are not reset to defaults on the server. */
+function bannerPayloadForApi(b, overrides = {}) {
+  const m = { ...b, ...overrides }
+  const useTimer = Boolean(m.useTimer ?? m.eventTimer)
+  const sortOrder = Number(m.sortOrder ?? m.sort_order) || 0
+  return {
+    title: m.title ?? '',
+    description: m.description ?? '',
+    image: m.image ?? '',
+    badge: m.badge ?? '',
+    badgeEnabled: m.badgeEnabled ?? m.badge_enabled ?? true,
+    badgeColor: (m.badgeColor ?? m.badge_color ?? '#FBBF24').trim() || '#FBBF24',
+    badgeBlink: Boolean(m.badgeBlink ?? m.badge_blink),
+    badgePriority: Number(m.badgePriority ?? m.badge_priority) || 0,
+    enableCountdown: Boolean(m.enableCountdown ?? m.enable_countdown),
+    eventStart: m.eventStart ?? m.event_start ?? null,
+    eventEnd: m.eventEnd ?? m.event_end ?? null,
+    redirectChannel: m.redirectChannel ?? '',
+    sortOrder,
+    isActive: m.isActive !== false && m.is_active !== false,
+    isEnabled: m.isEnabled !== false && m.enabled !== false,
+    useTimer,
+    startTime: useTimer ? (m.startTime ?? m.dailyStart ?? '09:00') : '',
+    endTime: useTimer ? (m.endTime ?? m.dailyEnd ?? '17:00') : '',
+  }
+}
+
+function reorderById(list, fromId, toId) {
+  const next = [...list]
+  const fi = next.findIndex((x) => x.id === fromId)
+  const ti = next.findIndex((x) => x.id === toId)
+  if (fi < 0 || ti < 0 || fi === ti) return list
+  const [row] = next.splice(fi, 1)
+  next.splice(ti, 0, row)
+  return next
+}
+
 function BannersPage() {
   const { showToast } = useToast()
   const [banners, setBanners] = useState([])
@@ -25,6 +62,7 @@ function BannersPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [addOpen, setAddOpen] = useState(false)
   const [editingBanner, setEditingBanner] = useState(null)
+  const [dragBannerId, setDragBannerId] = useState(null)
 
   const loadBanners = useCallback(async () => {
     try {
@@ -40,7 +78,14 @@ function BannersPage() {
   }, [showToast])
 
   useEffect(() => {
-    loadBanners()
+    let cancelled = false
+    const raf = requestAnimationFrame(() => {
+      if (!cancelled) void loadBanners()
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+    }
   }, [loadBanners])
 
   useEffect(() => {
@@ -50,8 +95,8 @@ function BannersPage() {
 
   const sortedBanners = useMemo(() => {
     return [...banners].sort((a, b) => {
-      const da = Number(a.sortOrder) || 0
-      const db = Number(b.sortOrder) || 0
+      const da = Number(a.sortOrder ?? a.sort_order) || 0
+      const db = Number(b.sortOrder ?? b.sort_order) || 0
       if (da !== db) return da - db
       const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : 0
       const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : 0
@@ -59,9 +104,49 @@ function BannersPage() {
     })
   }, [banners])
 
+  const persistSortOrder = useCallback(
+    async (ordered) => {
+      try {
+        await Promise.all(
+          ordered.map((b, i) => putBanner(b.id, bannerPayloadForApi(b, { sortOrder: i }))),
+        )
+        await loadBanners()
+        showToast('success', 'Banner order saved.')
+      } catch (e) {
+        showToast('error', e?.message || 'Could not save order')
+        await loadBanners()
+      }
+    },
+    [loadBanners, showToast],
+  )
+
+  const handleDropOnBanner = useCallback(
+    async (e, targetId) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const raw = e.dataTransfer.getData('text/plain')
+      const fromId = Number.parseInt(raw, 10)
+      if (!Number.isFinite(fromId) || fromId === targetId) return
+      const sorted = [...banners].sort((a, b) => {
+        const da = Number(a.sortOrder ?? a.sort_order) || 0
+        const db = Number(b.sortOrder ?? b.sort_order) || 0
+        if (da !== db) return da - db
+        const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : 0
+        const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : 0
+        return tb - ta
+      })
+      const next = reorderById(sorted, fromId, targetId)
+      if (next === sorted) return
+      setDragBannerId(null)
+      await persistSortOrder(next)
+    },
+    [banners, persistSortOrder],
+  )
+
   async function handleAddSubmit(payload) {
     try {
-      const { id: _id, ...rest } = payload
+      const rest = { ...payload }
+      delete rest.id
       await postBanner({
         ...rest,
         createdAt: new Date().toISOString(),
@@ -119,8 +204,8 @@ function BannersPage() {
               Banners
             </h1>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
-              Manage hero tiles and routing. Visibility follows enabled, active, and schedule rules
-              (preview updates every minute).
+              Manage hero tiles and routing. Public list uses active, enabled, event dates, and
+              optional daily timer. Drag the handle to reorder; preview updates every minute.
             </p>
           </div>
           <button
@@ -177,6 +262,10 @@ function BannersPage() {
                 ? 'border-emerald-500/40 shadow-[0_0_32px_rgba(16,185,129,0.2)] ring-2 ring-emerald-400/25'
                 : 'border-slate-600/50 shadow-none ring-1 ring-slate-700/60 grayscale-[0.25]'
 
+              const badgeOn = (b.badgeEnabled ?? b.badge_enabled) !== false && b.badge
+              const badgeColor = (b.badgeColor ?? b.badge_color ?? '#FBBF24').trim() || '#FBBF24'
+              const badgeBlink = Boolean(b.badgeBlink ?? b.badge_blink)
+
               return (
                 <motion.article
                   key={b.id}
@@ -184,10 +273,34 @@ function BannersPage() {
                   initial={{ opacity: 0, y: 14 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.28, delay: index * 0.05, ease: [0.16, 1, 0.3, 1] }}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                  }}
+                  onDrop={(e) => handleDropOnBanner(e, b.id)}
                   className={`group relative flex flex-col overflow-hidden rounded-2xl border bg-slate-950/50 backdrop-blur-sm transition-all duration-300 hover:-translate-y-0.5 ${activeBorder} ${
                     !b.isEnabled ? 'opacity-[0.72]' : ''
-                  }`}
+                  } ${dragBannerId === b.id ? 'ring-2 ring-amber-400/50' : ''}`}
                 >
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', String(b.id))
+                      e.dataTransfer.effectAllowed = 'move'
+                      setDragBannerId(b.id)
+                    }}
+                    onDragEnd={() => setDragBannerId(null)}
+                    className="absolute left-2 top-2 z-20 flex cursor-grab items-center justify-center rounded-lg bg-black/50 p-1.5 text-slate-300 ring-1 ring-white/15 transition-colors hover:bg-black/70 hover:text-amber-200 active:cursor-grabbing"
+                    aria-label={`Drag to reorder ${b.title}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') e.preventDefault()
+                    }}
+                  >
+                    <GripVertical className="h-5 w-5" strokeWidth={2} />
+                  </div>
+
                   <div className="relative aspect-[21/9] overflow-hidden bg-slate-800">
                     <img
                       src={b.image}
@@ -197,8 +310,13 @@ function BannersPage() {
                       }`}
                     />
                     <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 to-transparent opacity-70" />
-                    {b.badge ? (
-                      <span className="absolute left-3 top-3 rounded-md bg-amber-400/95 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-slate-950 shadow-lg">
+                    {badgeOn ? (
+                      <span
+                        className={`absolute left-12 top-3 rounded-md px-2 py-0.5 text-[10px] font-black uppercase tracking-wider shadow-lg ${
+                          badgeBlink ? 'animate-pulse' : ''
+                        }`}
+                        style={{ backgroundColor: badgeColor, color: '#0f172a' }}
+                      >
                         {b.badge}
                       </span>
                     ) : null}
@@ -261,6 +379,11 @@ function BannersPage() {
                           No timer
                         </span>
                       )}
+                      {b.enableCountdown ?? b.enable_countdown ? (
+                        <span className="rounded-md bg-cyan-500/20 px-2 py-0.5 text-cyan-100 ring-1 ring-cyan-400/35">
+                          Countdown
+                        </span>
+                      ) : null}
                     </div>
 
                     {b.redirectChannel ? (
@@ -269,7 +392,7 @@ function BannersPage() {
                       </p>
                     ) : null}
                     <p className="mt-1 text-[11px] text-slate-500">
-                      Order {b.sortOrder ?? 0}
+                      Order {b.sortOrder ?? b.sort_order ?? 0}
                       {' · '}
                       {b.createdAt instanceof Date
                         ? b.createdAt.toLocaleDateString(undefined, {

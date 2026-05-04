@@ -56,23 +56,66 @@ function parseTimeToPg(v) {
   return s
 }
 
+function parseMaybeTimestamptz(v) {
+  if (v === undefined || v === null || v === '') return null
+  const s = String(v).trim()
+  if (!s) return null
+  const d = new Date(s)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function parseBadgeColor(v) {
+  const raw = String(v ?? '#FBBF24').trim()
+  if (!raw) return '#FBBF24'
+  if (/^#[0-9A-Fa-f]{6}$/.test(raw)) return raw.toUpperCase()
+  if (/^#[0-9A-Fa-f]{3}$/.test(raw)) return raw.toUpperCase()
+  return '#FBBF24'
+}
+
 function parseBannerFields(req) {
   const b = req.body || {}
   const useTimer = parseBool(b.event_timer ?? b.eventTimer ?? b.useTimer, false)
   const daily_start = useTimer ? parseTimeToPg(b.daily_start ?? b.dailyStart ?? b.startTime) : null
   const daily_end = useTimer ? parseTimeToPg(b.daily_end ?? b.dailyEnd ?? b.endTime) : null
+  const badge_priority = Number.parseInt(String(b.badge_priority ?? b.badgePriority ?? 0), 10)
   return {
     title: String(b.title ?? '').trim(),
     description: String(b.description ?? '').trim(),
     active: parseBool(b.active ?? b.isActive, true),
     enabled: parseBool(b.enabled ?? b.isEnabled, true),
     badge: String(b.badge ?? '').trim(),
+    badge_enabled: parseBool(b.badge_enabled ?? b.badgeEnabled, true),
+    badge_color: parseBadgeColor(b.badge_color ?? b.badgeColor),
+    badge_blink: parseBool(b.badge_blink ?? b.badgeBlink, false),
+    badge_priority: Number.isFinite(badge_priority) ? badge_priority : 0,
+    enable_countdown: parseBool(b.enable_countdown ?? b.enableCountdown, false),
+    event_start: parseMaybeTimestamptz(b.event_start ?? b.eventStart),
+    event_end: parseMaybeTimestamptz(b.event_end ?? b.eventEnd),
     redirect_channel_id: parseRedirectChannelId(b),
     sort_order: Number.parseInt(String(b.sort_order ?? b.sortOrder ?? 0), 10) || 0,
     event_timer: useTimer,
     daily_start,
     daily_end,
   }
+}
+
+function validateBannerFields(fields) {
+  const errors = []
+  if (!fields.title) errors.push('title is required')
+  if (fields.enable_countdown && !fields.event_start) {
+    errors.push('event_start is required when enable_countdown is true')
+  }
+  if (fields.event_start && fields.event_end) {
+    const t0 = fields.event_start.getTime()
+    const t1 = fields.event_end.getTime()
+    if (t1 <= t0) errors.push('event_end must be after event_start')
+  }
+  if (fields.event_timer) {
+    if (!fields.daily_start || !fields.daily_end) {
+      errors.push('daily start and end times are required when event timer is enabled')
+    }
+  }
+  return errors
 }
 
 async function resolveImagePath({ body, file, existingImage }) {
@@ -105,7 +148,7 @@ async function unlinkUploadIfAny(imagePath) {
   await fs.unlink(path.join(UPLOADS_DIR, base)).catch(() => {})
 }
 
-/** Public: active + enabled + schedule; sorted by sort_order */
+/** Public: active + enabled + event range + legacy daily schedule; sorted */
 bannersRouter.get('/', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersPublic()
@@ -115,7 +158,7 @@ bannersRouter.get('/', async (req, res) => {
   }
 })
 
-/** CMS: all banners (admin UI), sorted by sort_order */
+/** CMS: all banners (admin UI) */
 bannersRouter.get('/manage', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersManage()
@@ -128,9 +171,10 @@ bannersRouter.get('/manage', async (req, res) => {
 bannersRouter.post('/', maybeUploadBanner, async (req, res) => {
   try {
     const fields = parseBannerFields(req)
-    if (!fields.title || !fields.description) {
+    const vErrs = validateBannerFields(fields)
+    if (vErrs.length) {
       if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
-      return res.status(400).json({ error: 'title and description are required' })
+      return res.status(400).json({ error: vErrs.join('; ') })
     }
     let imagePath
     try {
@@ -174,9 +218,10 @@ bannersRouter.put('/:id', maybeUploadBanner, async (req, res) => {
     }
 
     const fields = parseBannerFields(req)
-    if (!fields.title || !fields.description) {
+    const vErrs = validateBannerFields(fields)
+    if (vErrs.length) {
       if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
-      return res.status(400).json({ error: 'title and description are required' })
+      return res.status(400).json({ error: vErrs.join('; ') })
     }
 
     let imagePath
