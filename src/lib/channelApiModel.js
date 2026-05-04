@@ -12,6 +12,22 @@ const API_ORIGIN =
   (import.meta.env.VITE_API_BASE_URL && String(import.meta.env.VITE_API_BASE_URL).replace(/\/$/, '')) ||
   'https://osmani-admin-api.onrender.com'
 
+const PLAYER_UI_TO_API = {
+  Exo: 'exo',
+  WebView: 'webview',
+  VLC: 'vlc',
+  Native: 'native',
+  IJK: 'ijk',
+}
+
+const PLAYER_API_TO_UI = {
+  exo: 'Exo',
+  webview: 'WebView',
+  vlc: 'VLC',
+  native: 'Native',
+  ijk: 'IJK',
+}
+
 function resolveThumbnailUrl(c) {
   const rel = c?.thumbnail
   const abs = c?.thumbnailUrl
@@ -31,12 +47,21 @@ export function uiFromApiRow(c) {
   const active = c.isActive !== undefined ? Boolean(c.isActive) : c.active !== false
   const showInApp = c.showInApp !== undefined ? Boolean(c.showInApp) : c.show_in_app !== false
 
+  const bottomTabsDisplay =
+    c.bottomTab != null && String(c.bottomTab).trim() !== ''
+      ? String(c.bottomTab).trim()
+      : c.bottomTabsDisplay != null && String(c.bottomTabsDisplay).trim() !== ''
+        ? String(c.bottomTabsDisplay).trim()
+        : category
+  const ptKey = String(c.playerType ?? 'exo').toLowerCase()
+  const playerType = PLAYER_API_TO_UI[ptKey] ?? 'Exo'
+
   return {
     id: String(c.id),
     name: c.name ?? '',
     category,
     displaySection: category,
-    bottomTabsDisplay: c.bottomTabsDisplay ?? category,
+    bottomTabsDisplay,
     logoLetter: (c.name?.[0] ?? '?').toUpperCase(),
     logoGradient: CATEGORY_GRADIENTS[category] || 'from-indigo-600 to-purple-700',
     accessPremium,
@@ -50,7 +75,7 @@ export function uiFromApiRow(c) {
     origin: c.origin ?? '',
     referer: c.referer ?? '',
     userAgent: c.userAgent ?? '',
-    playerType: c.playerType ?? 'Exo',
+    playerType,
     thumbnailUrl: resolveThumbnailUrl(c),
   }
 }
@@ -62,6 +87,10 @@ export function channelFormDataFromSubmit(submitPayload) {
   fd.append('name', (s.name ?? '').trim())
   fd.append('url', (s.streamUrlPrimary ?? '').trim())
   fd.append('category', ((s.displaySection ?? 'General').trim() || 'General'))
+  fd.append(
+    'bottomTab',
+    ((s.bottomTabsDisplay ?? s.displaySection ?? 'General').trim() || 'General'),
+  )
   fd.append('isLive', String(Boolean(s.live)))
   fd.append('isHD', String(s.hd !== false))
   fd.append('isActive', String(s.active !== false))
@@ -72,7 +101,8 @@ export function channelFormDataFromSubmit(submitPayload) {
   fd.append('origin', (s.origin ?? '').trim())
   fd.append('referer', (s.referer ?? '').trim())
   fd.append('userAgent', (s.userAgent ?? '').trim())
-  fd.append('playerType', ((s.playerType ?? 'Exo').trim() || 'Exo'))
+  const uiPt = (s.playerType ?? 'Exo').trim() || 'Exo'
+  fd.append('playerType', PLAYER_UI_TO_API[uiPt] ?? 'exo')
 
   if (s.thumbnailFile instanceof Blob) {
     fd.append('thumbnail', s.thumbnailFile, s.thumbnailFile.name || 'thumbnail.jpg')
@@ -92,13 +122,14 @@ export function apiBodyFromFormSubmit(s) {
   return {
     name: s.name?.trim() ?? '',
     category: (s.displaySection ?? 'General').trim() || 'General',
+    bottomTab: (s.bottomTabsDisplay ?? s.displaySection ?? 'General').trim() || 'General',
     url: (s.streamUrlPrimary ?? '').trim(),
     backupStream1: (s.backupStream1 ?? '').trim(),
     backupStream2: (s.backupStream2 ?? '').trim(),
     origin: (s.origin ?? '').trim(),
     referer: (s.referer ?? '').trim(),
     userAgent: (s.userAgent ?? '').trim(),
-    playerType: (s.playerType ?? 'Exo').trim() || 'Exo',
+    playerType: PLAYER_UI_TO_API[(s.playerType ?? 'Exo').trim() || 'Exo'] ?? 'exo',
     accessType: s.accessPremium ? 'premium' : 'free',
     isLive: Boolean(s.live),
     isHD: s.hd !== false,
@@ -116,13 +147,14 @@ export function apiBodyFromUiChannel(ch) {
   return {
     name: ch.name ?? '',
     category: ch.category ?? ch.displaySection ?? 'General',
+    bottomTab: ch.bottomTabsDisplay ?? ch.displaySection ?? ch.category ?? 'General',
     url: ch.streamUrlPrimary ?? '',
     backupStream1: ch.backupStream1 ?? '',
     backupStream2: ch.backupStream2 ?? '',
     origin: ch.origin ?? '',
     referer: ch.referer ?? '',
     userAgent: ch.userAgent ?? '',
-    playerType: ch.playerType ?? 'Exo',
+    playerType: PLAYER_UI_TO_API[(ch.playerType ?? 'Exo').toString().trim() || 'Exo'] ?? 'exo',
     accessType: ch.accessPremium ? 'premium' : 'free',
     isLive: Boolean(ch.live),
     isHD: ch.hd !== false,

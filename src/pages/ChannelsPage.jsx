@@ -7,7 +7,9 @@ import { useToast } from '../context/ToastContext.jsx'
 import {
   addChannelFormData,
   deleteChannel,
+  getAppGlobalSettings,
   getChannels,
+  putAppGlobalSettings,
   updateChannel,
   updateChannelFormData,
 } from '../lib/api'
@@ -39,6 +41,38 @@ function ChannelsPage() {
   useEffect(() => {
     loadChannels()
   }, [loadChannels])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const s = await getAppGlobalSettings()
+        if (cancelled) return
+        setIsFreeMode(Boolean(s.freeMode))
+        setIsEmergencyMode(Boolean(s.emergencyMode))
+        setIsMaintenanceMode(Boolean(s.maintenanceMode))
+      } catch {
+        /* older API without /settings */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  async function persistAppModes(partial) {
+    const next = {
+      freeMode: partial.freeMode !== undefined ? partial.freeMode : isFreeMode,
+      emergencyMode: partial.emergencyMode !== undefined ? partial.emergencyMode : isEmergencyMode,
+      maintenanceMode:
+        partial.maintenanceMode !== undefined ? partial.maintenanceMode : isMaintenanceMode,
+    }
+    try {
+      await putAppGlobalSettings(next)
+    } catch (e) {
+      showToast('error', e?.message || 'Could not save app modes')
+    }
+  }
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -146,9 +180,18 @@ function ChannelsPage() {
           isFreeMode={isFreeMode}
           isEmergencyMode={isEmergencyMode}
           isMaintenanceMode={isMaintenanceMode}
-          onFreeModeChange={setIsFreeMode}
-          onEmergencyModeChange={setIsEmergencyMode}
-          onMaintenanceModeChange={setIsMaintenanceMode}
+          onFreeModeChange={(v) => {
+            setIsFreeMode(v)
+            persistAppModes({ freeMode: v })
+          }}
+          onEmergencyModeChange={(v) => {
+            setIsEmergencyMode(v)
+            persistAppModes({ emergencyMode: v })
+          }}
+          onMaintenanceModeChange={(v) => {
+            setIsMaintenanceMode(v)
+            persistAppModes({ maintenanceMode: v })
+          }}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           onAddChannel={() => {

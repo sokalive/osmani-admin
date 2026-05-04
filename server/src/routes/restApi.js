@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
 import { channelsRouter } from './channels.js'
+import { ensureGlobalAppSettingsFile, globalAppSettingsRouter } from './globalAppSettings.js'
 import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
 
 const FILES = {
@@ -30,7 +31,7 @@ export const restApi = Router()
 restApi.get('/', (_req, res) => {
   res.json({
     message: 'API is working 🚀',
-    endpoints: ['/health', '/channels', '/dashboard'],
+    endpoints: ['/health', '/channels', '/settings', '/dashboard'],
   })
 })
 
@@ -46,6 +47,7 @@ restApi.get('/health', (_req, res) => {
 /* ========================= */
 
 restApi.use('/channels', channelsRouter)
+restApi.use('/settings', globalAppSettingsRouter)
 
 /* =========================
    ⚠️ GLOBAL ERROR HANDLER
@@ -71,6 +73,7 @@ restApi.use((req, res) => {
 
 export async function ensureAllApiDataFiles() {
   await ensureJsonFile('channels.json', '[]\n')
+  await ensureGlobalAppSettingsFile()
   await ensureJsonFile(FILES.banners, '[]\n')
   await ensureJsonFile(FILES.plans, '[]\n')
   await ensureJsonFile(FILES.users, '[]\n')

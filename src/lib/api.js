@@ -112,6 +112,10 @@ export function deleteChannel(id) {
   return apiDelete(`/channels/${encodeURIComponent(id)}`)
 }
 
+/** Global app modes (Free / Emergency / Maintenance) — GET/PUT /api/settings */
+export const getAppGlobalSettings = () => apiGet('/settings')
+export const putAppGlobalSettings = (body) => apiPut('/settings', body)
+
 /** --- Banners --- */
 export const getBanners = () => apiGet('/banners')
 export const postBanner = (body) => apiPost('/banners', body)

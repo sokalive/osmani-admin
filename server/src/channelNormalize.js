@@ -1,5 +1,26 @@
 import path from 'node:path'
 
+const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
+
+/** Canonical playerType for API + storage */
+export function normalizePlayerType(v) {
+  const raw = String(v ?? 'exo')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+  const legacy = {
+    exo: 'exo',
+    exoplayer: 'exo',
+    webview: 'webview',
+    vlc: 'vlc',
+    native: 'native',
+    ijk: 'ijk',
+    ijkplayer: 'ijk',
+  }
+  const mapped = legacy[raw] ?? raw
+  return PLAYER_TYPES.has(mapped) ? mapped : 'exo'
+}
+
 /** Migrate legacy stored rows to canonical shape */
 export function migrateStoredChannel(c) {
   if (!c || typeof c !== 'object') return c
@@ -16,6 +37,15 @@ export function migrateStoredChannel(c) {
       : c.thumbnailUrl != null && String(c.thumbnailUrl).trim() !== ''
         ? String(c.thumbnailUrl).trim()
         : null
+  const category = (c.category || 'General').trim() || 'General'
+  const bottomTabRaw =
+    c.bottomTab != null && String(c.bottomTab).trim() !== ''
+      ? String(c.bottomTab).trim()
+      : c.bottomTabsDisplay != null && String(c.bottomTabsDisplay).trim() !== ''
+        ? String(c.bottomTabsDisplay).trim()
+        : c.bottom_tab != null && String(c.bottom_tab).trim() !== ''
+          ? String(c.bottom_tab).trim()
+          : category
 
   return {
     ...c,
@@ -30,7 +60,9 @@ export function migrateStoredChannel(c) {
           : true,
     accessType,
     thumbnail,
-    category: (c.category || 'General').trim() || 'General',
+    category,
+    bottomTab: bottomTabRaw || 'General',
+    playerType: normalizePlayerType(c.playerType),
     url: (c.url || '').trim(),
     name: (c.name || '').trim(),
   }
@@ -83,10 +115,17 @@ export function parseChannelInput(body, file, existing = null) {
     accessType = ex.accessType === 'premium' ? 'premium' : 'free'
   }
 
+  const category = str(b.category || b.displaySection, 'General') || 'General'
+  const bottomTab =
+    str(b.bottomTab || b.bottomTabsDisplay || b.bottom_tabs_display, '') ||
+    (ex != null ? ex.bottomTab : '') ||
+    category
+
   return {
     name: str(b.name),
     url: str(b.url || b.streamUrlPrimary),
-    category: str(b.category || b.displaySection, 'General') || 'General',
+    category,
+    bottomTab: bottomTab || category,
     thumbnail: thumbnail || null,
     isLive: parseBool(b.isLive ?? b.live, ex != null ? Boolean(ex.isLive) : true),
     isHD: parseBool(b.isHD ?? b.hd, ex != null ? Boolean(ex.isHD) : true),
@@ -98,7 +137,7 @@ export function parseChannelInput(body, file, existing = null) {
     origin: str(b.origin),
     referer: str(b.referer),
     userAgent: str(b.userAgent),
-    playerType: str(b.playerType, 'Exo') || 'Exo',
+    playerType: normalizePlayerType(b.playerType ?? (ex != null ? ex.playerType : 'exo')),
   }
 }
 
@@ -109,6 +148,7 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
     name: parsed.name,
     url: parsed.url,
     category: parsed.category,
+    bottomTab: parsed.bottomTab,
     thumbnail: parsed.thumbnail ?? base.thumbnail ?? null,
     isLive: parsed.isLive,
     isHD: parsed.isHD,
@@ -120,7 +160,7 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
     origin: parsed.origin,
     referer: parsed.referer,
     userAgent: parsed.userAgent,
-    playerType: parsed.playerType,
+    playerType: normalizePlayerType(parsed.playerType),
     createdAt: base.createdAt || nowIso,
     updatedAt: nowIso,
   }
@@ -144,12 +184,14 @@ export function channelToResponse(c, req) {
     showInApp: Boolean(m.showInApp),
     accessType: m.accessType === 'premium' ? 'premium' : 'free',
     category: m.category || 'General',
+    bottomTab: (m.bottomTab || m.category || 'General').trim() || 'General',
     backupStream1: m.backupStream1 ?? '',
     backupStream2: m.backupStream2 ?? '',
     origin: m.origin ?? '',
     referer: m.referer ?? '',
     userAgent: m.userAgent ?? '',
-    playerType: m.playerType ?? 'Exo',
+    playerType: normalizePlayerType(m.playerType),
+    bottomTabsDisplay: m.bottomTab || m.category || 'General',
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,
     live: Boolean(m.isLive),
