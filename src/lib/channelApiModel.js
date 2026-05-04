@@ -29,11 +29,12 @@ const PLAYER_API_TO_UI = {
 }
 
 function resolveThumbnailUrl(c) {
-  const rel = c?.thumbnail
-  const abs = c?.thumbnailUrl
-  if (typeof abs === 'string' && abs.startsWith('http')) return abs
-  if (typeof rel === 'string' && rel.startsWith('http')) return rel
-  if (typeof rel === 'string' && rel.startsWith('/')) return `${API_ORIGIN}${rel}`
+  const rel = c?.thumbnail != null ? String(c.thumbnail).trim() : ''
+  const abs = c?.thumbnailUrl != null ? String(c.thumbnailUrl).trim() : ''
+  if (abs.startsWith('http')) return abs
+  if (rel.startsWith('http')) return rel
+  if (rel.startsWith('/')) return `${API_ORIGIN}${rel}`
+  if (rel.length > 0 && !rel.startsWith('blob:')) return `${API_ORIGIN}/${rel.replace(/^\/+/, '')}`
   return null
 }
 
@@ -55,6 +56,7 @@ export function uiFromApiRow(c) {
         : category
   const ptKey = String(c.playerType ?? 'exo').toLowerCase()
   const playerType = PLAYER_API_TO_UI[ptKey] ?? 'Exo'
+  const thumbnail = resolveThumbnailUrl(c)
 
   return {
     id: String(c.id),
@@ -62,6 +64,8 @@ export function uiFromApiRow(c) {
     category,
     displaySection: category,
     bottomTabsDisplay,
+    /** Absolute URL for list/avatar; null if no image */
+    thumbnail,
     logoLetter: (c.name?.[0] ?? '?').toUpperCase(),
     logoGradient: CATEGORY_GRADIENTS[category] || 'from-indigo-600 to-purple-700',
     accessPremium,
@@ -76,7 +80,7 @@ export function uiFromApiRow(c) {
     referer: c.referer ?? '',
     userAgent: c.userAgent ?? '',
     playerType,
-    thumbnailUrl: resolveThumbnailUrl(c),
+    thumbnailUrl: thumbnail,
   }
 }
 

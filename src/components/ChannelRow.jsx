@@ -31,11 +31,22 @@ function ChannelRow({
       </td>
       <td className="min-w-[200px] px-5 py-5 align-middle">
         <div className="flex min-w-0 items-center gap-4">
-          <div
-            className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-base font-bold text-white shadow-md ring-1 ring-white/15 ${channel.logoGradient}`}
-          >
-            {channel.logoLetter}
-          </div>
+          {channel.thumbnail ? (
+            <img
+              src={channel.thumbnail}
+              alt={channel.name}
+              className="h-12 w-12 shrink-0 rounded-xl object-cover shadow-md ring-1 ring-white/15"
+              width={48}
+              height={48}
+            />
+          ) : (
+            <div
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#6c5ce7] text-base font-bold text-white shadow-md ring-1 ring-white/15"
+              aria-hidden
+            >
+              {channel.name?.charAt(0)?.toUpperCase() || 'S'}
+            </div>
+          )}
           <div className="min-w-0">
             <p className="truncate text-[15px] font-bold leading-tight tracking-tight text-white">
               {channel.name}
