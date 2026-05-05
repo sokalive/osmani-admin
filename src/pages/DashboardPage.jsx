@@ -7,7 +7,12 @@ import MostWatchedChannelsListCard from '../components/MostWatchedChannelsListCa
 import StatCard from '../components/StatCard'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getDashboard } from '../lib/api'
+import {
+  getAnalyticsChannels,
+  getAnalyticsLocations,
+  getAnalyticsOverview,
+  getAnalyticsTrend,
+} from '../lib/api'
 
 const emerald =
   'bg-gradient-to-br from-emerald-400/92 via-emerald-500/88 to-emerald-700/90'
@@ -16,11 +21,16 @@ function expandLocationsForCard(rows) {
   if (!Array.isArray(rows)) return []
   const out = []
   for (const row of rows) {
-    const n = Math.min(5000, Math.max(0, Math.floor(Number(row.count) || 0)))
+    const n = Math.min(5000, Math.max(0, Math.floor(Number(row.users) || 0)))
+    const country = String(row.country || '').trim()
+    const cc =
+      country.length === 2
+        ? country.toUpperCase()
+        : country.slice(0, 2).toUpperCase() || 'TZ'
     for (let i = 0; i < n; i += 1) {
       out.push({
-        countryCode: row.countryCode || 'TZ',
-        countryName: row.countryName || 'Tanzania',
+        countryCode: cc || 'TZ',
+        countryName: country || 'Tanzania',
         status: 'online',
       })
     }
@@ -30,37 +40,71 @@ function expandLocationsForCard(rows) {
 
 function DashboardPage() {
   const { showToast } = useToast()
-  const [dash, setDash] = useState(null)
+  const [overview, setOverview] = useState(null)
+  const [channels, setChannels] = useState([])
+  const [locations, setLocations] = useState([])
+  const [trend, setTrend] = useState([])
+  const [loaded, setLoaded] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const d = await getDashboard()
-      setDash(d)
+      const [o, c, l, t] = await Promise.all([
+        getAnalyticsOverview(),
+        getAnalyticsChannels(),
+        getAnalyticsLocations(),
+        getAnalyticsTrend(),
+      ])
+      setOverview(o && typeof o === 'object' ? o : {})
+      setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
+      setLocations(Array.isArray(l) ? l : [])
+      setTrend(
+        Array.isArray(t)
+          ? t.map((x) => ({
+              time: new Date(x.time).toLocaleTimeString('en-GB', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+                timeZone: 'Africa/Dar_es_Salaam',
+              }),
+              users: Number(x.users) || 0,
+            }))
+          : [],
+      )
+      setLoaded(true)
     } catch (e) {
       showToast('error', e?.message || 'Could not load dashboard')
-      setDash(null)
+      setOverview({})
+      setChannels([])
+      setLocations([])
+      setTrend([])
+      setLoaded(true)
     }
   }, [showToast])
 
   useEffect(() => {
     load()
+    const id = window.setInterval(load, 5000)
+    return () => window.clearInterval(id)
   }, [load])
 
   const installsFormatted = useMemo(() => {
-    const n = Number(dash?.totalAppInstalls)
+    const n = Number(overview?.totalInstalls)
     if (!Number.isFinite(n) || n <= 0) return '0'
     return n.toLocaleString('en-TZ')
-  }, [dash])
+  }, [overview])
 
   const liveUsersList = useMemo(
-    () => expandLocationsForCard(dash?.liveUsersByCountry),
-    [dash],
+    () => expandLocationsForCard(locations),
+    [locations],
   )
 
   const mostWatched = useMemo(() => {
-    const ch = dash?.mostWatchedChannels
-    return Array.isArray(ch) ? ch : []
-  }, [dash])
+    return (Array.isArray(channels) ? channels : []).map((r) => ({
+      id: String(r.channel_id ?? ''),
+      name: String(r.channel_id ?? 'Unknown Channel'),
+      watchers: Number(r.viewers) || 0,
+    }))
+  }, [channels])
 
   const section1Cards = [
     {
@@ -85,7 +129,8 @@ function DashboardPage() {
             <LiveUserLocationsCard users={liveUsersList} />
           </section>
         </div>
-        <LiveUsersTrendSection />
+        <LiveUsersTrendSection points={trend} />
+        {!loaded ? <p className="mt-3 text-xs text-slate-500">Loading dashboard…</p> : null}
       </main>
     </>
   )

@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { bannersRouter } from './banners.js'
 import { channelsRouter } from './channels.js'
+import { analyticsRouter } from './analytics.js'
 import { ensureGlobalAppSettingsFile, globalAppSettingsRouter } from './globalAppSettings.js'
 import { ensureJsonFile } from '../lib/jsonFile.js'
 import { usersRouter } from './users.js'
@@ -49,6 +50,10 @@ restApi.get('/', (_req, res) => {
       '/payment-status/:order_id',
       '/subscription-status',
       '/subscription-stream',
+      '/analytics/overview',
+      '/analytics/channels',
+      '/analytics/locations',
+      '/analytics/trend',
       '/webhooks/zenopay',
       '/dashboard',
     ],
@@ -89,6 +94,7 @@ restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(subscriptionRouter)
+restApi.use('/analytics', analyticsRouter)
 restApi.use('/plans', plansRouter)
 restApi.use('/transactions', transactionsRouter)
 restApi.use('/payments', paymentsRouter)

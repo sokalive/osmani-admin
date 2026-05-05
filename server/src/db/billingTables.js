@@ -2,6 +2,41 @@
  * Billing: plans, transactions, subscriptions, ZenoPay settings (single-row).
  */
 export async function ensureBillingTables(client) {
+  await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS app_installs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      device_id TEXT NOT NULL DEFAULT '',
+      installed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS app_installs_device_id_idx ON app_installs (device_id);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS app_installs_installed_at_idx ON app_installs (installed_at DESC);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS live_sessions (
+      device_id TEXT NOT NULL DEFAULT '',
+      channel_id TEXT,
+      country TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS live_sessions_channel_id_idx ON live_sessions (channel_id);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS live_sessions_country_idx ON live_sessions (country);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS live_sessions_updated_at_idx ON live_sessions (updated_at DESC);
+  `)
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS plans (
       id SERIAL PRIMARY KEY,

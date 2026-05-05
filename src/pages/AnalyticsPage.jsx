@@ -17,13 +17,12 @@ import {
 } from 'recharts'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getAnalyticsSummary } from '../lib/api'
 import {
-  buildRevenueSeriesFromTransactions,
-  revenueTodayFromTransactions,
-  topWatchedFromTransactions,
-} from '../lib/analyticsSeries'
-import { isSameLocalDay } from '../lib/dates'
+  getAnalyticsChannels,
+  getAnalyticsLocations,
+  getAnalyticsOverview,
+  getAnalyticsTrend,
+} from '../lib/api'
 import { formatTsh } from '../lib/formatMoney'
 import { useCountUp } from '../hooks/useCountUp'
 
@@ -95,65 +94,86 @@ function ChartBlock({ title, data, chartId, dataKey = 'revenue' }) {
 
 function AnalyticsPage() {
   const { showToast } = useToast()
-  const [transactions, setTransactions] = useState([])
-  const [users, setUsers] = useState([])
-  const [channelCount, setChannelCount] = useState(0)
+  const [overview, setOverview] = useState({})
+  const [channels, setChannels] = useState([])
+  const [locations, setLocations] = useState([])
+  const [trend, setTrend] = useState([])
+  const [loaded, setLoaded] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const s = await getAnalyticsSummary()
-      setTransactions(Array.isArray(s.transactions) ? s.transactions : [])
-      setUsers(Array.isArray(s.users) ? s.users : [])
-      setChannelCount(Number(s.channelCount) || 0)
+      const [o, c, l, t] = await Promise.all([
+        getAnalyticsOverview(),
+        getAnalyticsChannels(),
+        getAnalyticsLocations(),
+        getAnalyticsTrend(),
+      ])
+      setOverview(o && typeof o === 'object' ? o : {})
+      setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
+      setLocations(Array.isArray(l) ? l : [])
+      setTrend(Array.isArray(t) ? t : [])
+      setLoaded(true)
     } catch (e) {
       showToast('error', e?.message || 'Could not load analytics')
-      setTransactions([])
-      setUsers([])
+      setOverview({})
+      setChannels([])
+      setLocations([])
+      setTrend([])
+      setLoaded(true)
     }
   }, [showToast])
 
   useEffect(() => {
     load()
+    const id = window.setInterval(load, 5000)
+    return () => window.clearInterval(id)
   }, [load])
 
-  const txRevenueToday = useMemo(() => revenueTodayFromTransactions(transactions), [transactions])
+  const onlineNow = Number(overview?.onlineNow) || 0
+  const newUsersToday = Number(overview?.newUsersToday) || 0
+  const revenueTodayValue = Number(overview?.revenueToday) || 0
+  const totalInstallsBase = Number(overview?.totalInstalls) || 0
+  const dauEstimate = Math.max(0, onlineNow)
+  const txRevenueToday = revenueTodayValue
 
-  const newUsersToday = useMemo(() => {
-    const day = new Date()
-    return users.filter((u) => u.startDate && isSameLocalDay(u.startDate, day)).length
-  }, [users])
+  const chart7 = useMemo(() => {
+    const rows = Array.isArray(trend) ? trend : []
+    const sliced = rows.slice(Math.max(0, rows.length - 7))
+    return sliced.map((r) => ({
+      label: new Date(r.time).toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: 'Africa/Dar_es_Salaam',
+      }),
+      revenue: Number(r.users) || 0,
+    }))
+  }, [trend])
 
-  const onlineNow = useMemo(() => {
-    const now = Date.now()
-    const active = users.filter((u) => new Date(u.expiryDate).getTime() > now).length
-    return Math.max(0, active * 4 + channelCount * 120)
-  }, [users, channelCount])
+  const chart30 = useMemo(() => {
+    const rows = Array.isArray(trend) ? trend : []
+    const sliced = rows.slice(Math.max(0, rows.length - 30))
+    return sliced.map((r) => ({
+      label: new Date(r.time).toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: 'Africa/Dar_es_Salaam',
+      }),
+      revenue: Number(r.users) || 0,
+    }))
+  }, [trend])
 
-  const totalInstallsBase = useMemo(() => {
-    return Math.max(users.length, transactions.length)
-  }, [users.length, transactions.length])
-
-  const dauEstimate = useMemo(() => {
-    const base = users.length * 180 + transactions.filter((t) => t.status === 'completed').length * 40
-    return Math.max(users.length, base)
-  }, [users, transactions])
-
-  const revenueTodayValue = useMemo(() => {
-    const series = buildRevenueSeriesFromTransactions(transactions, 7)
-    const last = series[series.length - 1]
-    return last?.revenue ?? txRevenueToday
-  }, [transactions, txRevenueToday])
-
-  const chart7 = useMemo(
-    () => buildRevenueSeriesFromTransactions(transactions, 7),
-    [transactions],
+  const topContent = useMemo(
+    () =>
+      (Array.isArray(channels) ? channels : []).slice(0, 8).map((r) => ({
+        id: String(r.channel_id ?? ''),
+        title: String(r.channel_id ?? 'Unknown Channel'),
+        views: Number(r.viewers) || 0,
+        bar: 100,
+      })),
+    [channels],
   )
-  const chart30 = useMemo(
-    () => buildRevenueSeriesFromTransactions(transactions, 30),
-    [transactions],
-  )
-
-  const topContent = useMemo(() => topWatchedFromTransactions(transactions, 8), [transactions])
 
   const vOnline = useCountUp(onlineNow, { duration: 900 })
   const vNewUsers = useCountUp(newUsersToday, { duration: 900 })
@@ -168,8 +188,7 @@ function AnalyticsPage() {
         <header>
           <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">Analytics</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Audience, installs, and revenue derived from live API data (users, transactions, and
-            channels).
+            Audience, installs, and revenue derived from live analytics API.
           </p>
         </header>
 
@@ -186,28 +205,28 @@ function AnalyticsPage() {
             display={vNewUsers.toLocaleString('en-TZ')}
             icon={UserPlus}
             gradientClass="bg-gradient-to-br from-violet-400/95 via-purple-700/95 to-slate-900/95"
-            sub="From subscriptions"
+            sub="From device subscriptions"
           />
           <MetricCard
             title="Daily Active Users"
             display={vDau.toLocaleString('en-TZ')}
             icon={Activity}
             gradientClass="bg-gradient-to-br from-emerald-400/95 via-emerald-700/95 to-slate-900/95"
-            sub="Modelled from API activity"
+            sub="From live sessions"
           />
           <MetricCard
             title="Revenue Today"
             display={formatTsh(vRev)}
             icon={Banknote}
             gradientClass="bg-gradient-to-br from-amber-400/95 via-orange-700/95 to-slate-900/95"
-            sub={txRevenueToday > 0 ? 'Completed transactions today' : 'No completed TX today'}
+            sub={txRevenueToday > 0 ? 'Completed transactions today' : 'No completed transactions today'}
           />
           <MetricCard
             title="Total Installs"
             display={vInstalls.toLocaleString('en-TZ')}
             icon={Download}
             gradientClass="bg-gradient-to-br from-rose-400/95 via-fuchsia-800/95 to-slate-900/95"
-            sub="Users + transaction records (lower bound)"
+            sub="From device subscriptions"
           />
         </section>
 
@@ -219,11 +238,13 @@ function AnalyticsPage() {
         <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
           <h2 className="text-lg font-semibold text-white">Top watched content</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Ranked by completed payment volume (plan name as proxy)
+            Ranked by live viewers from sessions
           </p>
           <ul className="mt-5 space-y-4">
             {topContent.length === 0 ? (
-              <li className="text-sm text-slate-500">No transaction data yet.</li>
+              <li className="text-sm text-slate-500">
+                {loaded ? 'No live channel analytics yet.' : 'Loading live channel analytics…'}
+              </li>
             ) : (
               topContent.map((row) => (
                 <li key={row.id}>

@@ -37,17 +37,26 @@ function jitterSeries(points) {
 /**
  * Full-width analytics-style panel below dashboard cards — simulated live updates.
  */
-function LiveUsersTrendSection() {
-  const [data, setData] = useState(() => [...BASE_SERIES])
+function LiveUsersTrendSection({ points }) {
+  const [data, setData] = useState(() =>
+    Array.isArray(points) && points.length > 0 ? points : [...BASE_SERIES],
+  )
+
+  useEffect(() => {
+    if (Array.isArray(points) && points.length > 0) {
+      setData(points)
+    }
+  }, [points])
 
   const tick = useCallback(() => {
     setData((prev) => jitterSeries(prev))
   }, [])
 
   useEffect(() => {
+    if (Array.isArray(points) && points.length > 0) return undefined
     const id = window.setInterval(tick, 5000)
     return () => window.clearInterval(id)
-  }, [tick])
+  }, [tick, points])
 
   const yDomain = useMemo(() => {
     const vals = data.map((d) => d.users)
