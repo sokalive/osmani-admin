@@ -6,14 +6,32 @@ import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
 const app = express()
 const PORT = Number(process.env.PORT) || 4000
 
+// --- ALLOWED ORIGINS ---
+const allowedOrigins = [
+  'https://osmani-admin.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+]
+
 // --- MIDDLEWARE ---
 app.use(
   cors({
-    origin: ['https://osmani-admin.vercel.app'],
+    origin: (origin, callback) => {
+      // Ruhusu request bila origin (mfano: Postman, curl)
+      if (!origin) return callback(null, true)
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true)
+      } else {
+        console.warn('❌ Blocked by CORS:', origin)
+        return callback(new Error('Not allowed by CORS'))
+      }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
   }),
 )
+
 app.use(express.json({ limit: '4mb' }))
 ensureUploadsDir()
 app.use('/uploads', express.static(UPLOADS_DIR))
@@ -23,7 +41,7 @@ app.get('/', (req, res) => {
   res.type('text').send('Server yako inafanya kazi 🚀')
 })
 
-// --- HEALTH CHECK (MUHIMU SANA) ---
+// --- HEALTH CHECK ---
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'osmani-admin-api' })
 })
