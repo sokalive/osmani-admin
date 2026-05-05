@@ -32,9 +32,12 @@ function ChannelsPage() {
   const loadChannels = useCallback(async () => {
     try {
       const data = await getChannels()
+      console.log('getChannels() raw response:', data)
       const list = Array.isArray(data) ? data : []
+      console.log('getChannels() parsed list length:', list.length)
       setChannels(list.map(uiFromApiRow))
     } catch (e) {
+      console.error('loadChannels failed:', e)
       showToast('error', e?.message || 'Could not load channels')
       setChannels([])
     }

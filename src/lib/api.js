@@ -1,10 +1,18 @@
 const API_BASE_ENV = String(
   import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
 ).trim()
-export const API_BASE =
-  (API_BASE_ENV ? API_BASE_ENV.replace(/\/$/, '') : '') ||
-  'https://osmani-admin-api.onrender.com/api'
-export const API_ORIGIN = API_BASE.replace(/\/api$/, '')
+
+function normalizeApiBase(raw) {
+  const fallback = 'https://osmani-admin-api.onrender.com/api'
+  const s = String(raw || '').trim()
+  if (!s) return fallback
+  const clean = s.replace(/\/$/, '')
+  if (/\/api$/i.test(clean)) return clean
+  return `${clean}/api`
+}
+
+export const API_BASE = normalizeApiBase(API_BASE_ENV)
+export const API_ORIGIN = API_BASE.replace(/\/api$/i, '')
 
 console.log('API_BASE:', API_BASE)
 
@@ -61,7 +69,10 @@ export async function apiGet(path) {
     return body ?? fallbackForPath(path)
   } catch (e) {
     console.error('apiGet failed:', path, e)
-    return fallbackForPath(path)
+    if (String(path || '').startsWith('/analytics/overview')) {
+      return fallbackForPath(path)
+    }
+    throw e
   }
 }
 
