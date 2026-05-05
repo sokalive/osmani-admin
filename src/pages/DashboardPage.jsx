@@ -17,6 +17,13 @@ import {
 const emerald =
   'bg-gradient-to-br from-emerald-400/92 via-emerald-500/88 to-emerald-700/90'
 
+const OVERVIEW_FALLBACK = {
+  onlineNow: 0,
+  totalInstalls: 0,
+  revenueToday: 0,
+  newUsersToday: 0,
+}
+
 function expandLocationsForCard(rows) {
   if (!Array.isArray(rows)) return []
   const out = []
@@ -40,7 +47,7 @@ function expandLocationsForCard(rows) {
 
 function DashboardPage() {
   const { showToast } = useToast()
-  const [overview, setOverview] = useState({ onlineNow: 0, totalInstalls: 0, revenueToday: 0, newUsersToday: 0 })
+  const [overview, setOverview] = useState(OVERVIEW_FALLBACK)
   const [channels, setChannels] = useState([])
   const [locations, setLocations] = useState([])
   const [trend, setTrend] = useState([])
@@ -54,7 +61,8 @@ function DashboardPage() {
         getAnalyticsLocations(),
         getAnalyticsTrend(),
       ])
-      setOverview(o && typeof o === 'object' ? o : {})
+      console.log('API DATA:', o)
+      setOverview((o && typeof o === 'object' ? o : null) || OVERVIEW_FALLBACK)
       setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
       setLocations(Array.isArray(l) ? l : [])
       setTrend(
