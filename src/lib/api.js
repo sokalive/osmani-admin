@@ -135,7 +135,12 @@ export const deletePlan = (id) => apiDelete(`/plans/${encodeURIComponent(id)}`)
 export const getUsers = () => apiGet('/users')
 export const postUser = (body) => apiPost('/users', body)
 export const putUser = (id, body) => apiPut(`/users/${encodeURIComponent(id)}`, body)
-export const deleteUser = (id) => apiDelete(`/users/${encodeURIComponent(id)}`)
+export const deleteUser = (id, { force = false } = {}) => {
+  const path = force
+    ? `/users/${encodeURIComponent(id)}?force=true`
+    : `/users/${encodeURIComponent(id)}`
+  return apiDelete(path)
+}
 
 /** --- Transactions --- (optional server-side filters) */
 export function getTransactions(params = {}) {

@@ -183,6 +183,21 @@ function UsersPage() {
       await loadAll()
       showFlash('success', 'User removed.')
     } catch (e) {
+      if (e?.status === 400) {
+        const force = window.confirm(
+          'This user has an active subscription.\n\nDelete anyway with force=true?',
+        )
+        if (!force) return
+        try {
+          await deleteUser(row.device_id, { force: true })
+          await loadAll()
+          showFlash('success', 'User removed with force delete.')
+          return
+        } catch (e2) {
+          showToast('error', e2?.message || 'Force delete failed')
+          return
+        }
+      }
       showToast('error', e?.message || 'Delete failed')
     }
   }

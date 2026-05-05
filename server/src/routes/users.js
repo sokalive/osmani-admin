@@ -70,7 +70,32 @@ usersRouter.put('/:device_id', async (req, res) => {
 usersRouter.delete('/:device_id', async (req, res) => {
   try {
     const deviceId = String(req.params.device_id ?? '').trim()
-    if (!deviceId) return res.status(400).json({ error: 'device_id is required' })
+    if (!deviceId) {
+      return res.status(404).json({
+        error: 'Device subscription not found',
+        deletedSubscription: 0,
+        deletedTransactions: 0,
+      })
+    }
+    const force = String(req.query.force ?? '').toLowerCase() === 'true'
+    const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
+    if (!row) {
+      return res.status(404).json({
+        error: 'Device subscription not found',
+        deletedSubscription: 0,
+        deletedTransactions: 0,
+      })
+    }
+    const exp = row.expires_at instanceof Date ? row.expires_at : new Date(String(row.expires_at))
+    const activeNow =
+      row.status === 'active' && exp instanceof Date && !Number.isNaN(exp.getTime()) && exp > new Date()
+    if (activeNow && !force) {
+      return res.status(400).json({
+        error: 'Cannot delete active user without force=true',
+        deletedSubscription: 0,
+        deletedTransactions: 0,
+      })
+    }
     const out = await billing.deleteDeviceUserCascade(deviceId)
     res.json({ ok: true, ...out })
   } catch (e) {
