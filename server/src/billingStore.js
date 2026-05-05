@@ -219,6 +219,27 @@ export async function upsertSubscriptionAfterPayment(phone, planId, expiresAt) {
   )
 }
 
+/**
+ * Latest subscription row matching either user_id or normalized phone (+255…).
+ */
+export async function getSubscriptionByUserOrPhone(userId, phoneE164) {
+  const pool = requirePool()
+  const uid = userId != null ? String(userId).trim() : ''
+  const ph = phoneE164 != null ? String(phoneE164).trim() : ''
+  if (!uid && !ph) return null
+  const { rows } = await pool.query(
+    `SELECT *
+     FROM subscriptions
+     WHERE (($1::text IS NOT NULL AND $1::text <> '' AND user_id = $1)
+            OR ($2::text IS NOT NULL AND $2::text <> ''
+                AND REPLACE(phone, '+', '') = REPLACE($2::text, '+', '')))
+     ORDER BY expires_at DESC
+     LIMIT 1`,
+    [uid || null, ph || null],
+  )
+  return rows[0] ?? null
+}
+
 /** --- ZenoPay settings (row id = 1) --- */
 
 export async function getZenopayRow() {

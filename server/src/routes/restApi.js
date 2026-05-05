@@ -13,6 +13,7 @@ import { paymentsRouter } from './payments.js'
 import { plansRouter } from './plans.js'
 import { transactionsRouter } from './transactions.js'
 import { webhooksRouter } from './webhooks.js'
+import { subscriptionRouter } from './subscription.js'
 import { zenopaySettingsRouter } from './zenopaySettings.js'
 
 const FILES = {
@@ -85,6 +86,7 @@ restApi.use('/channels', channelsRouter)
 restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings', globalAppSettingsRouter)
+restApi.use('/subscription', subscriptionRouter)
 restApi.use('/plans', plansRouter)
 restApi.use('/transactions', transactionsRouter)
 restApi.use('/payments', paymentsRouter)

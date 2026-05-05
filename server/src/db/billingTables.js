@@ -59,6 +59,9 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
   `)
+  await client.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_id TEXT;
+  `)
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS zenopay_settings (
