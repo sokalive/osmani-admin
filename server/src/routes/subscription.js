@@ -42,16 +42,21 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     res.status(400).json({ error: 'device_id is required' })
     return
   }
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
-  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders?.()
+
+  const toSsePayload = (row) => {
+    const pub = rowToPublicStatus(row)
+    return { isActive: pub.isActive === true, expiresAt: pub.expiresAt ?? null }
+  }
 
   const send = () => {
     void (async () => {
       try {
         const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
-        const payload = rowToPublicStatus(row)
+        const payload = toSsePayload(row)
         res.write(`event: snapshot\ndata: ${JSON.stringify(payload)}\n\n`)
       } catch {
         /* ignore */
@@ -64,7 +69,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     if (!payload || payload.deviceId !== deviceId) return
     try {
       const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
-      res.write(`event: device_subscription\ndata: ${JSON.stringify(rowToPublicStatus(row))}\n\n`)
+      res.write(`event: device_subscription\ndata: ${JSON.stringify(toSsePayload(row))}\n\n`)
     } catch {
       /* ignore */
     }
