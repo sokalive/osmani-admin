@@ -40,7 +40,7 @@ function expandLocationsForCard(rows) {
 
 function DashboardPage() {
   const { showToast } = useToast()
-  const [overview, setOverview] = useState(null)
+  const [overview, setOverview] = useState({ onlineNow: 0, totalInstalls: 0, revenueToday: 0, newUsersToday: 0 })
   const [channels, setChannels] = useState([])
   const [locations, setLocations] = useState([])
   const [trend, setTrend] = useState([])

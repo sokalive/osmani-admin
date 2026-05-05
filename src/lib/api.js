@@ -1,9 +1,12 @@
-const ORIGIN =
-  (import.meta.env.VITE_API_BASE_URL && String(import.meta.env.VITE_API_BASE_URL).replace(/\/$/, '')) ||
-  'https://osmani-admin-api.onrender.com'
+const API_BASE_ENV = String(
+  import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
+).trim()
+export const API_BASE =
+  (API_BASE_ENV ? API_BASE_ENV.replace(/\/$/, '') : '') ||
+  'https://osmani-admin-api.onrender.com/api'
+export const API_ORIGIN = API_BASE.replace(/\/api$/, '')
 
-export const API_ORIGIN = ORIGIN
-export const API_BASE = `${ORIGIN}/api`
+console.log('API_BASE:', API_BASE)
 
 async function parseJsonSafe(res) {
   const text = await res.text()
@@ -37,10 +40,15 @@ function joinPath(path) {
 }
 
 export async function apiGet(path) {
-  const res = await fetch(joinPath(path))
-  const body = await parseJsonSafe(res)
-  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
-  return body
+  try {
+    const res = await fetch(joinPath(path))
+    const body = await parseJsonSafe(res)
+    if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+    return body
+  } catch (e) {
+    console.error('apiGet failed:', path, e)
+    return null
+  }
 }
 
 export async function apiPost(path, data) {
