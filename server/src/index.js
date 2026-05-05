@@ -7,7 +7,13 @@ const app = express()
 const PORT = Number(process.env.PORT) || 4000
 
 // --- MIDDLEWARE ---
-app.use(cors({ origin: true }))
+app.use(
+  cors({
+    origin: ['https://osmani-admin.vercel.app'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
+  }),
+)
 app.use(express.json({ limit: '4mb' }))
 ensureUploadsDir()
 app.use('/uploads', express.static(UPLOADS_DIR))
