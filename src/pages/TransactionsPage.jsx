@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getTransactions } from '../lib/api'
+import { deleteTransactionsBulk, getTransactions } from '../lib/api'
 import { endOfDay, isSameLocalDay, startOfDay } from '../lib/dates'
 import { formatTsh } from '../lib/formatMoney'
-import { formatReadableDateTime } from '../lib/formatTxDisplay'
 
 const PAGE_SIZE = 10
 
@@ -30,7 +29,22 @@ function statusBadgeClass(status) {
 
 function statusLabel(status) {
   if (!status) return ''
-  return status.charAt(0).toUpperCase() + status.slice(1)
+  return String(status).toUpperCase()
+}
+
+function formatEatDateTime(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '-'
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Dar_es_Salaam',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(d)
 }
 
 /** Today buckets: sum of amounts + transaction counts per status */
@@ -42,16 +56,17 @@ function computeTodayStats(transactions, todayRef = new Date()) {
     failed: empty(),
   }
   for (const t of transactions) {
-    if (!isSameLocalDay(t.date, todayRef)) continue
+    if (!isSameLocalDay(t.created_at, todayRef)) continue
     const amt = Number(t.amount)
     if (!Number.isFinite(amt)) continue
-    if (t.status === 'completed') {
+    const st = String(t.status || '').toLowerCase()
+    if (st === 'completed') {
       out.completed.sum += amt
       out.completed.count += 1
-    } else if (t.status === 'pending') {
+    } else if (st === 'pending') {
       out.pending.sum += amt
       out.pending.count += 1
-    } else if (t.status === 'failed') {
+    } else if (st === 'failed') {
       out.failed.sum += amt
       out.failed.count += 1
     }
@@ -66,11 +81,13 @@ function TransactionsPage() {
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [page, setPage] = useState(1)
+  const [selectedOrderIds, setSelectedOrderIds] = useState(() => new Set())
 
   const loadTx = useCallback(async () => {
     try {
       const rows = await getTransactions()
       setTransactions(Array.isArray(rows) ? rows : [])
+      setSelectedOrderIds(new Set())
     } catch (e) {
       showToast('error', e?.message || 'Could not load transactions')
       setTransactions([])
@@ -85,18 +102,18 @@ function TransactionsPage() {
 
   const filtered = useMemo(() => {
     const rows = transactions.filter((t) => {
-      if (tab !== 'all' && t.status !== tab) return false
+      if (tab !== 'all' && String(t.status).toLowerCase() !== tab) return false
       if (fromDate) {
         const from = startOfDay(new Date(fromDate))
-        if (new Date(t.date).getTime() < from.getTime()) return false
+        if (new Date(t.created_at).getTime() < from.getTime()) return false
       }
       if (toDate) {
         const to = endOfDay(new Date(toDate))
-        if (new Date(t.date).getTime() > to.getTime()) return false
+        if (new Date(t.created_at).getTime() > to.getTime()) return false
       }
       return true
     })
-    return [...rows].sort((a, b) => new Date(b.date) - new Date(a.date))
+    return [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
   }, [transactions, tab, fromDate, toDate])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -105,6 +122,44 @@ function TransactionsPage() {
     const start = (safePage - 1) * PAGE_SIZE
     return filtered.slice(start, start + PAGE_SIZE)
   }, [filtered, safePage, page])
+
+  const allVisibleSelected =
+    slice.length > 0 && slice.every((r) => selectedOrderIds.has(String(r.order_id)))
+
+  function toggleSelectAllVisible() {
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev)
+      if (allVisibleSelected) {
+        slice.forEach((r) => next.delete(String(r.order_id)))
+      } else {
+        slice.forEach((r) => next.add(String(r.order_id)))
+      }
+      return next
+    })
+  }
+
+  function toggleRowSelection(orderId) {
+    const oid = String(orderId)
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(oid)) next.delete(oid)
+      else next.add(oid)
+      return next
+    })
+  }
+
+  async function handleDeleteSelected() {
+    const ids = Array.from(selectedOrderIds)
+    if (ids.length === 0) return
+    if (!window.confirm(`Delete ${ids.length} selected transactions?`)) return
+    try {
+      await deleteTransactionsBulk(ids)
+      showToast('success', 'Selected transactions deleted.')
+      await loadTx()
+    } catch (e) {
+      showToast('error', e?.message || 'Failed to delete selected transactions')
+    }
+  }
 
   return (
     <>
@@ -221,6 +276,21 @@ function TransactionsPage() {
                 Clear dates
               </button>
             ) : null}
+            <button
+              type="button"
+              onClick={toggleSelectAllVisible}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-800"
+            >
+              Select All
+            </button>
+            <button
+              type="button"
+              disabled={selectedOrderIds.size === 0}
+              onClick={handleDeleteSelected}
+              className="rounded-xl border border-red-500/40 px-4 py-2 text-sm font-medium text-red-200 transition-colors hover:bg-red-500/15 disabled:opacity-50"
+            >
+              Delete Selected
+            </button>
           </div>
         </div>
 
@@ -229,12 +299,13 @@ function TransactionsPage() {
             <table className="w-full min-w-[880px] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-700/80 bg-slate-900/60 text-[11px] uppercase tracking-wide text-slate-400">
+                  <th className="px-4 py-3.5 font-semibold">Select</th>
                   <th className="px-4 py-3.5 font-semibold">Phone</th>
-                  <th className="px-4 py-3.5 font-semibold">Plan</th>
+                  <th className="px-4 py-3.5 font-semibold">Device ID</th>
                   <th className="px-4 py-3.5 font-semibold">Amount</th>
                   <th className="px-4 py-3.5 font-semibold">Order ID</th>
                   <th className="px-4 py-3.5 font-semibold">Status</th>
-                  <th className="px-4 py-3.5 font-semibold">Date</th>
+                  <th className="px-4 py-3.5 font-semibold">Date (EAT)</th>
                 </tr>
               </thead>
               <tbody>
@@ -243,23 +314,32 @@ function TransactionsPage() {
                     key={row.id}
                     className="border-b border-slate-800/80 transition-colors hover:bg-slate-900/55"
                   >
-                    <td className="px-4 py-3.5 font-mono text-[13px] text-slate-200">
-                      {row.phone}
+                    <td className="px-4 py-3.5">
+                      <input
+                        type="checkbox"
+                        checked={selectedOrderIds.has(String(row.order_id))}
+                        onChange={() => toggleRowSelection(row.order_id)}
+                      />
                     </td>
-                    <td className="px-4 py-3.5 text-slate-300">{row.plan}</td>
+                    <td className="px-4 py-3.5 font-mono text-[13px] text-slate-200">
+                      {row.phone || '-'}
+                    </td>
+                    <td className="px-4 py-3.5 font-mono text-xs text-slate-300">
+                      {row.device_id || '-'}
+                    </td>
                     <td className="px-4 py-3.5 font-semibold tabular-nums text-amber-100">
                       {formatTsh(row.amount)}
                     </td>
-                    <td className="px-4 py-3.5 font-mono text-xs text-slate-400">{row.orderId}</td>
+                    <td className="px-4 py-3.5 font-mono text-xs text-slate-400">{row.order_id}</td>
                     <td className="px-4 py-3.5">
                       <span
-                        className={`inline-flex rounded-lg px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ring-1 ${statusBadgeClass(row.status)}`}
+                        className={`inline-flex rounded-lg px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ring-1 ${statusBadgeClass(String(row.status).toLowerCase())}`}
                       >
                         {statusLabel(row.status)}
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-slate-300 tabular-nums">
-                      {formatReadableDateTime(row.date)}
+                      {formatEatDateTime(row.created_at)}
                     </td>
                   </tr>
                 ))}

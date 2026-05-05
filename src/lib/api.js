@@ -146,6 +146,16 @@ export function getTransactions(params = {}) {
   const s = q.toString()
   return apiGet(s ? `/transactions?${s}` : '/transactions')
 }
+export async function deleteTransactionsBulk(ids) {
+  const res = await fetch(joinPath('/transactions/bulk'), {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids: Array.isArray(ids) ? ids : [] }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
 
 /** Initiate ZenoPay collection (uses server-stored credentials + env overrides). */
 export const postCreatePayment = (body) => apiPost('/payments/create-payment', body)

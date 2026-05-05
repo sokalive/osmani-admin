@@ -165,6 +165,55 @@ export async function listTransactions(filters = {}) {
   return rows
 }
 
+/** Admin transaction list (raw DB fields for dashboard). */
+export async function listTransactionsAdmin(filters = {}) {
+  const pool = requirePool()
+  const cond = ['1=1']
+  const params = []
+  let i = 1
+  if (filters.status && filters.status !== 'all') {
+    cond.push(`t.status = $${i}`)
+    params.push(String(filters.status))
+    i += 1
+  }
+  if (filters.from) {
+    cond.push(`t.created_at >= $${i}::date`)
+    params.push(String(filters.from).slice(0, 10))
+    i += 1
+  }
+  if (filters.to) {
+    cond.push(`t.created_at < ($${i}::date + interval '1 day')`)
+    params.push(String(filters.to).slice(0, 10))
+    i += 1
+  }
+  const { rows } = await pool.query(
+    `SELECT
+       t.order_id,
+       t.amount,
+       t.status,
+       t.phone,
+       t.device_id,
+       t.created_at
+     FROM transactions t
+     WHERE ${cond.join(' AND ')}
+     ORDER BY t.created_at DESC`,
+    params,
+  )
+  return rows
+}
+
+export async function deleteTransactionsBulkByOrderIds(orderIds) {
+  const ids = Array.isArray(orderIds)
+    ? orderIds.map((x) => String(x ?? '').trim()).filter(Boolean)
+    : []
+  if (ids.length === 0) return { deleted: 0 }
+  const pool = requirePool()
+  const { rowCount } = await pool.query(`DELETE FROM transactions WHERE order_id = ANY($1::text[])`, [
+    ids,
+  ])
+  return { deleted: Number(rowCount) || 0 }
+}
+
 export async function getTransactionByOrderId(orderId) {
   const pool = requirePool()
   const { rows } = await pool.query(`SELECT * FROM transactions WHERE order_id = $1`, [
@@ -277,6 +326,56 @@ export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expire
     throw e
   }
   return { skipped: false }
+}
+
+export async function listDeviceUsers() {
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT
+       ds.device_id,
+       ds.status,
+       ds.started_at,
+       ds.expires_at,
+       lt.phone AS phone_number,
+       lt.plan_id
+     FROM device_subscriptions ds
+     LEFT JOIN LATERAL (
+       SELECT t.phone, t.plan_id
+       FROM transactions t
+       WHERE t.device_id = ds.device_id
+       ORDER BY t.created_at DESC
+       LIMIT 1
+     ) lt ON true
+     ORDER BY ds.updated_at DESC`,
+  )
+  return rows
+}
+
+export async function updateDeviceSubscriptionByDeviceId(deviceId, { expiresAt, status }) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  const s = status === 'active' ? 'active' : 'pending'
+  const { rows } = await pool.query(
+    `UPDATE device_subscriptions
+     SET expires_at = COALESCE($2::timestamptz, expires_at),
+         status = COALESCE($3, status),
+         updated_at = now()
+     WHERE device_id = $1
+     RETURNING *`,
+    [d, expiresAt ?? null, s],
+  )
+  return rows[0] ?? null
+}
+
+export async function deleteDeviceUserCascade(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  const delTx = await pool.query(`DELETE FROM transactions WHERE device_id = $1`, [d])
+  const delSub = await pool.query(`DELETE FROM device_subscriptions WHERE device_id = $1`, [d])
+  return {
+    deletedSubscription: Number(delSub.rowCount) || 0,
+    deletedTransactions: Number(delTx.rowCount) || 0,
+  }
 }
 
 /** --- ZenoPay settings (row id = 1) --- */
