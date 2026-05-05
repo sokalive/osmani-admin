@@ -239,7 +239,6 @@ export const postSecurityLog = (entry) => apiPost('/security-logs', entry)
 export const getDashboard = () => apiGet('/dashboard')
 export const putDashboardSettings = (body) => apiPut('/settings/dashboard', body)
 
-export const getAnalyticsSummary = () => apiGet('/analytics/summary')
 export const getAnalyticsOverview = () => apiGet('/analytics/overview')
 export const getAnalyticsChannels = () => apiGet('/analytics/channels')
 export const getAnalyticsLocations = () => apiGet('/analytics/locations')

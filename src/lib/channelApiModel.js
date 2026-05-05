@@ -8,8 +8,11 @@ const CATEGORY_GRADIENTS = {
   General: 'from-indigo-600 to-purple-700',
 }
 
+const API_BASE_ENV = String(
+  import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
+).trim()
 const API_ORIGIN =
-  (import.meta.env.VITE_API_BASE_URL && String(import.meta.env.VITE_API_BASE_URL).replace(/\/$/, '')) ||
+  (API_BASE_ENV ? API_BASE_ENV.replace(/\/$/, '').replace(/\/api$/, '') : '') ||
   'https://osmani-admin-api.onrender.com'
 
 const PLAYER_UI_TO_API = {
