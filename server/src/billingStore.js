@@ -110,10 +110,14 @@ export async function softDeletePlan(id) {
 export async function insertTransaction(row) {
   const pool = requirePool()
   const raw = row.raw_payload != null ? row.raw_payload : null
+  const deviceId =
+    row.device_id != null && String(row.device_id).trim()
+      ? String(row.device_id).trim()
+      : null
   const { rows } = await pool.query(
     `INSERT INTO transactions (
-       order_id, external_id, plan_id, phone, amount, currency, status, raw_payload
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+       order_id, external_id, plan_id, phone, amount, currency, status, raw_payload, device_id
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
      RETURNING *`,
     [
       row.order_id,
@@ -124,6 +128,7 @@ export async function insertTransaction(row) {
       row.currency ?? 'TZS',
       row.status ?? 'pending',
       raw,
+      deviceId,
     ],
   )
   return rows[0]
@@ -219,25 +224,59 @@ export async function upsertSubscriptionAfterPayment(phone, planId, expiresAt) {
   )
 }
 
-/**
- * Latest subscription row matching either user_id or normalized phone (+255…).
- */
-export async function getSubscriptionByUserOrPhone(userId, phoneE164) {
+/** --- Device subscriptions (realtime unlock) --- */
+
+/** Idempotent: duplicate webhooks reuse same order_id → skip writes. */
+export async function deviceSubscriptionOrderAlreadyApplied(orderId) {
   const pool = requirePool()
-  const uid = userId != null ? String(userId).trim() : ''
-  const ph = phoneE164 != null ? String(phoneE164).trim() : ''
-  if (!uid && !ph) return null
   const { rows } = await pool.query(
-    `SELECT *
-     FROM subscriptions
-     WHERE (($1::text IS NOT NULL AND $1::text <> '' AND user_id = $1)
-            OR ($2::text IS NOT NULL AND $2::text <> ''
-                AND REPLACE(phone, '+', '') = REPLACE($2::text, '+', '')))
-     ORDER BY expires_at DESC
-     LIMIT 1`,
-    [uid || null, ph || null],
+    `SELECT 1 FROM device_subscriptions WHERE transaction_id = $1 LIMIT 1`,
+    [String(orderId).trim()],
   )
+  return rows.length > 0
+}
+
+export async function getDeviceSubscriptionByDeviceId(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(`SELECT * FROM device_subscriptions WHERE device_id = $1`, [d])
   return rows[0] ?? null
+}
+
+/**
+ * Webhook-driven activation. Skips entirely if transaction_id (order_id) already applied.
+ * Renewals overwrite the same device_id row with a newer order/expiry only when not a duplicate webhook.
+ */
+export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expiresAt }) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  const oid = String(orderId ?? '').trim()
+  if (!d || !oid) throw new Error('deviceId and orderId required')
+  if (await deviceSubscriptionOrderAlreadyApplied(oid)) {
+    console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
+    return { skipped: true }
+  }
+  try {
+    await pool.query(
+      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at)
+       VALUES ($1, 'active', $2::timestamptz, now(), $3, now())
+       ON CONFLICT (device_id) DO UPDATE SET
+         status = EXCLUDED.status,
+         expires_at = EXCLUDED.expires_at,
+         started_at = EXCLUDED.started_at,
+         transaction_id = EXCLUDED.transaction_id,
+         updated_at = now()`,
+      [d, expiresAt, oid],
+    )
+  } catch (e) {
+    if (e?.code === '23505') {
+      console.log('[device_subscriptions] duplicate transaction_id (race):', oid)
+      return { skipped: true }
+    }
+    throw e
+  }
+  return { skipped: false }
 }
 
 /** --- ZenoPay settings (row id = 1) --- */

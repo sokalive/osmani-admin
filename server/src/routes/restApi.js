@@ -47,6 +47,8 @@ restApi.get('/', (_req, res) => {
       '/payments/zeno-webhook',
       '/zeno-webhook',
       '/payment-status/:order_id',
+      '/subscription-status',
+      '/subscription-stream',
       '/webhooks/zenopay',
       '/dashboard',
     ],
@@ -86,7 +88,7 @@ restApi.use('/channels', channelsRouter)
 restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings', globalAppSettingsRouter)
-restApi.use('/subscription', subscriptionRouter)
+restApi.use(subscriptionRouter)
 restApi.use('/plans', plansRouter)
 restApi.use('/transactions', transactionsRouter)
 restApi.use('/payments', paymentsRouter)

@@ -25,6 +25,10 @@ paymentsRouter.post('/create-payment', async (req, res) => {
   try {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const planId = Number(b.planId ?? b.plan_id)
+    const deviceId = String(b.deviceId ?? b.device_id ?? '').trim()
+    if (!deviceId) {
+      return res.status(400).json({ error: 'deviceId is required (client device identifier)' })
+    }
     const phoneRaw = String(b.phone ?? '').trim()
     const phone = normalizeTzPhone(phoneRaw)
     if (!phone || !Number.isFinite(planId)) {
@@ -52,7 +56,8 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       amount,
       currency: 'TZS',
       status: 'pending',
-      raw_payload: { step: 'created', phoneNorm: phone },
+      device_id: deviceId,
+      raw_payload: { step: 'created', phoneNorm: phone, device_id: deviceId },
     })
     const z = await zenopayCreateCollection(cred, {
       phone,
@@ -77,6 +82,7 @@ paymentsRouter.post('/create-payment', async (req, res) => {
     res.status(201).json({
       ok: true,
       orderId,
+      deviceId,
       transactionId: tx.id,
       amount,
       currency: 'TZS',

@@ -154,6 +154,15 @@ export const postCreatePayment = (body) => apiPost('/payments/create-payment', b
 export const getPaymentStatus = (orderId) =>
   apiGet(`/payment-status/${encodeURIComponent(String(orderId ?? ''))}`)
 
+/** Device subscription unlock (polling fallback). Prefer SSE `subscription-stream` for realtime. */
+export const getSubscriptionStatus = (deviceId) =>
+  apiGet(`/subscription-status?device_id=${encodeURIComponent(String(deviceId ?? '').trim())}`)
+
+export function subscriptionStreamUrl(deviceId) {
+  const d = encodeURIComponent(String(deviceId ?? '').trim())
+  return `${API_BASE}/subscription-stream?device_id=${d}`
+}
+
 /** --- Notifications --- */
 export const getNotifications = () => apiGet('/notifications')
 export const postNotification = (body) => apiPost('/notifications', body)

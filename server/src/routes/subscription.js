@@ -1,32 +1,88 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
-import { formatPhone } from '../zenopayClient.js'
+import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 
 export const subscriptionRouter = Router()
 
-/** GET /subscription — query: userId | user_id, phone (digits normalized to +255…) */
-subscriptionRouter.get('/', async (req, res) => {
+function rowToPublicStatus(row) {
+  if (!row) return { active: false, status: null, expiresAt: null }
+  const exp = row.expires_at
+  const expDate = exp ? new Date(exp) : null
+  const expiresOk =
+    Boolean(expDate) && !Number.isNaN(expDate.getTime()) && expDate.getTime() > Date.now()
+  const active = row.status === 'active' && expiresOk
+  const expiresAt = exp instanceof Date ? exp.toISOString() : exp != null ? String(exp) : null
+  return {
+    active,
+    /** legacy alias used by RN clients */
+    isActive: active,
+    status: row.status,
+    expiresAt,
+  }
+}
+
+/** GET /subscription-status — primary unlock check by device_id (poll every ~3s as fallback). */
+subscriptionRouter.get('/subscription-status', async (req, res) => {
   try {
-    const userId = String(req.query.userId ?? req.query.user_id ?? '').trim()
-    const rawPhone = String(req.query.phone ?? '').trim()
-    const phoneNorm = rawPhone ? formatPhone(rawPhone) : ''
-    const row = await billing.getSubscriptionByUserOrPhone(
-      userId || null,
-      phoneNorm || null,
-    )
-    console.log('PHONE MATCH:', { input: phoneNorm || rawPhone, db: row?.phone })
-    console.log('SUB API RESULT:', row)
-    if (!row) {
-      return res.json({ isActive: false, expiresAt: null })
+    const deviceId = String(req.query.device_id ?? '').trim()
+    if (!deviceId) {
+      return res.status(400).json({ error: 'device_id is required' })
     }
-    const expiresAt = row.expires_at
-    const expiresAtDate = expiresAt ? new Date(expiresAt) : null
-    const notExpired = Boolean(expiresAtDate && !Number.isNaN(expiresAtDate.getTime()) && expiresAtDate > new Date())
-    const isActive = row.is_active === true && notExpired
-    const expiresAtOut =
-      expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt != null ? String(expiresAt) : null
-    res.json({ isActive, expiresAt: expiresAtOut })
+    const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
+    res.json(rowToPublicStatus(row))
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) })
   }
+})
+
+/** GET /subscription-stream — SSE realtime (same-node process). RN can use RN Firebase/other; web uses EventSource. */
+subscriptionRouter.get('/subscription-stream', (req, res) => {
+  const deviceId = String(req.query.device_id ?? '').trim()
+  if (!deviceId) {
+    res.status(400).json({ error: 'device_id is required' })
+    return
+  }
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders?.()
+
+  const send = () => {
+    void (async () => {
+      try {
+        const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
+        const payload = rowToPublicStatus(row)
+        res.write(`event: snapshot\ndata: ${JSON.stringify(payload)}\n\n`)
+      } catch {
+        /* ignore */
+      }
+    })()
+  }
+  send()
+
+  const handler = async (payload) => {
+    if (!payload || payload.deviceId !== deviceId) return
+    try {
+      const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
+      res.write(`event: device_subscription\ndata: ${JSON.stringify(rowToPublicStatus(row))}\n\n`)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  deviceSubscriptionBus.on('update', handler)
+
+  const ping = setInterval(() => {
+    res.write(': ping\n\n')
+  }, 20_000)
+
+  req.on('close', () => {
+    clearInterval(ping)
+    deviceSubscriptionBus.off('update', handler)
+    try {
+      res.end()
+    } catch {
+      /* ignore */
+    }
+  })
 })

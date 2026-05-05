@@ -3,14 +3,16 @@ import { CheckCircle2, Loader2, Smartphone, Wifi, XCircle } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { API_ORIGIN } from '../lib/api'
+import { useDeviceSubscription } from '../context/DeviceSubscriptionContext.jsx'
 import {
-  getPaymentStatus,
+  API_ORIGIN,
   getPlans,
+  getSubscriptionStatus,
   getZenopaySettings,
   postCreatePayment,
   postZenopayTest,
   putZenopaySettings,
+  subscriptionStreamUrl,
 } from '../lib/api'
 
 function defaultSettings() {
@@ -43,6 +45,7 @@ function labelClass() {
 
 function ZenoPayPage() {
   const { showToast } = useToast()
+  const { applySubscriptionStatusPayload, clearSubscription } = useDeviceSubscription()
   const [cfg, setCfg] = useState(() => defaultSettings())
   const [draft, setDraft] = useState(() => ({ ...defaultSettings() }))
   const [saving, setSaving] = useState(false)
@@ -51,9 +54,10 @@ function ZenoPayPage() {
 
   const [checkoutPlans, setCheckoutPlans] = useState([])
   const [payPhone, setPayPhone] = useState('')
+  const [payDeviceId, setPayDeviceId] = useState('')
   const [payPlanId, setPayPlanId] = useState('')
   const [checkoutOrderId, setCheckoutOrderId] = useState(null)
-  const [checkoutStatus, setCheckoutStatus] = useState(null)
+  const [paymentWaitOpen, setPaymentWaitOpen] = useState(false)
   const [checkoutBusy, setCheckoutBusy] = useState(false)
 
   const defaultWebhook = `${String(API_ORIGIN).replace(/\/$/, '')}/api/zeno-webhook`
@@ -106,37 +110,59 @@ function ZenoPayPage() {
   }, [])
 
   useEffect(() => {
-    if (!checkoutOrderId) return
-    if (checkoutStatus === 'SUCCESS' || checkoutStatus === 'FAILED') return
+    if (!paymentWaitOpen || !payDeviceId.trim()) return undefined
     let cancelled = false
+    const sid = payDeviceId.trim()
+
+    function handleStatusPayload(payload) {
+      if (cancelled || !payload) return
+      applySubscriptionStatusPayload(payload)
+      const active = payload.active === true || payload.isActive === true
+      if (active) {
+        setPaymentWaitOpen(false)
+        showToast('success', 'Device subscription active — channels unlocked.')
+      }
+    }
+
+    let es = null
+    try {
+      es = new EventSource(subscriptionStreamUrl(sid))
+      es.addEventListener('snapshot', (ev) => {
+        try {
+          handleStatusPayload(JSON.parse(ev.data))
+        } catch {
+          /* ignore */
+        }
+      })
+      es.addEventListener('device_subscription', (ev) => {
+        try {
+          handleStatusPayload(JSON.parse(ev.data))
+        } catch {
+          /* ignore */
+        }
+      })
+    } catch {
+      /* EventSource unsupported */
+    }
+
+    const pollMs = 3000
     const poll = async () => {
       try {
-        const r = await getPaymentStatus(checkoutOrderId)
-        if (cancelled) return
-        const st = String(r?.status ?? 'PENDING')
-        setCheckoutStatus((prev) => {
-          if (prev !== 'SUCCESS' && st === 'SUCCESS') {
-            showToast(
-              'success',
-              'Payment confirmed. Subscription updated for that phone — consumer app can unlock channels.',
-            )
-          }
-          if (prev !== 'FAILED' && st === 'FAILED') {
-            showToast('error', 'Payment failed or was declined.')
-          }
-          return st
-        })
+        const r = await getSubscriptionStatus(sid)
+        handleStatusPayload(r)
       } catch {
-        /* network blips: keep polling */
+        /* keep polling */
       }
     }
     void poll()
-    const id = window.setInterval(poll, 4000)
+    const id = window.setInterval(poll, pollMs)
+
     return () => {
       cancelled = true
       window.clearInterval(id)
+      es?.close()
     }
-  }, [checkoutOrderId, checkoutStatus, showToast])
+  }, [paymentWaitOpen, payDeviceId, applySubscriptionStatusPayload, showToast])
 
   const dirty = useMemo(
     () =>
@@ -179,21 +205,30 @@ function ZenoPayPage() {
   async function handleCheckoutPay(e) {
     e.preventDefault()
     const pid = Number(payPlanId)
+    const dev = payDeviceId.trim()
     if (!payPhone.trim() || !Number.isFinite(pid)) {
       showToast('error', 'Enter phone and choose a plan')
       return
     }
+    if (!dev) {
+      showToast('error', 'Enter device ID (matches client device_subscriptions)')
+      return
+    }
     setCheckoutBusy(true)
     try {
-      const data = await postCreatePayment({ phone: payPhone.trim(), planId: pid })
+      const data = await postCreatePayment({
+        phone: payPhone.trim(),
+        planId: pid,
+        deviceId: dev,
+      })
       const oid = data?.orderId ?? data?.order_id
       if (!oid) {
         showToast('error', 'No order id returned from server')
         return
       }
       setCheckoutOrderId(String(oid))
-      setCheckoutStatus('PENDING')
-      showToast('success', 'Payment started — waiting for ZenoPay confirmation…')
+      setPaymentWaitOpen(true)
+      showToast('success', 'Complete payment on phone — unlocking via realtime stream + poll.')
     } catch (err) {
       showToast('error', err?.message || 'Payment could not be started')
     } finally {
@@ -203,7 +238,12 @@ function ZenoPayPage() {
 
   function clearCheckout() {
     setCheckoutOrderId(null)
-    setCheckoutStatus(null)
+    setPaymentWaitOpen(false)
+    clearSubscription()
+  }
+
+  function handleEndeleaContinue() {
+    setPaymentWaitOpen(false)
   }
 
   async function handleTestConnection() {
@@ -401,18 +441,36 @@ function ZenoPayPage() {
             <Smartphone className="mt-0.5 h-5 w-5 shrink-0 text-amber-400/90" />
             <div className="min-w-0 flex-1">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-400/90">
-                Test checkout &amp; status poll
+                Test checkout · device subscription (realtime + poll)
               </h2>
               <p className="mt-1 text-xs text-slate-500">
-                Starts a real collection, then polls{' '}
+                Requires <code className="font-mono text-slate-400">deviceId</code>. After ZenoPay webhook,
+                unlock uses{' '}
                 <code className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-300">
-                  GET /api/payment-status/:order_id
+                  /api/subscription-stream
                 </code>{' '}
-                every 4s until status is SUCCESS or FAILED (same flow a consumer app should use).
+                (SSE) and{' '}
+                <code className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-300">
+                  /api/subscription-status?device_id=
+                </code>{' '}
+                every 3s.
               </p>
             </div>
           </div>
-          <form onSubmit={handleCheckoutPay} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <form onSubmit={handleCheckoutPay} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="sm:col-span-1">
+              <label className={labelClass()} htmlFor="zp-pay-device">
+                Device ID
+              </label>
+              <input
+                id="zp-pay-device"
+                value={payDeviceId}
+                onChange={(e) => setPayDeviceId(e.target.value)}
+                placeholder="client-stable-device-id"
+                className={inputClass()}
+                autoComplete="off"
+              />
+            </div>
             <div className="sm:col-span-1">
               <label className={labelClass()} htmlFor="zp-pay-phone">
                 Phone (customer)
@@ -458,20 +516,10 @@ function ZenoPayPage() {
           {checkoutOrderId ? (
             <div className="mt-4 rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3 text-sm text-slate-300">
               <p className="font-mono text-xs text-slate-400">order_id: {checkoutOrderId}</p>
-              <p className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="text-slate-500">Status:</span>
-                {checkoutStatus === 'PENDING' || checkoutStatus == null ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
-                    <span className="text-amber-200">Waiting for confirmation…</span>
-                  </>
-                ) : checkoutStatus === 'SUCCESS' ? (
-                  <span className="font-medium text-emerald-300">SUCCESS — done</span>
-                ) : checkoutStatus === 'FAILED' ? (
-                  <span className="font-medium text-red-300">FAILED</span>
-                ) : (
-                  <span>{checkoutStatus}</span>
-                )}
+              <p className="mt-1 font-mono text-xs text-slate-400">device_id: {payDeviceId}</p>
+              <p className="mt-2 text-xs text-slate-500">
+                Open the modal after pay — realtime + 3s poll until active. ENDELEA only closes the modal (no
+                API).
               </p>
               <button
                 type="button"
@@ -483,6 +531,29 @@ function ZenoPayPage() {
             </div>
           ) : null}
         </section>
+
+        {paymentWaitOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-slate-600 bg-slate-950 p-6 shadow-2xl ring-1 ring-white/10">
+              <h3 className="text-lg font-semibold text-white">Waiting for unlock</h3>
+              <p className="mt-2 font-mono text-xs text-slate-500">{checkoutOrderId}</p>
+              <p className="mt-4 flex items-center gap-2 text-sm text-amber-200">
+                <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                Realtime SSE + polling <code className="text-[11px]">/subscription-status</code>…
+              </p>
+              <button
+                type="button"
+                className="mt-6 w-full rounded-xl border border-slate-600 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+                onClick={handleEndeleaContinue}
+              >
+                ENDELEA — close only
+              </button>
+              <p className="mt-3 text-center text-[11px] text-slate-500">
+                Unlock state is driven by webhook → DB → stream; closing does not refetch.
+              </p>
+            </div>
+          </div>
+        ) : null}
       </main>
     </>
   )

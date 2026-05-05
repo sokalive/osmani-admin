@@ -43,6 +43,28 @@ export async function ensureBillingTables(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS transactions_status_idx ON transactions (status);
   `)
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS device_id TEXT;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transactions_device_id_idx ON transactions (device_id)
+    WHERE device_id IS NOT NULL AND trim(device_id) <> '';
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS device_subscriptions (
+      device_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'pending',
+      expires_at TIMESTAMPTZ NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      transaction_id TEXT NOT NULL UNIQUE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT device_subscriptions_status_check CHECK (status IN ('active', 'pending'))
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_subscriptions_transaction_id_idx ON device_subscriptions (transaction_id);
+  `)
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS subscriptions (

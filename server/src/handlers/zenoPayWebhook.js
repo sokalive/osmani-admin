@@ -1,8 +1,5 @@
 import * as billing from '../billingStore.js'
-import { readJson, writeJsonAtomic } from '../lib/jsonFile.js'
-import { formatPhone } from '../zenopayClient.js'
-
-const USERS_FILE = 'users.json'
+import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 
 /** ZenoPay often sends `payment_status: "COMPLETED"` under `data` — read all layers. */
 function statusStringsFromWebhook(body) {
@@ -46,64 +43,6 @@ function webhookExplicitFailure(body) {
   const d = body?.data
   if (d && typeof d === 'object' && (d.success === false || d.paid === false)) return true
   return false
-}
-
-function phoneComparable(raw) {
-  const d = String(raw ?? '').replace(/\D/g, '')
-  if (!d) return ''
-  if (d.startsWith('255')) return d
-  if (d.startsWith('0')) return `255${d.slice(1)}`
-  return d
-}
-
-function webhookBuyerPhoneRaw(body) {
-  const nested = [body, body?.data, body?.payload, body?.payment].filter(
-    (x) => x && typeof x === 'object',
-  )
-  const keys = ['buyer_phone', 'phone', 'msisdn', 'customer_phone', 'mobile', 'payer_phone']
-  for (const o of nested) {
-    for (const k of keys) {
-      const v = o[k]
-      if (v != null && String(v).trim()) return String(v).trim()
-    }
-  }
-  return ''
-}
-
-function resolveSubscriptionPhone(body, txn) {
-  const w = webhookBuyerPhoneRaw(body)
-  const formatted = w ? formatPhone(w) : ''
-  const fromTxn = String(txn?.phone ?? '').trim()
-  if (fromTxn.startsWith('+255')) return fromTxn
-  if (formatted.startsWith('+255')) return formatted
-  return fromTxn || formatted || ''
-}
-
-async function findUserIdAndSyncUsersJson(phoneE164, planId, planName, expiresAtIso) {
-  const key = phoneComparable(phoneE164)
-  if (!key) return { userId: null }
-  const users = await readJson(USERS_FILE, [])
-  if (!Array.isArray(users)) return { userId: null }
-  let userId = null
-  const startDateIso = new Date().toISOString()
-  const next = users.map((u) => {
-    const uk = phoneComparable(u.phone)
-    if (uk && uk === key) {
-      userId = u.id ?? u.userId ?? null
-      return {
-        ...u,
-        planId: Number.isFinite(Number(planId)) ? Number(planId) : u.planId,
-        planName: planName || u.planName,
-        startDate: startDateIso,
-        expiryDate: expiresAtIso,
-      }
-    }
-    return u
-  })
-  if (userId != null) {
-    await writeJsonAtomic(USERS_FILE, next)
-  }
-  return { userId }
 }
 
 function normalizeWebhookBody(raw) {
@@ -189,22 +128,25 @@ export async function handleZenoPayWebhook(req, res) {
     })
     if (ok && txn.plan_id) {
       const plan = await billing.getPlanRowByIdAny(txn.plan_id)
-      if (plan) {
-        const phone = resolveSubscriptionPhone(body, txn)
-        if (!phone) {
-          console.warn('ZENO WEBHOOK: cannot resolve phone for subscription', orderId)
-        } else {
-          const expiresAt = await billing.subscriptionExpiresAtEndOfDay(plan.duration_days)
-          await billing.upsertSubscriptionAfterPayment(phone, txn.plan_id, expiresAt)
-          const planName = plan.name != null ? String(plan.name) : ''
-          const { userId } = await findUserIdAndSyncUsersJson(
-            phone,
-            txn.plan_id,
-            planName,
-            expiresAt,
-          )
-          console.log('SUBSCRIPTION ACTIVATED:', { userId, phone, expiresAt })
+      let deviceId = String(txn.device_id ?? '').trim()
+      if (!deviceId && txn.raw_payload && typeof txn.raw_payload === 'object') {
+        deviceId = String(txn.raw_payload.device_id ?? '').trim()
+      }
+      if (!plan) {
+        console.warn('ZENO WEBHOOK: plan not found for transaction', orderId)
+      } else if (!deviceId) {
+        console.warn('ZENO WEBHOOK: transaction missing device_id — cannot activate device_subscription', orderId)
+      } else {
+        const expiresAt = await billing.subscriptionExpiresAtEndOfDay(plan.duration_days)
+        const { skipped } = await billing.upsertDeviceSubscriptionActive({
+          deviceId,
+          orderId,
+          expiresAt,
+        })
+        if (!skipped) {
+          deviceSubscriptionBus.emit('update', { deviceId })
         }
+        console.log('DEVICE SUBSCRIPTION WEBHOOK:', { deviceId, orderId, expiresAt, skipped })
       }
     }
     return res.sendStatus(200)

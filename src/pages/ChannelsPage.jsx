@@ -3,6 +3,7 @@ import ChannelFormModal from '../components/ChannelFormModal'
 import ChannelRow from '../components/ChannelRow'
 import ChannelsToolbar from '../components/ChannelsToolbar'
 import Topbar from '../components/Topbar'
+import { useDeviceSubscription } from '../context/DeviceSubscriptionContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   addChannelFormData,
@@ -17,6 +18,7 @@ import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '.
 
 function ChannelsPage() {
   const { showToast } = useToast()
+  const { isSubscribed, expiresAt } = useDeviceSubscription()
   const [isFreeMode, setIsFreeMode] = useState(false)
   const [isEmergencyMode, setIsEmergencyMode] = useState(false)
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false)
@@ -174,6 +176,12 @@ function ChannelsPage() {
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-white sm:text-3xl">
             Channels
           </h1>
+          {isSubscribed ? (
+            <p className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+              Device subscription active{expiresAt ? ` · until ${expiresAt}` : ''} (consumer app mirrors this
+              from global store)
+            </p>
+          ) : null}
         </header>
 
         <ChannelsToolbar
