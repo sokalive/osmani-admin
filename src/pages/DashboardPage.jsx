@@ -1,0 +1,147 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Activity } from 'lucide-react'
+import LiveUserLocationsCard from '../components/LiveUserLocationsCard'
+import LiveUsersTrendSection from '../components/LiveUsersTrendSection'
+import MostWatchedChannelsCard from '../components/MostWatchedChannelsCard'
+import MostWatchedChannelsListCard from '../components/MostWatchedChannelsListCard'
+import StatCard from '../components/StatCard'
+import Topbar from '../components/Topbar'
+import { useToast } from '../context/ToastContext.jsx'
+import {
+  getAnalyticsChannels,
+  getAnalyticsLocations,
+  getAnalyticsOverview,
+  getAnalyticsTrend,
+} from '../lib/api'
+
+const emerald =
+  'bg-gradient-to-br from-emerald-400/92 via-emerald-500/88 to-emerald-700/90'
+
+const OVERVIEW_FALLBACK = {
+  onlineNow: 0,
+  totalInstalls: 0,
+  revenueToday: 0,
+  newUsersToday: 0,
+}
+
+function expandLocationsForCard(rows) {
+  if (!Array.isArray(rows)) return []
+  const out = []
+  for (const row of rows) {
+    const n = Math.min(5000, Math.max(0, Math.floor(Number(row.users) || 0)))
+    const country = String(row.country || '').trim()
+    const cc =
+      country.length === 2
+        ? country.toUpperCase()
+        : country.slice(0, 2).toUpperCase() || 'TZ'
+    for (let i = 0; i < n; i += 1) {
+      out.push({
+        countryCode: cc || 'TZ',
+        countryName: country || 'Tanzania',
+        status: 'online',
+      })
+    }
+  }
+  return out
+}
+
+function DashboardPage() {
+  const { showToast } = useToast()
+  const [overview, setOverview] = useState(OVERVIEW_FALLBACK)
+  const [channels, setChannels] = useState([])
+  const [locations, setLocations] = useState([])
+  const [trend, setTrend] = useState([])
+  const [loaded, setLoaded] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const [o, c, l, t] = await Promise.all([
+        getAnalyticsOverview(),
+        getAnalyticsChannels(),
+        getAnalyticsLocations(),
+        getAnalyticsTrend(),
+      ])
+      console.log('API DATA:', o)
+      setOverview((o && typeof o === 'object' ? o : null) || OVERVIEW_FALLBACK)
+      setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
+      setLocations(Array.isArray(l) ? l : [])
+      setTrend(
+        Array.isArray(t)
+          ? t.map((x) => ({
+              time: new Date(x.time).toLocaleTimeString('en-GB', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+                timeZone: 'Africa/Dar_es_Salaam',
+              }),
+              users: Number(x.users) || 0,
+            }))
+          : [],
+      )
+      setLoaded(true)
+    } catch (e) {
+      showToast('error', e?.message || 'Could not load dashboard')
+      setOverview({})
+      setChannels([])
+      setLocations([])
+      setTrend([])
+      setLoaded(true)
+    }
+  }, [showToast])
+
+  useEffect(() => {
+    load()
+    const id = window.setInterval(load, 5000)
+    return () => window.clearInterval(id)
+  }, [load])
+
+  const installsFormatted = useMemo(() => {
+    const n = Number(overview?.totalInstalls)
+    if (!Number.isFinite(n) || n <= 0) return '0'
+    return n.toLocaleString('en-TZ')
+  }, [overview])
+
+  const liveUsersList = useMemo(
+    () => expandLocationsForCard(locations),
+    [locations],
+  )
+
+  const mostWatched = useMemo(() => {
+    return (Array.isArray(channels) ? channels : []).map((r) => ({
+      id: String(r.channel_id ?? ''),
+      name: String(r.channel_id ?? 'Unknown Channel'),
+      watchers: Number(r.viewers) || 0,
+    }))
+  }, [channels])
+
+  const section1Cards = [
+    {
+      gradientClass: emerald,
+      className: 'dashboard-card',
+      title: 'Total App Installs',
+      value: installsFormatted,
+      icon: Activity,
+    },
+  ]
+
+  return (
+    <>
+      <Topbar />
+
+      <main className="mt-6">
+        <div className="overflow-x-auto">
+          <section className="dashboard-grid">
+            <StatCard key={`top-${section1Cards[0].title}`} {...section1Cards[0]} />
+            <MostWatchedChannelsListCard channels={mostWatched} />
+            <MostWatchedChannelsCard channels={mostWatched} />
+            <LiveUserLocationsCard users={liveUsersList} />
+          </section>
+        </div>
+        <LiveUsersTrendSection points={trend} />
+        {!loaded ? <p className="mt-3 text-xs text-slate-500">Loading dashboard…</p> : null}
+      </main>
+    </>
+  )
+}
+
+export default DashboardPage
