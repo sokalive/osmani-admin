@@ -10,28 +10,34 @@ const PORT = Number(process.env.PORT) || 4000
 const allowedOrigins = [
   'https://osmani-admin.vercel.app',
   'https://osmani-admin-mpya.onrender.com',
+  'https://osmani-tv-web.onrender.com',
   'http://localhost:5173',
   'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+  'http://10.0.2.2:5173',
+  'http://10.0.2.2:3000',
 ]
 
-// --- MIDDLEWARE ---
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Ruhusu request bila origin (mfano: Postman, curl)
-      if (!origin) return callback(null, true)
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests without Origin (Postman, curl, many mobile clients/APKs)
+    if (!origin) return callback(null, true)
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true)
-      } else {
-        console.warn('❌ Blocked by CORS:', origin)
-        return callback(new Error('Not allowed by CORS'))
-      }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    credentials: true,
-  }),
-)
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true)
+    }
+
+    console.warn('❌ Blocked by CORS:', origin)
+    return callback(new Error('Not allowed by CORS'))
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+}
+
+// --- MIDDLEWARE ---
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions))
 
 app.use(express.json({ limit: '4mb' }))
 ensureUploadsDir()
