@@ -18,6 +18,11 @@ import {
   updateChannel,
 } from '../store.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import {
+  logChannelStreamDiagGet,
+  logChannelStreamDiagList,
+  logChannelStreamDiagWrite,
+} from '../lib/channelStreamDiagnostics.js'
 
 export const channelsRouter = Router()
 
@@ -42,12 +47,24 @@ function maybeUpload(req, res, next) {
 }
 
 channelsRouter.get('/', async (req, res) => {
+  const t0 = Date.now()
   try {
     const list = await readChannels()
-    const sorted = [...list]
-      .map((c) => migrateStoredChannel(c))
-      .sort((a, b) => Number(a.id) - Number(b.id))
-    res.json(sorted.map((c) => channelToResponse(c, req)))
+    const sorted = [...list].sort((a, b) => Number(a.id) - Number(b.id))
+    const payload = sorted.map((c) => {
+      const api = channelToResponse(c, req)
+      logChannelStreamDiagGet(c, api, {
+        db_read_to_response_ms: Date.now() - t0,
+      })
+      return api
+    })
+    logChannelStreamDiagList(payload, {
+      handler_total_ms: Date.now() - t0,
+    })
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.setHeader('Pragma', 'no-cache')
+    res.setHeader('Expires', '0')
+    res.json(payload)
   } catch (e) {
     console.error('[channels] GET / failed:', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -72,7 +89,9 @@ channelsRouter.post('/', maybeUpload, async (req, res) => {
       action: 'created',
       channelId: created.id,
     })
-    res.status(201).json(channelToResponse(created, req))
+    const createdBody = channelToResponse(created, req)
+    logChannelStreamDiagWrite(createdBody, { scope: 'channels.POST_response' })
+    res.status(201).json(createdBody)
   } catch (e) {
     console.error('[channels] POST / failed:', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -112,7 +131,9 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
       action: 'updated',
       channelId: updated.id,
     })
-    res.json(channelToResponse(updated, req))
+    const updatedBody = channelToResponse(updated, req)
+    logChannelStreamDiagWrite(updatedBody, { scope: 'channels.PUT_response' })
+    res.json(updatedBody)
   } catch (e) {
     console.error('[channels] PUT /:id failed:', e)
     res.status(500).json({ error: String(e.message || e) })
