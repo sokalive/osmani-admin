@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 export const GLOBAL_APP_SETTINGS_FILE = 'global-app-settings.json'
 
@@ -39,6 +40,10 @@ globalAppSettingsRouter.put('/', async (req, res) => {
       ...body,
     })
     await writeJsonAtomic(GLOBAL_APP_SETTINGS_FILE, next)
+    liveSyncBus.publish('config.settings_changed', {
+      topics: ['config'],
+      action: 'updated',
+    })
     res.json(next)
   } catch (e) {
     console.error('[settings] PUT / failed:', e)

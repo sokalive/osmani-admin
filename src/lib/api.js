@@ -189,6 +189,14 @@ export function subscriptionStreamUrl(deviceId) {
   return `${API_BASE}/subscription-stream?device_id=${d}`
 }
 
+export function syncStreamUrl(topics = ['analytics']) {
+  const normalized = Array.isArray(topics)
+    ? topics.map((x) => String(x || '').trim()).filter(Boolean)
+    : []
+  const q = encodeURIComponent(normalized.length ? normalized.join(',') : 'analytics')
+  return `${API_BASE}/sync/stream?topics=${q}`
+}
+
 /** --- Notifications --- */
 export const getNotifications = () => apiGet('/notifications')
 export const postNotification = (body) => apiPost('/notifications', body)

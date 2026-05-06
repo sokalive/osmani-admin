@@ -17,6 +17,7 @@ import {
   readChannels,
   updateChannel,
 } from '../store.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 export const channelsRouter = Router()
 
@@ -66,6 +67,11 @@ channelsRouter.post('/', maybeUpload, async (req, res) => {
     const now = new Date().toISOString()
     const created = mergeChannelRecord(null, parsed, nextId, now)
     await insertChannel(created)
+    liveSyncBus.publish('config.channels_changed', {
+      topics: ['config'],
+      action: 'created',
+      channelId: created.id,
+    })
     res.status(201).json(channelToResponse(created, req))
   } catch (e) {
     console.error('[channels] POST / failed:', e)
@@ -101,6 +107,11 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
 
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
     await updateChannel(updated)
+    liveSyncBus.publish('config.channels_changed', {
+      topics: ['config'],
+      action: 'updated',
+      channelId: updated.id,
+    })
     res.json(channelToResponse(updated, req))
   } catch (e) {
     console.error('[channels] PUT /:id failed:', e)
@@ -124,6 +135,11 @@ channelsRouter.delete('/:id', async (req, res) => {
       if (f) await fs.unlink(path.join(UPLOADS_DIR, f)).catch(() => {})
     }
     await deleteChannelById(id)
+    liveSyncBus.publish('config.channels_changed', {
+      topics: ['config'],
+      action: 'deleted',
+      channelId: id,
+    })
     res.status(204).send()
   } catch (e) {
     console.error('[channels] DELETE /:id failed:', e)

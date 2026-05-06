@@ -6,6 +6,7 @@ import { bannerToPublicResponse, bannerToResponse } from '../bannerNormalize.js'
 import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 export const bannersRouter = Router()
 
@@ -221,6 +222,11 @@ bannersRouter.post('/', maybeUploadBanner, async (req, res) => {
       image: imagePath,
     })
     const full = await bannerStore.getBannerById(inserted.id)
+    liveSyncBus.publish('config.banners_changed', {
+      topics: ['config'],
+      action: 'created',
+      bannerId: inserted.id,
+    })
     res.status(201).json(bannerToResponse(full, req))
   } catch (e) {
     console.error('[banners] POST / failed:', e)
@@ -287,6 +293,11 @@ bannersRouter.put('/:id', maybeUploadBanner, async (req, res) => {
       return res.status(404).json({ error: 'Banner not found' })
     }
     const full = await bannerStore.getBannerById(id)
+    liveSyncBus.publish('config.banners_changed', {
+      topics: ['config'],
+      action: 'updated',
+      bannerId: id,
+    })
     res.json(bannerToResponse(full, req))
   } catch (e) {
     console.error('[banners] PUT /:id failed:', e)
@@ -307,6 +318,11 @@ bannersRouter.delete('/:id', async (req, res) => {
     }
     await bannerStore.deleteBannerById(id)
     await unlinkUploadIfAny(existing.image)
+    liveSyncBus.publish('config.banners_changed', {
+      topics: ['config'],
+      action: 'deleted',
+      bannerId: id,
+    })
     res.status(204).send()
   } catch (e) {
     console.error('[banners] DELETE /:id failed:', e)

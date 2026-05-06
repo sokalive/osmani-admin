@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
   Area,
   AreaChart,
@@ -9,59 +9,15 @@ import {
   YAxis,
 } from 'recharts'
 
-const BASE_SERIES = [
-  { time: '09:15', users: 120000 },
-  { time: '09:30', users: 180000 },
-  { time: '09:45', users: 250000 },
-  { time: '10:00', users: 210000 },
-  { time: '10:15', users: 300000 },
-  { time: '10:30', users: 350000 },
-  { time: '10:45', users: 280000 },
-]
-
-function clamp(n, lo, hi) {
-  return Math.min(hi, Math.max(lo, n))
-}
-
-function jitterSeries(points) {
-  return points.map((p) => ({
-    ...p,
-    users: clamp(
-      Math.round(p.users + (Math.random() - 0.48) * 45000),
-      80000,
-      420000,
-    ),
-  }))
-}
-
-/**
- * Full-width analytics-style panel below dashboard cards — simulated live updates.
- */
+/** Full-width analytics-style panel below dashboard cards. */
 function LiveUsersTrendSection({ points }) {
-  const [data, setData] = useState(() =>
-    Array.isArray(points) && points.length > 0 ? points : [...BASE_SERIES],
-  )
-
-  useEffect(() => {
-    if (Array.isArray(points) && points.length > 0) {
-      setData(points)
-    }
-  }, [points])
-
-  const tick = useCallback(() => {
-    setData((prev) => jitterSeries(prev))
-  }, [])
-
-  useEffect(() => {
-    if (Array.isArray(points) && points.length > 0) return undefined
-    const id = window.setInterval(tick, 5000)
-    return () => window.clearInterval(id)
-  }, [tick, points])
+  const data = Array.isArray(points) ? points : []
 
   const yDomain = useMemo(() => {
-    const vals = data.map((d) => d.users)
-    const min = Math.min(...vals)
-    const max = Math.max(...vals)
+    if (!data.length) return [0, 100]
+    const vals = data.map((d) => Number(d.users) || 0)
+    const min = Math.min(...vals, 0)
+    const max = Math.max(...vals, 100)
     const pad = (max - min) * 0.15 || 20000
     return [Math.floor(min - pad), Math.ceil(max + pad)]
   }, [data])

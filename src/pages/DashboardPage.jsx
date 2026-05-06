@@ -11,6 +11,7 @@ import {
   getAnalyticsChannels,
   getAnalyticsLocations,
   getAnalyticsOverview,
+  syncStreamUrl,
   getAnalyticsTrend,
 } from '../lib/api'
 
@@ -93,6 +94,23 @@ function DashboardPage() {
     load()
     const id = window.setInterval(load, 5000)
     return () => window.clearInterval(id)
+  }, [load])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['analytics']))
+    const onSync = () => {
+      void load()
+    }
+    es.addEventListener('snapshot', onSync)
+    es.addEventListener('analytics.install', onSync)
+    es.addEventListener('analytics.session_start', onSync)
+    es.addEventListener('analytics.session_heartbeat', onSync)
+    es.addEventListener('analytics.session_end', onSync)
+    es.addEventListener('analytics.transaction_updated', onSync)
+    es.addEventListener('analytics.subscription_updated', onSync)
+    return () => {
+      es.close()
+    }
   }, [load])
 
   const installsFormatted = useMemo(() => {

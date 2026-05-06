@@ -8,8 +8,12 @@ export async function ensureBillingTables(client) {
     CREATE TABLE IF NOT EXISTS app_installs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       device_id TEXT NOT NULL DEFAULT '',
+      install_instance_id TEXT NOT NULL DEFAULT '',
       installed_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+  `)
+  await client.query(`
+    ALTER TABLE app_installs ADD COLUMN IF NOT EXISTS install_instance_id TEXT NOT NULL DEFAULT '';
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS app_installs_device_id_idx ON app_installs (device_id);
@@ -18,10 +22,15 @@ export async function ensureBillingTables(client) {
     DELETE FROM app_installs a
     USING app_installs b
     WHERE a.device_id = b.device_id
+      AND COALESCE(a.install_instance_id, '') = COALESCE(b.install_instance_id, '')
       AND a.ctid < b.ctid;
   `)
   await client.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS app_installs_device_id_unique_idx ON app_installs (device_id);
+    DROP INDEX IF EXISTS app_installs_device_id_unique_idx;
+  `)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS app_installs_device_install_instance_unique_idx
+    ON app_installs (device_id, install_instance_id);
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS app_installs_installed_at_idx ON app_installs (installed_at DESC);

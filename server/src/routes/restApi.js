@@ -16,6 +16,7 @@ import { transactionsRouter } from './transactions.js'
 import { webhooksRouter } from './webhooks.js'
 import { subscriptionRouter } from './subscription.js'
 import { zenopaySettingsRouter } from './zenopaySettings.js'
+import { liveSyncRouter } from './liveSync.js'
 
 const FILES = {
   users: 'users.json',
@@ -58,6 +59,7 @@ restApi.get('/', (_req, res) => {
       '/analytics/session/start',
       '/analytics/session/heartbeat',
       '/analytics/session/end',
+      '/sync/stream',
       '/webhooks/zenopay',
       '/dashboard',
     ],
@@ -99,6 +101,7 @@ restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(subscriptionRouter)
+restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)
 restApi.use('/plans', plansRouter)
 restApi.use('/transactions', transactionsRouter)

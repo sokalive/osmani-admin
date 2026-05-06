@@ -1,5 +1,6 @@
 import * as billing from '../billingStore.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 /** ZenoPay often sends `payment_status: "COMPLETED"` under `data` — read all layers. */
 function statusStringsFromWebhook(body) {
@@ -126,6 +127,11 @@ export async function handleZenoPayWebhook(req, res) {
         webhookAt: new Date().toISOString(),
       },
     })
+    liveSyncBus.publish('analytics.transaction_updated', {
+      topics: ['analytics'],
+      orderId,
+      status: nextStatus,
+    })
     if (ok && txn.plan_id) {
       const plan = await billing.getPlanRowByIdAny(txn.plan_id)
       let deviceId = String(txn.device_id ?? '').trim()
@@ -145,6 +151,11 @@ export async function handleZenoPayWebhook(req, res) {
         })
         if (!skipped) {
           deviceSubscriptionBus.emit('update', { deviceId })
+          liveSyncBus.publish('analytics.subscription_updated', {
+            topics: ['analytics'],
+            deviceId,
+            orderId,
+          })
         }
         console.log('DEVICE SUBSCRIPTION WEBHOOK:', { deviceId, orderId, expiresAt, skipped })
       }

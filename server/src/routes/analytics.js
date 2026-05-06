@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 export const analyticsRouter = Router()
 
@@ -37,6 +38,12 @@ function parseText(v) {
 function parseDeviceId(v) {
   const s = parseText(v)
   if (!s) return null
+  return s.slice(0, 128)
+}
+
+function parseInstallInstanceId(v) {
+  const s = parseText(v)
+  if (!s) return ''
   return s.slice(0, 128)
 }
 
@@ -268,11 +275,12 @@ analyticsRouter.post('/install', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     await pool.query(
-      `INSERT INTO app_installs (device_id, installed_at)
-       VALUES ($1, now())
-       ON CONFLICT (device_id) DO NOTHING`,
-      [deviceId],
+      `INSERT INTO app_installs (device_id, install_instance_id, installed_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (device_id, install_instance_id) DO NOTHING`,
+      [deviceId, parseInstallInstanceId(req.body?.install_instance_id ?? req.body?.install_id)],
     )
+    liveSyncBus.publish('analytics.install', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/install]', e)
@@ -302,6 +310,7 @@ analyticsRouter.post('/session/start', async (req, res) => {
          updated_at = now()`,
       [deviceId, channelId, country],
     )
+    liveSyncBus.publish('analytics.session_start', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/session/start]', e)
@@ -331,6 +340,7 @@ analyticsRouter.post('/session/heartbeat', async (req, res) => {
          updated_at = now()`,
       [deviceId, channelId, country],
     )
+    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/session/heartbeat]', e)
@@ -349,6 +359,7 @@ analyticsRouter.post('/session/end', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     await pool.query(`DELETE FROM live_sessions WHERE device_id = $1`, [deviceId])
+    liveSyncBus.publish('analytics.session_end', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/session/end]', e)
