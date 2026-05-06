@@ -23,8 +23,9 @@ transactionsRouter.get('/', async (req, res) => {
           r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at ?? ''),
       })),
     )
-  } catch {
-    res.status(500).json({ error: 'Failed to load transactions' })
+  } catch (e) {
+    console.error('[transactions] GET / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -34,7 +35,8 @@ transactionsRouter.delete('/bulk', async (req, res) => {
     const ids = Array.isArray(b.ids) ? b.ids : []
     const out = await billing.deleteTransactionsBulkByOrderIds(ids)
     res.json({ ok: true, deleted: out.deleted })
-  } catch {
-    res.status(500).json({ error: 'Failed to delete selected transactions' })
+  } catch (e) {
+    console.error('[transactions] DELETE /bulk failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })

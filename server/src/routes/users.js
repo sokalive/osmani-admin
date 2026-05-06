@@ -33,6 +33,7 @@ usersRouter.get('/', async (_req, res) => {
       }),
     )
   } catch (e) {
+    console.error('[users] GET / failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
@@ -63,6 +64,7 @@ usersRouter.put('/:device_id', async (req, res) => {
         row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at ?? ''),
     })
   } catch (e) {
+    console.error('[users] PUT /:device_id failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
@@ -99,6 +101,7 @@ usersRouter.delete('/:device_id', async (req, res) => {
     const out = await billing.deleteDeviceUserCascade(deviceId)
     res.json({ ok: true, ...out })
   } catch (e) {
+    console.error('[users] DELETE /:device_id failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

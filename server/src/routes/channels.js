@@ -47,8 +47,9 @@ channelsRouter.get('/', async (req, res) => {
       .map((c) => migrateStoredChannel(c))
       .sort((a, b) => Number(a.id) - Number(b.id))
     res.json(sorted.map((c) => channelToResponse(c, req)))
-  } catch {
-    res.status(500).json({ error: 'Failed to load channels' })
+  } catch (e) {
+    console.error('[channels] GET / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -66,8 +67,9 @@ channelsRouter.post('/', maybeUpload, async (req, res) => {
     const created = mergeChannelRecord(null, parsed, nextId, now)
     await insertChannel(created)
     res.status(201).json(channelToResponse(created, req))
-  } catch {
-    res.status(500).json({ error: 'Failed to create channel' })
+  } catch (e) {
+    console.error('[channels] POST / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -100,8 +102,9 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
     await updateChannel(updated)
     res.json(channelToResponse(updated, req))
-  } catch {
-    res.status(500).json({ error: 'Failed to update channel' })
+  } catch (e) {
+    console.error('[channels] PUT /:id failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -122,7 +125,8 @@ channelsRouter.delete('/:id', async (req, res) => {
     }
     await deleteChannelById(id)
     res.status(204).send()
-  } catch {
-    res.status(500).json({ error: 'Failed to delete channel' })
+  } catch (e) {
+    console.error('[channels] DELETE /:id failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })

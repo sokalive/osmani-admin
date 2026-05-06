@@ -38,6 +38,13 @@ export async function ensureBillingTables(client) {
   `)
 
   await client.query(`
+    ALTER TABLE live_sessions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT now();
+  `)
+  await client.query(`
+    ALTER TABLE live_sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+  `)
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS plans (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL DEFAULT '',
@@ -99,6 +106,13 @@ export async function ensureBillingTables(client) {
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS device_subscriptions_transaction_id_idx ON device_subscriptions (transaction_id);
+  `)
+
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT now();
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
   `)
 
   await client.query(`

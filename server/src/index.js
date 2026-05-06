@@ -9,6 +9,7 @@ const PORT = Number(process.env.PORT) || 4000
 // --- ALLOWED ORIGINS ---
 const allowedOrigins = [
   'https://osmani-admin.vercel.app',
+  'https://osmani-admin-mpya.onrender.com',
   'http://localhost:5173',
   'http://localhost:3000',
 ]

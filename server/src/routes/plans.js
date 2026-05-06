@@ -29,8 +29,9 @@ plansRouter.get('/', async (_req, res) => {
   try {
     const rows = await billing.listPlansWithSubscriberCounts()
     res.json(rows.map(planRowToApi))
-  } catch {
-    res.status(500).json({ error: 'Failed to load plans' })
+  } catch (e) {
+    console.error('[plans] GET / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -46,8 +47,9 @@ plansRouter.post('/', async (req, res) => {
     }
     const row = await billing.insertPlan(p)
     res.status(201).json(planRowToApi({ ...row, active_subscriber_count: 0 }))
-  } catch {
-    res.status(500).json({ error: 'Failed to create plan' })
+  } catch (e) {
+    console.error('[plans] POST / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -70,8 +72,9 @@ plansRouter.put('/:id', async (req, res) => {
     const full = await billing.listPlansWithSubscriberCounts()
     const enriched = full.find((r) => Number(r.id) === id) || row
     res.json(planRowToApi(enriched))
-  } catch {
-    res.status(500).json({ error: 'Failed to update plan' })
+  } catch (e) {
+    console.error('[plans] PUT /:id failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -82,7 +85,8 @@ plansRouter.delete('/:id', async (req, res) => {
     const ok = await billing.softDeletePlan(id)
     if (!ok) return res.status(404).json({ error: 'Plan not found' })
     res.status(204).send()
-  } catch {
-    res.status(500).json({ error: 'Failed to delete plan' })
+  } catch (e) {
+    console.error('[plans] DELETE /:id failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })

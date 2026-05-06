@@ -24,8 +24,9 @@ globalAppSettingsRouter.get('/', async (_req, res) => {
   try {
     const data = await readJson(GLOBAL_APP_SETTINGS_FILE, defaults)
     res.json(normalizeSettings(data))
-  } catch {
-    res.status(500).json({ error: 'Failed to read settings' })
+  } catch (e) {
+    console.error('[settings] GET / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -39,8 +40,9 @@ globalAppSettingsRouter.put('/', async (req, res) => {
     })
     await writeJsonAtomic(GLOBAL_APP_SETTINGS_FILE, next)
     res.json(next)
-  } catch {
-    res.status(500).json({ error: 'Failed to save settings' })
+  } catch (e) {
+    console.error('[settings] PUT / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 

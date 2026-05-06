@@ -170,8 +170,9 @@ bannersRouter.get('/', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersPublic()
     res.json(rows.map((r) => bannerToPublicResponse(r, req)))
-  } catch {
-    res.status(500).json({ error: 'Failed to load banners' })
+  } catch (e) {
+    console.error('[banners] GET / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -180,8 +181,9 @@ bannersRouter.get('/manage', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersManage()
     res.json(rows.map((r) => bannerToResponse(r, req)))
-  } catch {
-    res.status(500).json({ error: 'Failed to load banners' })
+  } catch (e) {
+    console.error('[banners] GET /manage failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -220,9 +222,10 @@ bannersRouter.post('/', maybeUploadBanner, async (req, res) => {
     })
     const full = await bannerStore.getBannerById(inserted.id)
     res.status(201).json(bannerToResponse(full, req))
-  } catch {
+  } catch (e) {
+    console.error('[banners] POST / failed:', e)
     if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
-    res.status(500).json({ error: 'Failed to create banner' })
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -285,9 +288,10 @@ bannersRouter.put('/:id', maybeUploadBanner, async (req, res) => {
     }
     const full = await bannerStore.getBannerById(id)
     res.json(bannerToResponse(full, req))
-  } catch {
+  } catch (e) {
+    console.error('[banners] PUT /:id failed:', e)
     if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
-    res.status(500).json({ error: 'Failed to update banner' })
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -304,7 +308,8 @@ bannersRouter.delete('/:id', async (req, res) => {
     await bannerStore.deleteBannerById(id)
     await unlinkUploadIfAny(existing.image)
     res.status(204).send()
-  } catch {
-    res.status(500).json({ error: 'Failed to delete banner' })
+  } catch (e) {
+    console.error('[banners] DELETE /:id failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })

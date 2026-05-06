@@ -56,8 +56,9 @@ zenopaySettingsRouter.get('/', async (req, res) => {
   try {
     const row = await billing.getZenopayRow()
     res.json(rowToApiResponse(row, req))
-  } catch {
-    res.status(500).json({ error: 'Failed to load ZenoPay settings' })
+  } catch (e) {
+    console.error('[settings/zenopay] GET failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -85,8 +86,9 @@ zenopaySettingsRouter.put('/', async (req, res) => {
       last_test_message: b.lastTestMessage ?? b.last_test_message ?? current.last_test_message,
     })
     res.json(rowToApiResponse(row, req))
-  } catch {
-    res.status(500).json({ error: 'Failed to save ZenoPay settings' })
+  } catch (e) {
+    console.error('[settings/zenopay] PUT failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 
@@ -113,6 +115,7 @@ zenopaySettingsRouter.post('/test', async (req, res) => {
       httpStatus: Number(result.httpStatus || 0),
     })
   } catch (e) {
+    console.error('[settings/zenopay] POST /test failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

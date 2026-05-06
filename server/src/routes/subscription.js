@@ -31,6 +31,7 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
     const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
     res.json(rowToPublicStatus(row))
   } catch (e) {
+    console.error('[subscription-status]', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
@@ -58,8 +59,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
         const payload = toSsePayload(row)
         res.write(`event: snapshot\ndata: ${JSON.stringify(payload)}\n\n`)
-      } catch {
-        /* ignore */
+      } catch (e) {
+        console.error('[subscription-stream] snapshot failed:', e)
       }
     })()
   }
@@ -70,8 +71,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     try {
       const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
       res.write(`event: device_subscription\ndata: ${JSON.stringify(toSsePayload(row))}\n\n`)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      console.error('[subscription-stream] device_subscription event failed:', e)
     }
   }
 
@@ -86,8 +87,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     deviceSubscriptionBus.off('update', handler)
     try {
       res.end()
-    } catch {
-      /* ignore */
+    } catch (e) {
+      console.error('[subscription-stream] close res.end failed:', e)
     }
   })
 })

@@ -84,6 +84,7 @@ restApi.get('/payment-status/:order_id', async (req, res) => {
       txn.status === 'completed' ? 'SUCCESS' : txn.status === 'failed' ? 'FAILED' : 'PENDING'
     res.json({ order_id: txn.order_id, status })
   } catch (e) {
+    console.error('[payment-status]', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
@@ -101,8 +102,8 @@ restApi.use('/payments', paymentsRouter)
 restApi.use('/webhooks', webhooksRouter)
 
 restApi.use((err, _req, res, _next) => {
-  console.error(err)
-  res.status(500).json({ error: 'Internal server error' })
+  console.error('[restApi]', err)
+  res.status(500).json({ error: String(err.message || err) })
 })
 
 restApi.use((req, res) => {
