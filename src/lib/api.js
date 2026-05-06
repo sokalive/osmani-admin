@@ -16,20 +16,6 @@ export const API_ORIGIN = API_BASE.replace(/\/api$/i, '')
 
 console.log('API_BASE:', API_BASE)
 
-const ANALYTICS_OVERVIEW_FALLBACK = {
-  onlineNow: 0,
-  newUsersToday: 0,
-  revenueToday: 0,
-  totalInstalls: 0,
-}
-
-function fallbackForPath(path) {
-  if (String(path || '').startsWith('/analytics/overview')) {
-    return { ...ANALYTICS_OVERVIEW_FALLBACK }
-  }
-  return {}
-}
-
 async function parseJsonSafe(res) {
   const text = await res.text()
   if (!text) return null
@@ -62,18 +48,10 @@ function joinPath(path) {
 }
 
 export async function apiGet(path) {
-  try {
-    const res = await fetch(joinPath(path))
-    const body = await parseJsonSafe(res)
-    if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
-    return body ?? fallbackForPath(path)
-  } catch (e) {
-    console.error('apiGet failed:', path, e)
-    if (String(path || '').startsWith('/analytics/overview')) {
-      return fallbackForPath(path)
-    }
-    throw e
-  }
+  const res = await fetch(joinPath(path))
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
 }
 
 export async function apiPost(path, data) {

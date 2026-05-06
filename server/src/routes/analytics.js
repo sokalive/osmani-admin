@@ -5,23 +5,50 @@ export const analyticsRouter = Router()
 
 const OVERVIEW_ZERO = {
   onlineNow: 0,
+  dauToday: 0,
   newUsersToday: 0,
   revenueToday: 0,
   totalInstalls: 0,
 }
+
+const SESSION_TTL_SECONDS = Math.max(30, Number(process.env.ANALYTICS_SESSION_TTL_SECONDS) || 180)
+const SESSION_TTL_INTERVAL = `${SESSION_TTL_SECONDS} seconds`
 
 function numOrZero(v) {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
 }
 
-async function safeQueryScalar(pool, sql, label, mapRow) {
+async function safeQueryScalar(pool, sql, label, mapRow, params = []) {
   try {
-    const { rows } = await pool.query(sql)
+    const { rows } = await pool.query(sql, params)
     return mapRow(rows[0])
   } catch (e) {
     console.error(`[analytics] ${label}:`, e)
     return null
+  }
+}
+
+function parseText(v) {
+  const s = String(v ?? '').trim()
+  return s || null
+}
+
+function parseDeviceId(v) {
+  const s = parseText(v)
+  if (!s) return null
+  return s.slice(0, 128)
+}
+
+async function cleanupStaleSessions(pool) {
+  try {
+    await pool.query(
+      `DELETE FROM live_sessions
+       WHERE COALESCE(updated_at, started_at, now()) < (now() - $1::interval)`,
+      [SESSION_TTL_INTERVAL],
+    )
+  } catch (e) {
+    console.error('[analytics] cleanupStaleSessions:', e)
   }
 }
 
@@ -54,11 +81,23 @@ analyticsRouter.get('/overview', async (_req, res) => {
         error: 'Database not configured',
       })
     }
+    await cleanupStaleSessions(pool)
 
     const onlineNowRaw = await safeQueryScalar(
       pool,
-      `SELECT COUNT(*)::int AS c FROM live_sessions`,
+      `SELECT COUNT(*)::int AS c
+       FROM live_sessions
+       WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
       'overview.onlineNow',
+      (r) => numOrZero(r?.c),
+      [SESSION_TTL_INTERVAL],
+    )
+    const dauTodayRaw = await safeQueryScalar(
+      pool,
+      `SELECT COUNT(DISTINCT device_id)::int AS c
+       FROM live_sessions
+       WHERE COALESCE(updated_at, started_at, now()) >= date_trunc('day', now())`,
+      'overview.dauToday',
       (r) => numOrZero(r?.c),
     )
     const newUsersTodayRaw = await safeQueryScalar(
@@ -87,15 +126,18 @@ analyticsRouter.get('/overview', async (_req, res) => {
 
     const degraded =
       onlineNowRaw === null ||
+      dauTodayRaw === null ||
       newUsersTodayRaw === null ||
       revenueTodayRaw === null ||
       totalInstallsRaw === null
 
     res.json({
       onlineNow: onlineNowRaw ?? 0,
+      dauToday: dauTodayRaw ?? 0,
       newUsersToday: newUsersTodayRaw ?? 0,
       revenueToday: revenueTodayRaw ?? 0,
       totalInstalls: totalInstallsRaw ?? 0,
+      sessionTtlSeconds: SESSION_TTL_SECONDS,
       ...(degraded ? { degraded: true } : {}),
     })
   } catch (e) {
@@ -120,12 +162,15 @@ analyticsRouter.get('/channels', async (_req, res) => {
         error: 'Database not configured',
       })
     }
+    await cleanupStaleSessions(pool)
     const { rows } = await pool.query(
       `SELECT channel_id, COUNT(*)::int AS viewers
        FROM live_sessions
        WHERE channel_id IS NOT NULL
+         AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
        GROUP BY channel_id
        ORDER BY viewers DESC`,
+      [SESSION_TTL_INTERVAL],
     )
     const mapped = rows.map((r) => ({
       channel_id: String(r.channel_id),
@@ -153,12 +198,15 @@ analyticsRouter.get('/locations', async (_req, res) => {
       console.error('[analytics/locations] DATABASE_URL not set — no database pool')
       return res.status(200).json([])
     }
+    await cleanupStaleSessions(pool)
     const { rows } = await pool.query(
       `SELECT country, COUNT(*)::int AS users
        FROM live_sessions
        WHERE country IS NOT NULL AND trim(country) <> ''
+         AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
        GROUP BY country
        ORDER BY users DESC`,
+      [SESSION_TTL_INTERVAL],
     )
     res.json(
       rows.map((r) => ({
@@ -179,6 +227,7 @@ analyticsRouter.get('/trend', async (_req, res) => {
       console.error('[analytics/trend] DATABASE_URL not set — no database pool')
       return res.status(200).json([])
     }
+    await cleanupStaleSessions(pool)
     const tsCol = await resolveLiveSessionsTimeExpr(pool)
     if (!tsCol) {
       return res.status(200).json([])
@@ -192,6 +241,7 @@ analyticsRouter.get('/trend', async (_req, res) => {
          COUNT(*)::int AS users
        FROM live_sessions
        WHERE ${tsCol} IS NOT NULL
+         AND COALESCE(updated_at, started_at, now()) >= (now() - interval '24 hours')
        GROUP BY 1
        ORDER BY 1 ASC`,
     )
@@ -204,5 +254,104 @@ analyticsRouter.get('/trend', async (_req, res) => {
   } catch (e) {
     console.error('[analytics/trend]', e)
     res.status(200).json([])
+  }
+})
+
+analyticsRouter.post('/install', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'Database not configured' })
+    }
+    const deviceId = parseDeviceId(req.body?.device_id)
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    await pool.query(
+      `INSERT INTO app_installs (device_id, installed_at)
+       VALUES ($1, now())
+       ON CONFLICT (device_id) DO NOTHING`,
+      [deviceId],
+    )
+    return res.json({ ok: true, device_id: deviceId })
+  } catch (e) {
+    console.error('[analytics/install]', e)
+    return res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+analyticsRouter.post('/session/start', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'Database not configured' })
+    }
+    const deviceId = parseDeviceId(req.body?.device_id)
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    const channelId = parseText(req.body?.channel_id)
+    const country = parseText(req.body?.country)
+    await cleanupStaleSessions(pool)
+    await pool.query(
+      `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
+       VALUES ($1, $2, $3, now(), now())
+       ON CONFLICT (device_id) DO UPDATE SET
+         channel_id = EXCLUDED.channel_id,
+         country = COALESCE(EXCLUDED.country, live_sessions.country),
+         updated_at = now()`,
+      [deviceId, channelId, country],
+    )
+    return res.json({ ok: true, device_id: deviceId })
+  } catch (e) {
+    console.error('[analytics/session/start]', e)
+    return res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+analyticsRouter.post('/session/heartbeat', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'Database not configured' })
+    }
+    const deviceId = parseDeviceId(req.body?.device_id)
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    const channelId = parseText(req.body?.channel_id)
+    const country = parseText(req.body?.country)
+    await cleanupStaleSessions(pool)
+    await pool.query(
+      `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
+       VALUES ($1, $2, $3, now(), now())
+       ON CONFLICT (device_id) DO UPDATE SET
+         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+         country = COALESCE(EXCLUDED.country, live_sessions.country),
+         updated_at = now()`,
+      [deviceId, channelId, country],
+    )
+    return res.json({ ok: true, device_id: deviceId })
+  } catch (e) {
+    console.error('[analytics/session/heartbeat]', e)
+    return res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+analyticsRouter.post('/session/end', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'Database not configured' })
+    }
+    const deviceId = parseDeviceId(req.body?.device_id)
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    await pool.query(`DELETE FROM live_sessions WHERE device_id = $1`, [deviceId])
+    return res.json({ ok: true, device_id: deviceId })
+  } catch (e) {
+    console.error('[analytics/session/end]', e)
+    return res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

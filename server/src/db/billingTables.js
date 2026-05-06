@@ -15,6 +15,15 @@ export async function ensureBillingTables(client) {
     CREATE INDEX IF NOT EXISTS app_installs_device_id_idx ON app_installs (device_id);
   `)
   await client.query(`
+    DELETE FROM app_installs a
+    USING app_installs b
+    WHERE a.device_id = b.device_id
+      AND a.ctid < b.ctid;
+  `)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS app_installs_device_id_unique_idx ON app_installs (device_id);
+  `)
+  await client.query(`
     CREATE INDEX IF NOT EXISTS app_installs_installed_at_idx ON app_installs (installed_at DESC);
   `)
 
@@ -29,6 +38,15 @@ export async function ensureBillingTables(client) {
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS live_sessions_channel_id_idx ON live_sessions (channel_id);
+  `)
+  await client.query(`
+    DELETE FROM live_sessions a
+    USING live_sessions b
+    WHERE a.device_id = b.device_id
+      AND a.ctid < b.ctid;
+  `)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS live_sessions_device_id_unique_idx ON live_sessions (device_id);
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS live_sessions_country_idx ON live_sessions (country);

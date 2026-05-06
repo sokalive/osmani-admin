@@ -4,7 +4,6 @@ import AnalyticsPage from './pages/AnalyticsPage'
 import AppUpdatePage from './pages/AppUpdatePage'
 import BannersPage from './pages/BannersPage'
 import ChannelsPage from './pages/ChannelsPage'
-import DashboardPage from './pages/DashboardPage'
 import DeviceControlPage from './pages/DeviceControlPage'
 import NotificationsPage from './pages/NotificationsPage'
 import PlansPage from './pages/PlansPage'
@@ -26,7 +25,7 @@ function App() {
         <div className="ml-[280px] flex min-h-screen flex-col">
           <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col p-6">
             <Routes>
-              <Route path="/" element={<DashboardPage />} />
+              <Route path="/" element={<Navigate to="/analytics" replace />} />
               <Route path="/channels" element={<ChannelsPage />} />
               <Route path="/banners" element={<BannersPage />} />
               <Route path="/plans" element={<PlansPage />} />

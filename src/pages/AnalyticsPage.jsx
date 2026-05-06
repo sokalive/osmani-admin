@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Activity,
+  AlertTriangle,
   Banknote,
   Download,
+  Globe,
   Radio,
+  RefreshCw,
   UserPlus,
 } from 'lucide-react'
 import {
@@ -76,7 +79,7 @@ function ChartBlock({ title, data, chartId, dataKey = 'revenue' }) {
                 borderRadius: '12px',
               }}
               labelStyle={{ color: '#e2e8f0' }}
-              formatter={(val) => [formatTsh(val), 'Revenue']}
+              formatter={(val) => [`${Number(val).toLocaleString('en-TZ')} users`, 'Users']}
             />
             <Area
               type="monotone"
@@ -98,10 +101,15 @@ function AnalyticsPage() {
   const [channels, setChannels] = useState([])
   const [locations, setLocations] = useState([])
   const [trend, setTrend] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [isDegraded, setIsDegraded] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState(null)
   const [loaded, setLoaded] = useState(false)
 
   const load = useCallback(async () => {
     try {
+      setError('')
       const [o, c, l, t] = await Promise.all([
         getAnalyticsOverview(),
         getAnalyticsChannels(),
@@ -112,14 +120,20 @@ function AnalyticsPage() {
       setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
       setLocations(Array.isArray(l) ? l : [])
       setTrend(Array.isArray(t) ? t : [])
+      setIsDegraded(Boolean(o?.degraded || c?.degraded))
+      setLastUpdated(new Date())
       setLoaded(true)
     } catch (e) {
       showToast('error', e?.message || 'Could not load analytics')
+      setError(e?.message || 'Could not load analytics')
       setOverview({})
       setChannels([])
       setLocations([])
       setTrend([])
       setLoaded(true)
+      setIsDegraded(false)
+    } finally {
+      setIsLoading(false)
     }
   }, [showToast])
 
@@ -133,12 +147,12 @@ function AnalyticsPage() {
   const newUsersToday = Number(overview?.newUsersToday) || 0
   const revenueTodayValue = Number(overview?.revenueToday) || 0
   const totalInstallsBase = Number(overview?.totalInstalls) || 0
-  const dauEstimate = Math.max(0, onlineNow)
+  const dauToday = Number(overview?.dauToday) || 0
   const txRevenueToday = revenueTodayValue
 
-  const chart7 = useMemo(() => {
+  const chartShort = useMemo(() => {
     const rows = Array.isArray(trend) ? trend : []
-    const sliced = rows.slice(Math.max(0, rows.length - 7))
+    const sliced = rows.slice(Math.max(0, rows.length - 12))
     return sliced.map((r) => ({
       label: new Date(r.time).toLocaleTimeString('en-GB', {
         hour: '2-digit',
@@ -150,9 +164,9 @@ function AnalyticsPage() {
     }))
   }, [trend])
 
-  const chart30 = useMemo(() => {
+  const chartLong = useMemo(() => {
     const rows = Array.isArray(trend) ? trend : []
-    const sliced = rows.slice(Math.max(0, rows.length - 30))
+    const sliced = rows.slice(Math.max(0, rows.length - 96))
     return sliced.map((r) => ({
       label: new Date(r.time).toLocaleTimeString('en-GB', {
         hour: '2-digit',
@@ -177,9 +191,18 @@ function AnalyticsPage() {
 
   const vOnline = useCountUp(onlineNow, { duration: 900 })
   const vNewUsers = useCountUp(newUsersToday, { duration: 900 })
-  const vDau = useCountUp(dauEstimate, { duration: 1100 })
+  const vDau = useCountUp(dauToday, { duration: 1100 })
   const vRev = useCountUp(revenueTodayValue, { duration: 1000 })
   const vInstalls = useCountUp(totalInstallsBase, { duration: 1200 })
+
+  const topLocations = useMemo(
+    () =>
+      (Array.isArray(locations) ? locations : []).slice(0, 8).map((r) => ({
+        country: String(r.country || 'Unknown'),
+        users: Number(r.users) || 0,
+      })),
+    [locations],
+  )
 
   return (
     <>
@@ -187,9 +210,27 @@ function AnalyticsPage() {
       <main className="mt-6 flex min-h-0 flex-1 flex-col gap-8">
         <header>
           <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">Analytics</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Audience, installs, and revenue derived from live analytics API.
-          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-400">
+            <p>Audience, installs, and revenue derived from live analytics API.</p>
+            {lastUpdated ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2 py-0.5 text-xs">
+                <RefreshCw className="h-3 w-3" />
+                Updated {lastUpdated.toLocaleTimeString('en-GB')}
+              </span>
+            ) : null}
+          </div>
+          {isDegraded ? (
+            <p className="mt-2 inline-flex w-fit items-center gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200">
+              <AlertTriangle className="h-4 w-4" />
+              Backend returned degraded analytics data.
+            </p>
+          ) : null}
+          {error ? (
+            <p className="mt-2 inline-flex w-fit items-center gap-2 rounded-lg border border-rose-500/50 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-200">
+              <AlertTriangle className="h-4 w-4" />
+              {error}
+            </p>
+          ) : null}
         </header>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -212,7 +253,7 @@ function AnalyticsPage() {
             display={vDau.toLocaleString('en-TZ')}
             icon={Activity}
             gradientClass="bg-gradient-to-br from-emerald-400/95 via-emerald-700/95 to-slate-900/95"
-            sub="From live sessions"
+            sub="Distinct live devices today"
           />
           <MetricCard
             title="Revenue Today"
@@ -226,47 +267,74 @@ function AnalyticsPage() {
             display={vInstalls.toLocaleString('en-TZ')}
             icon={Download}
             gradientClass="bg-gradient-to-br from-rose-400/95 via-fuchsia-800/95 to-slate-900/95"
-            sub="From device subscriptions"
+            sub="From app install records"
           />
         </section>
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <ChartBlock title="7-day revenue" chartId="d7" data={chart7} />
-          <ChartBlock title="30-day revenue" chartId="d30" data={chart30} />
+          <ChartBlock title="Live users trend (recent)" chartId="d7" data={chartShort} />
+          <ChartBlock title="Live users trend (24h)" chartId="d30" data={chartLong} />
         </div>
 
-        <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
-          <h2 className="text-lg font-semibold text-white">Top watched content</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Ranked by live viewers from sessions
-          </p>
-          <ul className="mt-5 space-y-4">
-            {topContent.length === 0 ? (
-              <li className="text-sm text-slate-500">
-                {loaded ? 'No live channel analytics yet.' : 'Loading live channel analytics…'}
-              </li>
-            ) : (
-              topContent.map((row) => (
-                <li key={row.id}>
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="min-w-0 flex-1 truncate font-medium text-slate-200">
-                      {row.title}
-                    </span>
-                    <span className="shrink-0 tabular-nums text-amber-200/95">
-                      {formatTsh(row.views)}
-                    </span>
-                  </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 transition-all duration-500"
-                      style={{ width: `${row.bar}%` }}
-                    />
-                  </div>
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
+            <h2 className="text-lg font-semibold text-white">Top watched channels</h2>
+            <p className="mt-1 text-sm text-slate-500">Ranked by active live sessions</p>
+            <ul className="mt-5 space-y-4">
+              {topContent.length === 0 ? (
+                <li className="text-sm text-slate-500">
+                  {isLoading && !loaded ? 'Loading channel analytics...' : 'No live channel analytics yet.'}
                 </li>
-              ))
-            )}
-          </ul>
-        </section>
+              ) : (
+                topContent.map((row) => (
+                  <li key={row.id}>
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="min-w-0 flex-1 truncate font-medium text-slate-200">
+                        {row.title}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-amber-200/95">
+                        {row.views.toLocaleString('en-TZ')} users
+                      </span>
+                    </div>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-amber-400 to-yellow-500 transition-all duration-500"
+                        style={{ width: `${row.bar}%` }}
+                      />
+                    </div>
+                  </li>
+                ))
+              )}
+            </ul>
+          </section>
+
+          <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
+            <h2 className="inline-flex items-center gap-2 text-lg font-semibold text-white">
+              <Globe className="h-5 w-5 text-cyan-300" />
+              Live locations
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">Active users grouped by country</p>
+            <ul className="mt-5 space-y-3">
+              {topLocations.length === 0 ? (
+                <li className="text-sm text-slate-500">
+                  {isLoading && !loaded ? 'Loading live locations...' : 'No active location data yet.'}
+                </li>
+              ) : (
+                topLocations.map((row) => (
+                  <li
+                    key={`${row.country}-${row.users}`}
+                    className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2"
+                  >
+                    <span className="text-sm text-slate-200">{row.country}</span>
+                    <span className="text-sm font-semibold tabular-nums text-cyan-200">
+                      {row.users.toLocaleString('en-TZ')}
+                    </span>
+                  </li>
+                ))
+              )}
+            </ul>
+          </section>
+        </div>
       </main>
     </>
   )
