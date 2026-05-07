@@ -244,6 +244,66 @@ export async function updateTransactionByOrderId(orderId, { status, external_id,
   return rows[0] ?? null
 }
 
+/** Digits only — matches DB normalization for payment phone lookup. */
+export function normalizePhoneDigits(phone) {
+  return String(phone ?? '').replace(/[^0-9]/g, '')
+}
+
+export async function getLatestCompletedTransactionByNormalizedPhone(phoneInput) {
+  const digits = normalizePhoneDigits(phoneInput)
+  if (!digits || digits.length < 9) return null
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT *
+     FROM transactions t
+     WHERE t.status = 'completed'
+       AND t.plan_id IS NOT NULL
+       AND regexp_replace(COALESCE(t.phone::text, ''), '[^0-9]', '', 'g') = $1
+     ORDER BY t.created_at DESC
+     LIMIT 1`,
+    [digits],
+  )
+  return rows[0] ?? null
+}
+
+/**
+ * Resolve the device_id that currently holds an active subscription tied to this payment phone.
+ * Prefer txn.device_id when it matches an active row; otherwise fall back to latest completed txn's device.
+ */
+export async function findActiveDeviceIdForPaymentPhone(phoneInput) {
+  const digits = normalizePhoneDigits(phoneInput)
+  if (!digits || digits.length < 9) return null
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT t.device_id::text AS device_id
+     FROM transactions t
+     INNER JOIN device_subscriptions ds ON ds.device_id = t.device_id
+     WHERE t.status = 'completed'
+       AND t.plan_id IS NOT NULL
+       AND regexp_replace(COALESCE(t.phone::text, ''), '[^0-9]', '', 'g') = $1
+       AND ds.status = 'active'
+       AND ds.expires_at > now()
+     ORDER BY t.created_at DESC
+     LIMIT 1`,
+    [digits],
+  )
+  if (rows[0]?.device_id) return String(rows[0].device_id)
+
+  const txn = await getLatestCompletedTransactionByNormalizedPhone(phoneInput)
+  if (!txn) return null
+  const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+  const dev = String(txn.device_id ?? '').trim() || String(raw.device_id ?? '').trim()
+  if (!dev) return null
+  const { rows: dr } = await pool.query(
+    `SELECT device_id::text AS device_id
+     FROM device_subscriptions
+     WHERE device_id = $1 AND status = 'active' AND expires_at > now()
+     LIMIT 1`,
+    [dev],
+  )
+  return dr[0]?.device_id ? String(dr[0].device_id) : null
+}
+
 /** --- Subscriptions --- */
 
 /**
@@ -388,6 +448,65 @@ export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expire
     throw e
   }
   return { skipped: false }
+}
+
+/**
+ * Idempotent activation for a completed transaction (webhook + payment-status poll).
+ * Mirrors ZenoPay webhook success path.
+ */
+export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
+  if (!txn || String(txn.status ?? '').trim() !== 'completed') {
+    return {
+      activated: false,
+      skipped: true,
+      reason: 'not_completed',
+      deviceId: null,
+      orderId: txn?.order_id ? String(txn.order_id) : null,
+    }
+  }
+  const planId = txn.plan_id
+  if (!planId) {
+    return {
+      activated: false,
+      skipped: true,
+      reason: 'no_plan',
+      deviceId: null,
+      orderId: String(txn.order_id ?? ''),
+    }
+  }
+  let deviceId = String(txn.device_id ?? '').trim()
+  const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+  if (!deviceId) deviceId = String(raw.device_id ?? '').trim()
+  const orderId = String(txn.order_id ?? '').trim()
+  if (!deviceId) {
+    return {
+      activated: false,
+      skipped: true,
+      reason: 'no_device_id',
+      deviceId: null,
+      orderId,
+    }
+  }
+  const plan = await getPlanRowByIdAny(planId)
+  if (!plan) {
+    return {
+      activated: false,
+      skipped: true,
+      reason: 'plan_not_found',
+      deviceId,
+      orderId,
+    }
+  }
+  const expiresAt = await subscriptionExpiresAtEndOfDay(plan.duration_days)
+  const { skipped } = await upsertDeviceSubscriptionActive({ deviceId, orderId, expiresAt })
+  return {
+    activated: !skipped,
+    skipped,
+    reason: skipped ? 'already_applied' : 'ok',
+    deviceId,
+    orderId,
+    expiresAt,
+  }
 }
 
 export async function listDeviceUsers() {

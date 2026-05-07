@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ClipboardList, Hourglass, Send, Settings, Zap } from 'lucide-react'
+import { ClipboardList, Hourglass, Settings, Zap } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getDeviceControlSettings, putDeviceControlSettings } from '../lib/api'
+import { getDeviceControlSettings, postAdminForceTransferPhone, putDeviceControlSettings } from '../lib/api'
 import { appendSecurityLog } from '../lib/securityActivityLog'
 
 function newId() {
@@ -45,6 +45,9 @@ function DeviceControlPage() {
   }))
   const [tab, setTab] = useState('settings')
   const [flash, setFlash] = useState(null)
+  const [forcePaymentPhone, setForcePaymentPhone] = useState('')
+  const [forceNewDeviceId, setForceNewDeviceId] = useState('')
+  const [forceSubmitting, setForceSubmitting] = useState(false)
 
   const loadCfg = useCallback(async () => {
     try {
@@ -151,22 +154,43 @@ function DeviceControlPage() {
     }
   }, [cfg, appendLog])
 
-  const forceTransfer = useCallback(async () => {
-    const next = appendLog('Force transfer command dispatched (simulated handshake OK).')({ ...cfg })
-    try {
-      const saved = await putDeviceControlSettings(next)
-      setCfg(saved)
-      await appendSecurityLog({
-        actor: 'emergency-console',
-        eventType: 'Policy enforcement',
-        status: 'completed',
-        detail: `force_transfer · ref:${Math.random().toString(36).slice(2, 10)}`,
-      })
-      showFlash('success', 'Force transfer simulated.')
-    } catch (err) {
-      showToast('error', err?.message || 'Request failed')
-    }
-  }, [cfg, appendLog])
+  const handleForceTransferSubmit = useCallback(
+    async (e) => {
+      e.preventDefault()
+      const phone = forcePaymentPhone.trim()
+      const deviceId = forceNewDeviceId.trim()
+      if (!phone || !deviceId) {
+        showToast('error', 'Enter payment phone and new device ID.')
+        return
+      }
+      setForceSubmitting(true)
+      try {
+        await postAdminForceTransferPhone({
+          payment_phone: phone,
+          target_device_id: deviceId,
+        })
+        setCfg((c) =>
+          appendLog(
+            `Force transfer completed · ${phone.replace(/\s+/g, '')} → ${deviceId.slice(0, 32)}${deviceId.length > 32 ? '…' : ''}`,
+          )(c),
+        )
+        await appendSecurityLog({
+          actor: 'Admin',
+          eventType: 'Force transfer',
+          status: 'completed',
+          detail: `Admin force transfer by payment phone → ${deviceId.slice(0, 48)}`,
+        })
+        setForcePaymentPhone('')
+        setForceNewDeviceId('')
+        showFlash('success', 'Force transfer completed.')
+      } catch (err) {
+        showToast('error', err?.message || 'Force transfer failed')
+      } finally {
+        setForceSubmitting(false)
+      }
+    },
+    [appendLog, forceNewDeviceId, forcePaymentPhone, showToast],
+  )
 
   return (
     <>
@@ -358,20 +382,54 @@ function DeviceControlPage() {
         ) : null}
 
         {tab === 'force' ? (
-          <section className="max-w-lg rounded-2xl border border-red-500/25 bg-red-950/20 p-6 ring-1 ring-red-400/20">
-            <h2 className="text-lg font-semibold text-red-100">Force transfer</h2>
-            <p className="mt-2 text-sm text-red-200/80">
-              Sends a simulated override to the next eligible session. Use only when policy allows.
-            </p>
+          <form
+            onSubmit={handleForceTransferSubmit}
+            className="max-w-xl space-y-5 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
+          >
+            <div>
+              <h2 className="text-lg font-semibold text-white">Force Transfer Device</h2>
+              <p className="mt-2 text-sm text-slate-400">
+                Transfer a subscription to a new device without requiring old device confirmation.
+              </p>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Namba ya zamani (iliyolipia kifurushi)
+              </label>
+              <input
+                type="tel"
+                autoComplete="tel"
+                placeholder="e.g. +255712345678"
+                value={forcePaymentPhone}
+                onChange={(e) => setForcePaymentPhone(e.target.value)}
+                className={inputClass()}
+              />
+              <p className="mt-1.5 text-xs text-slate-500">Weka namba iliyotumika kulipia kifurushi</p>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Device ID ya simu mpya
+              </label>
+              <input
+                type="text"
+                placeholder="Paste new device ID"
+                value={forceNewDeviceId}
+                onChange={(e) => setForceNewDeviceId(e.target.value)}
+                className={inputClass()}
+              />
+              <p className="mt-1.5 text-xs text-slate-500">Pata Device ID kutoka kwenye simu mpya ya user</p>
+            </div>
+
             <button
-              type="button"
-              onClick={forceTransfer}
-              className="mt-6 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 px-6 py-3 text-sm font-bold text-white shadow-lg"
+              type="submit"
+              disabled={forceSubmitting}
+              className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-8 py-3 text-sm font-bold text-slate-950 disabled:opacity-50"
             >
-              <Send className="h-4 w-4" />
-              Run simulated force transfer
+              {forceSubmitting ? 'Transferring…' : 'Force Transfer Device'}
             </button>
-          </section>
+          </form>
         ) : null}
       </main>
     </>

@@ -133,32 +133,26 @@ export async function handleZenoPayWebhook(req, res) {
       status: nextStatus,
     })
     if (ok && txn.plan_id) {
-      const plan = await billing.getPlanRowByIdAny(txn.plan_id)
-      let deviceId = String(txn.device_id ?? '').trim()
-      if (!deviceId && txn.raw_payload && typeof txn.raw_payload === 'object') {
-        deviceId = String(txn.raw_payload.device_id ?? '').trim()
-      }
-      if (!plan) {
+      const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn({
+        ...txn,
+        status: 'completed',
+      })
+      if (act.reason === 'plan_not_found') {
         console.warn('ZENO WEBHOOK: plan not found for transaction', orderId)
-      } else if (!deviceId) {
-        console.warn('ZENO WEBHOOK: transaction missing device_id — cannot activate device_subscription', orderId)
-      } else {
-        const expiresAt = await billing.subscriptionExpiresAtEndOfDay(plan.duration_days)
-        const { skipped } = await billing.upsertDeviceSubscriptionActive({
-          deviceId,
+      } else if (act.reason === 'no_device_id') {
+        console.warn(
+          'ZENO WEBHOOK: transaction missing device_id — cannot activate device_subscription',
           orderId,
-          expiresAt,
+        )
+      } else if (!act.skipped && act.deviceId) {
+        deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
+        liveSyncBus.publish('analytics.subscription_updated', {
+          topics: ['analytics'],
+          deviceId: act.deviceId,
+          orderId,
         })
-        if (!skipped) {
-          deviceSubscriptionBus.emit('update', { deviceId })
-          liveSyncBus.publish('analytics.subscription_updated', {
-            topics: ['analytics'],
-            deviceId,
-            orderId,
-          })
-        }
-        console.log('DEVICE SUBSCRIPTION WEBHOOK:', { deviceId, orderId, expiresAt, skipped })
       }
+      console.log('DEVICE SUBSCRIPTION WEBHOOK:', { ...act, orderId })
     }
     return res.sendStatus(200)
   } catch (e) {

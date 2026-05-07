@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { Router } from 'express'
+import * as billing from '../billingStore.js'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
@@ -183,6 +184,87 @@ async function checkTransferLimits(pool, sourceDeviceId, cooldownMinutes, dailyL
   if (weekCount >= weeklyLimit) return { ok: false, reason: 'Weekly transfer limit reached' }
   if (lastAt && nowMs - lastAt < cooldownMs) return { ok: false, reason: 'Transfer cooldown active' }
   return { ok: true }
+}
+
+/** Shared admin force transfer by device IDs. Emits SSE + subscription bus after commit. */
+async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId, targetFpHash, auditExtra }) {
+  const src = text(sourceDeviceId, 128)
+  const tgt = text(targetDeviceId, 128)
+  if (!src || !tgt) return { ok: false, status: 400, error: 'source_device_id and target_device_id are required' }
+  if (src === tgt) return { ok: false, status: 400, error: 'Source and target device must differ' }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const sourceSub = await client.query(
+      `SELECT * FROM device_subscriptions WHERE device_id = $1 FOR UPDATE`,
+      [src],
+    )
+    const sub = sourceSub.rows[0]
+    if (!sub) {
+      await client.query('ROLLBACK')
+      return { ok: false, status: 404, error: 'Source subscription not found' }
+    }
+    const validSubRes = await client.query(
+      `SELECT (status = 'active' AND expires_at > now()) AS active FROM device_subscriptions WHERE device_id = $1`,
+      [src],
+    )
+    if (!validSubRes.rows[0]?.active) {
+      await client.query('ROLLBACK')
+      return { ok: false, status: 400, error: 'Source subscription expired' }
+    }
+    const code = randomTransferCode()
+    await client.query(
+      `INSERT INTO transfer_codes
+       (code, source_device_id, target_device_id, target_fingerprint_hash, status, expires_at, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'used', now() + interval '10 minutes', 'admin_force', now(), now())`,
+      [code, src, tgt, targetFpHash],
+    )
+    await client.query(
+      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
+       VALUES ($1, 'active', $2, now(), $3, now(), $4)
+       ON CONFLICT (device_id) DO UPDATE SET
+         status = 'active',
+         expires_at = EXCLUDED.expires_at,
+         transaction_id = EXCLUDED.transaction_id,
+         updated_at = now(),
+         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
+      [tgt, sub.expires_at, `force:${code}`, targetFpHash],
+    )
+    await client.query(
+      `UPDATE device_subscriptions SET status = 'pending', updated_at = now() WHERE device_id = $1`,
+      [src],
+    )
+    await client.query(
+      `INSERT INTO device_transfers
+       (code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at, completed_at)
+       VALUES ($1, $2, $3, $4, $5, 'completed', 'admin_force', 'admin', now(), now())`,
+      [code, src, tgt, sub.fingerprint_hash || null, targetFpHash],
+    )
+    const extra = auditExtra ? String(auditExtra).slice(0, 500) : ''
+    await logSecurityEvent(client, {
+      actor: 'Admin',
+      eventType: 'Force transfer',
+      status: 'completed',
+      detail: `Force transferred ${src} -> ${tgt}${extra ? ` · ${extra}` : ''}`,
+      metadata: { source_device_id: src, target_device_id: tgt },
+    })
+    await client.query('COMMIT')
+    deviceSubscriptionBus.emit('update', { deviceId: src })
+    deviceSubscriptionBus.emit('update', { deviceId: tgt })
+    emitSync('transfer_completed', {
+      source_device_id: src,
+      target_device_id: tgt,
+      reason: 'admin_force',
+    })
+    emitSync('subscription_revoked', { device_id: src, reason: 'admin_force' })
+    return { ok: true, source_device_id: src, target_device_id: tgt }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
 }
 
 deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
@@ -773,83 +855,54 @@ deviceSecurityRouter.post('/transfer/admin-force', async (req, res) => {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const sourceDeviceId = text(b.source_device_id, 128)
     const targetDeviceId = text(b.target_device_id, 128)
-    if (!sourceDeviceId || !targetDeviceId) {
-      return res.status(400).json({ error: 'source_device_id and target_device_id are required' })
-    }
     const targetFpHash = fingerprintHash(b.target_fingerprint || b.fingerprint)
-    const client = await pool.connect()
-    try {
-      await client.query('BEGIN')
-      const sourceSub = await client.query(
-        `SELECT * FROM device_subscriptions WHERE device_id = $1 FOR UPDATE`,
-        [sourceDeviceId],
-      )
-      const sub = sourceSub.rows[0]
-      if (!sub) {
-        await client.query('ROLLBACK')
-        return res.status(404).json({ error: 'Source subscription not found' })
-      }
-      const validSubRes = await client.query(
-        `SELECT (status = 'active' AND expires_at > now()) AS active FROM device_subscriptions WHERE device_id = $1`,
-        [sourceDeviceId],
-      )
-      if (!validSubRes.rows[0]?.active) {
-        await client.query('ROLLBACK')
-        return res.status(400).json({ error: 'Source subscription expired' })
-      }
-      const code = randomTransferCode()
-      await client.query(
-        `INSERT INTO transfer_codes
-         (code, source_device_id, target_device_id, target_fingerprint_hash, status, expires_at, created_by, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, 'used', now() + interval '10 minutes', 'admin_force', now(), now())`,
-        [code, sourceDeviceId, targetDeviceId, targetFpHash],
-      )
-      await client.query(
-        `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-         VALUES ($1, 'active', $2, now(), $3, now(), $4)
-         ON CONFLICT (device_id) DO UPDATE SET
-           status = 'active',
-           expires_at = EXCLUDED.expires_at,
-           transaction_id = EXCLUDED.transaction_id,
-           updated_at = now(),
-           fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
-        [targetDeviceId, sub.expires_at, `force:${code}`, targetFpHash],
-      )
-      await client.query(
-        `UPDATE device_subscriptions SET status = 'pending', updated_at = now() WHERE device_id = $1`,
-        [sourceDeviceId],
-      )
-      await client.query(
-        `INSERT INTO device_transfers
-         (code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at, completed_at)
-         VALUES ($1, $2, $3, $4, $5, 'completed', 'admin_force', 'admin', now(), now())`,
-        [code, sourceDeviceId, targetDeviceId, sub.fingerprint_hash || null, targetFpHash],
-      )
-      await logSecurityEvent(client, {
-        actor: 'Admin',
-        eventType: 'Force transfer',
-        status: 'completed',
-        detail: `Force transferred ${sourceDeviceId} -> ${targetDeviceId}`,
-        metadata: { source_device_id: sourceDeviceId, target_device_id: targetDeviceId },
-      })
-      await client.query('COMMIT')
-      deviceSubscriptionBus.emit('update', { deviceId: sourceDeviceId })
-      deviceSubscriptionBus.emit('update', { deviceId: targetDeviceId })
-      emitSync('transfer_completed', {
-        source_device_id: sourceDeviceId,
-        target_device_id: targetDeviceId,
-        reason: 'admin_force',
-      })
-      emitSync('subscription_revoked', { device_id: sourceDeviceId, reason: 'admin_force' })
-      return res.json({ ok: true, source_device_id: sourceDeviceId, target_device_id: targetDeviceId })
-    } catch (e) {
-      await client.query('ROLLBACK')
-      throw e
-    } finally {
-      client.release()
-    }
+    const result = await executeAdminForceTransfer(pool, {
+      sourceDeviceId,
+      targetDeviceId,
+      targetFpHash,
+      auditExtra: '',
+    })
+    if (!result.ok) return res.status(result.status).json({ error: result.error })
+    return res.json({ ok: true, source_device_id: result.source_device_id, target_device_id: result.target_device_id })
   } catch (e) {
     console.error('[transfer/admin-force]', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+deviceSecurityRouter.post('/transfer/admin-force-phone', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(pool)
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const paymentPhone = text(b.payment_phone ?? b.phone, 40)
+    const targetDeviceId = text(b.target_device_id ?? b.new_device_id, 128)
+    if (!paymentPhone || !targetDeviceId) {
+      return res.status(400).json({ error: 'payment_phone and target_device_id are required' })
+    }
+    const sourceDeviceId = await billing.findActiveDeviceIdForPaymentPhone(paymentPhone)
+    if (!sourceDeviceId) {
+      return res.status(404).json({ error: 'No active subscription found for this payment phone' })
+    }
+    const targetFpHash = fingerprintHash(b.target_fingerprint || b.fingerprint)
+    const digits = billing.normalizePhoneDigits(paymentPhone)
+    const auditExtra = digits ? `payment_phone_digits:${digits}` : ''
+    const result = await executeAdminForceTransfer(pool, {
+      sourceDeviceId,
+      targetDeviceId,
+      targetFpHash,
+      auditExtra,
+    })
+    if (!result.ok) return res.status(result.status).json({ error: result.error })
+    return res.json({
+      ok: true,
+      source_device_id: result.source_device_id,
+      target_device_id: result.target_device_id,
+      resolved_from_payment_phone: true,
+    })
+  } catch (e) {
+    console.error('[transfer/admin-force-phone]', e)
     return res.status(500).json({ error: String(e.message || e) })
   }
 })

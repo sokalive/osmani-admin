@@ -21,6 +21,8 @@ import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentPro
 import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
+import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 const FILES = {
   users: 'users.json',
@@ -77,6 +79,7 @@ restApi.get('/', (_req, res) => {
       '/transfer/request',
       '/transfer/confirm',
       '/transfer/admin-force',
+      '/transfer/admin-force-phone',
       '/subscription/recover',
       '/subscription/revoke',
       '/security-logs',
@@ -108,6 +111,19 @@ restApi.get('/payment-status/:order_id', async (req, res) => {
     const txn = await billing.getTransactionByOrderId(orderId)
     if (!txn) {
       return res.status(404).json({ error: 'Unknown order' })
+    }
+    if (txn.status === 'completed' && txn.plan_id) {
+      const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn(txn)
+      if (act.reason === 'no_device_id') {
+        console.warn('[payment-status] completed txn missing device_id:', orderId)
+      } else if (!act.skipped && act.deviceId) {
+        deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
+        liveSyncBus.publish('analytics.subscription_updated', {
+          topics: ['analytics'],
+          deviceId: act.deviceId,
+          orderId,
+        })
+      }
     }
     const status =
       txn.status === 'completed' ? 'SUCCESS' : txn.status === 'failed' ? 'FAILED' : 'PENDING'

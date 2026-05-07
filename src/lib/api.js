@@ -205,6 +205,7 @@ export const putNotification = (id, body) => apiPut(`/notifications/${encodeURIC
 /** --- Transfer codes --- */
 export const getTransferCodes = () => apiGet('/transfer-codes')
 export const postTransferCode = (body) => apiPost('/transfer-codes', body)
+export const postAdminForceTransferPhone = (body) => apiPost('/transfer/admin-force-phone', body)
 export const putTransferCode = (id, body) => apiPut(`/transfer-codes/${encodeURIComponent(id)}`, body)
 export const deleteTransferCode = (id) => apiDelete(`/transfer-codes/${encodeURIComponent(id)}`)
 
