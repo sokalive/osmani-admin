@@ -243,20 +243,30 @@ function isPotentiallyOnlineStatus(status) {
   return status === 200 || status === 206 || status === 301 || status === 302
 }
 
-function buildProbeHeaders(extra = {}) {
+function buildProbeHeaders(channel, extra = {}) {
+  const referer = asText(channel?.referer, 4000)
+  const origin = asText(channel?.origin, 4000)
+  const ua = asText(channel?.userAgent, 500) || MEDIA_USER_AGENT
   return {
-    'User-Agent': MEDIA_USER_AGENT,
+    'User-Agent': ua,
     Accept: '*/*',
     Connection: 'keep-alive',
+    ...(referer ? { Referer: referer } : {}),
+    ...(origin ? { Origin: origin } : {}),
     ...extra,
   }
 }
 
-async function runProbeRequest(url, method, { range = null, parseText = false } = {}) {
+async function runProbeRequest(
+  channel,
+  url,
+  method,
+  { range = null, parseText = false } = {},
+) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort('timeout'), HEALTH_PROBE_TIMEOUT_MS)
   const started = Date.now()
-  const headers = buildProbeHeaders(range ? { Range: range } : {})
+  const headers = buildProbeHeaders(channel, range ? { Range: range } : {})
   try {
     const res = await fetch(url, {
       method,
@@ -314,7 +324,7 @@ async function probeSingleChannel(channel) {
   const attempted = []
   const hlsByUrl = isLikelyHlsUrl(streamUrl)
 
-  const head = await runProbeRequest(streamUrl, 'HEAD')
+  const head = await runProbeRequest(channel, streamUrl, 'HEAD')
   attempted.push({ method: 'HEAD', status: head.status, error: head.error || '' })
   if (head.ok && isPotentiallyOnlineStatus(head.status)) {
     console.info(
@@ -341,7 +351,7 @@ async function probeSingleChannel(channel) {
     )
   }
 
-  const ranged = await runProbeRequest(streamUrl, 'GET', { range: 'bytes=0-1' })
+  const ranged = await runProbeRequest(channel, streamUrl, 'GET', { range: 'bytes=0-1' })
   attempted.push({ method: 'GET_RANGE', status: ranged.status, error: ranged.error || '' })
   if (ranged.ok && (ranged.status === 206 || ranged.status === 200 || ranged.status === 301 || ranged.status === 302)) {
     console.info(
@@ -365,7 +375,7 @@ async function probeSingleChannel(channel) {
     ranged.status === 403
 
   if (shouldTryHlsFetch) {
-    const playlist = await runProbeRequest(streamUrl, 'GET', { parseText: true })
+    const playlist = await runProbeRequest(channel, streamUrl, 'GET', { parseText: true })
     attempted.push({ method: 'GET_PLAYLIST', status: playlist.status, error: playlist.error || '' })
     const hasManifest =
       isHlsContentType(playlist.contentType) ||
