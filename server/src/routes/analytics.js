@@ -41,6 +41,20 @@ function parseDeviceId(v) {
   return s.slice(0, 128)
 }
 
+function parseChannelIdFromBody(body) {
+  return parseText(
+    body?.channel_id ??
+      body?.channelId ??
+      body?.active_channel_id ??
+      body?.activeChannelId ??
+      body?.channel,
+  )
+}
+
+function parseCountryFromBody(body) {
+  return parseText(body?.country ?? body?.country_code ?? body?.countryCode)
+}
+
 function parseInstallInstanceId(v) {
   const s = parseText(v)
   if (!s) return ''
@@ -183,9 +197,10 @@ analyticsRouter.get('/channels', async (_req, res) => {
       channel_id: String(r.channel_id),
       viewers: Number(r.viewers) || 0,
     }))
+    const top5Eligible = mapped.filter((x) => Number(x.viewers) >= 10).slice(0, 5)
     res.json({
       mostWatched: mapped,
-      top5: mapped.slice(0, 5),
+      top5: top5Eligible,
     })
   } catch (e) {
     console.error('[analytics/channels]', e)
@@ -298,8 +313,8 @@ analyticsRouter.post('/session/start', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    const channelId = parseText(req.body?.channel_id)
-    const country = parseText(req.body?.country)
+    const channelId = parseChannelIdFromBody(req.body)
+    const country = parseCountryFromBody(req.body)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -328,8 +343,8 @@ analyticsRouter.post('/session/heartbeat', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    const channelId = parseText(req.body?.channel_id)
-    const country = parseText(req.body?.country)
+    const channelId = parseChannelIdFromBody(req.body)
+    const country = parseCountryFromBody(req.body)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -363,6 +378,86 @@ analyticsRouter.post('/session/end', async (req, res) => {
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/session/end]', e)
+    return res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+// App-compatible presence aliases (mobile app integration)
+analyticsRouter.post('/presence/start', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'Database not configured' })
+    }
+    const deviceId = parseDeviceId(req.body?.device_id ?? req.body?.deviceId)
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    const channelId = parseChannelIdFromBody(req.body)
+    const country = parseCountryFromBody(req.body)
+    await cleanupStaleSessions(pool)
+    await pool.query(
+      `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
+       VALUES ($1, $2, $3, now(), now())
+       ON CONFLICT (device_id) DO UPDATE SET
+         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+         country = COALESCE(EXCLUDED.country, live_sessions.country),
+         updated_at = now()`,
+      [deviceId, channelId, country],
+    )
+    liveSyncBus.publish('analytics.session_start', { topics: ['analytics'], deviceId })
+    return res.json({ ok: true, device_id: deviceId })
+  } catch (e) {
+    console.error('[analytics/presence/start]', e)
+    return res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+analyticsRouter.post('/presence/heartbeat', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'Database not configured' })
+    }
+    const deviceId = parseDeviceId(req.body?.device_id ?? req.body?.deviceId)
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    const channelId = parseChannelIdFromBody(req.body)
+    const country = parseCountryFromBody(req.body)
+    await cleanupStaleSessions(pool)
+    await pool.query(
+      `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
+       VALUES ($1, $2, $3, now(), now())
+       ON CONFLICT (device_id) DO UPDATE SET
+         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+         country = COALESCE(EXCLUDED.country, live_sessions.country),
+         updated_at = now()`,
+      [deviceId, channelId, country],
+    )
+    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
+    return res.json({ ok: true, device_id: deviceId })
+  } catch (e) {
+    console.error('[analytics/presence/heartbeat]', e)
+    return res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+analyticsRouter.post('/presence/stop', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) {
+      return res.status(503).json({ ok: false, error: 'Database not configured' })
+    }
+    const deviceId = parseDeviceId(req.body?.device_id ?? req.body?.deviceId)
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    await pool.query(`DELETE FROM live_sessions WHERE device_id = $1`, [deviceId])
+    liveSyncBus.publish('analytics.session_end', { topics: ['analytics'], deviceId })
+    return res.json({ ok: true, device_id: deviceId })
+  } catch (e) {
+    console.error('[analytics/presence/stop]', e)
     return res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
