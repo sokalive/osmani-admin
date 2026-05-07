@@ -33,6 +33,8 @@ const HEALTH_BACKGROUND_INTERVAL_MS = Math.max(
   10000,
   Number(process.env.SERVER_HEALTH_BROADCAST_INTERVAL_MS) || 30000,
 )
+const MEDIA_USER_AGENT =
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) ExoPlayerLib/2.19.1'
 
 let healthCache = {
   cachedAt: 0,
@@ -228,6 +230,76 @@ function getPrimaryStreamUrl(channel) {
   return ''
 }
 
+function isLikelyHlsUrl(url) {
+  return /\.m3u8($|\?)/i.test(String(url || ''))
+}
+
+function isHlsContentType(contentType) {
+  const ct = String(contentType || '').toLowerCase()
+  return ct.includes('application/vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')
+}
+
+function isPotentiallyOnlineStatus(status) {
+  return status === 200 || status === 206 || status === 301 || status === 302
+}
+
+function buildProbeHeaders(extra = {}) {
+  return {
+    'User-Agent': MEDIA_USER_AGENT,
+    Accept: '*/*',
+    Connection: 'keep-alive',
+    ...extra,
+  }
+}
+
+async function runProbeRequest(url, method, { range = null, parseText = false } = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort('timeout'), HEALTH_PROBE_TIMEOUT_MS)
+  const started = Date.now()
+  const headers = buildProbeHeaders(range ? { Range: range } : {})
+  try {
+    const res = await fetch(url, {
+      method,
+      redirect: 'follow',
+      signal: controller.signal,
+      headers,
+    })
+    const ms = Date.now() - started
+    const contentType = res.headers.get('content-type') || ''
+    let snippet = ''
+    if (parseText) {
+      try {
+        const text = await res.text()
+        snippet = String(text || '').slice(0, 4096)
+      } catch {
+        snippet = ''
+      }
+    }
+    return {
+      ok: true,
+      status: Number(res.status) || 0,
+      ms,
+      redirected: Boolean(res.redirected),
+      finalUrl: res.url || url,
+      contentType,
+      snippet,
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      status: 0,
+      ms: Date.now() - started,
+      redirected: false,
+      finalUrl: url,
+      contentType: '',
+      snippet: '',
+      error: e?.name === 'AbortError' ? 'Timeout' : String(e?.message || e),
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function probeSingleChannel(channel) {
   const streamUrl = getPrimaryStreamUrl(channel)
   if (!streamUrl) {
@@ -239,47 +311,100 @@ async function probeSingleChannel(channel) {
     }
   }
   const name = asText(channel?.name, 300) || streamUrl
-  const start = Date.now()
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort('timeout'), HEALTH_PROBE_TIMEOUT_MS)
-  try {
-    let res = await fetch(streamUrl, {
-      method: 'HEAD',
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: { 'User-Agent': 'osmani-admin-health/1.0' },
-    })
-    if (res.status === 405 || res.status === 501) {
-      res = await fetch(streamUrl, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: controller.signal,
-        headers: {
-          Range: 'bytes=0-0',
-          'User-Agent': 'osmani-admin-health/1.0',
-        },
-      })
+  const attempted = []
+  const hlsByUrl = isLikelyHlsUrl(streamUrl)
+
+  const head = await runProbeRequest(streamUrl, 'HEAD')
+  attempted.push({ method: 'HEAD', status: head.status, error: head.error || '' })
+  if (head.ok && isPotentiallyOnlineStatus(head.status)) {
+    console.info(
+      '[SERVER_HEALTH]',
+      JSON.stringify({
+        channel: name,
+        method: 'HEAD',
+        decision: 'online',
+        status: head.status,
+        redirected: head.redirected,
+      }),
+    )
+    return { name, status: 'online', response_ms: head.ms }
+  }
+  if (!head.ok || head.status === 403 || head.status === 404 || head.status === 405 || head.status === 501) {
+    console.info(
+      '[SERVER_HEALTH]',
+      JSON.stringify({
+        channel: name,
+        message: 'provider blocked or failed HEAD; using GET range fallback',
+        status: head.status,
+        error: head.error || '',
+      }),
+    )
+  }
+
+  const ranged = await runProbeRequest(streamUrl, 'GET', { range: 'bytes=0-1' })
+  attempted.push({ method: 'GET_RANGE', status: ranged.status, error: ranged.error || '' })
+  if (ranged.ok && (ranged.status === 206 || ranged.status === 200 || ranged.status === 301 || ranged.status === 302)) {
+    console.info(
+      '[SERVER_HEALTH]',
+      JSON.stringify({
+        channel: name,
+        method: 'GET_RANGE',
+        decision: 'online',
+        status: ranged.status,
+        redirected: ranged.redirected,
+      }),
+    )
+    return { name, status: 'online', response_ms: ranged.ms }
+  }
+
+  const shouldTryHlsFetch =
+    hlsByUrl ||
+    isHlsContentType(head.contentType) ||
+    isHlsContentType(ranged.contentType) ||
+    head.status === 403 ||
+    ranged.status === 403
+
+  if (shouldTryHlsFetch) {
+    const playlist = await runProbeRequest(streamUrl, 'GET', { parseText: true })
+    attempted.push({ method: 'GET_PLAYLIST', status: playlist.status, error: playlist.error || '' })
+    const hasManifest =
+      isHlsContentType(playlist.contentType) ||
+      String(playlist.snippet || '').toUpperCase().includes('#EXTM3U')
+    const onlineByPlaylist =
+      hasManifest && (playlist.status === 403 || playlist.status === 200 || playlist.status === 206)
+    if (playlist.ok && onlineByPlaylist) {
+      console.info(
+        '[SERVER_HEALTH]',
+        JSON.stringify({
+          channel: name,
+          method: 'GET_PLAYLIST',
+          decision: 'online',
+          status: playlist.status,
+          redirected: playlist.redirected,
+          fallback: 'hls_manifest_detected',
+        }),
+      )
+      return { name, status: 'online', response_ms: playlist.ms }
     }
-    const ms = Date.now() - start
-    if (res.ok) {
-      return { name, status: 'online', response_ms: ms }
-    }
-    return {
-      name,
-      status: 'offline',
-      response_ms: ms,
-      error: `HTTP ${res.status}`,
-    }
-  } catch (e) {
-    const msg = e?.name === 'AbortError' ? 'Timeout' : String(e?.message || e)
-    return {
-      name,
-      status: 'offline',
-      response_ms: Date.now() - start,
-      error: msg,
-    }
-  } finally {
-    clearTimeout(timer)
+  }
+
+  const fallbackMs = ranged.ms || head.ms || 0
+  const statusHint = ranged.status || head.status || 0
+  console.info(
+    '[SERVER_HEALTH]',
+    JSON.stringify({
+      channel: name,
+      decision: 'offline',
+      status: statusHint,
+      attempted,
+      redirect_followed: Boolean(head.redirected || ranged.redirected),
+    }),
+  )
+  return {
+    name,
+    status: 'offline',
+    response_ms: fallbackMs,
+    error: statusHint ? `HTTP ${statusHint}` : (ranged.error || head.error || 'Probe failed'),
   }
 }
 
