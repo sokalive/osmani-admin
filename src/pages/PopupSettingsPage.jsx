@@ -3,22 +3,24 @@ import { Eye, X } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getPopupSettings, putPopupSettings } from '../lib/api'
+import { getPopupSettings, putPopupSettings, syncStreamUrl } from '../lib/api'
 
 function defaultPopup() {
   return {
-    mode: 'once',
+    mode: 'show_once',
     title: 'Welcome to Osmani TV',
     greeting: 'Hello!',
     introduction: 'Discover live sports, movies, and family channels in one place.',
-    bullets: ['HD streams where available', 'Manage subscriptions anytime', 'Support via WhatsApp'],
+    bullet_points: ['HD streams where available', 'Manage subscriptions anytime', 'Support via WhatsApp'],
     disclaimer: 'Content availability may vary by region.',
   }
 }
 
 function mergePopup(p) {
   const d = { ...defaultPopup(), ...p }
-  if (!Array.isArray(d.bullets) || d.bullets.length === 0) d.bullets = defaultPopup().bullets
+  if (!Array.isArray(d.bullet_points) || d.bullet_points.length === 0) {
+    d.bullet_points = defaultPopup().bullet_points
+  }
   return d
 }
 
@@ -48,6 +50,15 @@ function PopupSettingsPage() {
     load()
   }, [load])
 
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onChanged = () => {
+      void load()
+    }
+    es.addEventListener('popup_settings_changed', onChanged)
+    return () => es.close()
+  }, [load])
+
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved])
 
   function showFlash(type, message) {
@@ -64,7 +75,7 @@ function PopupSettingsPage() {
     try {
       const next = mergePopup(draft)
       const stored = await putPopupSettings(next)
-      const merged = mergePopup(stored)
+      const merged = mergePopup({ ...stored, introduction: draft.introduction })
       setSaved(merged)
       setDraft(merged)
       showFlash('success', 'Popup settings saved.')
@@ -73,7 +84,7 @@ function PopupSettingsPage() {
     }
   }
 
-  const bulletsText = Array.isArray(draft.bullets) ? draft.bullets.join('\n') : ''
+  const bulletsText = Array.isArray(draft.bullet_points) ? draft.bullet_points.join('\n') : ''
 
   return (
     <>
@@ -113,8 +124,8 @@ function PopupSettingsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Display mode</p>
             <div className="mt-4 flex flex-wrap gap-3">
               {[
-                { id: 'once', label: 'Show once' },
-                { id: 'always', label: 'Always show' },
+                { id: 'show_once', label: 'Show once' },
+                { id: 'always_show', label: 'Always show' },
                 { id: 'disabled', label: 'Disabled' },
               ].map((opt) => (
                 <button
@@ -172,7 +183,7 @@ function PopupSettingsPage() {
                 onChange={(e) =>
                   setDraft((d) => ({
                     ...d,
-                    bullets: e.target.value
+                    bullet_points: e.target.value
                       .split('\n')
                       .map((s) => s.trim())
                       .filter(Boolean),
@@ -219,7 +230,7 @@ function PopupSettingsPage() {
               <p className="mt-3 text-lg font-medium text-amber-200/95">{draft.greeting}</p>
               <p className="mt-3 text-sm leading-relaxed text-slate-300">{draft.introduction}</p>
               <ul className="mt-4 list-inside list-disc space-y-2 text-sm text-slate-400">
-                {(draft.bullets || []).map((b) => (
+                {(draft.bullet_points || []).map((b) => (
                   <li key={b}>{b}</li>
                 ))}
               </ul>

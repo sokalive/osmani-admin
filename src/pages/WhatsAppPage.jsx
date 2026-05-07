@@ -3,10 +3,10 @@ import { ExternalLink, MessageCircle } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getWhatsappSettings, putWhatsappSettings } from '../lib/api'
+import { getWhatsappSettings, putWhatsappSettings, syncStreamUrl } from '../lib/api'
 
 function defaultWa() {
-  return { link: 'https://wa.me/255712345678', message: '' }
+  return { enabled: true, url: 'https://wa.me/255712345678' }
 }
 
 function isValidWhatsAppUrl(url) {
@@ -46,8 +46,8 @@ function WhatsAppPage() {
     load()
   }, [load])
 
-  const valid = useMemo(() => isValidWhatsAppUrl(draft.link), [draft.link])
-  const dirty = draft.link !== stored.link
+  const valid = useMemo(() => isValidWhatsAppUrl(draft.url), [draft.url])
+  const dirty = draft.url !== stored.url || draft.enabled !== stored.enabled
 
   function showFlash(type, message) {
     setFlash({ type, message })
@@ -56,14 +56,14 @@ function WhatsAppPage() {
 
   async function handleSave(e) {
     e.preventDefault()
-    if (!isValidWhatsAppUrl(draft.link)) {
+    if (!isValidWhatsAppUrl(draft.url)) {
       showFlash('error', 'Use a wa.me or api.whatsapp.com URL only.')
       return
     }
     try {
       const saved = await putWhatsappSettings({
-        link: draft.link.trim(),
-        message: String(draft.message || '').trim(),
+        enabled: Boolean(draft.enabled),
+        url: draft.url.trim(),
       })
       setStored(saved)
       setDraft(saved)
@@ -74,12 +74,21 @@ function WhatsAppPage() {
   }
 
   function handleTest() {
-    if (!isValidWhatsAppUrl(draft.link)) {
+    if (!isValidWhatsAppUrl(draft.url)) {
       showFlash('error', 'Fix the URL before testing.')
       return
     }
-    window.open(draft.link.trim(), '_blank', 'noopener,noreferrer')
+    window.open(draft.url.trim(), '_blank', 'noopener,noreferrer')
   }
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onChanged = () => {
+      void load()
+    }
+    es.addEventListener('whatsapp_settings_changed', onChanged)
+    return () => es.close()
+  }, [load])
 
   return (
     <>
@@ -106,12 +115,12 @@ function WhatsAppPage() {
             WhatsApp link
           </label>
           <input
-            value={draft.link}
-            onChange={(e) => setDraft({ link: e.target.value })}
+            value={draft.url}
+            onChange={(e) => setDraft((d) => ({ ...d, url: e.target.value }))}
             className={inputClass()}
             placeholder="https://wa.me/255712345678"
           />
-          {!valid && draft.link.trim() ? (
+          {!valid && draft.url.trim() ? (
             <p className="mt-2 text-xs text-red-400">
               Allowed hosts: <span className="font-mono">wa.me</span> or{' '}
               <span className="font-mono">api.whatsapp.com</span>
@@ -122,7 +131,7 @@ function WhatsAppPage() {
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
               Current saved link
             </p>
-            <p className="mt-1 break-all font-mono text-sm text-emerald-200/95">{stored.link || '—'}</p>
+            <p className="mt-1 break-all font-mono text-sm text-emerald-200/95">{stored.url || '—'}</p>
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">

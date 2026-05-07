@@ -227,14 +227,14 @@ export const putPaymentProviderFormData = (id, formData) =>
 export const deletePaymentProvider = (id) =>
   apiDelete(`/settings/payment-providers/${encodeURIComponent(id)}`)
 
-export const getWhatsappSettings = () => apiGet('/settings/whatsapp')
-export const putWhatsappSettings = (body) => apiPut('/settings/whatsapp', body)
+export const getWhatsappSettings = () => apiGet('/whatsapp-settings')
+export const putWhatsappSettings = (body) => apiPut('/whatsapp-settings', body)
 
 export const getAppUpdateSettings = () => apiGet('/settings/app-update')
 export const putAppUpdateSettings = (body) => apiPut('/settings/app-update', body)
 
-export const getPopupSettings = () => apiGet('/settings/popup')
-export const putPopupSettings = (body) => apiPut('/settings/popup', body)
+export const getPopupSettings = () => apiGet('/popup-settings')
+export const putPopupSettings = (body) => apiPut('/popup-settings', body)
 
 export const getDeviceControlSettings = () => apiGet('/settings/device-control')
 export const putDeviceControlSettings = (body) => apiPut('/settings/device-control', body)

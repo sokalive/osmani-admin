@@ -19,6 +19,7 @@ import { zenopaySettingsRouter } from './zenopaySettings.js'
 import { liveSyncRouter } from './liveSync.js'
 import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentProviders.js'
 import { appUpdateRouter } from './appUpdate.js'
+import { realtimeSettingsRouter } from './realtimeSettings.js'
 
 const FILES = {
   users: 'users.json',
@@ -68,6 +69,9 @@ restApi.get('/', (_req, res) => {
       '/analytics/presence/stop',
       '/update-check',
       '/verify-apk-hash',
+      '/whatsapp-settings',
+      '/popup-settings',
+      '/server-health',
       '/sync/stream',
       '/webhooks/zenopay',
       '/dashboard',
@@ -111,6 +115,7 @@ restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(appUpdateRouter)
+restApi.use(realtimeSettingsRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)

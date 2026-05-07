@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getApiHealth, getServerHealth } from '../lib/api'
+import { getApiHealth, getServerHealth, syncStreamUrl } from '../lib/api'
 
 function ServerHealthPage() {
   const { showToast } = useToast()
@@ -29,11 +29,22 @@ function ServerHealthPage() {
     load()
   }, [load])
 
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onChanged = () => {
+      void load()
+    }
+    es.addEventListener('server_health_changed', onChanged)
+    return () => es.close()
+  }, [load])
+
   const stats = useMemo(() => {
     const total = rows.length
-    const online = rows.filter((r) => r.online).length
+    const online = rows.filter((r) => String(r.status || '').toLowerCase() === 'online').length
     const offline = total - online
-    const latencies = rows.filter((r) => r.online && r.ms > 0).map((r) => r.ms)
+    const latencies = rows
+      .filter((r) => String(r.status || '').toLowerCase() === 'online' && Number(r.response_ms) > 0)
+      .map((r) => Number(r.response_ms))
     const avg =
       latencies.length === 0 ? 0 : Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
     return { total, online, offline, avg }
@@ -108,16 +119,16 @@ function ServerHealthPage() {
                     <td className="px-4 py-3">
                       <span
                         className={`inline-flex rounded-lg px-2.5 py-0.5 text-[11px] font-bold uppercase ring-1 ${
-                          r.online
+                          String(r.status || '').toLowerCase() === 'online'
                             ? 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/45'
                             : 'bg-red-500/20 text-red-200 ring-red-400/45'
                         }`}
                       >
-                        {r.online ? 'Online' : 'Offline'}
+                        {String(r.status || '').toLowerCase() === 'online' ? 'Online' : 'Offline'}
                       </span>
                     </td>
                     <td className="px-4 py-3 tabular-nums text-slate-300">
-                      {r.online ? `${r.ms} ms` : '—'}
+                      {String(r.status || '').toLowerCase() === 'online' ? `${Number(r.response_ms) || 0} ms` : '—'}
                     </td>
                     <td className="max-w-[280px] truncate px-4 py-3 text-xs text-red-400/90">
                       {r.error || '—'}
