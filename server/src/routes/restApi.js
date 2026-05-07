@@ -18,6 +18,7 @@ import { subscriptionRouter } from './subscription.js'
 import { zenopaySettingsRouter } from './zenopaySettings.js'
 import { liveSyncRouter } from './liveSync.js'
 import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentProviders.js'
+import { appUpdateRouter } from './appUpdate.js'
 
 const FILES = {
   users: 'users.json',
@@ -65,6 +66,8 @@ restApi.get('/', (_req, res) => {
       '/analytics/presence/start',
       '/analytics/presence/heartbeat',
       '/analytics/presence/stop',
+      '/update-check',
+      '/verify-apk-hash',
       '/sync/stream',
       '/webhooks/zenopay',
       '/dashboard',
@@ -107,6 +110,7 @@ restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
+restApi.use(appUpdateRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)

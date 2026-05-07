@@ -5,6 +5,26 @@ export async function ensureBillingTables(client) {
   await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`)
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    INSERT INTO app_settings (key, value)
+    VALUES
+      ('update_soft', 'false'),
+      ('update_force', 'false'),
+      ('update_auto_download', 'false'),
+      ('update_source', 'inapp'),
+      ('update_apk_url', ''),
+      ('update_apk_hash', ''),
+      ('update_playstore_url', '')
+    ON CONFLICT (key) DO NOTHING;
+  `)
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS app_installs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       device_id TEXT NOT NULL DEFAULT '',
