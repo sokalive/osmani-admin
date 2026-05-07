@@ -150,6 +150,10 @@ function DashboardPage() {
     }))
   }, [channels, channelNameById])
 
+  const topFiveEligible = useMemo(() => {
+    return mostWatched.filter((x) => Number(x.watchers) >= 10)
+  }, [mostWatched])
+
   const section1Cards = [
     {
       gradientClass: emerald,
@@ -169,7 +173,7 @@ function DashboardPage() {
           <section className="dashboard-grid">
             <StatCard key={`top-${section1Cards[0].title}`} {...section1Cards[0]} />
             <MostWatchedChannelsListCard channels={mostWatched} />
-            <MostWatchedChannelsCard channels={mostWatched} />
+            <MostWatchedChannelsCard channels={topFiveEligible} />
             <LiveUserLocationsCard users={liveUsersList} />
           </section>
         </div>

@@ -1,8 +1,20 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 export const subscriptionRouter = Router()
+
+function countryFromRequest(req) {
+  const raw =
+    req.headers['cf-ipcountry'] ||
+    req.headers['x-vercel-ip-country'] ||
+    req.headers['x-country-code'] ||
+    ''
+  const c = String(raw ?? '').trim().toUpperCase()
+  if (!c || c.length < 2) return null
+  return c.slice(0, 2)
+}
 
 function rowToPublicStatus(row) {
   if (!row) return { active: false, status: null, expiresAt: null }
@@ -28,6 +40,11 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ error: 'device_id is required' })
     }
+    const country = countryFromRequest(req)
+    await billing.touchLivePresence({ deviceId, country }).catch((e) => {
+      console.error('[subscription-status] touchLivePresence failed:', e)
+    })
+    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
     res.json(rowToPublicStatus(row))
   } catch (e) {
@@ -43,6 +60,11 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     res.status(400).json({ error: 'device_id is required' })
     return
   }
+  const country = countryFromRequest(req)
+  void billing.touchLivePresence({ deviceId, country }).catch((e) => {
+    console.error('[subscription-stream] touchLivePresence failed:', e)
+  })
+  liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')

@@ -20,6 +20,12 @@ function requirePool() {
   return pool
 }
 
+function sanitizePresenceText(v, max = 120) {
+  const s = String(v ?? '').trim()
+  if (!s) return null
+  return s.slice(0, max)
+}
+
 /** --- Plans --- */
 
 export async function listPlansWithSubscriberCounts() {
@@ -291,6 +297,25 @@ export async function getDeviceSubscriptionByDeviceId(deviceId) {
   if (!d) return null
   const { rows } = await pool.query(`SELECT * FROM device_subscriptions WHERE device_id = $1`, [d])
   return rows[0] ?? null
+}
+
+/** Touch live presence row so analytics can reflect app-open presence immediately. */
+export async function touchLivePresence({ deviceId, country = null, channelId = null }) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const safeCountry = sanitizePresenceText(country, 32)
+  const safeChannel = sanitizePresenceText(channelId, 128)
+  await pool.query(
+    `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
+     VALUES ($1, $2, $3, now(), now())
+     ON CONFLICT (device_id) DO UPDATE SET
+       channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+       country = COALESCE(EXCLUDED.country, live_sessions.country),
+       updated_at = now()`,
+    [d, safeChannel, safeCountry],
+  )
+  return { deviceId: d, country: safeCountry, channelId: safeChannel }
 }
 
 /**
