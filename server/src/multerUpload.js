@@ -45,3 +45,20 @@ export const uploadBannerImage = multer({
   fileFilter,
   limits: { fileSize: 8 * 1024 * 1024 },
 })
+
+function paymentProviderLogoFilter(_req, file, cb) {
+  const mime = String(file?.mimetype || '').toLowerCase()
+  const allowed = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp'])
+  if (!allowed.has(mime)) {
+    cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Only PNG/JPG/WebP logo uploads are allowed'))
+    return
+  }
+  cb(null, true)
+}
+
+/** Payment provider logo — multipart field name `logo` */
+export const uploadPaymentProviderLogo = multer({
+  storage,
+  fileFilter: paymentProviderLogoFilter,
+  limits: { fileSize: 4 * 1024 * 1024 },
+})

@@ -17,6 +17,7 @@ import { webhooksRouter } from './webhooks.js'
 import { subscriptionRouter } from './subscription.js'
 import { zenopaySettingsRouter } from './zenopaySettings.js'
 import { liveSyncRouter } from './liveSync.js'
+import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentProviders.js'
 
 const FILES = {
   users: 'users.json',
@@ -43,6 +44,8 @@ restApi.get('/', (_req, res) => {
       '/banners',
       '/settings',
       '/settings/zenopay',
+      '/settings/payment-providers',
+      '/payment-providers',
       '/plans',
       '/transactions',
       '/payments/create-payment',
@@ -99,6 +102,7 @@ restApi.use('/users', usersRouter)
 restApi.use('/channels', channelsRouter)
 restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
+restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
@@ -124,6 +128,7 @@ export async function ensureAllApiDataFiles() {
   await ensureChannelsStorage()
   await ensureBannersStorage()
   await ensureGlobalAppSettingsFile()
+  await ensurePaymentProvidersFile()
   await ensureBillingStorage()
   await ensureJsonFile(FILES.users, '[]\n')
   await ensureJsonFile(FILES.notifications, '[]\n')
