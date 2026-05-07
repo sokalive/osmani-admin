@@ -1,18 +1,17 @@
 import { useMemo } from 'react'
 
 function rankRowClass(rank) {
-  const base =
-    'rounded-xl border border-white/[0.06] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+  const base = 'dashboard-top5-row'
   if (rank === 1) {
-    return `${base} bg-gradient-to-br from-red-600/45 via-red-900/25 to-red-950/40`
+    return `${base} dashboard-top5-rank-1`
   }
   if (rank === 2) {
-    return `${base} bg-gradient-to-br from-purple-600/45 via-purple-900/25 to-purple-950/40`
+    return `${base} dashboard-top5-rank-2`
   }
   if (rank === 3) {
-    return `${base} bg-gradient-to-br from-blue-600/45 via-blue-900/25 to-blue-950/40`
+    return `${base} dashboard-top5-rank-3`
   }
-  return `${base} bg-slate-900/75`
+  return `${base} dashboard-top5-rank-other`
 }
 
 /**
@@ -43,11 +42,11 @@ function MostWatchedChannelsCard({ channels, className = 'dashboard-card' }) {
             const rank = index + 1
             return (
               <li key={row.id} className={rankRowClass(rank)}>
-                <p className="font-bold leading-snug text-white">
+                <p className="dashboard-top5-title">
                   <span className="tabular-nums text-white">#{rank}</span>{' '}
                   <span>{row.name}</span>
                 </p>
-                <p className="mt-1 text-[13px] font-medium tabular-nums leading-snug text-white/70">
+                <p className="dashboard-top5-meta mt-1 tabular-nums">
                   {row.watchers.toLocaleString()} active watchers
                 </p>
               </li>

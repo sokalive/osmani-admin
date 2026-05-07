@@ -26,10 +26,10 @@ function MostWatchedChannelsListCard({ channels, className = 'dashboard-card' })
         <ul className="channel-list">
           {sorted.map((row) => (
             <li key={row.id} className="channel-item min-h-0">
-              <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-white">
+              <span className="dashboard-mwc-channel-name min-w-0 flex-1 truncate">
                 {row.name}
               </span>
-              <span className="watcher-badge shrink-0 tabular-nums">
+              <span className="watcher-badge dashboard-mwc-watchers-pill shrink-0 tabular-nums">
                 {row.watchers.toLocaleString()} watchers
               </span>
             </li>

@@ -258,3 +258,63 @@ body {
   white-space: nowrap;
   box-shadow: 0 0 10px rgba(255, 59, 59, 0.6);
 }
+
+.dashboard-mwc-channel-name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #ffffff;
+}
+
+.dashboard-mwc-watchers-pill {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ff5a5a 0%, #ff3b3b 58%, #d91f1f 100%);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  box-shadow:
+    0 0 14px rgba(255, 59, 59, 0.58),
+    0 0 26px rgba(255, 117, 24, 0.26);
+}
+
+.dashboard-top5-row {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 18px rgba(0, 0, 0, 0.2);
+}
+
+.dashboard-top5-rank-1 {
+  background: linear-gradient(135deg, rgba(248, 53, 53, 0.55) 0%, rgba(125, 16, 16, 0.34) 60%, rgba(54, 6, 6, 0.42) 100%);
+}
+
+.dashboard-top5-rank-2 {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.55) 0%, rgba(90, 30, 168, 0.34) 60%, rgba(41, 15, 76, 0.42) 100%);
+}
+
+.dashboard-top5-rank-3 {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.56) 0%, rgba(22, 78, 165, 0.34) 60%, rgba(12, 36, 81, 0.42) 100%);
+}
+
+.dashboard-top5-rank-other {
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.dashboard-top5-title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #ffffff;
+}
+
+.dashboard-top5-meta {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.78);
+}
