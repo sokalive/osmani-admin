@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
+import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 
@@ -14,6 +15,55 @@ function countryFromRequest(req) {
   const c = String(raw ?? '').trim().toUpperCase()
   if (!c || c.length < 2) return null
   return c.slice(0, 2)
+}
+
+function shortRef(id, n = 14) {
+  const s = String(id ?? '')
+  return s.length <= n ? s : `${s.slice(0, n)}…`
+}
+
+async function reconcileOrdersForVerify(deviceId, orderIdHint) {
+  const d = String(deviceId ?? '').trim()
+  const hint = String(orderIdHint ?? '').trim()
+
+  async function guardedReconcile(orderId) {
+    const t = await billing.getTransactionByOrderId(orderId)
+    if (!t) return
+    let txnDev = String(t.device_id ?? '').trim()
+    const raw = t.raw_payload && typeof t.raw_payload === 'object' ? t.raw_payload : {}
+    if (!txnDev) txnDev = String(raw.device_id ?? '').trim()
+    if (txnDev && txnDev !== d) {
+      console.warn('[subscription-verify] order_id / device_id mismatch — skipping reconcile', {
+        orderId: shortRef(orderId),
+        queryDevice: shortRef(d),
+        txnDevice: shortRef(txnDev),
+      })
+      return
+    }
+    await reconcileOrderWithZenoPay(orderId)
+  }
+
+  if (hint) {
+    await guardedReconcile(hint)
+  } else {
+    const pend = await billing.getLatestPendingTransactionForDevice(d)
+    if (pend?.order_id) await reconcileOrderWithZenoPay(String(pend.order_id))
+  }
+
+  const fin = await billing.tryFinalizeActivationForDevice(d)
+  if (fin.ran === true && fin.activated === true && fin.deviceId) {
+    deviceSubscriptionBus.emit('update', { deviceId: fin.deviceId })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId: fin.deviceId,
+      orderId: fin.orderId ?? null,
+    })
+    console.log('[subscription-verify] finalize activation repair', {
+      deviceId: shortRef(fin.deviceId),
+      orderId: shortRef(fin.orderId),
+      reason: fin.reason,
+    })
+  }
 }
 
 function rowToPublicStatus(row) {
@@ -41,30 +91,53 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ error: 'device_id is required' })
     }
+    const orderIdHint = String(req.query.order_id ?? '').trim()
     const country = countryFromRequest(req)
+    console.log('[subscription-verify] enter', {
+      deviceId: shortRef(deviceId),
+      order_id: orderIdHint ? shortRef(orderIdHint) : undefined,
+    })
+
     await billing.touchLivePresence({ deviceId, country }).catch((e) => {
       console.error('[subscription-status] touchLivePresence failed:', e)
     })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
+
+    await reconcileOrdersForVerify(deviceId, orderIdHint)
+
     const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
     const pub = rowToPublicStatus(row)
-    if (!pub.active) {
-      const plans = await billing.listPlansWithSubscriberCounts().catch(() => [])
-      return res.json({
-        ...pub,
-        playbackAllowed: false,
-        plans: Array.isArray(plans)
-          ? plans.map((p) => ({
-              id: Number(p.id),
-              name: String(p.name ?? ''),
-              price: Number(p.price) || 0,
-              duration_days: Number(p.duration_days) || 0,
-            }))
-          : [],
-      })
-    }
-    res.json({ ...pub, playbackAllowed: true })
+    const bodyOut = !pub.active
+      ? {
+          ...pub,
+          playbackAllowed: false,
+          plans: await billing
+            .listPlansWithSubscriberCounts()
+            .then((plans) =>
+              Array.isArray(plans)
+                ? plans.map((p) => ({
+                    id: Number(p.id),
+                    name: String(p.name ?? ''),
+                    price: Number(p.price) || 0,
+                    duration_days: Number(p.duration_days) || 0,
+                  }))
+                : [],
+            )
+            .catch(() => []),
+        }
+      : { ...pub, playbackAllowed: true }
+
+    console.log('[subscription-verify] response', {
+      deviceId: shortRef(deviceId),
+      active: bodyOut.active === true,
+      isActive: bodyOut.isActive === true,
+      playbackAllowed: bodyOut.playbackAllowed === true,
+      status: bodyOut.status,
+      expiresAt: bodyOut.expiresAt ? shortRef(bodyOut.expiresAt, 28) : null,
+    })
+
+    res.json(bodyOut)
   } catch (e) {
     console.error('[subscription-status]', e)
     res.status(500).json({ error: String(e.message || e) })

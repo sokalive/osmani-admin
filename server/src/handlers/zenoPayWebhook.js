@@ -7,6 +7,12 @@ function statusStringsFromWebhook(body) {
   const nested = [body, body?.data, body?.payload, body?.payment, body?.transaction].filter(
     (x) => x && typeof x === 'object',
   )
+  /** Order-status API returns `data: [{ payment_status: "COMPLETED" }]`. */
+  if (Array.isArray(body?.data)) {
+    for (const item of body.data) {
+      if (item && typeof item === 'object') nested.push(item)
+    }
+  }
   const keys = ['payment_status', 'status', 'state', 'result']
   const out = []
   const seen = new Set()
@@ -24,7 +30,7 @@ function statusStringsFromWebhook(body) {
   return out
 }
 
-function webhookSuccess(body) {
+export function webhookSuccess(body) {
   for (const raw of statusStringsFromWebhook(body)) {
     const s = raw.toLowerCase()
     if (['completed', 'success', 'paid', 'successful', 'ok'].includes(s)) return true
@@ -35,7 +41,7 @@ function webhookSuccess(body) {
   return false
 }
 
-function webhookExplicitFailure(body) {
+export function webhookExplicitFailure(body) {
   for (const raw of statusStringsFromWebhook(body)) {
     const s = raw.toLowerCase()
     if (['failed', 'error', 'declined', 'cancelled', 'rejected'].includes(s)) return true

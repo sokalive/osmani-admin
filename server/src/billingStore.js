@@ -440,6 +440,10 @@ export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expire
          updated_at = now()`,
       [d, expiresAt, oid],
     )
+    console.log('[device_subscriptions] upsert active', {
+      deviceId: d.length > 20 ? `${d.slice(0, 18)}…` : d,
+      orderId: oid.length > 24 ? `${oid.slice(0, 22)}…` : oid,
+    })
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)
@@ -507,6 +511,49 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
     orderId,
     expiresAt,
   }
+}
+
+/** Latest pending payment for this device (poll provider before subscription-status). */
+export async function getLatestPendingTransactionForDevice(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT *
+     FROM transactions
+     WHERE device_id = $1
+       AND status = 'pending'
+       AND plan_id IS NOT NULL
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  return rows[0] ?? null
+}
+
+export async function getLatestCompletedTransactionForDevice(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT *
+     FROM transactions
+     WHERE device_id = $1
+       AND status = 'completed'
+       AND plan_id IS NOT NULL
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  return rows[0] ?? null
+}
+
+/** Repair path: completed txn exists but device_subscriptions not yet updated. */
+export async function tryFinalizeActivationForDevice(deviceId) {
+  const txn = await getLatestCompletedTransactionForDevice(deviceId)
+  if (!txn) return { ran: false, reason: 'no_completed_txn' }
+  const act = await tryActivateDeviceSubscriptionFromCompletedTxn(txn)
+  return { ran: true, ...act }
 }
 
 export async function listDeviceUsers() {

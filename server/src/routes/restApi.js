@@ -21,8 +21,7 @@ import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentPro
 import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
-import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
-import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 
 const FILES = {
   users: 'users.json',
@@ -108,23 +107,20 @@ restApi.get('/payment-status/:order_id', async (req, res) => {
     if (!orderId) {
       return res.status(400).json({ error: 'order_id is required' })
     }
+    const rec = await reconcileOrderWithZenoPay(orderId)
     const txn = await billing.getTransactionByOrderId(orderId)
     if (!txn) {
       return res.status(404).json({ error: 'Unknown order' })
     }
-    if (txn.status === 'completed' && txn.plan_id) {
-      const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn(txn)
-      if (act.reason === 'no_device_id') {
-        console.warn('[payment-status] completed txn missing device_id:', orderId)
-      } else if (!act.skipped && act.deviceId) {
-        deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
-        liveSyncBus.publish('analytics.subscription_updated', {
-          topics: ['analytics'],
-          deviceId: act.deviceId,
-          orderId,
-        })
-      }
-    }
+    console.log('[payment-status]', {
+      orderId: orderId.length > 22 ? `${orderId.slice(0, 20)}…` : orderId,
+      phase: rec.phase,
+      txnStatusBefore: rec.txnStatusBefore,
+      txnStatusAfter: txn.status,
+      providerOk: rec.providerHttpOk,
+      activated: rec.activation?.activated,
+      activationReason: rec.activation?.reason,
+    })
     const status =
       txn.status === 'completed' ? 'SUCCESS' : txn.status === 'failed' ? 'FAILED' : 'PENDING'
     res.json({ order_id: txn.order_id, status })

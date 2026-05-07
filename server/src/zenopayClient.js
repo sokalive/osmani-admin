@@ -253,3 +253,67 @@ export async function zenopayCreateCollection(cred, { phone, amount, orderId }) 
     return { ok: false, status: 0, body: { error: String(e.message || e) } }
   }
 }
+
+/**
+ * GET order payment status (reconcile before webhook). Docs: `/api/payments/order-status?order_id=…`
+ * Override full URL with ZENO_ORDER_STATUS_URL (optional `{order_id}` placeholder).
+ */
+export function resolveZenopayOrderStatusUrl(cred, orderId) {
+  const oid = String(orderId ?? '').trim()
+  if (!oid) return ''
+
+  const envFull = String(process.env.ZENO_ORDER_STATUS_URL || '').trim()
+  if (envFull) {
+    if (envFull.includes('{order_id}')) {
+      return envFull.replace(/\{order_id\}/g, encodeURIComponent(oid))
+    }
+    const join = envFull.includes('?') ? '&' : '?'
+    return `${envFull.replace(/\/+$/, '')}${join}order_id=${encodeURIComponent(oid)}`
+  }
+
+  const ep = String(cred?.apiEndpoint || '').trim()
+  if (!ep) return ''
+  try {
+    const u = new URL(ep)
+    return `${u.origin}/api/payments/order-status?order_id=${encodeURIComponent(oid)}`
+  } catch {
+    return ''
+  }
+}
+
+export async function zenopayGetOrderStatus(cred, orderId) {
+  const url = resolveZenopayOrderStatusUrl(cred, orderId)
+  if (!url) {
+    return { ok: false, status: 0, body: { error: 'Invalid or missing ZenoPay API endpoint for order-status' } }
+  }
+  const apiKey = String(process.env.ZENO_API_KEY || cred?.apiKey || '').trim()
+  if (!apiKey) {
+    return { ok: false, status: 0, body: { error: 'Missing API key for order-status' } }
+  }
+
+  const ac = new AbortController()
+  const t = setTimeout(() => ac.abort(), 18_000)
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'x-api-key': apiKey,
+      },
+      signal: ac.signal,
+    })
+    clearTimeout(t)
+    const text = await res.text()
+    let json = null
+    try {
+      json = text ? JSON.parse(text) : null
+    } catch {
+      json = { raw: text.slice(0, 2000) }
+    }
+    return { ok: res.ok, status: res.status, body: json }
+  } catch (e) {
+    clearTimeout(t)
+    return { ok: false, status: 0, body: { error: e?.name === 'AbortError' ? 'timeout' : String(e.message || e) } }
+  }
+}
