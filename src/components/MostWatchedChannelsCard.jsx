@@ -37,7 +37,7 @@ function MostWatchedChannelsCard({ channels, className = 'dashboard-card' }) {
       </div>
 
       <div className="card-content">
-        <ul className="channel-list">
+        <ul className="channel-list dashboard-top5-list">
           {topFive.map((row, index) => {
             const rank = index + 1
             return (
