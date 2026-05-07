@@ -228,6 +228,7 @@ appUpdateRouter.put('/settings/app-update', async (req, res) => {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
     const body = req.body && typeof req.body === 'object' ? req.body : {}
+    console.info('[app-update] save payload:', JSON.stringify(body))
     const normalizedSource = normalizeSource(body.source)
     const rawApkUrl = text(body.apkUrl, 4000)
     const rawPlaystoreUrl = text(body.playstoreUrl, 4000)
@@ -254,14 +255,17 @@ appUpdateRouter.put('/settings/app-update', async (req, res) => {
     }
 
     await ensureAppSettingsTable(pool)
+    let writes = 0
     for (const [key, value] of Object.entries(next)) {
-      await pool.query(
+      const result = await pool.query(
         `INSERT INTO app_settings (key, value, updated_at)
          VALUES ($1, $2, now())
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
         [key, value],
       )
+      writes += Number(result.rowCount) || 0
     }
+    console.info('[app-update] db write result:', JSON.stringify({ keys: Object.keys(next), writes }))
 
     const decisionData = toPublicConfig(next, 'settings:put')
     liveSyncBus.publish('config.app_update_changed', {
@@ -269,15 +273,38 @@ appUpdateRouter.put('/settings/app-update', async (req, res) => {
       action: 'updated',
       updateDecision: decisionData.decision,
     })
+    console.info(
+      '[app-update] emitted SSE event:',
+      JSON.stringify({
+        event: 'config.app_update_changed',
+        updateDecision: decisionData.decision,
+        source: decisionData.source,
+      }),
+    )
+
+    const stored = toPublicConfig(await loadRowsByKey(pool), 'settings:stored-after-save')
+    console.info(
+      '[app-update] stored values after save:',
+      JSON.stringify({
+        softUpdate: stored.softUpdate,
+        forceUpdate: stored.forceUpdate,
+        autoDownload: stored.autoDownload,
+        source: stored.source,
+        apkUrl: stored.apkUrl,
+        sha256: stored.sha256,
+        playstoreUrl: stored.playstoreUrl,
+        decision: stored.decision,
+      }),
+    )
 
     return res.json({
-      softUpdate: asBool(next[UPDATE_KEYS.soft]),
-      forceUpdate: asBool(next[UPDATE_KEYS.force]),
-      autoDownload: asBool(next[UPDATE_KEYS.autoDownload]),
-      source: normalizeUiSource(next[UPDATE_KEYS.source]),
-      apkUrl: next[UPDATE_KEYS.apkUrl],
-      sha256: next[UPDATE_KEYS.apkHash],
-      playstoreUrl: next[UPDATE_KEYS.playstoreUrl],
+      softUpdate: stored.softUpdate,
+      forceUpdate: stored.forceUpdate,
+      autoDownload: stored.autoDownload,
+      source: normalizeUiSource(stored.source),
+      apkUrl: stored.apkUrl,
+      sha256: stored.sha256,
+      playstoreUrl: stored.playstoreUrl,
     })
   } catch (e) {
     console.error('[settings/app-update] PUT', e)

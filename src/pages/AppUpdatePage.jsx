@@ -52,7 +52,9 @@ function AppUpdatePage() {
   async function handleSave(e) {
     e.preventDefault()
     try {
+      console.info('[AppUpdatePage] save payload:', draft)
       const saved = await putAppUpdateSettings(draft)
+      console.info('[AppUpdatePage] save response:', saved)
       setCfg(saved)
       setDraft(saved)
       showFlash('success', 'App update configuration saved.')
