@@ -2,6 +2,7 @@ import cors from 'cors'
 import express from 'express'
 import { ensureUploadsDir, UPLOADS_DIR } from './multerUpload.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
+import { streamProxyRouter } from './routes/streamProxy.js'
 
 const app = express()
 const PORT = Number(process.env.PORT) || 4000
@@ -54,6 +55,7 @@ app.get('/api/health', (req, res) => {
 })
 
 // --- API ROUTES ---
+app.use(streamProxyRouter)
 app.use('/api', restApi)
 
 // --- 404 HANDLER ---
