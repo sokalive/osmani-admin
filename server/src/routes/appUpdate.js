@@ -41,7 +41,9 @@ function normalizeSource(v) {
   const s = String(v ?? '')
     .trim()
     .toLowerCase()
-  return s === 'play' ? 'play' : 'inapp'
+  if (s === 'play') return 'play'
+  if (s === 'apk' || s === 'inapp') return 'apk'
+  return 'apk'
 }
 
 function text(v, max = 4096) {
@@ -54,30 +56,67 @@ function normalizeHash(v) {
   return text(v, 128).toLowerCase()
 }
 
-function toPublicConfig(rowsByKey) {
+function normalizeUiSource(v) {
+  return normalizeSource(v) === 'play' ? 'play' : 'inapp'
+}
+
+function pickFirstNonEmpty(...values) {
+  for (const v of values) {
+    const t = text(v, 4000)
+    if (t) return t
+  }
+  return ''
+}
+
+function isValidSha256(v) {
+  return /^[a-f0-9]{64}$/i.test(String(v || ''))
+}
+
+function logDecisionContext(tag, ctx) {
+  console.info(`[app-update] ${tag}:`, JSON.stringify(ctx))
+}
+
+function toPublicConfig(rowsByKey, tag = 'decision') {
   const source = normalizeSource(rowsByKey[UPDATE_KEYS.source] ?? DEFAULTS[UPDATE_KEYS.source])
   const soft = asBool(rowsByKey[UPDATE_KEYS.soft] ?? DEFAULTS[UPDATE_KEYS.soft])
   const force = asBool(rowsByKey[UPDATE_KEYS.force] ?? DEFAULTS[UPDATE_KEYS.force])
   const autoDownload = asBool(
     rowsByKey[UPDATE_KEYS.autoDownload] ?? DEFAULTS[UPDATE_KEYS.autoDownload],
   )
-  const apkUrl = text(rowsByKey[UPDATE_KEYS.apkUrl] ?? DEFAULTS[UPDATE_KEYS.apkUrl], 4000)
-  const apkSha256 = normalizeHash(rowsByKey[UPDATE_KEYS.apkHash] ?? DEFAULTS[UPDATE_KEYS.apkHash])
-  const playstoreUrl = text(
-    rowsByKey[UPDATE_KEYS.playstoreUrl] ?? DEFAULTS[UPDATE_KEYS.playstoreUrl],
-    4000,
-  )
+  const apkUrlRaw = text(rowsByKey[UPDATE_KEYS.apkUrl] ?? DEFAULTS[UPDATE_KEYS.apkUrl], 4000)
+  const apkSha256Raw = normalizeHash(rowsByKey[UPDATE_KEYS.apkHash] ?? DEFAULTS[UPDATE_KEYS.apkHash])
+  const playstoreUrlRaw = text(rowsByKey[UPDATE_KEYS.playstoreUrl] ?? DEFAULTS[UPDATE_KEYS.playstoreUrl], 4000)
+  const hasAnyUrl = Boolean(apkUrlRaw || playstoreUrlRaw)
+  const apkUrl =
+    source === 'apk' ? pickFirstNonEmpty(apkUrlRaw, playstoreUrlRaw) : text(apkUrlRaw, 4000)
+  const playstoreUrl =
+    source === 'play' ? pickFirstNonEmpty(playstoreUrlRaw, apkUrlRaw) : text(playstoreUrlRaw, 4000)
+  const apkSha256 = isValidSha256(apkSha256Raw) ? apkSha256Raw : ''
+  if (apkSha256Raw && !apkSha256) {
+    console.warn('[app-update] rejected hash format during decision generation')
+  }
 
   let decision = 'NONE'
-  if (soft || force) {
-    if (source === 'play') {
-      decision = 'PLAY_STORE'
-    } else if (force) {
-      decision = 'FORCE'
-    } else if (soft) {
-      decision = 'SOFT'
-    }
+  if (force) {
+    decision = 'FORCE'
+  } else if (soft) {
+    decision = 'SOFT'
   }
+  const fallbackNotice =
+    decision === 'FORCE' && !hasAnyUrl
+      ? 'Update source not configured'
+      : decision === 'SOFT' && !hasAnyUrl
+        ? 'Update available'
+        : ''
+
+  logDecisionContext(tag, {
+    source,
+    soft,
+    force,
+    decision,
+    hasAnyUrl,
+    fallbackActivated: Boolean(fallbackNotice),
+  })
 
   return {
     decision,
@@ -87,6 +126,7 @@ function toPublicConfig(rowsByKey) {
     playstore_url: playstoreUrl,
     auto_download: autoDownload,
     server_time: new Date().toISOString(),
+    notice: fallbackNotice,
     // admin view compatibility fields
     softUpdate: soft,
     forceUpdate: force,
@@ -167,12 +207,12 @@ appUpdateRouter.get('/settings/app-update', async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const data = toPublicConfig(await loadRowsByKey(pool))
+    const data = toPublicConfig(await loadRowsByKey(pool), 'settings:get')
     return res.json({
       softUpdate: data.softUpdate,
       forceUpdate: data.forceUpdate,
       autoDownload: data.autoDownload,
-      source: data.source,
+      source: normalizeUiSource(data.source),
       apkUrl: data.apkUrl,
       sha256: data.sha256,
       playstoreUrl: data.playstoreUrl,
@@ -188,26 +228,29 @@ appUpdateRouter.put('/settings/app-update', async (req, res) => {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
     const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const normalizedSource = normalizeSource(body.source)
+    const rawApkUrl = text(body.apkUrl, 4000)
+    const rawPlaystoreUrl = text(body.playstoreUrl, 4000)
+    const rawHash = normalizeHash(body.sha256)
+    const apkCheck = validateHttpsUrl(rawApkUrl)
+    const playCheck = validateHttpsUrl(rawPlaystoreUrl)
+    if (!apkCheck.ok && rawApkUrl) {
+      console.warn('[app-update] rejected URL (apk_url):', rawApkUrl)
+    }
+    if (!playCheck.ok && rawPlaystoreUrl) {
+      console.warn('[app-update] rejected URL (playstore_url):', rawPlaystoreUrl)
+    }
+    if (rawHash && !isValidSha256(rawHash)) {
+      console.warn('[app-update] rejected hash (invalid sha256 length/format)')
+    }
     const next = {
       [UPDATE_KEYS.soft]: String(Boolean(body.softUpdate)),
       [UPDATE_KEYS.force]: String(Boolean(body.forceUpdate)),
       [UPDATE_KEYS.autoDownload]: String(Boolean(body.autoDownload)),
-      [UPDATE_KEYS.source]: normalizeSource(body.source),
-      [UPDATE_KEYS.apkUrl]: text(body.apkUrl, 4000),
-      [UPDATE_KEYS.apkHash]: normalizeHash(body.sha256),
-      [UPDATE_KEYS.playstoreUrl]: text(body.playstoreUrl, 4000),
-    }
-
-    const apkCheck = validateHttpsUrl(next[UPDATE_KEYS.apkUrl])
-    if (!apkCheck.ok && next[UPDATE_KEYS.source] === 'inapp') {
-      return res.status(400).json({ error: `apkUrl: ${apkCheck.error}` })
-    }
-    const playCheck = validateHttpsUrl(next[UPDATE_KEYS.playstoreUrl])
-    if (!playCheck.ok && next[UPDATE_KEYS.source] === 'play') {
-      return res.status(400).json({ error: `playstoreUrl: ${playCheck.error}` })
-    }
-    if (next[UPDATE_KEYS.apkHash] && !/^[a-f0-9]{64}$/i.test(next[UPDATE_KEYS.apkHash])) {
-      return res.status(400).json({ error: 'sha256 must be a 64-character hex hash' })
+      [UPDATE_KEYS.source]: normalizedSource,
+      [UPDATE_KEYS.apkUrl]: apkCheck.ok ? apkCheck.value : '',
+      [UPDATE_KEYS.apkHash]: isValidSha256(rawHash) ? rawHash : '',
+      [UPDATE_KEYS.playstoreUrl]: playCheck.ok ? playCheck.value : '',
     }
 
     await ensureAppSettingsTable(pool)
@@ -220,17 +263,18 @@ appUpdateRouter.put('/settings/app-update', async (req, res) => {
       )
     }
 
+    const decisionData = toPublicConfig(next, 'settings:put')
     liveSyncBus.publish('config.app_update_changed', {
       topics: ['config'],
       action: 'updated',
-      updateDecision: toPublicConfig(next).decision,
+      updateDecision: decisionData.decision,
     })
 
     return res.json({
       softUpdate: asBool(next[UPDATE_KEYS.soft]),
       forceUpdate: asBool(next[UPDATE_KEYS.force]),
       autoDownload: asBool(next[UPDATE_KEYS.autoDownload]),
-      source: normalizeSource(next[UPDATE_KEYS.source]),
+      source: normalizeUiSource(next[UPDATE_KEYS.source]),
       apkUrl: next[UPDATE_KEYS.apkUrl],
       sha256: next[UPDATE_KEYS.apkHash],
       playstoreUrl: next[UPDATE_KEYS.playstoreUrl],
@@ -245,7 +289,7 @@ appUpdateRouter.get('/update-check', async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const data = toPublicConfig(await loadRowsByKey(pool))
+    const data = toPublicConfig(await loadRowsByKey(pool), 'update-check:get')
     return res.json({
       decision: data.decision,
       source: data.source,
@@ -254,6 +298,7 @@ appUpdateRouter.get('/update-check', async (_req, res) => {
       playstore_url: data.playstore_url,
       auto_download: data.auto_download,
       server_time: data.server_time,
+      notice: data.notice,
     })
   } catch (e) {
     console.error('[update-check] GET', e)
@@ -265,7 +310,7 @@ appUpdateRouter.post('/update-check', async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const data = toPublicConfig(await loadRowsByKey(pool))
+    const data = toPublicConfig(await loadRowsByKey(pool), 'update-check:post')
     return res.json({
       decision: data.decision,
       source: data.source,
@@ -274,6 +319,7 @@ appUpdateRouter.post('/update-check', async (_req, res) => {
       playstore_url: data.playstore_url,
       auto_download: data.auto_download,
       server_time: data.server_time,
+      notice: data.notice,
     })
   } catch (e) {
     console.error('[update-check] POST', e)
