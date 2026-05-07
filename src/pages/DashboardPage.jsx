@@ -11,6 +11,7 @@ import {
   getAnalyticsChannels,
   getAnalyticsLocations,
   getAnalyticsOverview,
+  getChannels,
   syncStreamUrl,
   getAnalyticsTrend,
 } from '../lib/api'
@@ -50,21 +51,24 @@ function DashboardPage() {
   const { showToast } = useToast()
   const [overview, setOverview] = useState(OVERVIEW_FALLBACK)
   const [channels, setChannels] = useState([])
+  const [channelCatalog, setChannelCatalog] = useState([])
   const [locations, setLocations] = useState([])
   const [trend, setTrend] = useState([])
   const [loaded, setLoaded] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const [o, c, l, t] = await Promise.all([
+      const [o, c, l, t, catalog] = await Promise.all([
         getAnalyticsOverview(),
         getAnalyticsChannels(),
         getAnalyticsLocations(),
         getAnalyticsTrend(),
+        getChannels(),
       ])
       console.log('API DATA:', o)
       setOverview((o && typeof o === 'object' ? o : null) || OVERVIEW_FALLBACK)
       setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
+      setChannelCatalog(Array.isArray(catalog) ? catalog : [])
       setLocations(Array.isArray(l) ? l : [])
       setTrend(
         Array.isArray(t)
@@ -84,6 +88,7 @@ function DashboardPage() {
       showToast('error', e?.message || 'Could not load dashboard')
       setOverview({})
       setChannels([])
+      setChannelCatalog([])
       setLocations([])
       setTrend([])
       setLoaded(true)
@@ -124,13 +129,26 @@ function DashboardPage() {
     [locations],
   )
 
+  const channelNameById = useMemo(() => {
+    const m = new Map()
+    for (const row of Array.isArray(channelCatalog) ? channelCatalog : []) {
+      const id = String(row?.id ?? '').trim()
+      const name = String(row?.name ?? '').trim()
+      if (!id) continue
+      m.set(id, name || id)
+    }
+    return m
+  }, [channelCatalog])
+
   const mostWatched = useMemo(() => {
     return (Array.isArray(channels) ? channels : []).map((r) => ({
       id: String(r.channel_id ?? ''),
-      name: String(r.channel_id ?? 'Unknown Channel'),
+      name:
+        channelNameById.get(String(r.channel_id ?? '').trim()) ||
+        String(r.channel_id ?? 'Unknown Channel'),
       watchers: Number(r.viewers) || 0,
     }))
-  }, [channels])
+  }, [channels, channelNameById])
 
   const section1Cards = [
     {
