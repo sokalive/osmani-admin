@@ -7,6 +7,10 @@ const DEFAULT_UA =
   process.env.STREAM_PROXY_USER_AGENT ||
   'Mozilla/5.0 (Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36'
 
+/** Public path suffix (no leading slash): "stream-proxy" | "stream-proxy-test" */
+const PROXY_MOUNT_STREAM = 'stream-proxy'
+const PROXY_MOUNT_TEST = 'stream-proxy-test'
+
 const SEGMENT_EXT_RE = /\.(ts|m4s|aac|mp4|m3u8)(\?.*)?$/i
 const MAX_URL_LENGTH = 4000
 
@@ -26,14 +30,15 @@ function resolveBaseOrigin(req) {
   return `${proto}://${host}`.replace(/\/$/, '')
 }
 
-function buildProxyUrl(req, absoluteTarget, hdr) {
+function buildProxyUrl(req, absoluteTarget, hdr, mountPath) {
   const base = resolveBaseOrigin(req)
+  const path = String(mountPath || PROXY_MOUNT_STREAM).replace(/^\/+/, '').replace(/\/+$/, '')
   const q = new URLSearchParams()
   q.set('url', absoluteTarget)
   if (hdr.referer) q.set('referer', hdr.referer)
   if (hdr.origin) q.set('origin', hdr.origin)
   if (hdr.userAgent) q.set('userAgent', hdr.userAgent)
-  return `${base}/stream-proxy?${q.toString()}`
+  return `${base}/${path}?${q.toString()}`
 }
 
 function extractUpstreamHeaders(req) {
@@ -61,23 +66,23 @@ function toAbsoluteResourceUri(rawUri, baseUrl) {
   }
 }
 
-function rewriteAttributeUri(line, baseUrl, req, upstreamHeaders, counter) {
+function rewriteAttributeUri(line, baseUrl, req, upstreamHeaders, counter, mountPath) {
   return line.replace(/URI="([^"]+)"/gi, (_m, uri) => {
     const absolute = toAbsoluteResourceUri(uri, baseUrl)
     if (!absolute || absolute.startsWith('data:')) return `URI="${uri}"`
     counter.count += 1
-    return `URI="${buildProxyUrl(req, absolute, upstreamHeaders)}"`
+    return `URI="${buildProxyUrl(req, absolute, upstreamHeaders, mountPath)}"`
   })
 }
 
-function rewriteManifest(manifest, baseUrl, req, upstreamHeaders) {
+function rewriteManifest(manifest, baseUrl, req, upstreamHeaders, mountPath) {
   const lines = String(manifest || '').split(/\r?\n/)
   const counter = { count: 0 }
   const rewritten = lines.map((line) => {
     const trimmed = line.trim()
     if (!trimmed) return line
     if (trimmed.startsWith('#EXT-X-KEY') || trimmed.startsWith('#EXT-X-MAP')) {
-      return rewriteAttributeUri(line, baseUrl, req, upstreamHeaders, counter)
+      return rewriteAttributeUri(line, baseUrl, req, upstreamHeaders, counter, mountPath)
     }
     if (trimmed.startsWith('#')) return line
     if (!SEGMENT_EXT_RE.test(trimmed) && !trimmed.includes('/')) {
@@ -85,7 +90,7 @@ function rewriteManifest(manifest, baseUrl, req, upstreamHeaders) {
     }
     const absolute = toAbsoluteResourceUri(trimmed, baseUrl)
     counter.count += 1
-    return buildProxyUrl(req, absolute, upstreamHeaders)
+    return buildProxyUrl(req, absolute, upstreamHeaders, mountPath)
   })
   return { text: rewritten.join('\n'), rewriteCount: counter.count }
 }
@@ -119,7 +124,7 @@ function logTokenDiagnostics(urlStr, status) {
   })
 }
 
-streamProxyRouter.get('/stream-proxy', async (req, res) => {
+async function runStreamProxy(req, res, mountPath) {
   const startedAt = Date.now()
   const sourceUrl = String(req.query.url || '').trim()
   if (!sourceUrl) {
@@ -153,6 +158,7 @@ streamProxyRouter.get('/stream-proxy', async (req, res) => {
   } catch (e) {
     logProxyDiagnostics({
       scope: 'fetch_error',
+      mount: mountPath,
       source_url: parsed.toString(),
       error: String(e.message || e),
       elapsed_ms: Date.now() - startedAt,
@@ -165,6 +171,7 @@ streamProxyRouter.get('/stream-proxy', async (req, res) => {
   const contentType = upstreamRes.headers.get('content-type') || 'application/octet-stream'
   logProxyDiagnostics({
     scope: 'request',
+    mount: mountPath,
     source_url: parsed.toString(),
     final_url: finalUrl,
     status,
@@ -180,13 +187,15 @@ streamProxyRouter.get('/stream-proxy', async (req, res) => {
 
   if (isManifest(finalUrl, contentType)) {
     const body = await upstreamRes.text()
-    const { text, rewriteCount } = rewriteManifest(body, finalUrl, req, upstreamHeaders)
+    const { text, rewriteCount } = rewriteManifest(body, finalUrl, req, upstreamHeaders, mountPath)
     logProxyDiagnostics({
       scope: 'manifest_rewrite',
+      mount: mountPath,
       source_url: parsed.toString(),
       final_url: finalUrl,
       rewritten_url_count: rewriteCount,
       output_bytes: Buffer.byteLength(text, 'utf8'),
+      has_extm3u: text.includes('#EXTM3U'),
     })
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
     res.setHeader('Cache-Control', 'no-store')
@@ -214,6 +223,7 @@ streamProxyRouter.get('/stream-proxy', async (req, res) => {
   nodeStream.on('error', (e) => {
     logProxyDiagnostics({
       scope: 'stream_error',
+      mount: mountPath,
       source_url: parsed.toString(),
       final_url: finalUrl,
       error: String(e.message || e),
@@ -221,4 +231,7 @@ streamProxyRouter.get('/stream-proxy', async (req, res) => {
     res.destroy(e)
   })
   return nodeStream.pipe(res)
-})
+}
+
+streamProxyRouter.get(`/${PROXY_MOUNT_STREAM}`, (req, res) => runStreamProxy(req, res, PROXY_MOUNT_STREAM))
+streamProxyRouter.get(`/${PROXY_MOUNT_TEST}`, (req, res) => runStreamProxy(req, res, PROXY_MOUNT_TEST))

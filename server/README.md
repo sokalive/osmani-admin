@@ -1,36 +1,44 @@
-# Osmani Admin — Channels API
+# Osmani Admin — API (Express)
 
-Express CRUD backed by **`server/data/channels.json`** (no database).
+Channels and admin routes are under **`/api/*`**. Stream proxy is mounted at the app root (not under `/api`).
 
-## Run (exact steps)
+## Run locally
 
 ```bash
 cd server
 npm install
-node src/index.js
+npm start
 ```
 
-Default URL: **http://localhost:4000** (override with `PORT` env).
+Default URL: **http://localhost:4000** (override with `PORT`).
 
-## Frontend
+## Render deploy (required)
 
-In the project root `.env`:
+The repo root is the **frontend** (Vite). This API must run with **Root Directory = `server`**.
+
+| Render setting | Value |
+|----------------|--------|
+| Root Directory | `server` |
+| Build Command | `npm install` |
+| Start Command | `npm start` |
+
+Wrong root → wrong `package.json` → routes like `/stream-proxy-test` will 404.
+
+## Useful paths
+
+| Path | Description |
+|------|-------------|
+| `GET /api/health` | API health |
+| `GET /api/channels` | Channel list (requires `DATABASE_URL`) |
+| `GET /stream-proxy` | IPTV/HLS proxy + manifest rewrite |
+| `GET /stream-proxy-test` | Same as above (public smoke test; e.g. Mux sample m3u8) |
+
+## Frontend dev
+
+From repo root `.env`:
 
 ```env
 VITE_API_BASE_URL=http://localhost:4000
 ```
 
-Then start Vite (`npm run dev` from repo root).
-
-## Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/channels` | List channels (sorted by id) |
-| POST | `/channels` | Create (`name` + `url` required) |
-| PUT | `/channels/:id` | Update |
-| DELETE | `/channels/:id` | Delete (204) |
-
-`GET /health` → `{ ok: true }`.
-
-If `data/channels.json` is missing, it is created as `[]` on startup.
+Then `npm run dev` from repo root.
