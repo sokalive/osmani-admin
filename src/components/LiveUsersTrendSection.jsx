@@ -14,11 +14,11 @@ function LiveUsersTrendSection({ points }) {
   const data = Array.isArray(points) ? points : []
 
   const yDomain = useMemo(() => {
-    if (!data.length) return [0, 100]
+    if (!data.length) return [0, 10]
     const vals = data.map((d) => Number(d.users) || 0)
     const min = Math.min(...vals, 0)
-    const max = Math.max(...vals, 100)
-    const pad = (max - min) * 0.15 || 20000
+    const max = Math.max(...vals, 10)
+    const pad = (max - min) * 0.15 || 1
     return [Math.floor(min - pad), Math.ceil(max + pad)]
   }, [data])
 
@@ -35,7 +35,7 @@ function LiveUsersTrendSection({ points }) {
           id="live-users-trend-heading"
           className="mb-4 text-lg font-bold tracking-tight text-[#FFFFFF] sm:mb-5 sm:text-xl"
         >
-          Live Users Trend
+          App Installs Growth
         </h2>
 
         <div className="h-[min(380px,calc(100vw-4rem))] w-full min-h-[280px]">
@@ -72,7 +72,7 @@ function LiveUsersTrendSection({ points }) {
 
               <YAxis
                 domain={yDomain}
-                tickFormatter={(v) => `${Math.round(v / 1000)}k`}
+                tickFormatter={(v) => `${Math.round(v)}`}
                 tick={{ fill: '#BFC7D5', fontSize: 11 }}
                 tickLine={false}
                 axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
@@ -88,8 +88,8 @@ function LiveUsersTrendSection({ points }) {
                 }}
                 labelStyle={{ color: '#BFC7D5' }}
                 formatter={(value) => [
-                  `${Number(value).toLocaleString()} users`,
-                  'Live users',
+                  `${Number(value).toLocaleString()} installs`,
+                  'Total installs',
                 ]}
               />
 

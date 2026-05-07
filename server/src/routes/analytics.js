@@ -249,22 +249,22 @@ analyticsRouter.get('/trend', async (_req, res) => {
       console.error('[analytics/trend] DATABASE_URL not set — no database pool')
       return res.status(200).json([])
     }
-    await cleanupStaleSessions(pool)
-    const tsCol = await resolveLiveSessionsTimeExpr(pool)
-    if (!tsCol) {
-      return res.status(200).json([])
-    }
     const { rows } = await pool.query(
       `SELECT
-         (
-           date_trunc('hour', ${tsCol})
-           + floor(date_part('minute', ${tsCol}) / 5) * interval '5 minutes'
-         )::timestamptz AS time,
-         COUNT(*)::int AS users
-       FROM live_sessions
-       WHERE ${tsCol} IS NOT NULL
-         AND COALESCE(updated_at, started_at, now()) >= (now() - interval '24 hours')
-       GROUP BY 1
+         bucket AS time,
+         SUM(bucket_installs) OVER (ORDER BY bucket)::int AS users
+       FROM (
+         SELECT
+           (
+             date_trunc('hour', installed_at)
+             + floor(date_part('minute', installed_at) / 5) * interval '5 minutes'
+           )::timestamptz AS bucket,
+           COUNT(*)::int AS bucket_installs
+         FROM app_installs
+         WHERE installed_at IS NOT NULL
+           AND installed_at >= (now() - interval '24 hours')
+         GROUP BY 1
+       ) install_buckets
        ORDER BY 1 ASC`,
     )
     res.json(
