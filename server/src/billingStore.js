@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import { ensureBillingTables } from './db/billingTables.js'
 import { getPool } from './db/pool.js'
 
@@ -296,6 +297,42 @@ export async function getDeviceSubscriptionByDeviceId(deviceId) {
   const d = String(deviceId ?? '').trim()
   if (!d) return null
   const { rows } = await pool.query(`SELECT * FROM device_subscriptions WHERE device_id = $1`, [d])
+  return rows[0] ?? null
+}
+
+/**
+ * Server-authoritative access check using PostgreSQL NOW() (never device time).
+ */
+export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = null) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const fpHash =
+    fingerprint && String(fingerprint).trim()
+      ? crypto
+          .createHash('sha256')
+          .update(`${String(process.env.FINGERPRINT_HASH_SALT || 'osmani-fp-v1')}::${String(fingerprint).trim()}`)
+          .digest('hex')
+      : null
+  const { rows } = await pool.query(
+    `SELECT
+       ds.device_id,
+       ds.status,
+       ds.expires_at,
+       ds.started_at,
+       ds.updated_at,
+       ds.transaction_id,
+       (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
+       COALESCE(ad.is_blocked, false) AS blocked_now,
+       ad.block_reason
+     FROM device_subscriptions ds
+     LEFT JOIN admin_devices ad
+       ON ad.device_id = ds.device_id
+       OR ($2::text IS NOT NULL AND ad.fingerprint_hash = $2::text)
+     WHERE ds.device_id = $1
+     LIMIT 1`,
+    [d, fpHash],
+  )
   return rows[0] ?? null
 }
 

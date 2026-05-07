@@ -18,18 +18,19 @@ function countryFromRequest(req) {
 
 function rowToPublicStatus(row) {
   if (!row) return { active: false, status: null, expiresAt: null }
+  const active = row.active_now === true && row.blocked_now !== true
+  const status =
+    row.blocked_now === true ? 'blocked' : active ? 'active' : row.status === 'active' ? 'expired' : row.status
   const exp = row.expires_at
-  const expDate = exp ? new Date(exp) : null
-  const expiresOk =
-    Boolean(expDate) && !Number.isNaN(expDate.getTime()) && expDate.getTime() > Date.now()
-  const active = row.status === 'active' && expiresOk
   const expiresAt = exp instanceof Date ? exp.toISOString() : exp != null ? String(exp) : null
   return {
     active,
     /** legacy alias used by RN clients */
     isActive: active,
-    status: row.status,
+    status,
     expiresAt,
+    blocked: row.blocked_now === true,
+    blockReason: row.block_reason ? String(row.block_reason) : null,
   }
 }
 
@@ -45,8 +46,25 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
       console.error('[subscription-status] touchLivePresence failed:', e)
     })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
-    const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
-    res.json(rowToPublicStatus(row))
+    const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
+    const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
+    const pub = rowToPublicStatus(row)
+    if (!pub.active) {
+      const plans = await billing.listPlansWithSubscriberCounts().catch(() => [])
+      return res.json({
+        ...pub,
+        playbackAllowed: false,
+        plans: Array.isArray(plans)
+          ? plans.map((p) => ({
+              id: Number(p.id),
+              name: String(p.name ?? ''),
+              price: Number(p.price) || 0,
+              duration_days: Number(p.duration_days) || 0,
+            }))
+          : [],
+      })
+    }
+    res.json({ ...pub, playbackAllowed: true })
   } catch (e) {
     console.error('[subscription-status]', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -78,7 +96,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   const send = () => {
     void (async () => {
       try {
-        const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
+        const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
+        const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
         const payload = toSsePayload(row)
         res.write(`event: snapshot\ndata: ${JSON.stringify(payload)}\n\n`)
       } catch (e) {
@@ -91,7 +110,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   const handler = async (payload) => {
     if (!payload || payload.deviceId !== deviceId) return
     try {
-      const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
+      const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
+      const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
       res.write(`event: device_subscription\ndata: ${JSON.stringify(toSsePayload(row))}\n\n`)
     } catch (e) {
       console.error('[subscription-stream] device_subscription event failed:', e)

@@ -25,6 +25,16 @@ export async function ensureBillingTables(client) {
   `)
 
   await client.query(`
+    INSERT INTO app_settings (key, value)
+    VALUES
+      ('transfer_mode', 'confirmation'),
+      ('transfer_daily_limit', '5'),
+      ('transfer_weekly_limit', '15'),
+      ('transfer_cooldown_minutes', '60')
+    ON CONFLICT (key) DO NOTHING;
+  `)
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS app_installs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       device_id TEXT NOT NULL DEFAULT '',
@@ -160,6 +170,125 @@ export async function ensureBillingTables(client) {
   `)
   await client.query(`
     ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS fingerprint_hash TEXT;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_subscriptions_fingerprint_hash_idx
+    ON device_subscriptions (fingerprint_hash)
+    WHERE fingerprint_hash IS NOT NULL;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS transfer_codes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      code TEXT NOT NULL UNIQUE,
+      source_device_id TEXT NOT NULL,
+      target_device_id TEXT,
+      target_fingerprint_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ,
+      created_by TEXT NOT NULL DEFAULT 'system',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT transfer_codes_status_check
+        CHECK (status IN ('active', 'used', 'revoked', 'expired'))
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transfer_codes_source_device_idx ON transfer_codes (source_device_id);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transfer_codes_status_expiry_idx ON transfer_codes (status, expires_at DESC);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS device_transfers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      code_id UUID REFERENCES transfer_codes (id) ON DELETE SET NULL,
+      code TEXT,
+      source_device_id TEXT NOT NULL,
+      target_device_id TEXT NOT NULL,
+      source_fingerprint_hash TEXT,
+      target_fingerprint_hash TEXT,
+      status TEXT NOT NULL DEFAULT 'completed',
+      reason TEXT,
+      requested_by TEXT NOT NULL DEFAULT 'device',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      CONSTRAINT device_transfers_status_check
+        CHECK (status IN ('requested', 'completed', 'rejected', 'revoked'))
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_transfers_source_idx ON device_transfers (source_device_id, created_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_transfers_target_idx ON device_transfers (target_device_id, created_at DESC);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS security_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      actor TEXT NOT NULL DEFAULT '',
+      event_type TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'completed',
+      detail TEXT NOT NULL DEFAULT '',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT security_events_status_check CHECK (status IN ('completed', 'failed', 'warning', 'blocked'))
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS security_events_created_idx ON security_events (created_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS security_events_event_type_idx ON security_events (event_type);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_devices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      device_id TEXT NOT NULL UNIQUE,
+      fingerprint_hash TEXT,
+      is_blocked BOOLEAN NOT NULL DEFAULT false,
+      block_reason TEXT,
+      whitelisted BOOLEAN NOT NULL DEFAULT false,
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_devices_fingerprint_idx
+    ON admin_devices (fingerprint_hash)
+    WHERE fingerprint_hash IS NOT NULL;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_devices_blocked_idx
+    ON admin_devices (is_blocked)
+    WHERE is_blocked = true;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_otp_codes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      admin_id TEXT NOT NULL DEFAULT 'admin',
+      code_hash TEXT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'force_transfer',
+      status TEXT NOT NULL DEFAULT 'active',
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT admin_otp_codes_status_check CHECK (status IN ('active', 'used', 'expired'))
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_otp_codes_admin_purpose_idx
+    ON admin_otp_codes (admin_id, purpose, expires_at DESC);
   `)
 
   await client.query(`
