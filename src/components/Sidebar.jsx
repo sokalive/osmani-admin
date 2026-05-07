@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import {
   BarChart3,
   Bell,
+  Building2,
   ClipboardList,
   CreditCard,
   Download,
@@ -29,6 +30,7 @@ const menuItems = [
   { id: 'transactions', label: 'Transactions', icon: CreditCard, path: '/transactions' },
   { id: 'users', label: 'Users', icon: Users, path: '/users' },
   { id: 'notifications', label: 'Notifications', icon: Bell, path: '/notifications' },
+  { id: 'payment-providers', label: 'Payment Providers', icon: Building2, path: '/payment-providers' },
   { id: 'analytics', label: 'Analytics', icon: BarChart3, path: '/analytics' },
   { id: 'zenopay', label: 'ZenoPay Settings', icon: WalletCards, path: '/zenopay' },
   { id: 'whatsapp', label: 'WhatsApp Support', icon: MessageCircle, path: '/whatsapp' },

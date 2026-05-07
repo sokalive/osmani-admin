@@ -7,6 +7,7 @@ import ChannelsPage from './pages/ChannelsPage'
 import DashboardPage from './pages/DashboardPage'
 import DeviceControlPage from './pages/DeviceControlPage'
 import NotificationsPage from './pages/NotificationsPage'
+import PaymentProvidersPage from './pages/PaymentProvidersPage'
 import PlansPage from './pages/PlansPage'
 import PopupSettingsPage from './pages/PopupSettingsPage'
 import SecurityAlertsPage from './pages/SecurityAlertsPage'
@@ -33,6 +34,7 @@ function App() {
               <Route path="/transactions" element={<TransactionsPage />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
+              <Route path="/payment-providers" element={<PaymentProvidersPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/zenopay" element={<ZenoPayPage />} />
               <Route path="/whatsapp" element={<WhatsAppPage />} />

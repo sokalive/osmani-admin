@@ -212,6 +212,20 @@ export const deleteTransferCode = (id) => apiDelete(`/transfer-codes/${encodeURI
 export const getZenopaySettings = () => apiGet('/settings/zenopay')
 export const putZenopaySettings = (body) => apiPut('/settings/zenopay', body)
 export const postZenopayTest = (body) => apiPost('/settings/zenopay/test', body)
+export const getPaymentProvidersSettings = () => apiGet('/settings/payment-providers')
+export const getPaymentProviders = () => apiGet('/payment-providers')
+export const postPaymentProviderFormData = (formData) =>
+  fetch(joinPath('/settings/payment-providers'), {
+    method: 'POST',
+    body: formData,
+  }).then(parseJsonSafeResponse)
+export const putPaymentProviderFormData = (id, formData) =>
+  fetch(joinPath(`/settings/payment-providers/${encodeURIComponent(id)}`), {
+    method: 'PUT',
+    body: formData,
+  }).then(parseJsonSafeResponse)
+export const deletePaymentProvider = (id) =>
+  apiDelete(`/settings/payment-providers/${encodeURIComponent(id)}`)
 
 export const getWhatsappSettings = () => apiGet('/settings/whatsapp')
 export const putWhatsappSettings = (body) => apiPut('/settings/whatsapp', body)
