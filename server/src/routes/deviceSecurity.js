@@ -4,7 +4,6 @@ import * as billing from '../billingStore.js'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
-import { getSyncStreamClientsSnapshot } from './liveSync.js'
 
 export const deviceSecurityRouter = Router()
 
@@ -138,18 +137,6 @@ async function logSecurityEvent(pool, { actor, eventType, status, detail, metada
 
 function emitSync(event, payload) {
   liveSyncBus.publish(event, { topics: ['config'], ...payload })
-}
-
-function emitTransferScoped(event, payload) {
-  if (event === 'transfer_confirmation_required') {
-    console.log('[transfer-sse] emit transfer_confirmation_required', {
-      source_device_id: payload?.source_device_id || null,
-      target_device_id: payload?.target_device_id || null,
-      pending_transfer_id: payload?.pending_transfer_id || null,
-      code: payload?.code || null,
-    })
-  }
-  emitSync(event, { scope: 'device', ...payload })
 }
 
 async function cleanupSecurity(pool) {
@@ -663,7 +650,6 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const sourceDeviceId = text(b.source_device_id ?? b.device_id, 128)
     const paymentPhone = text(b.payment_phone ?? b.phone, 40)
-    const targetDeviceId = text(b.target_device_id, 128) || null
     if (!sourceDeviceId || !paymentPhone) {
       return res.status(400).json({ error: 'source_device_id and payment_phone are required' })
     }
@@ -703,12 +689,7 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
         eventType: 'Transfer request',
         status: 'failed',
         detail: limits.reason,
-        metadata: { source_device_id: sourceDeviceId, target_device_id: targetDeviceId },
-      })
-      emitTransferScoped('transfer_rejected', {
-        source_device_id: sourceDeviceId,
-        target_device_id: targetDeviceId,
-        reason: limits.reason,
+        metadata: { source_device_id: sourceDeviceId },
       })
       return res.status(429).json({ ok: false, error: limits.reason })
     }
@@ -718,32 +699,20 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
        (code, source_device_id, target_device_id, target_fingerprint_hash, status, expires_at, created_by, created_at, updated_at)
        VALUES ($1, $2, $3, $4, 'active', now() + ($5::int * interval '1 minute'), 'device', now(), now())
        RETURNING id, code, expires_at`,
-      [generatedCode, sourceDeviceId, targetDeviceId, fpHash, TRANSFER_CODE_TTL_MINUTES],
+      [generatedCode, sourceDeviceId, null, fpHash, TRANSFER_CODE_TTL_MINUTES],
     )
     await pool.query(
       `INSERT INTO device_transfers
        (code_id, code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'requested', 'awaiting_target_submission', 'device', now())`,
-      [rows[0].id, rows[0].code, sourceDeviceId, targetDeviceId, null, fpHash],
-    )
-    await pool.query(
-      `UPDATE device_transfers
-       SET status = 'awaiting_target_submission',
-           reason = 'awaiting_target_submission'
-       WHERE code_id = $1`,
-      [rows[0].id],
+       VALUES ($1, $2, $3, $4, $5, $6, 'requested', 'code_issued', 'device', now())`,
+      [rows[0].id, rows[0].code, sourceDeviceId, 'pending-target', null, fpHash],
     )
     await logSecurityEvent(pool, {
       actor: sourceDeviceId,
       eventType: 'Transfer request',
       status: 'completed',
-      detail: `Transfer code issued for target ${targetDeviceId}`,
-      metadata: { source_device_id: sourceDeviceId, target_device_id: targetDeviceId },
-    })
-    emitTransferScoped('transfer_requested', {
-      source_device_id: sourceDeviceId,
-      target_device_id: targetDeviceId,
-      code: rows[0].code,
+      detail: 'Transfer code issued',
+      metadata: { source_device_id: sourceDeviceId, code: rows[0].code },
     })
     return res.json({
       ok: true,
@@ -782,17 +751,10 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
     const codeRow = codeRowRes.rows[0]
     if (!codeRow) {
       await client.query('ROLLBACK')
-      emitTransferScoped('transfer_rejected', { code, reason: 'invalid_code', target_device_id: targetDeviceId })
       return res.status(404).json({ error: 'Invalid transfer code' })
     }
     if (codeRow.status !== 'active') {
       await client.query('ROLLBACK')
-      emitTransferScoped('transfer_rejected', {
-        code,
-        reason: 'code_not_active',
-        source_device_id: codeRow.source_device_id,
-        target_device_id: targetDeviceId,
-      })
       return res.status(400).json({ error: 'Transfer code not active' })
     }
     const expRes = await client.query(`SELECT now() < $1::timestamptz AS valid`, [codeRow.expires_at])
@@ -802,12 +764,6 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
         [codeRow.id],
       )
       await client.query('COMMIT')
-      emitTransferScoped('transfer_rejected', {
-        code,
-        reason: 'code_expired',
-        source_device_id: codeRow.source_device_id,
-        target_device_id: targetDeviceId,
-      })
       return res.status(400).json({ error: 'Transfer code expired' })
     }
     const sourceSub = await client.query(
@@ -820,12 +776,6 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
     const sub = sourceSub.rows[0]
     if (!sub) {
       await client.query('ROLLBACK')
-      emitTransferScoped('transfer_rejected', {
-        code,
-        reason: 'source_subscription_missing',
-        source_device_id: codeRow.source_device_id,
-        target_device_id: targetDeviceId,
-      })
       return res.status(404).json({ error: 'Source subscription not found' })
     }
     const validSubRes = await client.query(
@@ -834,195 +784,8 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
     )
     if (!validSubRes.rows[0]?.active) {
       await client.query('ROLLBACK')
-      emitTransferScoped('transfer_rejected', {
-        code,
-        reason: 'source_subscription_expired',
-        source_device_id: codeRow.source_device_id,
-        target_device_id: targetDeviceId,
-      })
       return res.status(400).json({ error: 'Source subscription expired' })
     }
-    const pendingTransferRes = await client.query(
-      `UPDATE device_transfers
-       SET status = 'pending_confirmation',
-           reason = 'awaiting_source_approval',
-           target_device_id = $2,
-           target_fingerprint_hash = COALESCE($3, target_fingerprint_hash)
-       WHERE code_id = $1
-       RETURNING id`,
-      [codeRow.id, targetDeviceId, targetFpHash],
-    )
-    let pendingTransferId = String(pendingTransferRes.rows[0]?.id || '')
-    if (!pendingTransferId) {
-      const inserted = await client.query(
-        `INSERT INTO device_transfers
-         (code_id, code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'pending_confirmation', 'awaiting_source_approval', 'device', now())
-         RETURNING id`,
-        [codeRow.id, codeRow.code, codeRow.source_device_id, targetDeviceId, sub.fingerprint_hash || null, targetFpHash],
-      )
-      pendingTransferId = String(inserted.rows[0]?.id || '')
-    }
-    await client.query(
-      `UPDATE transfer_codes
-       SET status = 'pending_confirmation',
-           target_device_id = $2,
-           target_fingerprint_hash = COALESCE($3, target_fingerprint_hash),
-           used_at = now(),
-           updated_at = now()
-       WHERE id = $1`,
-      [codeRow.id, targetDeviceId, targetFpHash],
-    )
-    if (!pendingTransferId) {
-      await client.query('ROLLBACK')
-      return res.status(500).json({ error: 'Could not create pending transfer state' })
-    }
-    await logSecurityEvent(client, {
-      actor: targetDeviceId,
-      eventType: 'Transfer confirmation',
-      status: 'pending',
-      detail: `Pending source approval ${codeRow.source_device_id} -> ${targetDeviceId}`,
-      metadata: {
-        code,
-        source_device_id: codeRow.source_device_id,
-        target_device_id: targetDeviceId,
-        pending_transfer_id: pendingTransferId,
-      },
-    })
-    await client.query('COMMIT')
-    const connected = getSyncStreamClientsSnapshot()
-    const sourceNorm = String(codeRow.source_device_id || '').trim().toLowerCase()
-    const sourceFound = connected.clients.some(
-      (c) => String(c.device_id || '').trim().toLowerCase() === sourceNorm,
-    )
-    console.log('[transfer-sse] before emit transfer_confirmation_required', {
-      event: 'transfer_confirmation_required',
-      source_device_id: codeRow.source_device_id,
-      target_device_id: targetDeviceId,
-      pending_transfer_id: pendingTransferId,
-      code,
-      connected_clients_count: connected.count,
-      source_client_found: sourceFound,
-      connected_clients: connected.clients,
-    })
-    emitTransferScoped('transfer_confirmation_required', {
-      code,
-      pending_transfer_id: pendingTransferId,
-      source_device_id: codeRow.source_device_id,
-      target_device_id: targetDeviceId,
-    })
-    emitTransferScoped('transfer_pending', {
-      code,
-      pending_transfer_id: pendingTransferId,
-      source_device_id: codeRow.source_device_id,
-      target_device_id: targetDeviceId,
-    })
-    return res.json({
-      ok: true,
-      pending: true,
-      pending_transfer_id: pendingTransferId,
-      source_device_id: codeRow.source_device_id,
-      target_device_id: targetDeviceId,
-    })
-  } catch (e) {
-    await client.query('ROLLBACK')
-    console.error('[transfer/confirm]', e)
-    return res.status(500).json({ error: String(e.message || e) })
-  } finally {
-    client.release()
-  }
-})
-
-deviceSecurityRouter.post('/transfer/decision', async (req, res) => {
-  const pool = getPool()
-  if (!pool) return res.status(503).json({ error: 'Database not configured' })
-  await ensureSecurityTables(pool)
-  const b = req.body && typeof req.body === 'object' ? req.body : {}
-  const pendingTransferId = text(b.pending_transfer_id ?? b.transfer_id, 64)
-  const sourceDeviceId = text(b.source_device_id ?? b.device_id, 128)
-  const actionRaw = text(b.action, 32).toLowerCase()
-  const action = actionRaw === 'approve' || b.approve === true ? 'approve' : actionRaw === 'reject' ? 'reject' : ''
-  if (!pendingTransferId || !sourceDeviceId || !action) {
-    return res.status(400).json({ error: 'pending_transfer_id, source_device_id and action=approve|reject are required' })
-  }
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    const transferRes = await client.query(
-      `SELECT * FROM device_transfers WHERE id = $1 FOR UPDATE`,
-      [pendingTransferId],
-    )
-    const transfer = transferRes.rows[0]
-    if (!transfer) {
-      await client.query('ROLLBACK')
-      return res.status(404).json({ error: 'Pending transfer not found' })
-    }
-    if (String(transfer.source_device_id) !== sourceDeviceId) {
-      await client.query('ROLLBACK')
-      return res.status(403).json({ error: 'Only source device can decide this transfer' })
-    }
-    if (String(transfer.status) !== 'pending_confirmation') {
-      await client.query('ROLLBACK')
-      return res.status(400).json({ error: 'Transfer is not awaiting source approval' })
-    }
-
-    const code = String(transfer.code || '')
-    if (action === 'reject') {
-      await client.query(
-        `UPDATE device_transfers
-         SET status = 'rejected', reason = 'rejected_by_source', completed_at = now()
-         WHERE id = $1`,
-        [pendingTransferId],
-      )
-      if (transfer.code_id) {
-        await client.query(
-          `UPDATE transfer_codes
-           SET status = 'revoked', revoked_at = now(), updated_at = now()
-           WHERE id = $1`,
-          [transfer.code_id],
-        )
-      }
-      await logSecurityEvent(client, {
-        actor: sourceDeviceId,
-        eventType: 'Transfer confirmation',
-        status: 'completed',
-        detail: `Rejected transfer to ${transfer.target_device_id}`,
-        metadata: {
-          code,
-          pending_transfer_id: pendingTransferId,
-          source_device_id: sourceDeviceId,
-          target_device_id: transfer.target_device_id,
-        },
-      })
-      await client.query('COMMIT')
-      emitTransferScoped('transfer_rejected', {
-        code,
-        reason: 'rejected_by_source',
-        pending_transfer_id: pendingTransferId,
-        source_device_id: sourceDeviceId,
-        target_device_id: transfer.target_device_id,
-      })
-      return res.json({ ok: true, rejected: true, pending_transfer_id: pendingTransferId })
-    }
-
-    const sourceSubRes = await client.query(
-      `SELECT * FROM device_subscriptions WHERE device_id = $1 FOR UPDATE`,
-      [sourceDeviceId],
-    )
-    const sourceSub = sourceSubRes.rows[0]
-    if (!sourceSub) {
-      await client.query('ROLLBACK')
-      return res.status(404).json({ error: 'Source subscription not found' })
-    }
-    const validSubRes = await client.query(
-      `SELECT (status = 'active' AND expires_at > now()) AS active FROM device_subscriptions WHERE device_id = $1`,
-      [sourceDeviceId],
-    )
-    if (!validSubRes.rows[0]?.active) {
-      await client.query('ROLLBACK')
-      return res.status(400).json({ error: 'Source subscription expired' })
-    }
-
     await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
        VALUES ($1, 'active', $2, now(), $3, now(), $4)
@@ -1032,75 +795,52 @@ deviceSecurityRouter.post('/transfer/decision', async (req, res) => {
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
-      [
-        String(transfer.target_device_id),
-        sourceSub.expires_at,
-        `transfer:${code || pendingTransferId}`,
-        transfer.target_fingerprint_hash || null,
-      ],
+      [targetDeviceId, sub.expires_at, `transfer:${code}`, targetFpHash],
     )
     await client.query(
-      `UPDATE device_subscriptions SET status = 'pending', updated_at = now() WHERE device_id = $1`,
-      [sourceDeviceId],
+      `UPDATE device_subscriptions
+       SET status = 'pending', updated_at = now()
+       WHERE device_id = $1`,
+      [codeRow.source_device_id],
     )
-    if (transfer.code_id) {
-      await client.query(
-        `UPDATE transfer_codes
-         SET status = 'used', used_at = COALESCE(used_at, now()), updated_at = now()
-         WHERE id = $1`,
-        [transfer.code_id],
-      )
-    }
     await client.query(
-      `UPDATE device_transfers
-       SET status = 'approved', reason = 'approved_by_source'
+      `UPDATE transfer_codes
+       SET status = 'used',
+           target_device_id = $2,
+           target_fingerprint_hash = COALESCE($3, target_fingerprint_hash),
+           used_at = COALESCE(used_at, now()),
+           updated_at = now()
        WHERE id = $1`,
-      [pendingTransferId],
+      [codeRow.id, targetDeviceId, targetFpHash],
     )
     await client.query(
       `UPDATE device_transfers
-       SET status = 'completed', reason = 'approved_by_source', completed_at = now()
-       WHERE id = $1`,
-      [pendingTransferId],
+       SET status = 'completed',
+           completed_at = now(),
+           target_device_id = $2,
+           target_fingerprint_hash = COALESCE($3, target_fingerprint_hash),
+           reason = 'confirmed_by_code'
+       WHERE code_id = $1`,
+      [codeRow.id, targetDeviceId, targetFpHash],
     )
     await logSecurityEvent(client, {
-      actor: sourceDeviceId,
+      actor: codeRow.source_device_id,
       eventType: 'Transfer confirmation',
       status: 'completed',
-      detail: `Approved transfer to ${transfer.target_device_id}`,
+      detail: `Transferred to ${targetDeviceId}`,
       metadata: {
         code,
-        pending_transfer_id: pendingTransferId,
-        source_device_id: sourceDeviceId,
-        target_device_id: transfer.target_device_id,
+        source_device_id: codeRow.source_device_id,
+        target_device_id: targetDeviceId,
       },
     })
     await client.query('COMMIT')
-    deviceSubscriptionBus.emit('update', { deviceId: sourceDeviceId })
-    deviceSubscriptionBus.emit('update', { deviceId: String(transfer.target_device_id) })
-    emitTransferScoped('transfer_completed', {
-      code,
-      pending_transfer_id: pendingTransferId,
-      source_device_id: sourceDeviceId,
-      target_device_id: transfer.target_device_id,
-    })
-    emitTransferScoped('subscription_revoked', {
-      device_id: sourceDeviceId,
-      pending_transfer_id: pendingTransferId,
-      source_device_id: sourceDeviceId,
-      target_device_id: transfer.target_device_id,
-      reason: 'transferred',
-    })
-    return res.json({
-      ok: true,
-      approved: true,
-      pending_transfer_id: pendingTransferId,
-      source_device_id: sourceDeviceId,
-      target_device_id: transfer.target_device_id,
-    })
+    deviceSubscriptionBus.emit('update', { deviceId: codeRow.source_device_id })
+    deviceSubscriptionBus.emit('update', { deviceId: targetDeviceId })
+    return res.json({ ok: true, source_device_id: codeRow.source_device_id, target_device_id: targetDeviceId })
   } catch (e) {
-    await client.query('ROLLBACK').catch(() => {})
-    console.error('[transfer/decision]', e)
+    await client.query('ROLLBACK')
+    console.error('[transfer/confirm]', e)
     return res.status(500).json({ error: String(e.message || e) })
   } finally {
     client.release()

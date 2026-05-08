@@ -78,7 +78,6 @@ restApi.get('/', (_req, res) => {
       '/transfer-codes',
       '/transfer/request',
       '/transfer/confirm',
-      '/transfer/decision',
       '/transfer/admin-force',
       '/transfer/admin-force-phone',
       '/subscription/recover',
