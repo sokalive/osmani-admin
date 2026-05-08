@@ -121,7 +121,6 @@ async function ensureTransferSettingsInfrastructure(pool) {
     INSERT INTO app_settings (key, value)
     VALUES
       ('transfer_mode', 'confirmation'),
-      ('transfer_enabled', 'true'),
       ('transfer_daily_limit', '5'),
       ('transfer_weekly_limit', '15'),
       ('transfer_cooldown_minutes', '60')
@@ -159,61 +158,14 @@ async function readAppSettings(pool, defaults) {
 
 const TRANSFER_SETTING_KEYS = {
   mode: 'transfer_mode',
-  enabled: 'transfer_enabled',
   daily: 'transfer_daily_limit',
   weekly: 'transfer_weekly_limit',
   cooldown: 'transfer_cooldown_minutes',
 }
 
-/** Persisted `transfer_enabled` text: only explicit true-ish values enable; empty / unknown = off (no default-on). */
-function parsePersistedTransferEnabledStrict(raw) {
-  const s = String(raw ?? '').trim().toLowerCase()
-  if (!s) return false
-  return ['1', 'true', 'yes', 'on'].includes(s)
-}
-
-const TRANSFER_DISABLED_CLIENT_MESSAGE =
-  'Timu Yetu Ya Ufundi imezima huduma hii kwa muda. Tafadhali wasiliana na mhudumu kama unahitaji msaada.'
-
-function parseBoolInput(v, fallback = true) {
-  if (typeof v === 'boolean') return v
-  const s = String(v ?? '')
-    .trim()
-    .toLowerCase()
-  if (!s) return fallback
-  if (['1', 'true', 'yes', 'on'].includes(s)) return true
-  if (['0', 'false', 'no', 'off'].includes(s)) return false
-  return fallback
-}
-
-function parseBoolDetailed(v, fallback = true) {
-  if (v === null || v === undefined) {
-    return { value: fallback, source: String(v), raw: v, fallbackUsed: true }
-  }
-  const type = typeof v
-  if (type === 'boolean') {
-    return { value: v, source: 'boolean', raw: v, fallbackUsed: false }
-  }
-  const s = String(v ?? '')
-    .trim()
-    .toLowerCase()
-  if (!s) return { value: fallback, source: 'empty', raw: v, fallbackUsed: true }
-  if (['1', 'true', 'yes', 'on', 't'].includes(s)) {
-    return { value: true, source: 'string_true', raw: v, fallbackUsed: false }
-  }
-  if (['0', 'false', 'no', 'off', 'f'].includes(s)) {
-    return { value: false, source: 'string_false', raw: v, fallbackUsed: false }
-  }
-  return { value: fallback, source: 'unrecognized', raw: v, fallbackUsed: true }
-}
-
-function bodyHasExplicitTransferEnabled(body) {
-  if (!body || typeof body !== 'object') return false
-  return (
-    Object.prototype.hasOwnProperty.call(body, 'transferEnabled') ||
-    Object.prototype.hasOwnProperty.call(body, 'transfer_enabled')
-  )
-}
+/** Exact client copy for POST /transfer/request when daily / weekly caps are exceeded. */
+const TRANSFER_LIMIT_FORBIDDEN_MESSAGE =
+  'Umefikia kiwango cha mwisho cha kuamisha kifurushi. Tafadhali wasiliana na muhudumu kama unahitaji kuamisha kifurushi tena.'
 
 async function readTransferSettingsLive(pool) {
   await ensureTransferSettingsInfrastructure(pool)
@@ -243,10 +195,8 @@ async function readTransferSettingsLive(pool) {
   if (missingKeys.length > 0) {
     throw new Error(`Missing transfer settings rows in app_settings: ${missingKeys.join(', ')}`)
   }
-  const enabledCell = String(byKey[TRANSFER_SETTING_KEYS.enabled] ?? '').trim()
   return {
     transferMode: byKey[TRANSFER_SETTING_KEYS.mode] === 'manual' ? 'manual' : 'confirmation',
-    transferEnabled: parsePersistedTransferEnabledStrict(enabledCell),
     dailyLimit: toInt(byKey[TRANSFER_SETTING_KEYS.daily], 5, 1, 1000),
     weeklyLimit: toInt(byKey[TRANSFER_SETTING_KEYS.weekly], 15, 1, 5000),
     cooldownMinutes: toInt(byKey[TRANSFER_SETTING_KEYS.cooldown], 60, 1, 1440),
@@ -434,7 +384,6 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
     )
     const responseBody = {
       transferMode: live.transferMode,
-      transferEnabled: live.transferEnabled,
       dailyLimit: live.dailyLimit,
       weeklyLimit: live.weeklyLimit,
       cooldownMinutes: live.cooldownMinutes,
@@ -471,83 +420,31 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     console.log('[device-control] PUT raw req.body keys', Object.keys(b))
     await client.query('BEGIN')
     const before = await readTransferSettingsLive(client)
-    const explicitTE = bodyHasExplicitTransferEnabled(b)
-    const rawTransferEnabled = Object.prototype.hasOwnProperty.call(b, 'transferEnabled')
-      ? b.transferEnabled
-      : b.transfer_enabled
-    let parsedEnabled
-    if (!explicitTE) {
-      parsedEnabled = {
-        value: before.transferEnabled,
-        source: 'preserved_not_in_body',
-        raw: undefined,
-        fallbackUsed: false,
-      }
-    } else if (rawTransferEnabled === '') {
-      parsedEnabled = {
-        value: before.transferEnabled,
-        source: 'preserved_empty_string',
-        raw: rawTransferEnabled,
-        fallbackUsed: false,
-      }
-    } else {
-      parsedEnabled = parseBoolDetailed(rawTransferEnabled, before.transferEnabled)
-    }
     const payload = {
       transferMode: String(b.transferMode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
-      transferEnabled: parsedEnabled.value,
       dailyLimit: toInt(b.dailyLimit, before.dailyLimit, 1, 1000),
       weeklyLimit: toInt(b.weeklyLimit, before.weeklyLimit, 1, 5000),
       cooldownMinutes: toInt(b.cooldownMinutes, before.cooldownMinutes, 1, 1440),
     }
     console.log('[device-control] PUT incoming payload', {
-      transferEnabledExplicit: explicitTE,
-      transferEnabledRaw: rawTransferEnabled,
-      transferEnabledType: typeof rawTransferEnabled,
-      parsedEnabled,
       beforeSnapshot: {
-        transferEnabled: before.transferEnabled,
         dailyLimit: before.dailyLimit,
         weeklyLimit: before.weeklyLimit,
         cooldownMinutes: before.cooldownMinutes,
       },
     })
-    const beforeEnabledRow = await client.query(
-      `SELECT key, value, updated_at FROM app_settings WHERE key = $1 FOR UPDATE`,
-      [TRANSFER_SETTING_KEYS.enabled],
-    )
-    const sqlWriteEnabled = payload.transferEnabled ? 'true' : 'false'
     const upsertResults = await saveAppSettings(client, {
       [TRANSFER_SETTING_KEYS.mode]: payload.transferMode,
-      [TRANSFER_SETTING_KEYS.enabled]: sqlWriteEnabled,
       [TRANSFER_SETTING_KEYS.daily]: payload.dailyLimit,
       [TRANSFER_SETTING_KEYS.weekly]: payload.weeklyLimit,
       [TRANSFER_SETTING_KEYS.cooldown]: payload.cooldownMinutes,
     })
     console.log('[device-control] PUT upsert rowCount/returned', upsertResults)
     const live = await readTransferSettingsLive(client)
-    const afterEnabledRow = await client.query(
-      `SELECT key, value, updated_at FROM app_settings WHERE key = $1`,
-      [TRANSFER_SETTING_KEYS.enabled],
-    )
-    const persistedEnabledValue = String(afterEnabledRow.rows[0]?.value ?? '')
-    if (persistedEnabledValue !== sqlWriteEnabled) {
-      throw new Error(
-        `transfer_enabled write mismatch: expected=${sqlWriteEnabled} persisted=${persistedEnabledValue || '<empty>'}`,
-      )
-    }
     await client.query('COMMIT')
-    const postCommitEnabledRow = await pool.query(
-      `SELECT key, value
-       FROM app_settings
-       WHERE key = $1`,
-      [TRANSFER_SETTING_KEYS.enabled],
-    )
-    console.log('[device-control] PUT post-commit literal SELECT transfer_enabled row', postCommitEnabledRow.rows[0] || null)
     emitSync('app_settings_changed', payload)
     const responseBody = {
       transferMode: live.transferMode,
-      transferEnabled: live.transferEnabled,
       dailyLimit: live.dailyLimit,
       weeklyLimit: live.weeklyLimit,
       cooldownMinutes: live.cooldownMinutes,
@@ -555,23 +452,15 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       logs: Array.isArray(b.logs) ? b.logs : [],
     }
     console.log('[device-control] PUT save payload', payload)
-    console.log('[device-control] PUT transfer_enabled write', {
-      beforeRow: beforeEnabledRow.rows[0] || null,
-      sqlWriteEnabled,
-      afterRowInTxn: afterEnabledRow.rows[0] || null,
-      afterRowPostCommit: postCommitEnabledRow.rows[0] || null,
-    })
     console.log('[device-control] PUT old->new', {
       old: {
         transferMode: before.transferMode,
-        transferEnabled: before.transferEnabled,
         dailyLimit: before.dailyLimit,
         weeklyLimit: before.weeklyLimit,
         cooldownMinutes: before.cooldownMinutes,
       },
       next: {
         transferMode: live.transferMode,
-        transferEnabled: live.transferEnabled,
         dailyLimit: live.dailyLimit,
         weeklyLimit: live.weeklyLimit,
         cooldownMinutes: live.cooldownMinutes,
@@ -624,6 +513,7 @@ deviceSecurityRouter.get('/settings/security-suite', async (_req, res) => {
       })),
       alerts: alertRows.rows.map((r) => ({
         id: String(r.id),
+        actor: String(r.actor || ''),
         title: String(r.event_type || r.actor || 'Security alert'),
         deviceOrIp: String(r.detail || ''),
         time: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
@@ -692,6 +582,7 @@ deviceSecurityRouter.put('/settings/security-suite', async (req, res) => {
       blockedUsers,
       alerts: alertRows.rows.map((r) => ({
         id: String(r.id),
+        actor: String(r.actor || ''),
         title: String(r.event_type || r.actor || 'Security alert'),
         deviceOrIp: String(r.detail || ''),
         time: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
@@ -1045,19 +936,6 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
     await cleanupSecurity(pool)
 
     const livePolicy = await readTransferSettingsLive(pool)
-    if (!livePolicy.transferEnabled) {
-      const responseBody = {
-        ok: false,
-        code: 'TRANSFER_DISABLED',
-        error: TRANSFER_DISABLED_CLIENT_MESSAGE,
-        maintenance: true,
-      }
-      console.warn('[transfer/request] rejected: TRANSFER_DISABLED (persisted transfer_enabled is not truthy)', {
-        persistedRows: livePolicy.dbRows?.filter((r) => r.key === TRANSFER_SETTING_KEYS.enabled),
-      })
-      console.log('[transfer/request] response body', responseBody)
-      return res.status(403).json(responseBody)
-    }
 
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const sourceDeviceId = text(b.source_device_id ?? b.device_id, 128)
@@ -1084,7 +962,6 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
     const fpHash = fingerprintHash(b.target_fingerprint || b.fingerprint)
     console.log('[transfer/request] policy snapshot', {
       sourceDeviceId,
-      transferEnabled: livePolicy.transferEnabled,
       cooldownMinutes: livePolicy.cooldownMinutes,
       dailyLimit: livePolicy.dailyLimit,
       weeklyLimit: livePolicy.weeklyLimit,
@@ -1098,14 +975,11 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
       livePolicy.weeklyLimit,
     )
     if (!limits.ok) {
+      const isDaily = limits.reason === 'Daily transfer limit reached'
+      const isWeekly = limits.reason === 'Weekly transfer limit reached'
+      const isCooldown = limits.reason === 'Transfer cooldown active'
       const reasonCode =
-        limits.reason === 'Daily transfer limit reached'
-          ? 'daily_limit_reached'
-          : limits.reason === 'Weekly transfer limit reached'
-            ? 'weekly_limit_reached'
-            : limits.reason === 'Transfer cooldown active'
-              ? 'cooldown_active'
-              : 'transfer_rejected'
+        isDaily ? 'TRANSFER_DAILY_LIMIT' : isWeekly ? 'TRANSFER_WEEKLY_LIMIT' : isCooldown ? 'cooldown_active' : 'transfer_rejected'
       await logSecurityEvent(pool, {
         actor: sourceDeviceId,
         eventType: 'Transfer request',
@@ -1113,7 +987,7 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
         detail: limits.reason,
         metadata: { source_device_id: sourceDeviceId, reason: reasonCode },
       })
-      if (reasonCode === 'cooldown_active') {
+      if (isCooldown) {
         console.warn('[transfer/request] rejected: cooldown active', {
           sourceDeviceId,
           retryAfterSec: limits.retryAfterSec,
@@ -1121,14 +995,25 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
           dayCount: limits.dayCount,
           weekCount: limits.weekCount,
         })
-      } else if (reasonCode === 'daily_limit_reached') {
+        const responseBody = {
+          ok: false,
+          code: reasonCode,
+          error: limits.reason,
+          retryAfterSec: limits.retryAfterSec || null,
+          cooldownUntilMs: limits.cooldownUntilMs || null,
+        }
+        console.log('[transfer/request] response body', responseBody)
+        return res.status(429).json(responseBody)
+      }
+      if (isDaily) {
         console.warn('[transfer/request] rejected: daily limit reached', {
           sourceDeviceId,
           dayCount: limits.dayCount,
           dailyLimit: livePolicy.dailyLimit,
           weekCount: limits.weekCount,
         })
-      } else if (reasonCode === 'weekly_limit_reached') {
+      }
+      if (isWeekly) {
         console.warn('[transfer/request] rejected: weekly limit reached', {
           sourceDeviceId,
           weekCount: limits.weekCount,
@@ -1136,12 +1021,19 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
           dayCount: limits.dayCount,
         })
       }
+      if (isDaily || isWeekly) {
+        const responseBody = {
+          ok: false,
+          code: reasonCode,
+          error: TRANSFER_LIMIT_FORBIDDEN_MESSAGE,
+        }
+        console.log('[transfer/request] response body', responseBody)
+        return res.status(403).json(responseBody)
+      }
       const responseBody = {
         ok: false,
         code: reasonCode,
         error: limits.reason,
-        retryAfterSec: limits.retryAfterSec || null,
-        cooldownUntilMs: limits.cooldownUntilMs || null,
       }
       console.log('[transfer/request] response body', responseBody)
       return res.status(429).json(responseBody)

@@ -21,7 +21,6 @@ import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentPro
 import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
-import { debugTransferDiagnosticsRouter } from './debugTransferDiagnostics.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 
 const FILES = {
@@ -94,8 +93,6 @@ restApi.get('/', (_req, res) => {
       '/sync/stream',
       '/webhooks/zenopay',
       '/dashboard',
-      '/debug/transfer-enabled',
-      '/debug/set-transfer-enabled',
     ],
   })
 })
@@ -148,7 +145,6 @@ restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
 restApi.use(deviceSecurityRouter)
-restApi.use('/debug', debugTransferDiagnosticsRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)

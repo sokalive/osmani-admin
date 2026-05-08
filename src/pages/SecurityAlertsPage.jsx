@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Activity,
   ListChecks,
@@ -13,6 +14,7 @@ import { useToast } from '../context/ToastContext.jsx'
 import {
   deleteSecurityAlert,
   getSecuritySuite,
+  postAdminForceTransferPhone,
   postSecurityAlertsBulkDelete,
   postSecuritySuiteRestoreWhitelist,
   putSecuritySuite,
@@ -37,8 +39,18 @@ function normalizeSuite(raw) {
     protectionMode: raw.protectionMode === 'automatic' ? 'automatic' : 'manual',
     whitelist: Array.isArray(raw.whitelist) ? raw.whitelist : [],
     blockedUsers: Array.isArray(raw.blockedUsers) ? raw.blockedUsers : [],
-    alerts: Array.isArray(raw.alerts) ? raw.alerts : [],
+    alerts: Array.isArray(raw.alerts)
+      ? raw.alerts.map((a) => ({
+          ...a,
+          actor: typeof a.actor === 'string' ? a.actor.trim() : '',
+        }))
+      : [],
   }
+}
+
+function deviceIdFromAlert(alert) {
+  const actor = typeof alert.actor === 'string' ? alert.actor.trim() : ''
+  return actor || ''
 }
 
 function computeAlertStats(alerts) {
@@ -50,6 +62,7 @@ function computeAlertStats(alerts) {
 }
 
 function SecurityAlertsPage() {
+  const navigate = useNavigate()
   const { showToast } = useToast()
   const [suite, setSuite] = useState(() => normalizeSuite(null))
   const [protectionDraft, setProtectionDraft] = useState('manual')
@@ -193,6 +206,64 @@ function SecurityAlertsPage() {
       })
     },
     [persist, suite],
+  )
+
+  const persistBlock = useCallback(
+    async (deviceId, reason) => {
+      const id = String(deviceId ?? '').trim()
+      if (!id) {
+        showToast('error', 'No device id on this alert (actor empty).')
+        return
+      }
+      const blockedUsers = [
+        ...suite.blockedUsers.filter((b) => String(b.value ?? b.id) !== id),
+        { id, value: id, reason },
+      ]
+      const ok = await persist({ ...suite, blockedUsers })
+      if (ok) showToast('success', `Blocked · ${id.slice(0, 24)}${id.length > 24 ? '…' : ''}`)
+    },
+    [persist, showToast, suite],
+  )
+
+  const persistTrustDevice = useCallback(
+    async (deviceId) => {
+      const id = String(deviceId ?? '').trim()
+      if (!id) {
+        showToast('error', 'No device id on this alert (actor empty).')
+        return
+      }
+      const whitelist = [...suite.whitelist.filter((w) => String(w.value ?? w.id) !== id)]
+      whitelist.unshift({ id: newId(), value: id })
+      const ok = await persist({ ...suite, whitelist })
+      if (ok) showToast('success', `Trusted · ${id.slice(0, 24)}${id.length > 24 ? '…' : ''}`)
+    },
+    [persist, showToast, suite],
+  )
+
+  const handleForceFromAlert = useCallback(
+    async (alertActor) => {
+      const hinted = deviceIdFromAlert({ actor: alertActor })
+      const paymentPhone =
+        typeof window !== 'undefined'
+          ? window.prompt('Nambari ya kulipia (payment phone)', '')
+          : null
+      const targetDeviceId =
+        typeof window !== 'undefined' ? window.prompt('Device ID ya simu mpya', hinted || '') : null
+      const phone = String(paymentPhone ?? '').trim()
+      const target = String(targetDeviceId ?? '').trim()
+      if (!phone || !target) return
+      try {
+        await postAdminForceTransferPhone({
+          payment_phone: phone,
+          target_device_id: target,
+        })
+        showToast('success', 'Force transfer completed.')
+        await load()
+      } catch (e) {
+        showToast('error', e?.message || 'Force transfer failed')
+      }
+    },
+    [load, showToast],
   )
 
   const restoreWhitelistDefaults = useCallback(async () => {
@@ -420,15 +491,59 @@ function SecurityAlertsPage() {
                       {formatReadableDateTime(a.time || a.timestamp || a.createdAt)}
                     </p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-                    <span className="inline-flex rounded-lg px-3 py-1 text-[11px] font-bold uppercase tracking-wide ring-1 bg-red-500/20 text-red-200 ring-red-400/45">
+                  <div className="flex w-full min-w-[220px] flex-col gap-2 lg:max-w-xl lg:items-end">
+                    <span className="inline-flex self-start rounded-lg px-3 py-1 text-[11px] font-bold uppercase tracking-wide ring-1 bg-red-500/20 text-red-200 ring-red-400/45 lg:self-end">
                       Active
                     </span>
-                    <div className="flex gap-2">
+                    <div className="flex w-full flex-wrap gap-1.5 lg:justify-end">
+                      <button
+                        type="button"
+                        onClick={() => persistBlock(deviceIdFromAlert(a), '30m temporary block')}
+                        className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/20"
+                      >
+                        Block 30m
+                      </button>
                       <button
                         type="button"
                         onClick={() => deleteOne(a.id)}
-                        className="inline-flex items-center gap-1 rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/20"
+                        className="rounded-lg border border-sky-500/35 bg-sky-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-sky-100 hover:bg-sky-500/20"
+                      >
+                        Allow Once
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleForceFromAlert(a.actor)}
+                        className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-500/20"
+                      >
+                        Force Transfer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          persistBlock(deviceIdFromAlert(a), 'Account locked (security alert)')
+                        }
+                        className="rounded-lg border border-red-500/45 bg-red-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-red-100 hover:bg-red-500/25"
+                      >
+                        Lock Account
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => persistTrustDevice(deviceIdFromAlert(a))}
+                        className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/20"
+                      >
+                        Trust
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => navigate('/security-logs')}
+                        className="rounded-lg border border-slate-600 bg-slate-900/70 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+                      >
+                        View Logs
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteOne(a.id)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-red-500/35 bg-red-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-red-200 hover:bg-red-500/20"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         Delete

@@ -16,36 +16,12 @@ function newId() {
 function defaultDevice() {
   return {
     transferMode: 'confirmation',
-    transferEnabled: true,
     dailyLimit: 5,
     weeklyLimit: 15,
     cooldownMinutes: 60,
     pending: [],
     logs: [],
   }
-}
-
-/** API may send camelCase or snake_case; never use Boolean(x) on strings — Boolean("false") is true in JS. */
-function parseTransferEnabledFromApi(s) {
-  const hasCamel = Object.prototype.hasOwnProperty.call(s, 'transferEnabled')
-  const hasSnake = Object.prototype.hasOwnProperty.call(s, 'transfer_enabled')
-  if (!hasCamel && !hasSnake) {
-    console.warn('[device-control-ui] transferEnabled / transfer_enabled absent in API payload; defaulting ON', {
-      topLevelKeys: Object.keys(s),
-    })
-    return true
-  }
-  const raw = hasCamel ? s.transferEnabled : s.transfer_enabled
-  if (raw === null) {
-    console.warn('[device-control-ui] transferEnabled is null; defaulting ON')
-    return true
-  }
-  if (typeof raw === 'boolean') return raw
-  if (typeof raw === 'number') return raw !== 0
-  const t = String(raw).trim().toLowerCase()
-  if (['true', '1', 'yes', 'on'].includes(t)) return true
-  if (['false', '0', 'no', 'off'].includes(t)) return false
-  return Boolean(raw)
 }
 
 function toSafeNonNegInt(v, fallback) {
@@ -56,17 +32,8 @@ function toSafeNonNegInt(v, fallback) {
 
 function normalizeDeviceControlFromServer(s) {
   if (!s || typeof s !== 'object') throw new Error('Invalid settings response')
-  const parsedTransfer = parseTransferEnabledFromApi(s)
-  console.log('[device-control-ui] normalize transferEnabled', {
-    hasCamelKey: Object.prototype.hasOwnProperty.call(s, 'transferEnabled'),
-    hasSnakeKey: Object.prototype.hasOwnProperty.call(s, 'transfer_enabled'),
-    rawCamel: s.transferEnabled,
-    rawSnake: s.transfer_enabled,
-    parsedBoolean: parsedTransfer,
-  })
   return {
     transferMode: String(s.transferMode || s.transfer_mode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
-    transferEnabled: parsedTransfer,
     dailyLimit: toSafeNonNegInt(s.dailyLimit ?? s.daily_limit, 5),
     weeklyLimit: toSafeNonNegInt(s.weeklyLimit ?? s.weekly_limit, 15),
     cooldownMinutes: toSafeNonNegInt(s.cooldownMinutes ?? s.cooldown_minutes, 60),
@@ -91,7 +58,6 @@ function DeviceControlPage() {
   const [cfg, setCfg] = useState(() => defaultDevice())
   const [draft, setDraft] = useState(() => ({
     transferMode: defaultDevice().transferMode,
-    transferEnabled: defaultDevice().transferEnabled,
     dailyLimit: defaultDevice().dailyLimit,
     weeklyLimit: defaultDevice().weeklyLimit,
     cooldownMinutes: defaultDevice().cooldownMinutes,
@@ -105,18 +71,10 @@ function DeviceControlPage() {
   const loadCfg = useCallback(async () => {
     try {
       const s = await getDeviceControlSettings()
-      console.log('[device-control-ui] GET /settings/device-control raw response', JSON.stringify(s))
       const hydrated = normalizeDeviceControlFromServer(s)
       setCfg(hydrated)
       setDraft({
         transferMode: hydrated.transferMode,
-        transferEnabled: hydrated.transferEnabled,
-        dailyLimit: hydrated.dailyLimit,
-        weeklyLimit: hydrated.weeklyLimit,
-        cooldownMinutes: hydrated.cooldownMinutes,
-      })
-      console.log('[device-control-ui] state after refresh', {
-        transferEnabled: hydrated.transferEnabled,
         dailyLimit: hydrated.dailyLimit,
         weeklyLimit: hydrated.weeklyLimit,
         cooldownMinutes: hydrated.cooldownMinutes,
@@ -130,19 +88,9 @@ function DeviceControlPage() {
     loadCfg()
   }, [loadCfg])
 
-  useEffect(() => {
-    if (tab !== 'settings') return
-    console.log('[device-control-ui] toggle render props', {
-      draftTransferEnabled: draft.transferEnabled,
-      cfgTransferEnabled: cfg.transferEnabled,
-      switchVisualOn: Boolean(draft.transferEnabled),
-    })
-  }, [tab, draft.transferEnabled, cfg.transferEnabled])
-
   const dirty = useMemo(
     () =>
       draft.transferMode !== cfg.transferMode ||
-      Boolean(draft.transferEnabled) !== Boolean(cfg.transferEnabled) ||
       Number(draft.dailyLimit) !== cfg.dailyLimit ||
       Number(draft.weeklyLimit) !== cfg.weeklyLimit ||
       Number(draft.cooldownMinutes) !== cfg.cooldownMinutes,
@@ -165,24 +113,18 @@ function DeviceControlPage() {
 
   async function handleSaveSettings(e) {
     e.preventDefault()
-    console.log('[device-control-ui] toggle before save', {
-      transferEnabled: draft.transferEnabled,
-      transferMode: draft.transferMode,
-    })
     const daily = Math.max(1, Math.floor(Number(draft.dailyLimit)))
     const weekly = Math.max(daily, Math.floor(Number(draft.weeklyLimit)))
     const cool = Math.max(5, Math.floor(Number(draft.cooldownMinutes)))
     const next = appendLog('Device control settings saved.')({
       ...cfg,
       transferMode: draft.transferMode,
-      transferEnabled: Boolean(draft.transferEnabled),
       dailyLimit: daily,
       weeklyLimit: weekly,
       cooldownMinutes: cool,
     })
     const requestPayload = {
       transferMode: draft.transferMode,
-      transferEnabled: Boolean(draft.transferEnabled),
       dailyLimit: daily,
       weeklyLimit: weekly,
       cooldownMinutes: cool,
@@ -190,20 +132,11 @@ function DeviceControlPage() {
       logs: Array.isArray(next.logs) ? next.logs : [],
     }
     try {
-      console.log('[device-control-ui] payload sent', requestPayload)
       const saved = await putDeviceControlSettings(requestPayload)
-      console.log('[device-control-ui] saved settings response', saved)
       const hydrated = normalizeDeviceControlFromServer(saved)
       setCfg(hydrated)
       setDraft({
         transferMode: hydrated.transferMode,
-        transferEnabled: hydrated.transferEnabled,
-        dailyLimit: hydrated.dailyLimit,
-        weeklyLimit: hydrated.weeklyLimit,
-        cooldownMinutes: hydrated.cooldownMinutes,
-      })
-      console.log('[device-control-ui] state after save', {
-        transferEnabled: hydrated.transferEnabled,
         dailyLimit: hydrated.dailyLimit,
         weeklyLimit: hydrated.weeklyLimit,
         cooldownMinutes: hydrated.cooldownMinutes,
@@ -212,7 +145,7 @@ function DeviceControlPage() {
         actor: 'policy-engine',
         eventType: 'Policy enforcement',
         status: 'completed',
-        detail: `enabled:${draft.transferEnabled ? 'yes' : 'no'} · mode:${draft.transferMode} · daily ${daily} · weekly ${weekly} · cool ${cool}m`,
+        detail: `limits · mode:${draft.transferMode} · daily ${daily} · weekly ${weekly} · cool ${cool}m`,
       })
       showFlash('success', 'Settings saved.')
     } catch (err) {
@@ -269,7 +202,7 @@ function DeviceControlPage() {
         <header>
           <h1 className="text-2xl font-bold text-white sm:text-3xl">Device Control</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Transfer limits, pending queue, audit trail, and emergency actions
+            Transfer limits, pending queue, audit trail, and admin force transfer
           </p>
         </header>
 
@@ -301,36 +234,9 @@ function DeviceControlPage() {
           >
             <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
               <div>
-                <p className="text-sm font-medium text-slate-200">Ruhusu Uhamishaji wa Kifurushi</p>
-                <p className="text-xs text-slate-500">
-                  Ukizima, `/api/transfer/request` itareturn maintenance response kwa app users.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDraft((d) => ({ ...d, transferEnabled: !d.transferEnabled }))}
-                className={`inline-flex h-8 w-16 items-center rounded-full border px-1 transition ${
-                  draft.transferEnabled
-                    ? 'border-emerald-400/45 bg-emerald-500/20'
-                    : 'border-slate-600 bg-slate-800'
-                }`}
-                aria-label="Ruhusu Uhamishaji wa Kifurushi"
-              >
-                <span
-                  className={`h-6 w-6 rounded-full transition ${
-                    draft.transferEnabled
-                      ? 'translate-x-8 bg-emerald-300'
-                      : 'translate-x-0 bg-slate-400'
-                  }`}
-                />
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
-              <div>
                 <p className="text-sm font-medium text-slate-200">Transfer mode</p>
                 <p className="text-xs text-slate-500">
-                  Legacy setting retained for compatibility. Live flow is immediate transfer by code.
+                  Retained for compatibility with clients; transfer access is gated by persisted limits below.
                 </p>
               </div>
               <div className="flex gap-2">
