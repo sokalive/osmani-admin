@@ -757,6 +757,15 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
       await client.query('ROLLBACK')
       return res.status(400).json({ error: 'Transfer code not active' })
     }
+    const sourceDeviceId = String(codeRow.source_device_id || '').trim()
+    if (!sourceDeviceId) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Transfer code missing source device' })
+    }
+    if (sourceDeviceId === targetDeviceId) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Target device must differ from source device' })
+    }
     const expRes = await client.query(`SELECT now() < $1::timestamptz AS valid`, [codeRow.expires_at])
     if (!expRes.rows[0]?.valid) {
       await client.query(
@@ -771,7 +780,7 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
        FROM device_subscriptions
        WHERE device_id = $1
        FOR UPDATE`,
-      [codeRow.source_device_id],
+      [sourceDeviceId],
     )
     const sub = sourceSub.rows[0]
     if (!sub) {
@@ -780,13 +789,13 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
     }
     const validSubRes = await client.query(
       `SELECT (status = 'active' AND expires_at > now()) AS active FROM device_subscriptions WHERE device_id = $1`,
-      [codeRow.source_device_id],
+      [sourceDeviceId],
     )
     if (!validSubRes.rows[0]?.active) {
       await client.query('ROLLBACK')
       return res.status(400).json({ error: 'Source subscription expired' })
     }
-    await client.query(
+    const upsertTarget = await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
        VALUES ($1, 'active', $2, now(), $3, now(), $4)
        ON CONFLICT (device_id) DO UPDATE SET
@@ -794,26 +803,41 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
          expires_at = EXCLUDED.expires_at,
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
-         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
+         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)
+       RETURNING device_id, status, expires_at, transaction_id`,
       [targetDeviceId, sub.expires_at, `transfer:${code}`, targetFpHash],
     )
-    await client.query(
+    if (!upsertTarget.rows[0]) {
+      await client.query('ROLLBACK')
+      return res.status(500).json({ error: 'Target subscription activation failed' })
+    }
+    const revokeSource = await client.query(
       `UPDATE device_subscriptions
        SET status = 'pending', updated_at = now()
-       WHERE device_id = $1`,
-      [codeRow.source_device_id],
+       WHERE device_id = $1
+       RETURNING device_id, status, expires_at`,
+      [sourceDeviceId],
     )
-    await client.query(
+    if (!revokeSource.rows[0]) {
+      await client.query('ROLLBACK')
+      return res.status(500).json({ error: 'Source subscription revoke failed' })
+    }
+    const markCodeUsed = await client.query(
       `UPDATE transfer_codes
        SET status = 'used',
            target_device_id = $2,
            target_fingerprint_hash = COALESCE($3, target_fingerprint_hash),
            used_at = COALESCE(used_at, now()),
            updated_at = now()
-       WHERE id = $1`,
+       WHERE id = $1
+       RETURNING id, status, target_device_id`,
       [codeRow.id, targetDeviceId, targetFpHash],
     )
-    await client.query(
+    if (!markCodeUsed.rows[0]) {
+      await client.query('ROLLBACK')
+      return res.status(500).json({ error: 'Transfer code update failed' })
+    }
+    const updatedTransfers = await client.query(
       `UPDATE device_transfers
        SET status = 'completed',
            completed_at = now(),
@@ -823,21 +847,57 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
        WHERE code_id = $1`,
       [codeRow.id, targetDeviceId, targetFpHash],
     )
+    if ((updatedTransfers.rowCount || 0) === 0) {
+      await client.query(
+        `INSERT INTO device_transfers
+         (code_id, code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at, completed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'completed', 'confirmed_by_code', 'device', now(), now())`,
+        [codeRow.id, code, sourceDeviceId, targetDeviceId, sub.fingerprint_hash || null, targetFpHash],
+      )
+    }
+    const postState = await client.query(
+      `SELECT device_id, status, expires_at, (status = 'active' AND expires_at > now()) AS active_now
+       FROM device_subscriptions
+       WHERE device_id = ANY($1::text[])`,
+      [[sourceDeviceId, targetDeviceId]],
+    )
+    const sourceAfter = postState.rows.find((r) => String(r.device_id) === sourceDeviceId)
+    const targetAfter = postState.rows.find((r) => String(r.device_id) === targetDeviceId)
+    const sourceActiveNow = sourceAfter?.active_now === true
+    const targetActiveNow = targetAfter?.active_now === true
+    if (!targetAfter || !targetActiveNow) {
+      await client.query('ROLLBACK')
+      return res.status(500).json({ error: 'Transfer verification failed: target is not active after move' })
+    }
+    if (!sourceAfter || sourceActiveNow) {
+      await client.query('ROLLBACK')
+      return res.status(500).json({ error: 'Transfer verification failed: source still active after revoke' })
+    }
     await logSecurityEvent(client, {
-      actor: codeRow.source_device_id,
+      actor: sourceDeviceId,
       eventType: 'Transfer confirmation',
       status: 'completed',
       detail: `Transferred to ${targetDeviceId}`,
       metadata: {
         code,
-        source_device_id: codeRow.source_device_id,
+        source_device_id: sourceDeviceId,
         target_device_id: targetDeviceId,
+        source_active_after: sourceActiveNow,
+        target_active_after: targetActiveNow,
       },
     })
     await client.query('COMMIT')
-    deviceSubscriptionBus.emit('update', { deviceId: codeRow.source_device_id })
+    deviceSubscriptionBus.emit('update', { deviceId: sourceDeviceId })
     deviceSubscriptionBus.emit('update', { deviceId: targetDeviceId })
-    return res.json({ ok: true, source_device_id: codeRow.source_device_id, target_device_id: targetDeviceId })
+    return res.json({
+      ok: true,
+      source_device_id: sourceDeviceId,
+      target_device_id: targetDeviceId,
+      transferred: true,
+      source_active_after: false,
+      target_active_after: true,
+      expires_at: targetAfter.expires_at instanceof Date ? targetAfter.expires_at.toISOString() : String(targetAfter.expires_at),
+    })
   } catch (e) {
     await client.query('ROLLBACK')
     console.error('[transfer/confirm]', e)
