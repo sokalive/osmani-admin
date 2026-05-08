@@ -25,6 +25,19 @@ function defaultDevice() {
   }
 }
 
+function normalizeDeviceControlFromServer(s) {
+  if (!s || typeof s !== 'object') throw new Error('Invalid settings response')
+  return {
+    transferMode: String(s.transferMode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
+    transferEnabled: Boolean(s.transferEnabled),
+    dailyLimit: Number(s.dailyLimit),
+    weeklyLimit: Number(s.weeklyLimit),
+    cooldownMinutes: Number(s.cooldownMinutes),
+    pending: Array.isArray(s.pending) ? s.pending : [],
+    logs: Array.isArray(s.logs) ? s.logs : [],
+  }
+}
+
 function inputClass() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
 }
@@ -56,14 +69,20 @@ function DeviceControlPage() {
     try {
       const s = await getDeviceControlSettings()
       console.log('[device-control-ui] fetched settings', s)
-      const merged = { ...defaultDevice(), ...s }
-      setCfg(merged)
+      const hydrated = normalizeDeviceControlFromServer(s)
+      setCfg(hydrated)
       setDraft({
-        transferMode: merged.transferMode,
-        transferEnabled: merged.transferEnabled !== false,
-        dailyLimit: merged.dailyLimit,
-        weeklyLimit: merged.weeklyLimit,
-        cooldownMinutes: merged.cooldownMinutes,
+        transferMode: hydrated.transferMode,
+        transferEnabled: hydrated.transferEnabled,
+        dailyLimit: hydrated.dailyLimit,
+        weeklyLimit: hydrated.weeklyLimit,
+        cooldownMinutes: hydrated.cooldownMinutes,
+      })
+      console.log('[device-control-ui] state after refresh', {
+        transferEnabled: hydrated.transferEnabled,
+        dailyLimit: hydrated.dailyLimit,
+        weeklyLimit: hydrated.weeklyLimit,
+        cooldownMinutes: hydrated.cooldownMinutes,
       })
     } catch (e) {
       showToast('error', e?.message || 'Could not load device control')
@@ -100,6 +119,10 @@ function DeviceControlPage() {
 
   async function handleSaveSettings(e) {
     e.preventDefault()
+    console.log('[device-control-ui] toggle before save', {
+      transferEnabled: draft.transferEnabled,
+      transferMode: draft.transferMode,
+    })
     const daily = Math.max(1, Math.floor(Number(draft.dailyLimit)))
     const weekly = Math.max(daily, Math.floor(Number(draft.weeklyLimit)))
     const cool = Math.max(5, Math.floor(Number(draft.cooldownMinutes)))
@@ -112,15 +135,23 @@ function DeviceControlPage() {
       cooldownMinutes: cool,
     })
     try {
+      console.log('[device-control-ui] payload sent', next)
       const saved = await putDeviceControlSettings(next)
       console.log('[device-control-ui] saved settings response', saved)
-      setCfg(saved)
+      const hydrated = normalizeDeviceControlFromServer(saved)
+      setCfg(hydrated)
       setDraft({
-        transferMode: saved.transferMode,
-        transferEnabled: saved.transferEnabled !== false,
-        dailyLimit: saved.dailyLimit,
-        weeklyLimit: saved.weeklyLimit,
-        cooldownMinutes: saved.cooldownMinutes,
+        transferMode: hydrated.transferMode,
+        transferEnabled: hydrated.transferEnabled,
+        dailyLimit: hydrated.dailyLimit,
+        weeklyLimit: hydrated.weeklyLimit,
+        cooldownMinutes: hydrated.cooldownMinutes,
+      })
+      console.log('[device-control-ui] state after save', {
+        transferEnabled: hydrated.transferEnabled,
+        dailyLimit: hydrated.dailyLimit,
+        weeklyLimit: hydrated.weeklyLimit,
+        cooldownMinutes: hydrated.cooldownMinutes,
       })
       await appendSecurityLog({
         actor: 'policy-engine',

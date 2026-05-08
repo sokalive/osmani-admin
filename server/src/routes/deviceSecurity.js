@@ -135,14 +135,6 @@ const TRANSFER_SETTING_KEYS = {
   cooldown: 'transfer_cooldown_minutes',
 }
 
-const TRANSFER_SETTING_DEFAULTS = {
-  [TRANSFER_SETTING_KEYS.mode]: 'confirmation',
-  [TRANSFER_SETTING_KEYS.enabled]: 'true',
-  [TRANSFER_SETTING_KEYS.daily]: '5',
-  [TRANSFER_SETTING_KEYS.weekly]: '15',
-  [TRANSFER_SETTING_KEYS.cooldown]: '60',
-}
-
 function parseBoolInput(v, fallback = true) {
   if (typeof v === 'boolean') return v
   const s = String(v ?? '')
@@ -155,7 +147,6 @@ function parseBoolInput(v, fallback = true) {
 }
 
 async function readTransferSettingsLive(pool) {
-  await saveAppSettings(pool, TRANSFER_SETTING_DEFAULTS)
   const keys = Object.values(TRANSFER_SETTING_KEYS)
   const { rows } = await pool.query(
     `SELECT key, value, updated_at
@@ -165,6 +156,10 @@ async function readTransferSettingsLive(pool) {
   )
   const byKey = {}
   for (const r of rows) byKey[String(r.key)] = String(r.value ?? '')
+  const missingKeys = keys.filter((k) => !(k in byKey))
+  if (missingKeys.length > 0) {
+    throw new Error(`Missing transfer settings rows in app_settings: ${missingKeys.join(', ')}`)
+  }
   return {
     transferMode: byKey[TRANSFER_SETTING_KEYS.mode] === 'manual' ? 'manual' : 'confirmation',
     transferEnabled: parseBoolInput(byKey[TRANSFER_SETTING_KEYS.enabled], true),
@@ -383,10 +378,11 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
 })
 
 deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
+  const client = (await getPool()?.connect?.()) || null
   try {
     const pool = getPool()
-    if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    await ensureSecurityTables(pool)
+    if (!pool || !client) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(client)
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const payload = {
       transferMode: String(b.transferMode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
@@ -395,15 +391,18 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       weeklyLimit: toInt(b.weeklyLimit, 15, 1, 5000),
       cooldownMinutes: toInt(b.cooldownMinutes, 60, 1, 1440),
     }
-    await saveAppSettings(pool, {
+    await client.query('BEGIN')
+    const before = await readTransferSettingsLive(client)
+    await saveAppSettings(client, {
       [TRANSFER_SETTING_KEYS.mode]: payload.transferMode,
       [TRANSFER_SETTING_KEYS.enabled]: payload.transferEnabled ? 'true' : 'false',
       [TRANSFER_SETTING_KEYS.daily]: payload.dailyLimit,
       [TRANSFER_SETTING_KEYS.weekly]: payload.weeklyLimit,
       [TRANSFER_SETTING_KEYS.cooldown]: payload.cooldownMinutes,
     })
+    const live = await readTransferSettingsLive(client)
+    await client.query('COMMIT')
     emitSync('app_settings_changed', payload)
-    const live = await readTransferSettingsLive(pool)
     const responseBody = {
       transferMode: live.transferMode,
       transferEnabled: live.transferEnabled,
@@ -414,12 +413,32 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       logs: Array.isArray(b.logs) ? b.logs : [],
     }
     console.log('[device-control] PUT save payload', payload)
+    console.log('[device-control] PUT old->new', {
+      old: {
+        transferMode: before.transferMode,
+        transferEnabled: before.transferEnabled,
+        dailyLimit: before.dailyLimit,
+        weeklyLimit: before.weeklyLimit,
+        cooldownMinutes: before.cooldownMinutes,
+      },
+      next: {
+        transferMode: live.transferMode,
+        transferEnabled: live.transferEnabled,
+        dailyLimit: live.dailyLimit,
+        weeklyLimit: live.weeklyLimit,
+        cooldownMinutes: live.cooldownMinutes,
+      },
+    })
     console.log('[device-control] PUT persisted rows', live.dbRows)
+    console.log('[device-control] PUT commit success', { ok: true })
     console.log('[device-control] PUT settings response', responseBody)
     return res.json(responseBody)
   } catch (e) {
+    if (client) await client.query('ROLLBACK').catch(() => {})
     console.error('[device-control] PUT', e)
     return res.status(500).json({ error: String(e.message || e) })
+  } finally {
+    if (client) client.release()
   }
 })
 
