@@ -140,6 +140,14 @@ function emitSync(event, payload) {
 }
 
 function emitTransferScoped(event, payload) {
+  if (event === 'transfer_confirmation_required') {
+    console.log('[transfer-sse] emit transfer_confirmation_required', {
+      source_device_id: payload?.source_device_id || null,
+      target_device_id: payload?.target_device_id || null,
+      pending_transfer_id: payload?.pending_transfer_id || null,
+      code: payload?.code || null,
+    })
+  }
   emitSync(event, { scope: 'device', ...payload })
 }
 
