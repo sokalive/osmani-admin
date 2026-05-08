@@ -16,6 +16,7 @@ function newId() {
 function defaultDevice() {
   return {
     transferMode: 'confirmation',
+    transferEnabled: true,
     dailyLimit: 5,
     weeklyLimit: 15,
     cooldownMinutes: 60,
@@ -40,6 +41,7 @@ function DeviceControlPage() {
   const [cfg, setCfg] = useState(() => defaultDevice())
   const [draft, setDraft] = useState(() => ({
     transferMode: defaultDevice().transferMode,
+    transferEnabled: defaultDevice().transferEnabled,
     dailyLimit: defaultDevice().dailyLimit,
     weeklyLimit: defaultDevice().weeklyLimit,
     cooldownMinutes: defaultDevice().cooldownMinutes,
@@ -57,6 +59,7 @@ function DeviceControlPage() {
       setCfg(merged)
       setDraft({
         transferMode: merged.transferMode,
+        transferEnabled: merged.transferEnabled !== false,
         dailyLimit: merged.dailyLimit,
         weeklyLimit: merged.weeklyLimit,
         cooldownMinutes: merged.cooldownMinutes,
@@ -73,6 +76,7 @@ function DeviceControlPage() {
   const dirty = useMemo(
     () =>
       draft.transferMode !== cfg.transferMode ||
+      Boolean(draft.transferEnabled) !== Boolean(cfg.transferEnabled) ||
       Number(draft.dailyLimit) !== cfg.dailyLimit ||
       Number(draft.weeklyLimit) !== cfg.weeklyLimit ||
       Number(draft.cooldownMinutes) !== cfg.cooldownMinutes,
@@ -101,6 +105,7 @@ function DeviceControlPage() {
     const next = appendLog('Device control settings saved.')({
       ...cfg,
       transferMode: draft.transferMode,
+      transferEnabled: Boolean(draft.transferEnabled),
       dailyLimit: daily,
       weeklyLimit: weekly,
       cooldownMinutes: cool,
@@ -110,6 +115,7 @@ function DeviceControlPage() {
       setCfg(saved)
       setDraft({
         transferMode: saved.transferMode,
+        transferEnabled: saved.transferEnabled !== false,
         dailyLimit: saved.dailyLimit,
         weeklyLimit: saved.weeklyLimit,
         cooldownMinutes: saved.cooldownMinutes,
@@ -118,7 +124,7 @@ function DeviceControlPage() {
         actor: 'policy-engine',
         eventType: 'Policy enforcement',
         status: 'completed',
-        detail: `mode:${draft.transferMode} · daily ${daily} · weekly ${weekly} · cool ${cool}m`,
+        detail: `enabled:${draft.transferEnabled ? 'yes' : 'no'} · mode:${draft.transferMode} · daily ${daily} · weekly ${weekly} · cool ${cool}m`,
       })
       showFlash('success', 'Settings saved.')
     } catch (err) {
@@ -205,6 +211,33 @@ function DeviceControlPage() {
             onSubmit={handleSaveSettings}
             className="max-w-xl space-y-5 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
           >
+            <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-slate-200">Ruhusu Uhamishaji wa Kifurushi</p>
+                <p className="text-xs text-slate-500">
+                  Ukizima, `/api/transfer/request` itareturn maintenance response kwa app users.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDraft((d) => ({ ...d, transferEnabled: !d.transferEnabled }))}
+                className={`inline-flex h-8 w-16 items-center rounded-full border px-1 transition ${
+                  draft.transferEnabled
+                    ? 'border-emerald-400/45 bg-emerald-500/20'
+                    : 'border-slate-600 bg-slate-800'
+                }`}
+                aria-label="Ruhusu Uhamishaji wa Kifurushi"
+              >
+                <span
+                  className={`h-6 w-6 rounded-full transition ${
+                    draft.transferEnabled
+                      ? 'translate-x-8 bg-emerald-300'
+                      : 'translate-x-0 bg-slate-400'
+                  }`}
+                />
+              </button>
+            </div>
+
             <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
               <div>
                 <p className="text-sm font-medium text-slate-200">Transfer mode</p>

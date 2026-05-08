@@ -62,6 +62,7 @@ export async function ensureBillingTables(client) {
     INSERT INTO app_settings (key, value)
     VALUES
       ('transfer_mode', 'confirmation'),
+      ('transfer_enabled', 'true'),
       ('transfer_daily_limit', '5'),
       ('transfer_weekly_limit', '15'),
       ('transfer_cooldown_minutes', '60')

@@ -171,7 +171,7 @@ async function checkTransferLimits(pool, sourceDeviceId, cooldownMinutes, dailyL
        MAX(created_at) AS last_at
      FROM device_transfers
      WHERE source_device_id = $1
-       AND status = 'completed'`,
+       AND status IN ('completed', 'approved')`,
     [sourceDeviceId],
   )
   const r = rows[0] || {}
@@ -274,6 +274,7 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
     await ensureSecurityTables(pool)
     const defaults = {
       transfer_mode: 'confirmation',
+      transfer_enabled: 'true',
       transfer_daily_limit: '5',
       transfer_weekly_limit: '15',
       transfer_cooldown_minutes: '60',
@@ -294,6 +295,7 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
     )
     return res.json({
       transferMode: values.transfer_mode === 'manual' ? 'manual' : 'confirmation',
+      transferEnabled: String(values.transfer_enabled).toLowerCase() !== 'false',
       dailyLimit: toInt(values.transfer_daily_limit, 5, 1, 1000),
       weeklyLimit: toInt(values.transfer_weekly_limit, 15, 1, 5000),
       cooldownMinutes: toInt(values.transfer_cooldown_minutes, 60, 1, 1440),
@@ -325,12 +327,14 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const payload = {
       transferMode: String(b.transferMode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
+      transferEnabled: b.transferEnabled !== false,
       dailyLimit: toInt(b.dailyLimit, 5, 1, 1000),
       weeklyLimit: toInt(b.weeklyLimit, 15, 1, 5000),
       cooldownMinutes: toInt(b.cooldownMinutes, 60, 1, 1440),
     }
     await saveAppSettings(pool, {
       transfer_mode: payload.transferMode,
+      transfer_enabled: payload.transferEnabled ? 'true' : 'false',
       transfer_daily_limit: payload.dailyLimit,
       transfer_weekly_limit: payload.weeklyLimit,
       transfer_cooldown_minutes: payload.cooldownMinutes,
@@ -821,10 +825,30 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
     const fpHash = fingerprintHash(b.target_fingerprint || b.fingerprint)
     const cfg = await readAppSettings(pool, {
       transfer_mode: 'confirmation',
+      transfer_enabled: 'true',
       transfer_daily_limit: '5',
       transfer_weekly_limit: '15',
       transfer_cooldown_minutes: '60',
     })
+    const transferEnabled = String(cfg.transfer_enabled || 'true').toLowerCase() !== 'false'
+    if (!transferEnabled) {
+      const disabledMessage =
+        'Timu Yetu Ya Ufundi imezima huduma hii kwa muda. Tafadhali wasiliana na mhudumu kama unahitaji msaada.'
+      await logSecurityEvent(pool, {
+        actor: sourceDeviceId,
+        eventType: 'Transfer request',
+        status: 'failed',
+        detail: 'Transfer service disabled by admin setting',
+        metadata: { source_device_id: sourceDeviceId, reason: 'transfer_disabled' },
+      })
+      console.warn('[transfer/request] rejected: transfer disabled', { sourceDeviceId })
+      return res.status(503).json({
+        ok: false,
+        code: 'transfer_disabled',
+        error: disabledMessage,
+        maintenance: true,
+      })
+    }
     const limits = await checkTransferLimits(
       pool,
       sourceDeviceId,
@@ -833,14 +857,29 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
       toInt(cfg.transfer_weekly_limit, 15, 1, 5000),
     )
     if (!limits.ok) {
+      const reasonCode =
+        limits.reason === 'Daily transfer limit reached'
+          ? 'daily_limit_reached'
+          : limits.reason === 'Weekly transfer limit reached'
+            ? 'weekly_limit_reached'
+            : limits.reason === 'Transfer cooldown active'
+              ? 'cooldown_active'
+              : 'transfer_rejected'
       await logSecurityEvent(pool, {
         actor: sourceDeviceId,
         eventType: 'Transfer request',
         status: 'failed',
         detail: limits.reason,
-        metadata: { source_device_id: sourceDeviceId },
+        metadata: { source_device_id: sourceDeviceId, reason: reasonCode },
       })
-      return res.status(429).json({ ok: false, error: limits.reason })
+      if (reasonCode === 'cooldown_active') {
+        console.warn('[transfer/request] rejected: cooldown active', { sourceDeviceId })
+      } else if (reasonCode === 'daily_limit_reached') {
+        console.warn('[transfer/request] rejected: daily limit reached', { sourceDeviceId })
+      } else if (reasonCode === 'weekly_limit_reached') {
+        console.warn('[transfer/request] rejected: weekly limit reached', { sourceDeviceId })
+      }
+      return res.status(429).json({ ok: false, code: reasonCode, error: limits.reason })
     }
     const generatedCode = randomTransferCode()
     const { rows } = await pool.query(
