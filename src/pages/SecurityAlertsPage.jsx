@@ -113,7 +113,11 @@ function SecurityAlertsPage() {
       return
     }
     try {
-      await postSecurityAlertsBulkDelete({ all: true })
+      const out = await postSecurityAlertsBulkDelete({ all: true })
+      if (typeof out?.deleted === 'number' && out.deleted === 0 && suite.alerts.length > 0) {
+        showToast('error', 'Delete-all completed with 0 rows affected.')
+        return
+      }
       setSelectedAlerts(new Set())
       await load()
     } catch (e) {
@@ -159,7 +163,11 @@ function SecurityAlertsPage() {
     if (selectedAlerts.size === 0) return
     if (!window.confirm(`Delete ${selectedAlerts.size} selected alerts?`)) return
     try {
-      await postSecurityAlertsBulkDelete({ ids: Array.from(selectedAlerts) })
+      const out = await postSecurityAlertsBulkDelete({ ids: Array.from(selectedAlerts) })
+      if (!out?.deleted) {
+        showToast('error', 'No alerts were deleted. Refresh and retry.')
+        return
+      }
       setSelectedAlerts(new Set())
       await load()
     } catch (e) {

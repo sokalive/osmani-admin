@@ -204,7 +204,11 @@ function TransferCodesPage() {
     if (selected.size === 0) return
     if (!window.confirm(`Delete ${selected.size} selected codes?`)) return
     try {
-      await postTransferCodesBulkDelete({ ids: Array.from(selected) })
+      const out = await postTransferCodesBulkDelete({ ids: Array.from(selected) })
+      if (!out?.deleted) {
+        showFlash('error', 'No codes deleted. Refresh and retry.')
+        return
+      }
       setSelected(new Set())
       await loadCodes()
       showFlash('success', 'Selected codes deleted.')
@@ -216,7 +220,11 @@ function TransferCodesPage() {
   async function deleteAll() {
     if (!window.confirm('Delete ALL transfer codes history?')) return
     try {
-      await postTransferCodesBulkDelete({ all: true })
+      const out = await postTransferCodesBulkDelete({ all: true })
+      if (typeof out?.deleted === 'number' && out.deleted === 0 && codes.length > 0) {
+        showFlash('error', 'Delete-all affected 0 rows.')
+        return
+      }
       setSelected(new Set())
       await loadCodes()
       showFlash('success', 'All transfer codes deleted.')
@@ -227,7 +235,11 @@ function TransferCodesPage() {
 
   async function cleanupExpired() {
     try {
-      await postTransferCodesBulkDelete({ all: true, expiredOnly: true })
+      const out = await postTransferCodesBulkDelete({ all: true, expiredOnly: true })
+      if (typeof out?.deleted === 'number' && out.deleted === 0) {
+        showFlash('success', 'No expired codes to clean.')
+        return
+      }
       await loadCodes()
       showFlash('success', 'Expired codes cleaned up.')
     } catch (e) {

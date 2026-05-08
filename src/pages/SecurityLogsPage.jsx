@@ -90,7 +90,11 @@ function SecurityLogsPage() {
     if (selected.size === 0) return
     if (!window.confirm(`Delete ${selected.size} selected logs?`)) return
     try {
-      await postSecurityLogsBulkDelete({ ids: Array.from(selected) })
+      const out = await postSecurityLogsBulkDelete({ ids: Array.from(selected) })
+      if (!out?.deleted) {
+        showToast('error', 'No logs were deleted. Refresh and retry.')
+        return
+      }
       setSelected(new Set())
       await refresh()
       showToast('success', 'Selected logs deleted.')
@@ -103,7 +107,11 @@ function SecurityLogsPage() {
     if (!logs.length) return
     if (!window.confirm('Delete ALL security logs? This does not affect subscriptions.')) return
     try {
-      await postSecurityLogsBulkDelete({ all: true })
+      const out = await postSecurityLogsBulkDelete({ all: true })
+      if (typeof out?.deleted === 'number' && out.deleted === 0 && logs.length > 0) {
+        showToast('error', 'Delete-all completed with 0 rows affected.')
+        return
+      }
       setSelected(new Set())
       await refresh()
       showToast('success', 'All logs deleted.')
