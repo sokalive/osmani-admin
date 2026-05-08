@@ -25,14 +25,51 @@ function defaultDevice() {
   }
 }
 
+/** API may send camelCase or snake_case; never use Boolean(x) on strings — Boolean("false") is true in JS. */
+function parseTransferEnabledFromApi(s) {
+  const hasCamel = Object.prototype.hasOwnProperty.call(s, 'transferEnabled')
+  const hasSnake = Object.prototype.hasOwnProperty.call(s, 'transfer_enabled')
+  if (!hasCamel && !hasSnake) {
+    console.warn('[device-control-ui] transferEnabled / transfer_enabled absent in API payload; defaulting ON', {
+      topLevelKeys: Object.keys(s),
+    })
+    return true
+  }
+  const raw = hasCamel ? s.transferEnabled : s.transfer_enabled
+  if (raw === null) {
+    console.warn('[device-control-ui] transferEnabled is null; defaulting ON')
+    return true
+  }
+  if (typeof raw === 'boolean') return raw
+  if (typeof raw === 'number') return raw !== 0
+  const t = String(raw).trim().toLowerCase()
+  if (['true', '1', 'yes', 'on'].includes(t)) return true
+  if (['false', '0', 'no', 'off'].includes(t)) return false
+  return Boolean(raw)
+}
+
+function toSafeNonNegInt(v, fallback) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return fallback
+  return Math.floor(n)
+}
+
 function normalizeDeviceControlFromServer(s) {
   if (!s || typeof s !== 'object') throw new Error('Invalid settings response')
+  const parsedTransfer = parseTransferEnabledFromApi(s)
+  console.log('[device-control-ui] normalize transferEnabled', {
+    hasCamelKey: Object.prototype.hasOwnProperty.call(s, 'transferEnabled'),
+    hasSnakeKey: Object.prototype.hasOwnProperty.call(s, 'transfer_enabled'),
+    rawCamel: s.transferEnabled,
+    rawSnake: s.transfer_enabled,
+    parsedBoolean: parsedTransfer,
+  })
   return {
-    transferMode: String(s.transferMode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
-    transferEnabled: Boolean(s.transferEnabled),
-    dailyLimit: Number(s.dailyLimit),
-    weeklyLimit: Number(s.weeklyLimit),
-    cooldownMinutes: Number(s.cooldownMinutes),
+    transferMode: String(s.transferMode || s.transfer_mode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
+    transferEnabled: parsedTransfer,
+    dailyLimit: toSafeNonNegInt(s.dailyLimit ?? s.daily_limit, 5),
+    weeklyLimit: toSafeNonNegInt(s.weeklyLimit ?? s.weekly_limit, 15),
+    cooldownMinutes: toSafeNonNegInt(s.cooldownMinutes ?? s.cooldown_minutes, 60),
     pending: Array.isArray(s.pending) ? s.pending : [],
     logs: Array.isArray(s.logs) ? s.logs : [],
   }
@@ -68,7 +105,7 @@ function DeviceControlPage() {
   const loadCfg = useCallback(async () => {
     try {
       const s = await getDeviceControlSettings()
-      console.log('[device-control-ui] fetched settings', s)
+      console.log('[device-control-ui] GET /settings/device-control raw response', JSON.stringify(s))
       const hydrated = normalizeDeviceControlFromServer(s)
       setCfg(hydrated)
       setDraft({
@@ -92,6 +129,15 @@ function DeviceControlPage() {
   useEffect(() => {
     loadCfg()
   }, [loadCfg])
+
+  useEffect(() => {
+    if (tab !== 'settings') return
+    console.log('[device-control-ui] toggle render props', {
+      draftTransferEnabled: draft.transferEnabled,
+      cfgTransferEnabled: cfg.transferEnabled,
+      switchVisualOn: Boolean(draft.transferEnabled),
+    })
+  }, [tab, draft.transferEnabled, cfg.transferEnabled])
 
   const dirty = useMemo(
     () =>
