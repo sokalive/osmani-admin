@@ -108,15 +108,45 @@ async function ensureSecurityTables(pool) {
   `)
 }
 
+/** Ensures KV table exists and transfer policy rows exist (idempotent ON CONFLICT DO NOTHING). */
+async function ensureTransferSettingsInfrastructure(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await pool.query(`
+    INSERT INTO app_settings (key, value)
+    VALUES
+      ('transfer_mode', 'confirmation'),
+      ('transfer_enabled', 'true'),
+      ('transfer_daily_limit', '5'),
+      ('transfer_weekly_limit', '15'),
+      ('transfer_cooldown_minutes', '60')
+    ON CONFLICT (key) DO NOTHING;
+  `)
+}
+
+async function upsertAppSetting(pool, key, value) {
+  const str = String(value ?? '')
+  const res = await pool.query(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+     RETURNING key, value`,
+    [key, str],
+  )
+  return { rowCount: Number(res.rowCount) || 0, row: res.rows[0] || null }
+}
+
 async function saveAppSettings(pool, entries) {
+  const out = {}
   for (const [k, v] of Object.entries(entries)) {
-    await pool.query(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES ($1, $2, now())
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [k, String(v ?? '')],
-    )
+    out[k] = await upsertAppSetting(pool, k, v)
   }
+  return out
 }
 
 async function readAppSettings(pool, defaults) {
@@ -147,6 +177,9 @@ function parseBoolInput(v, fallback = true) {
 }
 
 function parseBoolDetailed(v, fallback = true) {
+  if (v === null || v === undefined) {
+    return { value: fallback, source: String(v), raw: v, fallbackUsed: true }
+  }
   const type = typeof v
   if (type === 'boolean') {
     return { value: v, source: 'boolean', raw: v, fallbackUsed: false }
@@ -164,23 +197,46 @@ function parseBoolDetailed(v, fallback = true) {
   return { value: fallback, source: 'unrecognized', raw: v, fallbackUsed: true }
 }
 
+function bodyHasExplicitTransferEnabled(body) {
+  if (!body || typeof body !== 'object') return false
+  return (
+    Object.prototype.hasOwnProperty.call(body, 'transferEnabled') ||
+    Object.prototype.hasOwnProperty.call(body, 'transfer_enabled')
+  )
+}
+
 async function readTransferSettingsLive(pool) {
+  await ensureTransferSettingsInfrastructure(pool)
   const keys = Object.values(TRANSFER_SETTING_KEYS)
+  /** Prefer latest updated row per key if duplicates ever exist (defensive). */
   const { rows } = await pool.query(
-    `SELECT key, value, updated_at
+    `SELECT DISTINCT ON (key) key, value, updated_at
      FROM app_settings
-     WHERE key = ANY($1::text[])`,
+     WHERE key = ANY($1::text[])
+     ORDER BY key, updated_at DESC NULLS LAST`,
     [keys],
   )
+  const dupProbe = await pool.query(
+    `SELECT key, COUNT(*)::int AS n
+     FROM app_settings
+     WHERE key = ANY($1::text[])
+     GROUP BY key
+     HAVING COUNT(*) > 1`,
+    [keys],
+  )
+  if ((dupProbe.rowCount ?? 0) > 0) {
+    console.warn('[device-control] duplicate app_settings keys detected', dupProbe.rows)
+  }
   const byKey = {}
   for (const r of rows) byKey[String(r.key)] = String(r.value ?? '')
   const missingKeys = keys.filter((k) => !(k in byKey))
   if (missingKeys.length > 0) {
     throw new Error(`Missing transfer settings rows in app_settings: ${missingKeys.join(', ')}`)
   }
+  const enabledCell = String(byKey[TRANSFER_SETTING_KEYS.enabled] ?? '').trim()
   return {
     transferMode: byKey[TRANSFER_SETTING_KEYS.mode] === 'manual' ? 'manual' : 'confirmation',
-    transferEnabled: parseBoolInput(byKey[TRANSFER_SETTING_KEYS.enabled], true),
+    transferEnabled: parseBoolInput(enabledCell, true),
     dailyLimit: toInt(byKey[TRANSFER_SETTING_KEYS.daily], 5, 1, 1000),
     weeklyLimit: toInt(byKey[TRANSFER_SETTING_KEYS.weekly], 15, 1, 5000),
     cooldownMinutes: toInt(byKey[TRANSFER_SETTING_KEYS.cooldown], 60, 1, 1440),
@@ -402,33 +458,63 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     if (!pool || !client) return res.status(503).json({ error: 'Database not configured' })
     await ensureSecurityTables(client)
     const b = req.body && typeof req.body === 'object' ? req.body : {}
-    const parsedEnabled = parseBoolDetailed(b.transferEnabled, true)
+    console.log('[device-control] PUT raw req.body keys', Object.keys(b))
+    await client.query('BEGIN')
+    const before = await readTransferSettingsLive(client)
+    const explicitTE = bodyHasExplicitTransferEnabled(b)
+    const rawTransferEnabled = Object.prototype.hasOwnProperty.call(b, 'transferEnabled')
+      ? b.transferEnabled
+      : b.transfer_enabled
+    let parsedEnabled
+    if (!explicitTE) {
+      parsedEnabled = {
+        value: before.transferEnabled,
+        source: 'preserved_not_in_body',
+        raw: undefined,
+        fallbackUsed: false,
+      }
+    } else if (rawTransferEnabled === '') {
+      parsedEnabled = {
+        value: before.transferEnabled,
+        source: 'preserved_empty_string',
+        raw: rawTransferEnabled,
+        fallbackUsed: false,
+      }
+    } else {
+      parsedEnabled = parseBoolDetailed(rawTransferEnabled, before.transferEnabled)
+    }
     const payload = {
       transferMode: String(b.transferMode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
       transferEnabled: parsedEnabled.value,
-      dailyLimit: toInt(b.dailyLimit, 5, 1, 1000),
-      weeklyLimit: toInt(b.weeklyLimit, 15, 1, 5000),
-      cooldownMinutes: toInt(b.cooldownMinutes, 60, 1, 1440),
+      dailyLimit: toInt(b.dailyLimit, before.dailyLimit, 1, 1000),
+      weeklyLimit: toInt(b.weeklyLimit, before.weeklyLimit, 1, 5000),
+      cooldownMinutes: toInt(b.cooldownMinutes, before.cooldownMinutes, 1, 1440),
     }
     console.log('[device-control] PUT incoming payload', {
-      transferEnabledRaw: b.transferEnabled,
-      transferEnabledType: typeof b.transferEnabled,
+      transferEnabledExplicit: explicitTE,
+      transferEnabledRaw: rawTransferEnabled,
+      transferEnabledType: typeof rawTransferEnabled,
       parsedEnabled,
+      beforeSnapshot: {
+        transferEnabled: before.transferEnabled,
+        dailyLimit: before.dailyLimit,
+        weeklyLimit: before.weeklyLimit,
+        cooldownMinutes: before.cooldownMinutes,
+      },
     })
-    await client.query('BEGIN')
-    const before = await readTransferSettingsLive(client)
     const beforeEnabledRow = await client.query(
       `SELECT key, value, updated_at FROM app_settings WHERE key = $1 FOR UPDATE`,
       [TRANSFER_SETTING_KEYS.enabled],
     )
     const sqlWriteEnabled = payload.transferEnabled ? 'true' : 'false'
-    await saveAppSettings(client, {
+    const upsertResults = await saveAppSettings(client, {
       [TRANSFER_SETTING_KEYS.mode]: payload.transferMode,
       [TRANSFER_SETTING_KEYS.enabled]: sqlWriteEnabled,
       [TRANSFER_SETTING_KEYS.daily]: payload.dailyLimit,
       [TRANSFER_SETTING_KEYS.weekly]: payload.weeklyLimit,
       [TRANSFER_SETTING_KEYS.cooldown]: payload.cooldownMinutes,
     })
+    console.log('[device-control] PUT upsert rowCount/returned', upsertResults)
     const live = await readTransferSettingsLive(client)
     const afterEnabledRow = await client.query(
       `SELECT key, value, updated_at FROM app_settings WHERE key = $1`,
@@ -442,9 +528,12 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     }
     await client.query('COMMIT')
     const postCommitEnabledRow = await pool.query(
-      `SELECT key, value, updated_at FROM app_settings WHERE key = $1`,
+      `SELECT key, value
+       FROM app_settings
+       WHERE key = $1`,
       [TRANSFER_SETTING_KEYS.enabled],
     )
+    console.log('[device-control] PUT post-commit literal SELECT transfer_enabled row', postCommitEnabledRow.rows[0] || null)
     emitSync('app_settings_changed', payload)
     const responseBody = {
       transferMode: live.transferMode,
