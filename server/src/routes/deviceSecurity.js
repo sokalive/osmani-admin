@@ -308,7 +308,7 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
        ORDER BY created_at DESC
        LIMIT 200`,
     )
-    return res.json({
+    const responseBody = {
       transferMode: values.transfer_mode === 'manual' ? 'manual' : 'confirmation',
       transferEnabled: String(values.transfer_enabled).toLowerCase() !== 'false',
       dailyLimit: toInt(values.transfer_daily_limit, 5, 1, 1000),
@@ -327,7 +327,9 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
         at: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
         message: String(r.detail || ''),
       })),
-    })
+    }
+    console.log('[device-control] GET settings response', responseBody)
+    return res.json(responseBody)
   } catch (e) {
     console.error('[device-control] GET', e)
     return res.status(500).json({ error: String(e.message || e) })
@@ -362,7 +364,7 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       transfer_weekly_limit: '15',
       transfer_cooldown_minutes: '60',
     })
-    return res.json({
+    const responseBody = {
       transferMode: values.transfer_mode === 'manual' ? 'manual' : 'confirmation',
       transferEnabled: String(values.transfer_enabled).toLowerCase() !== 'false',
       dailyLimit: toInt(values.transfer_daily_limit, 5, 1, 1000),
@@ -370,7 +372,9 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       cooldownMinutes: toInt(values.transfer_cooldown_minutes, 60, 1, 1440),
       pending: Array.isArray(b.pending) ? b.pending : [],
       logs: Array.isArray(b.logs) ? b.logs : [],
-    })
+    }
+    console.log('[device-control] PUT settings response', responseBody)
+    return res.json(responseBody)
   } catch (e) {
     console.error('[device-control] PUT', e)
     return res.status(500).json({ error: String(e.message || e) })
@@ -879,12 +883,14 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
         metadata: { source_device_id: sourceDeviceId, reason: 'transfer_disabled' },
       })
       console.warn('[transfer/request] rejected: transfer disabled', { sourceDeviceId })
-      return res.status(503).json({
+      const responseBody = {
         ok: false,
         code: 'transfer_disabled',
         error: disabledMessage,
         maintenance: true,
-      })
+      }
+      console.log('[transfer/request] response body', responseBody)
+      return res.status(503).json(responseBody)
     }
     const limits = await checkTransferLimits(
       pool,
@@ -932,13 +938,15 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
           dayCount: limits.dayCount,
         })
       }
-      return res.status(429).json({
+      const responseBody = {
         ok: false,
         code: reasonCode,
         error: limits.reason,
         retryAfterSec: limits.retryAfterSec || null,
         cooldownUntilMs: limits.cooldownUntilMs || null,
-      })
+      }
+      console.log('[transfer/request] response body', responseBody)
+      return res.status(429).json(responseBody)
     }
     console.log('[transfer/request] policy counters pass', {
       sourceDeviceId,
@@ -966,13 +974,15 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
       detail: 'Transfer code issued',
       metadata: { source_device_id: sourceDeviceId, code: rows[0].code },
     })
-    return res.json({
+    const responseBody = {
       ok: true,
       code: String(rows[0].code),
       expires_at: rows[0].expires_at instanceof Date ? rows[0].expires_at.toISOString() : String(rows[0].expires_at),
       transfer_mode: cfg.transfer_mode,
       source_device_id: sourceDeviceId,
-    })
+    }
+    console.log('[transfer/request] response body', responseBody)
+    return res.json(responseBody)
   } catch (e) {
     console.error('[transfer/request]', e)
     return res.status(500).json({ error: String(e.message || e) })

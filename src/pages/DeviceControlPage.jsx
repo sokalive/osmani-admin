@@ -55,6 +55,7 @@ function DeviceControlPage() {
   const loadCfg = useCallback(async () => {
     try {
       const s = await getDeviceControlSettings()
+      console.log('[device-control-ui] fetched settings', s)
       const merged = { ...defaultDevice(), ...s }
       setCfg(merged)
       setDraft({
@@ -112,6 +113,7 @@ function DeviceControlPage() {
     })
     try {
       const saved = await putDeviceControlSettings(next)
+      console.log('[device-control-ui] saved settings response', saved)
       setCfg(saved)
       setDraft({
         transferMode: saved.transferMode,
