@@ -303,9 +303,15 @@ export async function ensureBillingTables(client) {
       detail TEXT NOT NULL DEFAULT '',
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      CONSTRAINT security_events_status_check CHECK (status IN ('completed', 'failed', 'warning', 'blocked'))
+      CONSTRAINT security_events_status_check
+        CHECK (status IN ('completed', 'failed', 'warning', 'blocked', 'pending'))
     );
   `)
+  await ensureStatusConstraint(client, {
+    tableName: 'security_events',
+    constraintName: 'security_events_status_check',
+    statuses: ['completed', 'failed', 'warning', 'blocked', 'pending'],
+  })
   await client.query(`
     CREATE INDEX IF NOT EXISTS security_events_created_idx ON security_events (created_at DESC);
   `)
