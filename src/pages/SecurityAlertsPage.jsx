@@ -11,7 +11,9 @@ import {
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import {
+  deleteSecurityAlert,
   getSecuritySuite,
+  postSecurityAlertsBulkDelete,
   postSecuritySuiteRestoreWhitelist,
   putSecuritySuite,
 } from '../lib/api'
@@ -53,6 +55,7 @@ function SecurityAlertsPage() {
   const [protectionDraft, setProtectionDraft] = useState('manual')
   const [whitelistInput, setWhitelistInput] = useState('')
   const [savedFlash, setSavedFlash] = useState(false)
+  const [selectedAlerts, setSelectedAlerts] = useState(() => new Set())
 
   const load = useCallback(async () => {
     try {
@@ -109,28 +112,60 @@ function SecurityAlertsPage() {
     ) {
       return
     }
-    await persist({ ...suite, alerts: [] })
-  }, [persist, suite])
-
-  const resolveOne = useCallback(
-    async (id) => {
-      await persist({
-        ...suite,
-        alerts: suite.alerts.map((a) => (a.id === id ? { ...a, status: 'resolved' } : a)),
-      })
-    },
-    [persist, suite],
-  )
+    try {
+      await postSecurityAlertsBulkDelete({ all: true })
+      setSelectedAlerts(new Set())
+      await load()
+    } catch (e) {
+      showToast('error', e?.message || 'Delete all alerts failed')
+    }
+    setSelectedAlerts(new Set())
+  }, [load, showToast])
 
   const deleteOne = useCallback(
     async (id) => {
-      await persist({
-        ...suite,
-        alerts: suite.alerts.filter((a) => a.id !== id),
-      })
+      try {
+        await deleteSecurityAlert(id)
+        setSelectedAlerts((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+        await load()
+      } catch (e) {
+        showToast('error', e?.message || 'Delete alert failed')
+      }
     },
-    [persist, suite],
+    [load, showToast],
   )
+
+  const toggleAlert = useCallback((id) => {
+    setSelectedAlerts((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const toggleAllAlerts = useCallback(() => {
+    setSelectedAlerts((prev) => {
+      if (prev.size === suite.alerts.length) return new Set()
+      return new Set(suite.alerts.map((a) => a.id))
+    })
+  }, [suite.alerts])
+
+  const deleteSelectedAlerts = useCallback(async () => {
+    if (selectedAlerts.size === 0) return
+    if (!window.confirm(`Delete ${selectedAlerts.size} selected alerts?`)) return
+    try {
+      await postSecurityAlertsBulkDelete({ ids: Array.from(selectedAlerts) })
+      setSelectedAlerts(new Set())
+      await load()
+    } catch (e) {
+      showToast('error', e?.message || 'Delete selected alerts failed')
+    }
+  }, [load, selectedAlerts, showToast])
 
   const addWhitelist = useCallback(async () => {
     const v = whitelistInput.trim()
@@ -262,7 +297,7 @@ function SecurityAlertsPage() {
                   onClick={restoreWhitelistDefaults}
                   className="rounded-xl border border-slate-600 px-4 py-2.5 text-sm font-medium text-slate-400 hover:bg-slate-800"
                 >
-                  Reset demo list
+                  Restore defaults
                 </button>
               </div>
             </div>
@@ -325,10 +360,32 @@ function SecurityAlertsPage() {
 
         <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
           <div className="border-b border-slate-800/80 px-5 py-4">
-            <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
-              <ListChecks className="h-5 w-5 text-amber-400" />
-              Alerts
-            </h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                <ListChecks className="h-5 w-5 text-amber-400" />
+                Alerts
+              </h2>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleAllAlerts}
+                  className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                >
+                  {selectedAlerts.size === suite.alerts.length && suite.alerts.length > 0
+                    ? 'Unselect all'
+                    : 'Select all'}
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedAlerts.size === 0}
+                  onClick={deleteSelectedAlerts}
+                  className="inline-flex items-center gap-1 rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-200 disabled:opacity-40"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete selected ({selectedAlerts.size})
+                </button>
+              </div>
+            </div>
           </div>
           <ul className="divide-y divide-slate-800/90">
             {suite.alerts.length === 0 ? (
@@ -340,6 +397,15 @@ function SecurityAlertsPage() {
                   className="flex flex-col gap-4 px-5 py-4 transition-colors hover:bg-slate-900/50 lg:flex-row lg:items-center lg:justify-between"
                 >
                   <div className="min-w-0 flex-1">
+                    <label className="mb-2 inline-flex items-center gap-2 text-xs text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={selectedAlerts.has(a.id)}
+                        onChange={() => toggleAlert(a.id)}
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500/40"
+                      />
+                      Select
+                    </label>
                     <p className="font-semibold text-white">{a.title}</p>
                     <p className="mt-1 font-mono text-sm text-slate-400">{a.deviceOrIp}</p>
                     <p className="mt-1 text-xs text-slate-500">
@@ -347,25 +413,10 @@ function SecurityAlertsPage() {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-                    <span
-                      className={`inline-flex rounded-lg px-3 py-1 text-[11px] font-bold uppercase tracking-wide ring-1 ${
-                        a.status === 'active'
-                          ? 'bg-red-500/20 text-red-200 ring-red-400/45'
-                          : 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/45'
-                      }`}
-                    >
-                      {a.status === 'active' ? 'Active' : 'Resolved'}
+                    <span className="inline-flex rounded-lg px-3 py-1 text-[11px] font-bold uppercase tracking-wide ring-1 bg-red-500/20 text-red-200 ring-red-400/45">
+                      Active
                     </span>
                     <div className="flex gap-2">
-                      {a.status === 'active' ? (
-                        <button
-                          type="button"
-                          onClick={() => resolveOne(a.id)}
-                          className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20"
-                        >
-                          Mark as resolved
-                        </button>
-                      ) : null}
                       <button
                         type="button"
                         onClick={() => deleteOne(a.id)}

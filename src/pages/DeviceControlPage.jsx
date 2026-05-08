@@ -5,6 +5,7 @@ import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { getDeviceControlSettings, postAdminForceTransferPhone, putDeviceControlSettings } from '../lib/api'
 import { appendSecurityLog } from '../lib/securityActivityLog'
+import { formatReadableDateTime } from '../lib/formatTxDisplay'
 
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -29,7 +30,7 @@ function inputClass() {
 
 const TABS = [
   { id: 'settings', label: 'Settings', icon: Settings },
-  { id: 'pending', label: 'Pending', icon: Hourglass },
+  { id: 'pending', label: 'Recent Activity', icon: Hourglass },
   { id: 'logs', label: 'Logs', icon: ClipboardList },
   { id: 'force', label: 'Force Transfer', icon: Zap },
 ]
@@ -125,35 +126,6 @@ function DeviceControlPage() {
     }
   }
 
-  const simulatePending = useCallback(async () => {
-    const devices = ['Pixel 8 · Dar es Salaam', 'Samsung A54 · Arusha', 'TV Box · Mwanza']
-    const pick = devices[Math.floor(Math.random() * devices.length)]
-    const row = {
-      id: newId(),
-      deviceLabel: pick,
-      requestedAt: new Date().toISOString(),
-      status: 'pending',
-    }
-    const ok = Math.random() > 0.12
-    const next = appendLog(`Incoming transfer request from ${pick}`)({
-      ...cfg,
-      pending: [row, ...(cfg.pending || [])].slice(0, 50),
-    })
-    try {
-      const saved = await putDeviceControlSettings(next)
-      setCfg(saved)
-      await appendSecurityLog({
-        actor: pick,
-        eventType: 'Code transfer',
-        status: ok ? 'completed' : 'failed',
-        detail: `pending id ${String(row.id).slice(0, 8)} · handshake ${ok ? 'OK' : 'TIMEOUT'}`,
-      })
-      showFlash('success', 'Simulated pending request added.')
-    } catch (err) {
-      showToast('error', err?.message || 'Request failed')
-    }
-  }, [cfg, appendLog])
-
   const handleForceTransferSubmit = useCallback(
     async (e) => {
       e.preventDefault()
@@ -237,7 +209,7 @@ function DeviceControlPage() {
               <div>
                 <p className="text-sm font-medium text-slate-200">Transfer mode</p>
                 <p className="text-xs text-slate-500">
-                  Confirmation requires user approval; manual is admin-only path.
+                  Legacy setting retained for compatibility. Live flow is immediate transfer by code.
                 </p>
               </div>
               <div className="flex gap-2">
@@ -316,13 +288,6 @@ function DeviceControlPage() {
 
         {tab === 'pending' ? (
           <section className="space-y-4">
-            <button
-              type="button"
-              onClick={simulatePending}
-              className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-sm font-semibold text-amber-100 hover:bg-amber-500/20"
-            >
-              Simulate incoming request
-            </button>
             <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-slate-700 bg-slate-900/60 text-[11px] uppercase text-slate-400">
@@ -336,7 +301,7 @@ function DeviceControlPage() {
                   {(cfg.pending || []).length === 0 ? (
                     <tr>
                       <td colSpan={3} className="px-4 py-10 text-center text-slate-500">
-                        No pending requests.
+                        No recent transfer activity.
                       </td>
                     </tr>
                   ) : (
@@ -344,7 +309,7 @@ function DeviceControlPage() {
                       <tr key={p.id} className="border-b border-slate-800/80">
                         <td className="px-4 py-3 text-slate-200">{p.deviceLabel}</td>
                         <td className="px-4 py-3 text-slate-400">
-                          {new Date(p.requestedAt).toLocaleString()}
+                          {formatReadableDateTime(p.requestedAt)}
                         </td>
                         <td className="px-4 py-3">
                           <span className="rounded-lg bg-amber-500/20 px-2 py-0.5 text-xs font-bold uppercase text-amber-100 ring-1 ring-amber-400/35">
@@ -370,7 +335,7 @@ function DeviceControlPage() {
                   {cfg.logs.map((l) => (
                     <li key={l.id} className="px-4 py-3 text-sm">
                       <span className="font-mono text-xs text-slate-500">
-                        {new Date(l.at).toLocaleString()}
+                        {formatReadableDateTime(l.at)}
                       </span>
                       <p className="mt-1 text-slate-300">{l.message}</p>
                     </li>
