@@ -16,6 +16,7 @@ function parseTopics(raw) {
 
 liveSyncRouter.get('/sync/stream', (req, res) => {
   const topics = parseTopics(req.query.topics)
+  const deviceId = String(req.query.device_id ?? '').trim()
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
@@ -34,6 +35,21 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
   const handler = (packet) => {
     const hasTopic = topics.some((topic) => packet?.payload?.topics?.includes(topic))
     if (!hasTopic) return
+    const p = packet?.payload || {}
+    const isScoped =
+      p.scope === 'device' ||
+      p.device_id != null ||
+      p.source_device_id != null ||
+      p.target_device_id != null
+    if (isScoped) {
+      if (!deviceId) return
+      const recipients = [
+        String(p.device_id ?? '').trim(),
+        String(p.source_device_id ?? '').trim(),
+        String(p.target_device_id ?? '').trim(),
+      ].filter(Boolean)
+      if (recipients.length > 0 && !recipients.includes(deviceId)) return
+    }
     send(packet.event || 'sync', packet)
   }
 
