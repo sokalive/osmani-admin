@@ -717,6 +717,13 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, 'requested', 'awaiting_target_submission', 'device', now())`,
       [rows[0].id, rows[0].code, sourceDeviceId, targetDeviceId, null, fpHash],
     )
+    await pool.query(
+      `UPDATE device_transfers
+       SET status = 'awaiting_target_submission',
+           reason = 'awaiting_target_submission'
+       WHERE code_id = $1`,
+      [rows[0].id],
+    )
     await logSecurityEvent(pool, {
       actor: sourceDeviceId,
       eventType: 'Transfer request',
@@ -1020,6 +1027,12 @@ deviceSecurityRouter.post('/transfer/decision', async (req, res) => {
         [transfer.code_id],
       )
     }
+    await client.query(
+      `UPDATE device_transfers
+       SET status = 'approved', reason = 'approved_by_source'
+       WHERE id = $1`,
+      [pendingTransferId],
+    )
     await client.query(
       `UPDATE device_transfers
        SET status = 'completed', reason = 'approved_by_source', completed_at = now()

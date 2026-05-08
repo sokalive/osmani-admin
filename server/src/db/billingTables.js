@@ -195,8 +195,17 @@ export async function ensureBillingTables(client) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       CONSTRAINT transfer_codes_status_check
-        CHECK (status IN ('active', 'used', 'revoked', 'expired'))
+        CHECK (status IN ('active', 'pending_confirmation', 'used', 'revoked', 'expired'))
     );
+  `)
+  await client.query(`
+    ALTER TABLE transfer_codes
+    DROP CONSTRAINT IF EXISTS transfer_codes_status_check;
+  `)
+  await client.query(`
+    ALTER TABLE transfer_codes
+    ADD CONSTRAINT transfer_codes_status_check
+    CHECK (status IN ('active', 'pending_confirmation', 'used', 'revoked', 'expired'));
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS transfer_codes_source_device_idx ON transfer_codes (source_device_id);
@@ -220,7 +229,38 @@ export async function ensureBillingTables(client) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       completed_at TIMESTAMPTZ,
       CONSTRAINT device_transfers_status_check
-        CHECK (status IN ('requested', 'completed', 'rejected', 'revoked'))
+        CHECK (
+          status IN (
+            'requested',
+            'awaiting_target_submission',
+            'pending_confirmation',
+            'approved',
+            'completed',
+            'rejected',
+            'expired',
+            'revoked'
+          )
+        )
+    );
+  `)
+  await client.query(`
+    ALTER TABLE device_transfers
+    DROP CONSTRAINT IF EXISTS device_transfers_status_check;
+  `)
+  await client.query(`
+    ALTER TABLE device_transfers
+    ADD CONSTRAINT device_transfers_status_check
+    CHECK (
+      status IN (
+        'requested',
+        'awaiting_target_submission',
+        'pending_confirmation',
+        'approved',
+        'completed',
+        'rejected',
+        'expired',
+        'revoked'
+      )
     );
   `)
   await client.query(`
