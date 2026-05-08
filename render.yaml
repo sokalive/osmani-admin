@@ -28,3 +28,26 @@ services:
       - path: /
         name: Cache-Control
         value: no-cache, no-store, must-revalidate
+
+  # Node API — persistent media uploads (attach disk + set UPLOAD_DIR to mountPath).
+  # If you already have this service on Render, Blueprint merges by name; align UPLOAD_DIR with disk mountPath.
+  # Persistent disks require a paid instance type (not free).
+  - type: web
+    name: osmani-admin-api
+    runtime: node
+    region: oregon
+    plan: starter
+    rootDir: server
+    repo: https://github.com/sokalive/osmani-admin.git
+    branch: main
+    buildCommand: npm ci
+    startCommand: npm start
+    envVars:
+      - key: UPLOAD_DIR
+        value: /var/render/media
+      - key: NODE_VERSION
+        value: "20"
+    disk:
+      name: media-uploads
+      mountPath: /var/render/media
+      sizeGB: 1

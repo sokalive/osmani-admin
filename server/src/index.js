@@ -1,6 +1,11 @@
 import cors from 'cors'
 import express from 'express'
-import { ensureUploadsDir, UPLOADS_DIR } from './multerUpload.js'
+import {
+  assertUploadStorageReady,
+  getMediaHealthSnapshot,
+  logUploadStorageDiagnostics,
+  UPLOADS_DIR,
+} from './multerUpload.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
 import { streamProxyRouter } from './routes/streamProxy.js'
 
@@ -41,8 +46,31 @@ app.use(cors(corsOptions))
 app.options('*', cors(corsOptions))
 
 app.use(express.json({ limit: '4mb' }))
-ensureUploadsDir()
-app.use('/uploads', express.static(UPLOADS_DIR))
+
+app.use(
+  '/uploads',
+  express.static(UPLOADS_DIR, {
+    index: false,
+    etag: true,
+    lastModified: true,
+    maxAge: 0,
+    setHeaders(res) {
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate')
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+    },
+  }),
+)
+// Missing files: do not fall through to JSON 404
+app.use('/uploads', (req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(405).setHeader('Content-Type', 'text/plain; charset=utf-8').send('Method Not Allowed')
+  }
+  res
+    .status(404)
+    .setHeader('Content-Type', 'text/plain; charset=utf-8')
+    .setHeader('Cache-Control', 'no-store')
+    .send('Not found')
+})
 
 // --- ROOT TEST ---
 app.get('/', (req, res) => {
@@ -54,11 +82,31 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'osmani-admin-api' })
 })
 
+app.get('/api/health/media', async (req, res) => {
+  const snap = await getMediaHealthSnapshot()
+  const body = {
+    ok: snap.ok,
+    uploadsDir: snap.uploadsDir,
+    exists: snap.exists,
+    writable: snap.writable,
+    fileCount: snap.fileCount,
+    sampleFiles: snap.sampleFiles,
+    sampleReadOk: snap.sampleReadOk,
+    staticRouteOk: true,
+    staticPath: '/uploads',
+    error: snap.error,
+  }
+  if (!snap.ok) {
+    return res.status(503).json(body)
+  }
+  return res.json(body)
+})
+
 // --- API ROUTES ---
 app.use(streamProxyRouter)
 app.use('/api', restApi)
 
-// --- 404 HANDLER ---
+// --- 404 HANDLER (skip /uploads — handled above) ---
 app.use((req, res) => {
   res.status(404).json({
     error: 'Route not found',
@@ -69,6 +117,8 @@ app.use((req, res) => {
 // --- START SERVER ---
 async function main() {
   try {
+    assertUploadStorageReady()
+    logUploadStorageDiagnostics()
     await ensureAllApiDataFiles()
 
     const server = app.listen(PORT, () => {

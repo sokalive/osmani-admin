@@ -6,10 +6,145 @@ import { randomBytes } from 'node:crypto'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-export const UPLOADS_DIR = path.join(__dirname, '../uploads')
+/** Prefer UPLOAD_DIR for production (Render persistent disk); fallback for local dev only. */
+function resolveUploadsDir() {
+  const raw = process.env.UPLOAD_DIR?.trim()
+  if (raw) return path.resolve(raw)
+  return path.join(__dirname, '../uploads')
+}
+
+export const UPLOADS_DIR = resolveUploadsDir()
 
 export function ensureUploadsDir() {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+}
+
+/**
+ * Blocks startup if uploads root is unusable (missing disk mount, read-only, etc.).
+ */
+export function assertUploadStorageReady() {
+  if (process.env.REQUIRE_UPLOAD_DIR === '1' && !process.env.UPLOAD_DIR?.trim()) {
+    console.error('[uploads] FATAL: REQUIRE_UPLOAD_DIR=1 but UPLOAD_DIR is not set')
+    process.exit(1)
+  }
+  ensureUploadsDir()
+  try {
+    fs.accessSync(UPLOADS_DIR, fs.constants.R_OK | fs.constants.W_OK)
+  } catch (e) {
+    console.error('[uploads] FATAL: UPLOAD_DIR not readable/writable:', UPLOADS_DIR, e?.message || e)
+    process.exit(1)
+  }
+  const probe = path.join(UPLOADS_DIR, '.write-probe')
+  try {
+    fs.writeFileSync(probe, Buffer.from('ok'))
+    fs.unlinkSync(probe)
+  } catch (e) {
+    console.error('[uploads] FATAL: cannot write probe file under UPLOAD_DIR:', UPLOADS_DIR, e?.message || e)
+    process.exit(1)
+  }
+}
+
+function listRegularFiles(dir) {
+  let names = []
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const files = []
+  for (const name of names) {
+    if (name.startsWith('.')) continue
+    const full = path.join(dir, name)
+    try {
+      const st = fs.statSync(full)
+      if (st.isFile()) files.push(name)
+    } catch {
+      /* skip */
+    }
+  }
+  return files.sort()
+}
+
+/** Startup diagnostics — called once after assertUploadStorageReady */
+export function logUploadStorageDiagnostics() {
+  const exists = fs.existsSync(UPLOADS_DIR)
+  const files = listRegularFiles(UPLOADS_DIR)
+  const sample = files.slice(0, 8)
+
+  if (process.env.RENDER === 'true' && !process.env.UPLOAD_DIR?.trim()) {
+    console.warn(
+      '[uploads] WARN: RENDER=true but UPLOAD_DIR is unset — files go to ephemeral disk under repo path and WILL be lost on deploy. Set UPLOAD_DIR to your persistent disk mount.',
+    )
+  }
+
+  console.log('[uploads] resolved UPLOAD_DIR:', UPLOADS_DIR)
+  console.log('[uploads] directory exists:', exists)
+  console.log('[uploads] image file count:', files.length)
+  if (sample.length) console.log('[uploads] sample files:', sample.join(', '))
+}
+
+export async function getMediaHealthSnapshot() {
+  let exists = false
+  let writable = false
+  let fileCount = 0
+  let sampleFiles = []
+  let sampleReadOk = false
+  let sampleBytes = 0
+  let error = null
+
+  try {
+    exists = fs.existsSync(UPLOADS_DIR)
+    if (!exists) {
+      return {
+        ok: false,
+        uploadsDir: UPLOADS_DIR,
+        exists,
+        writable,
+        fileCount,
+        sampleFiles,
+        sampleReadOk,
+        sampleBytes,
+        error: 'upload directory missing',
+      }
+    }
+    fs.accessSync(UPLOADS_DIR, fs.constants.W_OK)
+    writable = true
+    const files = listRegularFiles(UPLOADS_DIR)
+    fileCount = files.length
+    sampleFiles = files.slice(0, 5)
+    if (sampleFiles.length > 0) {
+      const first = path.join(UPLOADS_DIR, sampleFiles[0])
+      const buf = await fs.promises.readFile(first)
+      sampleReadOk = buf.length > 0
+      sampleBytes = buf.length
+    } else {
+      sampleReadOk = true
+    }
+    return {
+      ok: true,
+      uploadsDir: UPLOADS_DIR,
+      exists,
+      writable,
+      fileCount,
+      sampleFiles,
+      sampleReadOk,
+      sampleBytes,
+      error: null,
+    }
+  } catch (e) {
+    error = String(e?.message || e)
+    return {
+      ok: false,
+      uploadsDir: UPLOADS_DIR,
+      exists,
+      writable,
+      fileCount,
+      sampleFiles,
+      sampleReadOk,
+      sampleBytes,
+      error,
+    }
+  }
 }
 
 const storage = multer.diskStorage({

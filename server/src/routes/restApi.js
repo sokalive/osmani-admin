@@ -43,6 +43,7 @@ restApi.get('/', (_req, res) => {
     message: 'API is working 🚀',
     endpoints: [
       '/health',
+      '/health/media',
       '/users',
       '/channels',
       '/banners',
