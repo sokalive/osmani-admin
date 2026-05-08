@@ -282,7 +282,6 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
     const pendingRows = await pool.query(
       `SELECT id, source_device_id, target_device_id, created_at, status
        FROM device_transfers
-       WHERE status = 'requested'
        ORDER BY created_at DESC
        LIMIT 100`,
     )
@@ -298,7 +297,9 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
       dailyLimit: toInt(values.transfer_daily_limit, 5, 1, 1000),
       weeklyLimit: toInt(values.transfer_weekly_limit, 15, 1, 5000),
       cooldownMinutes: toInt(values.transfer_cooldown_minutes, 60, 1, 1440),
-      pending: pendingRows.rows.map((r) => ({
+      pending: pendingRows.rows
+        .filter((r) => ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked'].includes(String(r.status)))
+        .map((r) => ({
         id: String(r.id),
         deviceLabel: `${r.source_device_id} -> ${r.target_device_id || 'pending'}`,
         requestedAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
@@ -360,9 +361,9 @@ deviceSecurityRouter.get('/settings/security-suite', async (_req, res) => {
        ORDER BY updated_at DESC`,
     )
     const alertRows = await pool.query(
-      `SELECT id, actor, detail, status, created_at, metadata
+      `SELECT id, actor, event_type, detail, status, created_at, metadata
        FROM security_events
-       WHERE status IN ('failed', 'blocked', 'warning')
+       WHERE status IN ('failed', 'blocked', 'warning', 'pending')
        ORDER BY created_at DESC
        LIMIT 200`,
     )
@@ -376,7 +377,7 @@ deviceSecurityRouter.get('/settings/security-suite', async (_req, res) => {
       })),
       alerts: alertRows.rows.map((r) => ({
         id: String(r.id),
-        title: String(r.actor || 'Security alert'),
+        title: String(r.event_type || r.actor || 'Security alert'),
         deviceOrIp: String(r.detail || ''),
         time: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
         timestamp: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
@@ -431,11 +432,26 @@ deviceSecurityRouter.put('/settings/security-suite', async (req, res) => {
       throw e
     }
     emitSync('app_settings_changed', { section: 'security_suite' })
+    const alertRows = await pool.query(
+      `SELECT id, actor, event_type, detail, status, created_at, metadata
+       FROM security_events
+       WHERE status IN ('failed', 'blocked', 'warning', 'pending')
+       ORDER BY created_at DESC
+       LIMIT 200`,
+    )
     return res.json({
       protectionMode: String(b.protectionMode || 'automatic'),
       whitelist,
       blockedUsers,
-      alerts: Array.isArray(b.alerts) ? b.alerts : [],
+      alerts: alertRows.rows.map((r) => ({
+        id: String(r.id),
+        title: String(r.event_type || r.actor || 'Security alert'),
+        deviceOrIp: String(r.detail || ''),
+        time: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+        timestamp: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+        status: String(r.status) === 'completed' ? 'resolved' : 'active',
+        kind: String(r.metadata?.kind || 'pattern'),
+      })),
     })
   } catch (e) {
     console.error('[security-suite] PUT', e)
@@ -471,6 +487,43 @@ deviceSecurityRouter.post('/settings/security-suite/restore-whitelist', async (_
   }
 })
 
+deviceSecurityRouter.delete('/settings/security-suite/alerts/:id', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(pool)
+    const id = text(req.params.id, 64)
+    const { rowCount } = await pool.query(`DELETE FROM security_events WHERE id = $1`, [id])
+    if (!rowCount) return res.status(404).json({ error: 'Alert not found' })
+    return res.status(204).send()
+  } catch (e) {
+    console.error('[security-suite] alert delete', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+deviceSecurityRouter.post('/settings/security-suite/alerts/bulk-delete', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(pool)
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    if (b.all === true) {
+      const out = await pool.query(
+        `DELETE FROM security_events WHERE status IN ('failed', 'blocked', 'warning', 'pending')`,
+      )
+      return res.json({ ok: true, deleted: Number(out.rowCount) || 0 })
+    }
+    const ids = Array.isArray(b.ids) ? b.ids.map((x) => text(x, 64)).filter(Boolean) : []
+    if (ids.length === 0) return res.status(400).json({ error: 'ids or all=true required' })
+    const out = await pool.query(`DELETE FROM security_events WHERE id = ANY($1::text[])`, [ids])
+    return res.json({ ok: true, deleted: Number(out.rowCount) || 0 })
+  } catch (e) {
+    console.error('[security-suite] alert bulk-delete', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
 deviceSecurityRouter.get('/security-logs', async (_req, res) => {
   try {
     const pool = getPool()
@@ -494,6 +547,42 @@ deviceSecurityRouter.get('/security-logs', async (_req, res) => {
     )
   } catch (e) {
     console.error('[security-logs] GET', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+deviceSecurityRouter.delete('/security-logs/:id', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(pool)
+    const id = text(req.params.id, 64)
+    const { rowCount } = await pool.query(`DELETE FROM security_events WHERE id = $1`, [id])
+    if (!rowCount) return res.status(404).json({ error: 'Security log not found' })
+    return res.status(204).send()
+  } catch (e) {
+    console.error('[security-logs] DELETE', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+deviceSecurityRouter.post('/security-logs/bulk-delete', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(pool)
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const all = b.all === true
+    if (all) {
+      const out = await pool.query(`DELETE FROM security_events`)
+      return res.json({ ok: true, deleted: Number(out.rowCount) || 0 })
+    }
+    const ids = Array.isArray(b.ids) ? b.ids.map((x) => text(x, 64)).filter(Boolean) : []
+    if (ids.length === 0) return res.status(400).json({ error: 'ids or all=true required' })
+    const out = await pool.query(`DELETE FROM security_events WHERE id = ANY($1::text[])`, [ids])
+    return res.json({ ok: true, deleted: Number(out.rowCount) || 0 })
+  } catch (e) {
+    console.error('[security-logs] bulk-delete', e)
     return res.status(500).json({ error: String(e.message || e) })
   }
 })
@@ -637,6 +726,32 @@ deviceSecurityRouter.delete('/transfer-codes/:id', async (req, res) => {
     return res.status(204).send()
   } catch (e) {
     console.error('[transfer-codes] DELETE', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+deviceSecurityRouter.post('/transfer-codes/bulk-delete', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(pool)
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const all = b.all === true
+    const expiredOnly = b.expiredOnly === true
+    if (all && expiredOnly) {
+      const out = await pool.query(`DELETE FROM transfer_codes WHERE status = 'expired' OR expires_at <= now()`)
+      return res.json({ ok: true, deleted: Number(out.rowCount) || 0 })
+    }
+    if (all) {
+      const out = await pool.query(`DELETE FROM transfer_codes`)
+      return res.json({ ok: true, deleted: Number(out.rowCount) || 0 })
+    }
+    const ids = Array.isArray(b.ids) ? b.ids.map((x) => text(x, 64)).filter(Boolean) : []
+    if (ids.length === 0) return res.status(400).json({ error: 'ids or all=true required' })
+    const out = await pool.query(`DELETE FROM transfer_codes WHERE id = ANY($1::text[])`, [ids])
+    return res.json({ ok: true, deleted: Number(out.rowCount) || 0 })
+  } catch (e) {
+    console.error('[transfer-codes] bulk-delete', e)
     return res.status(500).json({ error: String(e.message || e) })
   }
 })

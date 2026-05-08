@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, ClipboardList, Shield, XCircle } from 'lucide-react'
+import { ClipboardList, Shield, Trash2 } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getSecurityLogs } from '../lib/api'
+import { deleteSecurityLog, getSecurityLogs, postSecurityLogsBulkDelete } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
 
 function isTransferAttempt(row) {
@@ -13,6 +13,7 @@ function isTransferAttempt(row) {
 function SecurityLogsPage() {
   const { showToast } = useToast()
   const [logs, setLogs] = useState([])
+  const [selected, setSelected] = useState(() => new Set())
 
   const refresh = useCallback(async () => {
     try {
@@ -34,21 +35,82 @@ function SecurityLogsPage() {
   }, [refresh])
 
   const stats = useMemo(() => {
-    let transferAttempts = 0
-    let approved = 0
-    let denied = 0
+    let transferEvents = 0
+    let completedTransfers = 0
+    let failedTransfers = 0
     for (const row of logs) {
-      if (row.status === 'completed') approved += 1
-      if (row.status === 'failed') denied += 1
-      if (isTransferAttempt(row)) transferAttempts += 1
+      const isTransfer = isTransferAttempt(row)
+      if (!isTransfer) continue
+      transferEvents += 1
+      if (row.status === 'completed') completedTransfers += 1
+      if (row.status === 'failed' || row.status === 'blocked' || row.status === 'warning') failedTransfers += 1
     }
     return {
       securityEvents: logs.length,
-      transferAttempts,
-      approved,
-      denied,
+      transferEvents,
+      completedTransfers,
+      failedTransfers,
     }
   }, [logs])
+
+  const selectedCount = selected.size
+
+  function toggleOne(id) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    setSelected((prev) => {
+      if (prev.size === logs.length) return new Set()
+      return new Set(logs.map((r) => r.id))
+    })
+  }
+
+  async function deleteOne(id) {
+    try {
+      await deleteSecurityLog(id)
+      setSelected((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      await refresh()
+      showToast('success', 'Log deleted.')
+    } catch (e) {
+      showToast('error', e?.message || 'Delete failed')
+    }
+  }
+
+  async function deleteSelected() {
+    if (selected.size === 0) return
+    if (!window.confirm(`Delete ${selected.size} selected logs?`)) return
+    try {
+      await postSecurityLogsBulkDelete({ ids: Array.from(selected) })
+      setSelected(new Set())
+      await refresh()
+      showToast('success', 'Selected logs deleted.')
+    } catch (e) {
+      showToast('error', e?.message || 'Bulk delete failed')
+    }
+  }
+
+  async function deleteAll() {
+    if (!logs.length) return
+    if (!window.confirm('Delete ALL security logs? This does not affect subscriptions.')) return
+    try {
+      await postSecurityLogsBulkDelete({ all: true })
+      setSelected(new Set())
+      await refresh()
+      showToast('success', 'All logs deleted.')
+    } catch (e) {
+      showToast('error', e?.message || 'Delete all failed')
+    }
+  }
 
   return (
     <>
@@ -59,7 +121,7 @@ function SecurityLogsPage() {
             Security Logs
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Full history of all security events — no deletion
+            Full history of security and transfer events.
           </p>
         </header>
 
@@ -75,29 +137,52 @@ function SecurityLogsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-amber-400/90">
               Transfer Attempts
             </p>
-            <p className="mt-3 text-3xl font-bold tabular-nums text-amber-50">{stats.transferAttempts}</p>
+            <p className="mt-3 text-3xl font-bold tabular-nums text-amber-50">{stats.transferEvents}</p>
           </article>
           <article className="rounded-2xl border border-emerald-500/35 bg-emerald-950/25 p-5 ring-1 ring-emerald-500/20">
-            <div className="flex items-center gap-2 text-emerald-400/90">
-              <CheckCircle2 className="h-5 w-5" />
-              <span className="text-xs font-semibold uppercase tracking-wide">Approved</span>
-            </div>
-            <p className="mt-3 text-3xl font-bold tabular-nums text-emerald-100">{stats.approved}</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Transfer Completed</p>
+            <p className="mt-3 text-3xl font-bold tabular-nums text-emerald-100">{stats.completedTransfers}</p>
           </article>
           <article className="rounded-2xl border border-red-500/35 bg-red-950/25 p-5 ring-1 ring-red-500/20">
-            <div className="flex items-center gap-2 text-red-400/90">
-              <XCircle className="h-5 w-5" />
-              <span className="text-xs font-semibold uppercase tracking-wide">Denied</span>
-            </div>
-            <p className="mt-3 text-3xl font-bold tabular-nums text-red-100">{stats.denied}</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-red-300">Transfer Failed/Blocked</p>
+            <p className="mt-3 text-3xl font-bold tabular-nums text-red-100">{stats.failedTransfers}</p>
           </article>
         </section>
 
         <section>
-          <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold text-white">
-            <ClipboardList className="h-5 w-5 text-amber-400" />
-            Event log
-          </h2>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+              <ClipboardList className="h-5 w-5 text-amber-400" />
+              Event log
+            </h2>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleAll}
+                className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              >
+                {selectedCount === logs.length && logs.length > 0 ? 'Unselect all' : 'Select all'}
+              </button>
+              <button
+                type="button"
+                disabled={selectedCount === 0}
+                onClick={deleteSelected}
+                className="inline-flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-200 disabled:opacity-40"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete selected ({selectedCount})
+              </button>
+              <button
+                type="button"
+                disabled={logs.length === 0}
+                onClick={deleteAll}
+                className="inline-flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-200 disabled:opacity-40"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete all
+              </button>
+            </div>
+          </div>
           <ul className="space-y-3">
             {logs.map((row) => (
               <li
@@ -107,6 +192,12 @@ function SecurityLogsPage() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(row.id)}
+                        onChange={() => toggleOne(row.id)}
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500/40"
+                      />
                       <span className="font-mono text-sm font-semibold text-amber-100/95">
                         {row.actor}
                       </span>
@@ -129,6 +220,14 @@ function SecurityLogsPage() {
                     <p className="text-xs text-slate-500">
                       {formatReadableDateTime(row.timestamp)}
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => deleteOne(row.id)}
+                      className="mt-2 inline-flex items-center gap-1 rounded-lg border border-red-500/35 bg-red-500/10 px-2.5 py-1 text-[11px] font-semibold text-red-200"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Delete
+                    </button>
                   </div>
                 </div>
               </li>

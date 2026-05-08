@@ -5,12 +5,18 @@ import {
   KeyRound,
   Plus,
   Search,
+  Trash2,
 } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { randomTransferCode } from '../data/transferCodesSeed'
-import { getTransferCodes, postTransferCode, putTransferCode } from '../lib/api'
+import {
+  deleteTransferCode,
+  getTransferCodes,
+  postTransferCode,
+  postTransferCodesBulkDelete,
+  putTransferCode,
+} from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
 import { appendSecurityLog } from '../lib/securityActivityLog'
 
@@ -54,6 +60,7 @@ function TransferCodesPage() {
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [search, setSearch] = useState('')
   const [flash, setFlash] = useState(null)
+  const [selected, setSelected] = useState(() => new Set())
 
   const loadCodes = useCallback(async () => {
     try {
@@ -98,17 +105,35 @@ function TransferCodesPage() {
   const stats = useMemo(() => {
     let active = 0
     let used = 0
+    let expired = 0
     for (const c of withEffective) {
       const st = c.displayStatus
       if (st === 'active') active += 1
       if (st === 'used') used += 1
+      if (st === 'expired') expired += 1
     }
-    return { total: codes.length, active, used }
+    return { total: codes.length, active, used, expired }
   }, [withEffective, codes.length])
 
   function showFlash(type, message) {
     setFlash({ type, message })
     window.setTimeout(() => setFlash(null), 3200)
+  }
+
+  function toggleOne(id) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    setSelected((prev) => {
+      if (prev.size === filtered.length) return new Set()
+      return new Set(filtered.map((r) => r.id))
+    })
   }
 
   const copyCode = useCallback(async (code) => {
@@ -126,6 +151,11 @@ function TransferCodesPage() {
     if (new Date(c.expiresAt).getTime() <= Date.now()) return
     try {
       await putTransferCode(cid, { ...c, status: 'revoked' })
+      setSelected((prev) => {
+        const next = new Set(prev)
+        next.delete(cid)
+        return next
+      })
       await loadCodes()
       appendSecurityLog({
         actor: 'Admin',
@@ -140,28 +170,68 @@ function TransferCodesPage() {
   }
 
   async function generateOne() {
-    const created = new Date().toISOString()
-    const hours = 24 + Math.floor(Math.random() * 48)
-    const expiresAt = new Date(Date.now() + hours * 3600000).toISOString()
-    const code = randomTransferCode()
     try {
-      await postTransferCode({
-        code,
-        deviceUser: 'Unassigned device',
-        createdAt: created,
-        expiresAt,
-        status: 'active',
-      })
+      const created = await postTransferCode({ deviceUser: 'Unassigned device', hours: 24 })
       await loadCodes()
       appendSecurityLog({
         actor: 'Admin',
         eventType: 'Code transfer',
         status: 'completed',
-        detail: `issued ${code} · expires ${expiresAt.slice(0, 10)}`,
+        detail: `issued ${created?.code || 'transfer code'} · expires ${(created?.expiresAt || '').slice(0, 10)}`,
       })
       showFlash('success', 'New transfer code generated.')
     } catch (e) {
       showToast('error', e?.message || 'Generate failed')
+    }
+  }
+
+  async function deleteOne(id) {
+    try {
+      await deleteTransferCode(id)
+      setSelected((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      await loadCodes()
+      showFlash('success', 'Code deleted.')
+    } catch (e) {
+      showToast('error', e?.message || 'Delete failed')
+    }
+  }
+
+  async function deleteSelected() {
+    if (selected.size === 0) return
+    if (!window.confirm(`Delete ${selected.size} selected codes?`)) return
+    try {
+      await postTransferCodesBulkDelete({ ids: Array.from(selected) })
+      setSelected(new Set())
+      await loadCodes()
+      showFlash('success', 'Selected codes deleted.')
+    } catch (e) {
+      showToast('error', e?.message || 'Bulk delete failed')
+    }
+  }
+
+  async function deleteAll() {
+    if (!window.confirm('Delete ALL transfer codes history?')) return
+    try {
+      await postTransferCodesBulkDelete({ all: true })
+      setSelected(new Set())
+      await loadCodes()
+      showFlash('success', 'All transfer codes deleted.')
+    } catch (e) {
+      showToast('error', e?.message || 'Delete all failed')
+    }
+  }
+
+  async function cleanupExpired() {
+    try {
+      await postTransferCodesBulkDelete({ all: true, expiredOnly: true })
+      await loadCodes()
+      showFlash('success', 'Expired codes cleaned up.')
+    } catch (e) {
+      showToast('error', e?.message || 'Expired cleanup failed')
     }
   }
 
@@ -186,7 +256,7 @@ function TransferCodesPage() {
               Transfer Codes
             </h1>
             <p className="mt-1 text-sm text-slate-400">
-              One-time transfer tokens · countdown updates every second
+              One-time transfer tokens for immediate ownership move
             </p>
           </div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
@@ -206,6 +276,13 @@ function TransferCodesPage() {
             >
               <Plus className="h-4 w-4" />
               Generate Code
+            </button>
+            <button
+              type="button"
+              onClick={cleanupExpired}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-600 px-4 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              Cleanup Expired
             </button>
           </div>
         </header>
@@ -228,9 +305,40 @@ function TransferCodesPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-sky-400/90">Used Codes</p>
             <p className="mt-3 text-3xl font-bold text-sky-100">{stats.used}</p>
           </div>
+          <div className="rounded-2xl border border-slate-500/30 bg-slate-900/40 p-5 ring-1 ring-slate-500/20">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">Expired Codes</p>
+            <p className="mt-3 text-3xl font-bold text-slate-100">{stats.expired}</p>
+          </div>
         </section>
 
         <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-b border-slate-800 px-4 py-3">
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+            >
+              {selected.size === filtered.length && filtered.length > 0 ? 'Unselect all' : 'Select all'}
+            </button>
+            <button
+              type="button"
+              disabled={selected.size === 0}
+              onClick={deleteSelected}
+              className="inline-flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-200 disabled:opacity-40"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete selected ({selected.size})
+            </button>
+            <button
+              type="button"
+              disabled={codes.length === 0}
+              onClick={deleteAll}
+              className="inline-flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-200 disabled:opacity-40"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete all
+            </button>
+          </div>
           {codes.length === 0 ? (
             <div className="px-5 py-14 text-center">
               <p className="text-slate-400">No transfer codes yet.</p>
@@ -244,10 +352,10 @@ function TransferCodesPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => loadCodes()}
+                  onClick={loadCodes}
                   className="rounded-xl border border-slate-600 px-6 py-3 text-sm font-semibold text-slate-300 hover:bg-slate-800"
                 >
-                  Restore demo codes
+                  Refresh
                 </button>
               </div>
             </div>
@@ -257,6 +365,7 @@ function TransferCodesPage() {
             <table className="w-full min-w-[960px] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-700/80 bg-slate-900/60 text-[11px] uppercase tracking-wide text-slate-400">
+                  <th className="px-4 py-3 font-semibold">Select</th>
                   <th className="px-4 py-3 font-semibold">Code</th>
                   <th className="px-4 py-3 font-semibold">Device / User</th>
                   <th className="px-4 py-3 font-semibold">Created At</th>
@@ -268,6 +377,14 @@ function TransferCodesPage() {
               <tbody>
                 {filtered.map((c) => (
                   <tr key={c.id} className="border-b border-slate-800/80 hover:bg-slate-900/50">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(c.id)}
+                        onChange={() => toggleOne(c.id)}
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500/40"
+                      />
+                    </td>
                     <td className="px-4 py-3 font-mono text-base font-bold tracking-wide text-amber-100">
                       {c.code}
                     </td>
@@ -310,7 +427,14 @@ function TransferCodesPage() {
                             Revoke
                           </button>
                         ) : (
-                          <span className="text-xs text-slate-600">—</span>
+                          <button
+                            type="button"
+                            onClick={() => deleteOne(c.id)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-200"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </button>
                         )}
                       </div>
                     </td>

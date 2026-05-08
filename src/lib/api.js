@@ -208,6 +208,7 @@ export const postTransferCode = (body) => apiPost('/transfer-codes', body)
 export const postAdminForceTransferPhone = (body) => apiPost('/transfer/admin-force-phone', body)
 export const putTransferCode = (id, body) => apiPut(`/transfer-codes/${encodeURIComponent(id)}`, body)
 export const deleteTransferCode = (id) => apiDelete(`/transfer-codes/${encodeURIComponent(id)}`)
+export const postTransferCodesBulkDelete = (body) => apiPost('/transfer-codes/bulk-delete', body)
 
 /** --- Settings docs --- */
 export const getZenopaySettings = () => apiGet('/settings/zenopay')
@@ -244,9 +245,15 @@ export const getSecuritySuite = () => apiGet('/settings/security-suite')
 export const putSecuritySuite = (body) => apiPut('/settings/security-suite', body)
 export const postSecuritySuiteRestoreWhitelist = () =>
   apiPost('/settings/security-suite/restore-whitelist', {})
+export const deleteSecurityAlert = (id) =>
+  apiDelete(`/settings/security-suite/alerts/${encodeURIComponent(id)}`)
+export const postSecurityAlertsBulkDelete = (body) =>
+  apiPost('/settings/security-suite/alerts/bulk-delete', body)
 
 export const getSecurityLogs = () => apiGet('/security-logs')
 export const postSecurityLog = (entry) => apiPost('/security-logs', entry)
+export const deleteSecurityLog = (id) => apiDelete(`/security-logs/${encodeURIComponent(id)}`)
+export const postSecurityLogsBulkDelete = (body) => apiPost('/security-logs/bulk-delete', body)
 
 export const getDashboard = () => apiGet('/dashboard')
 export const putDashboardSettings = (body) => apiPut('/settings/dashboard', body)
