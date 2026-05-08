@@ -244,21 +244,43 @@ export async function updateTransactionByOrderId(orderId, { status, external_id,
   return rows[0] ?? null
 }
 
-/** Digits only — matches DB normalization for payment phone lookup. */
+/**
+ * Canonical Tanzania phone digits for comparisons.
+ *  - 0678089174  -> 255678089174
+ *  - 255678089174 -> 255678089174
+ *  - +255678089174 -> 255678089174
+ */
 export function normalizePhoneDigits(phone) {
-  return String(phone ?? '').replace(/[^0-9]/g, '')
+  const digits = String(phone ?? '').replace(/[^0-9]/g, '')
+  if (!digits) return ''
+  if (/^0\d{9}$/.test(digits)) return `255${digits.slice(1)}`
+  if (/^[67]\d{8}$/.test(digits)) return `255${digits}`
+  if (/^255\d{9}$/.test(digits)) return digits
+  return digits
+}
+
+function tzPhoneCanonicalSql(expr) {
+  return `(
+    CASE
+      WHEN regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g') ~ '^0[0-9]{9}$'
+        THEN '255' || substr(regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g'), 2)
+      WHEN regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g') ~ '^[67][0-9]{8}$'
+        THEN '255' || regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g')
+      ELSE regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g')
+    END
+  )`
 }
 
 export async function getLatestCompletedTransactionByNormalizedPhone(phoneInput) {
   const digits = normalizePhoneDigits(phoneInput)
-  if (!digits || digits.length < 9) return null
+  if (!digits || digits.length < 10) return null
   const pool = requirePool()
   const { rows } = await pool.query(
     `SELECT *
      FROM transactions t
      WHERE t.status = 'completed'
        AND t.plan_id IS NOT NULL
-       AND regexp_replace(COALESCE(t.phone::text, ''), '[^0-9]', '', 'g') = $1
+       AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
      ORDER BY t.created_at DESC
      LIMIT 1`,
     [digits],
@@ -272,7 +294,7 @@ export async function getLatestCompletedTransactionByNormalizedPhone(phoneInput)
  */
 export async function findActiveDeviceIdForPaymentPhone(phoneInput) {
   const digits = normalizePhoneDigits(phoneInput)
-  if (!digits || digits.length < 9) return null
+  if (!digits || digits.length < 10) return null
   const pool = requirePool()
   const { rows } = await pool.query(
     `SELECT t.device_id::text AS device_id
@@ -280,7 +302,7 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput) {
      INNER JOIN device_subscriptions ds ON ds.device_id = t.device_id
      WHERE t.status = 'completed'
        AND t.plan_id IS NOT NULL
-       AND regexp_replace(COALESCE(t.phone::text, ''), '[^0-9]', '', 'g') = $1
+       AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
        AND ds.status = 'active'
        AND ds.expires_at > now()
      ORDER BY t.created_at DESC
