@@ -1,6 +1,40 @@
 /**
  * Billing: plans, transactions, subscriptions, ZenoPay settings (single-row).
  */
+async function currentConstraintDefinition(client, tableName, constraintName) {
+  const { rows } = await client.query(
+    `SELECT pg_get_constraintdef(c.oid) AS def
+     FROM pg_constraint c
+     INNER JOIN pg_class t ON t.oid = c.conrelid
+     INNER JOIN pg_namespace n ON n.oid = t.relnamespace
+     WHERE n.nspname = current_schema()
+       AND t.relname = $1
+       AND c.conname = $2
+     LIMIT 1`,
+    [tableName, constraintName],
+  )
+  return String(rows[0]?.def || '')
+}
+
+async function ensureStatusConstraint(client, { tableName, constraintName, statuses }) {
+  const def = (await currentConstraintDefinition(client, tableName, constraintName)).toLowerCase()
+  const wants = Array.from(new Set(statuses.map((s) => String(s).toLowerCase())))
+  const hasAll = def && wants.every((s) => def.includes(`'${s}'`))
+  if (hasAll) {
+    console.log(`[startup-migration] ${constraintName} already up-to-date`)
+    return false
+  }
+  const statusSql = wants.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ')
+  await client.query(`ALTER TABLE ${tableName} DROP CONSTRAINT IF EXISTS ${constraintName};`)
+  await client.query(
+    `ALTER TABLE ${tableName}
+     ADD CONSTRAINT ${constraintName}
+     CHECK (status IN (${statusSql}));`,
+  )
+  console.log(`[startup-migration] ${constraintName} updated`)
+  return true
+}
+
 export async function ensureBillingTables(client) {
   await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`)
 
@@ -198,15 +232,11 @@ export async function ensureBillingTables(client) {
         CHECK (status IN ('active', 'pending_confirmation', 'used', 'revoked', 'expired'))
     );
   `)
-  await client.query(`
-    ALTER TABLE transfer_codes
-    DROP CONSTRAINT IF EXISTS transfer_codes_status_check;
-  `)
-  await client.query(`
-    ALTER TABLE transfer_codes
-    ADD CONSTRAINT transfer_codes_status_check
-    CHECK (status IN ('active', 'pending_confirmation', 'used', 'revoked', 'expired'));
-  `)
+  await ensureStatusConstraint(client, {
+    tableName: 'transfer_codes',
+    constraintName: 'transfer_codes_status_check',
+    statuses: ['active', 'pending_confirmation', 'used', 'revoked', 'expired'],
+  })
   await client.query(`
     CREATE INDEX IF NOT EXISTS transfer_codes_source_device_idx ON transfer_codes (source_device_id);
   `)
@@ -243,26 +273,20 @@ export async function ensureBillingTables(client) {
         )
     );
   `)
-  await client.query(`
-    ALTER TABLE device_transfers
-    DROP CONSTRAINT IF EXISTS device_transfers_status_check;
-  `)
-  await client.query(`
-    ALTER TABLE device_transfers
-    ADD CONSTRAINT device_transfers_status_check
-    CHECK (
-      status IN (
-        'requested',
-        'awaiting_target_submission',
-        'pending_confirmation',
-        'approved',
-        'completed',
-        'rejected',
-        'expired',
-        'revoked'
-      )
-    );
-  `)
+  await ensureStatusConstraint(client, {
+    tableName: 'device_transfers',
+    constraintName: 'device_transfers_status_check',
+    statuses: [
+      'requested',
+      'awaiting_target_submission',
+      'pending_confirmation',
+      'approved',
+      'completed',
+      'rejected',
+      'expired',
+      'revoked',
+    ],
+  })
   await client.query(`
     CREATE INDEX IF NOT EXISTS device_transfers_source_idx ON device_transfers (source_device_id, created_at DESC);
   `)
