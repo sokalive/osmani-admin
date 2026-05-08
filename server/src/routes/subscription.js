@@ -84,6 +84,43 @@ function rowToPublicStatus(row) {
   }
 }
 
+/**
+ * Shared path for GET /subscription-status and POST /subscription/verify:
+ * presence touch, reconcile + activate, then access state + plans.
+ */
+async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint }) {
+  const country = countryFromRequest(req)
+  const d = String(deviceId ?? '').trim()
+  const hint = String(orderIdHint ?? '').trim()
+  const fp = String(fingerprint ?? '').trim()
+
+  await billing.touchLivePresence({ deviceId: d, country }).catch((e) => {
+    console.error('[subscription-verify] touchLivePresence failed:', e)
+  })
+  liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId: d })
+
+  await reconcileOrdersForVerify(d, hint)
+
+  const row = await billing.getDeviceSubscriptionAccessState(d, fp)
+  const pub = rowToPublicStatus(row)
+  if (!pub.active) {
+    const plans = await billing.listPlansWithSubscriberCounts().catch(() => [])
+    return {
+      ...pub,
+      playbackAllowed: false,
+      plans: Array.isArray(plans)
+        ? plans.map((p) => ({
+            id: Number(p.id),
+            name: String(p.name ?? ''),
+            price: Number(p.price) || 0,
+            duration_days: Number(p.duration_days) || 0,
+          }))
+        : [],
+    }
+  }
+  return { ...pub, playbackAllowed: true }
+}
+
 /** GET /subscription-status — primary unlock check by device_id (poll every ~3s as fallback). */
 subscriptionRouter.get('/subscription-status', async (req, res) => {
   try {
@@ -92,43 +129,18 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
       return res.status(400).json({ error: 'device_id is required' })
     }
     const orderIdHint = String(req.query.order_id ?? '').trim()
-    const country = countryFromRequest(req)
+    const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
     console.log('[subscription-verify] enter', {
+      method: 'GET',
+      path: '/subscription-status',
       deviceId: shortRef(deviceId),
       order_id: orderIdHint ? shortRef(orderIdHint) : undefined,
     })
 
-    await billing.touchLivePresence({ deviceId, country }).catch((e) => {
-      console.error('[subscription-status] touchLivePresence failed:', e)
-    })
-    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
-    const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
-
-    await reconcileOrdersForVerify(deviceId, orderIdHint)
-
-    const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
-    const pub = rowToPublicStatus(row)
-    const bodyOut = !pub.active
-      ? {
-          ...pub,
-          playbackAllowed: false,
-          plans: await billing
-            .listPlansWithSubscriberCounts()
-            .then((plans) =>
-              Array.isArray(plans)
-                ? plans.map((p) => ({
-                    id: Number(p.id),
-                    name: String(p.name ?? ''),
-                    price: Number(p.price) || 0,
-                    duration_days: Number(p.duration_days) || 0,
-                  }))
-                : [],
-            )
-            .catch(() => []),
-        }
-      : { ...pub, playbackAllowed: true }
+    const bodyOut = await executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint: fp })
 
     console.log('[subscription-verify] response', {
+      method: 'GET',
       deviceId: shortRef(deviceId),
       active: bodyOut.active === true,
       isActive: bodyOut.isActive === true,
@@ -140,6 +152,48 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
     res.json(bodyOut)
   } catch (e) {
     console.error('[subscription-status]', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+/**
+ * POST /subscription/verify — same logic as GET /subscription-status (mobile app compatibility).
+ * Body: { device_id, device_fingerprint | fingerprint, order_id? }
+ */
+subscriptionRouter.post('/subscription/verify', async (req, res) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(b.device_id ?? b.deviceId ?? '').trim()
+    if (!deviceId) {
+      return res.status(400).json({ error: 'device_id is required' })
+    }
+    const orderIdHint = String(b.order_id ?? b.orderId ?? '').trim()
+    const fp = String(
+      b.device_fingerprint ?? b.fingerprint ?? b.deviceFingerprint ?? req.headers['x-device-fingerprint'] ?? '',
+    ).trim()
+
+    console.log('[subscription-verify] enter', {
+      method: 'POST',
+      path: '/subscription/verify',
+      deviceId: shortRef(deviceId),
+      order_id: orderIdHint ? shortRef(orderIdHint) : undefined,
+    })
+
+    const bodyOut = await executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint: fp })
+
+    console.log('[subscription-verify] response', {
+      method: 'POST',
+      deviceId: shortRef(deviceId),
+      active: bodyOut.active === true,
+      isActive: bodyOut.isActive === true,
+      playbackAllowed: bodyOut.playbackAllowed === true,
+      status: bodyOut.status,
+      expiresAt: bodyOut.expiresAt ? shortRef(bodyOut.expiresAt, 28) : null,
+    })
+
+    res.json(bodyOut)
+  } catch (e) {
+    console.error('[subscription/verify]', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

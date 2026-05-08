@@ -57,6 +57,7 @@ restApi.get('/', (_req, res) => {
       '/zeno-webhook',
       '/payment-status/:order_id',
       '/subscription-status',
+      '/subscription/verify',
       '/subscription-stream',
       '/analytics/overview',
       '/analytics/channels',
