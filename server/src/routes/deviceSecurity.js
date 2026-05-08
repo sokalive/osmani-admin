@@ -166,24 +166,39 @@ async function resolveSubscriptionByDevice(pool, deviceId) {
 async function checkTransferLimits(pool, sourceDeviceId, cooldownMinutes, dailyLimit, weeklyLimit) {
   const { rows } = await pool.query(
     `SELECT
-       COUNT(*) FILTER (WHERE created_at >= now() - interval '1 day')::int AS day_count,
-       COUNT(*) FILTER (WHERE created_at >= now() - interval '7 day')::int AS week_count,
-       MAX(created_at) AS last_at
+       COUNT(*) FILTER (
+         WHERE status = 'completed'
+           AND COALESCE(completed_at, created_at) >= now() - interval '1 day'
+       )::int AS day_count,
+       COUNT(*) FILTER (
+         WHERE status = 'completed'
+           AND COALESCE(completed_at, created_at) >= now() - interval '7 day'
+       )::int AS week_count,
+       MAX(COALESCE(completed_at, created_at)) FILTER (WHERE status = 'completed') AS last_completed_at
      FROM device_transfers
-     WHERE source_device_id = $1
-       AND status IN ('completed', 'approved')`,
+     WHERE source_device_id = $1`,
     [sourceDeviceId],
   )
   const r = rows[0] || {}
   const dayCount = Number(r.day_count) || 0
   const weekCount = Number(r.week_count) || 0
-  const lastAt = r.last_at ? new Date(r.last_at).getTime() : null
+  const lastCompletedAtMs = r.last_completed_at ? new Date(r.last_completed_at).getTime() : null
   const cooldownMs = cooldownMinutes * 60 * 1000
   const nowMs = Date.now()
-  if (dayCount >= dailyLimit) return { ok: false, reason: 'Daily transfer limit reached' }
-  if (weekCount >= weeklyLimit) return { ok: false, reason: 'Weekly transfer limit reached' }
-  if (lastAt && nowMs - lastAt < cooldownMs) return { ok: false, reason: 'Transfer cooldown active' }
-  return { ok: true }
+  if (dayCount >= dailyLimit) return { ok: false, reason: 'Daily transfer limit reached', dayCount, weekCount }
+  if (weekCount >= weeklyLimit) return { ok: false, reason: 'Weekly transfer limit reached', dayCount, weekCount }
+  if (lastCompletedAtMs && nowMs - lastCompletedAtMs < cooldownMs) {
+    const retryAfterSec = Math.max(1, Math.ceil((lastCompletedAtMs + cooldownMs - nowMs) / 1000))
+    return {
+      ok: false,
+      reason: 'Transfer cooldown active',
+      dayCount,
+      weekCount,
+      retryAfterSec,
+      cooldownUntilMs: lastCompletedAtMs + cooldownMs,
+    }
+  }
+  return { ok: true, dayCount, weekCount, cooldownMinutes }
 }
 
 /** Shared admin force transfer by device IDs. Emits SSE + subscription bus after commit. */
@@ -340,7 +355,22 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       transfer_cooldown_minutes: payload.cooldownMinutes,
     })
     emitSync('app_settings_changed', payload)
-    return res.json({ ...payload, pending: b.pending || [], logs: b.logs || [] })
+    const values = await readAppSettings(pool, {
+      transfer_mode: 'confirmation',
+      transfer_enabled: 'true',
+      transfer_daily_limit: '5',
+      transfer_weekly_limit: '15',
+      transfer_cooldown_minutes: '60',
+    })
+    return res.json({
+      transferMode: values.transfer_mode === 'manual' ? 'manual' : 'confirmation',
+      transferEnabled: String(values.transfer_enabled).toLowerCase() !== 'false',
+      dailyLimit: toInt(values.transfer_daily_limit, 5, 1, 1000),
+      weeklyLimit: toInt(values.transfer_weekly_limit, 15, 1, 5000),
+      cooldownMinutes: toInt(values.transfer_cooldown_minutes, 60, 1, 1440),
+      pending: Array.isArray(b.pending) ? b.pending : [],
+      logs: Array.isArray(b.logs) ? b.logs : [],
+    })
   } catch (e) {
     console.error('[device-control] PUT', e)
     return res.status(500).json({ error: String(e.message || e) })
@@ -831,6 +861,13 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
       transfer_cooldown_minutes: '60',
     })
     const transferEnabled = String(cfg.transfer_enabled || 'true').toLowerCase() !== 'false'
+    console.log('[transfer/request] policy snapshot', {
+      sourceDeviceId,
+      transferEnabled,
+      cooldownMinutes: toInt(cfg.transfer_cooldown_minutes, 60, 1, 1440),
+      dailyLimit: toInt(cfg.transfer_daily_limit, 5, 1, 1000),
+      weeklyLimit: toInt(cfg.transfer_weekly_limit, 15, 1, 5000),
+    })
     if (!transferEnabled) {
       const disabledMessage =
         'Timu Yetu Ya Ufundi imezima huduma hii kwa muda. Tafadhali wasiliana na mhudumu kama unahitaji msaada.'
@@ -873,14 +910,41 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
         metadata: { source_device_id: sourceDeviceId, reason: reasonCode },
       })
       if (reasonCode === 'cooldown_active') {
-        console.warn('[transfer/request] rejected: cooldown active', { sourceDeviceId })
+        console.warn('[transfer/request] rejected: cooldown active', {
+          sourceDeviceId,
+          retryAfterSec: limits.retryAfterSec,
+          cooldownUntilMs: limits.cooldownUntilMs,
+          dayCount: limits.dayCount,
+          weekCount: limits.weekCount,
+        })
       } else if (reasonCode === 'daily_limit_reached') {
-        console.warn('[transfer/request] rejected: daily limit reached', { sourceDeviceId })
+        console.warn('[transfer/request] rejected: daily limit reached', {
+          sourceDeviceId,
+          dayCount: limits.dayCount,
+          dailyLimit: toInt(cfg.transfer_daily_limit, 5, 1, 1000),
+          weekCount: limits.weekCount,
+        })
       } else if (reasonCode === 'weekly_limit_reached') {
-        console.warn('[transfer/request] rejected: weekly limit reached', { sourceDeviceId })
+        console.warn('[transfer/request] rejected: weekly limit reached', {
+          sourceDeviceId,
+          weekCount: limits.weekCount,
+          weeklyLimit: toInt(cfg.transfer_weekly_limit, 15, 1, 5000),
+          dayCount: limits.dayCount,
+        })
       }
-      return res.status(429).json({ ok: false, code: reasonCode, error: limits.reason })
+      return res.status(429).json({
+        ok: false,
+        code: reasonCode,
+        error: limits.reason,
+        retryAfterSec: limits.retryAfterSec || null,
+        cooldownUntilMs: limits.cooldownUntilMs || null,
+      })
     }
+    console.log('[transfer/request] policy counters pass', {
+      sourceDeviceId,
+      dayCount: limits.dayCount,
+      weekCount: limits.weekCount,
+    })
     const generatedCode = randomTransferCode()
     const { rows } = await pool.query(
       `INSERT INTO transfer_codes
