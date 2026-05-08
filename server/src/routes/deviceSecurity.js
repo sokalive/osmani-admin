@@ -165,6 +165,16 @@ const TRANSFER_SETTING_KEYS = {
   cooldown: 'transfer_cooldown_minutes',
 }
 
+/** Persisted `transfer_enabled` text: only explicit true-ish values enable; empty / unknown = off (no default-on). */
+function parsePersistedTransferEnabledStrict(raw) {
+  const s = String(raw ?? '').trim().toLowerCase()
+  if (!s) return false
+  return ['1', 'true', 'yes', 'on'].includes(s)
+}
+
+const TRANSFER_DISABLED_CLIENT_MESSAGE =
+  'Timu Yetu Ya Ufundi imezima huduma hii kwa muda. Tafadhali wasiliana na mhudumu kama unahitaji msaada.'
+
 function parseBoolInput(v, fallback = true) {
   if (typeof v === 'boolean') return v
   const s = String(v ?? '')
@@ -236,7 +246,7 @@ async function readTransferSettingsLive(pool) {
   const enabledCell = String(byKey[TRANSFER_SETTING_KEYS.enabled] ?? '').trim()
   return {
     transferMode: byKey[TRANSFER_SETTING_KEYS.mode] === 'manual' ? 'manual' : 'confirmation',
-    transferEnabled: parseBoolInput(enabledCell, true),
+    transferEnabled: parsePersistedTransferEnabledStrict(enabledCell),
     dailyLimit: toInt(byKey[TRANSFER_SETTING_KEYS.daily], 5, 1, 1000),
     weeklyLimit: toInt(byKey[TRANSFER_SETTING_KEYS.weekly], 15, 1, 5000),
     cooldownMinutes: toInt(byKey[TRANSFER_SETTING_KEYS.cooldown], 60, 1, 1440),
@@ -1033,6 +1043,22 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
     await ensureSecurityTables(pool)
     await cleanupSecurity(pool)
+
+    const livePolicy = await readTransferSettingsLive(pool)
+    if (!livePolicy.transferEnabled) {
+      const responseBody = {
+        ok: false,
+        code: 'TRANSFER_DISABLED',
+        error: TRANSFER_DISABLED_CLIENT_MESSAGE,
+        maintenance: true,
+      }
+      console.warn('[transfer/request] rejected: TRANSFER_DISABLED (persisted transfer_enabled is not truthy)', {
+        persistedRows: livePolicy.dbRows?.filter((r) => r.key === TRANSFER_SETTING_KEYS.enabled),
+      })
+      console.log('[transfer/request] response body', responseBody)
+      return res.status(403).json(responseBody)
+    }
+
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const sourceDeviceId = text(b.source_device_id ?? b.device_id, 128)
     const paymentPhone = text(b.payment_phone ?? b.phone, 40)
@@ -1056,36 +1082,14 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
       return res.status(400).json({ error: 'Source subscription expired' })
     }
     const fpHash = fingerprintHash(b.target_fingerprint || b.fingerprint)
-    const livePolicy = await readTransferSettingsLive(pool)
-    const transferEnabled = livePolicy.transferEnabled
     console.log('[transfer/request] policy snapshot', {
       sourceDeviceId,
-      transferEnabled,
+      transferEnabled: livePolicy.transferEnabled,
       cooldownMinutes: livePolicy.cooldownMinutes,
       dailyLimit: livePolicy.dailyLimit,
       weeklyLimit: livePolicy.weeklyLimit,
       persistedRows: livePolicy.dbRows,
     })
-    if (!transferEnabled) {
-      const disabledMessage =
-        'Timu Yetu Ya Ufundi imezima huduma hii kwa muda. Tafadhali wasiliana na mhudumu kama unahitaji msaada.'
-      await logSecurityEvent(pool, {
-        actor: sourceDeviceId,
-        eventType: 'Transfer request',
-        status: 'failed',
-        detail: 'Transfer service disabled by admin setting',
-        metadata: { source_device_id: sourceDeviceId, reason: 'transfer_disabled' },
-      })
-      console.warn('[transfer/request] rejected: transfer disabled', { sourceDeviceId })
-      const responseBody = {
-        ok: false,
-        code: 'transfer_disabled',
-        error: disabledMessage,
-        maintenance: true,
-      }
-      console.log('[transfer/request] response body', responseBody)
-      return res.status(503).json(responseBody)
-    }
     const limits = await checkTransferLimits(
       pool,
       sourceDeviceId,
