@@ -1,0 +1,30 @@
+# Render Blueprint — static admin SPA (Vite).
+# After merging to your production branch, ensure this service's branch in the dashboard
+# matches (typically main). Apply via Dashboard → Blueprint → Link repository file.
+#
+# Reduces stale HTML at the CDN while keeping hashed /assets/* cacheable (immutable filenames).
+
+services:
+  - type: web
+    name: osmani-admin-mpya
+    runtime: static
+    repo: https://github.com/sokalive/osmani-admin.git
+    branch: main
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # Hashed bundles — safe to cache aggressively (filename changes each build).
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      # SPA shell — always revalidate so clients pick up new chunk references quickly.
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache, no-store, must-revalidate
+      - path: /
+        name: Cache-Control
+        value: no-cache, no-store, must-revalidate
