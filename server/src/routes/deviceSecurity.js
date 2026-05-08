@@ -146,6 +146,24 @@ function parseBoolInput(v, fallback = true) {
   return fallback
 }
 
+function parseBoolDetailed(v, fallback = true) {
+  const type = typeof v
+  if (type === 'boolean') {
+    return { value: v, source: 'boolean', raw: v, fallbackUsed: false }
+  }
+  const s = String(v ?? '')
+    .trim()
+    .toLowerCase()
+  if (!s) return { value: fallback, source: 'empty', raw: v, fallbackUsed: true }
+  if (['1', 'true', 'yes', 'on', 't'].includes(s)) {
+    return { value: true, source: 'string_true', raw: v, fallbackUsed: false }
+  }
+  if (['0', 'false', 'no', 'off', 'f'].includes(s)) {
+    return { value: false, source: 'string_false', raw: v, fallbackUsed: false }
+  }
+  return { value: fallback, source: 'unrecognized', raw: v, fallbackUsed: true }
+}
+
 async function readTransferSettingsLive(pool) {
   const keys = Object.values(TRANSFER_SETTING_KEYS)
   const { rows } = await pool.query(
@@ -384,24 +402,49 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     if (!pool || !client) return res.status(503).json({ error: 'Database not configured' })
     await ensureSecurityTables(client)
     const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const parsedEnabled = parseBoolDetailed(b.transferEnabled, true)
     const payload = {
       transferMode: String(b.transferMode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
-      transferEnabled: parseBoolInput(b.transferEnabled, true),
+      transferEnabled: parsedEnabled.value,
       dailyLimit: toInt(b.dailyLimit, 5, 1, 1000),
       weeklyLimit: toInt(b.weeklyLimit, 15, 1, 5000),
       cooldownMinutes: toInt(b.cooldownMinutes, 60, 1, 1440),
     }
+    console.log('[device-control] PUT incoming payload', {
+      transferEnabledRaw: b.transferEnabled,
+      transferEnabledType: typeof b.transferEnabled,
+      parsedEnabled,
+    })
     await client.query('BEGIN')
     const before = await readTransferSettingsLive(client)
+    const beforeEnabledRow = await client.query(
+      `SELECT key, value, updated_at FROM app_settings WHERE key = $1 FOR UPDATE`,
+      [TRANSFER_SETTING_KEYS.enabled],
+    )
+    const sqlWriteEnabled = payload.transferEnabled ? 'true' : 'false'
     await saveAppSettings(client, {
       [TRANSFER_SETTING_KEYS.mode]: payload.transferMode,
-      [TRANSFER_SETTING_KEYS.enabled]: payload.transferEnabled ? 'true' : 'false',
+      [TRANSFER_SETTING_KEYS.enabled]: sqlWriteEnabled,
       [TRANSFER_SETTING_KEYS.daily]: payload.dailyLimit,
       [TRANSFER_SETTING_KEYS.weekly]: payload.weeklyLimit,
       [TRANSFER_SETTING_KEYS.cooldown]: payload.cooldownMinutes,
     })
     const live = await readTransferSettingsLive(client)
+    const afterEnabledRow = await client.query(
+      `SELECT key, value, updated_at FROM app_settings WHERE key = $1`,
+      [TRANSFER_SETTING_KEYS.enabled],
+    )
+    const persistedEnabledValue = String(afterEnabledRow.rows[0]?.value ?? '')
+    if (persistedEnabledValue !== sqlWriteEnabled) {
+      throw new Error(
+        `transfer_enabled write mismatch: expected=${sqlWriteEnabled} persisted=${persistedEnabledValue || '<empty>'}`,
+      )
+    }
     await client.query('COMMIT')
+    const postCommitEnabledRow = await pool.query(
+      `SELECT key, value, updated_at FROM app_settings WHERE key = $1`,
+      [TRANSFER_SETTING_KEYS.enabled],
+    )
     emitSync('app_settings_changed', payload)
     const responseBody = {
       transferMode: live.transferMode,
@@ -413,6 +456,12 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       logs: Array.isArray(b.logs) ? b.logs : [],
     }
     console.log('[device-control] PUT save payload', payload)
+    console.log('[device-control] PUT transfer_enabled write', {
+      beforeRow: beforeEnabledRow.rows[0] || null,
+      sqlWriteEnabled,
+      afterRowInTxn: afterEnabledRow.rows[0] || null,
+      afterRowPostCommit: postCommitEnabledRow.rows[0] || null,
+    })
     console.log('[device-control] PUT old->new', {
       old: {
         transferMode: before.transferMode,

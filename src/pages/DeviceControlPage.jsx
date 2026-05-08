@@ -134,9 +134,18 @@ function DeviceControlPage() {
       weeklyLimit: weekly,
       cooldownMinutes: cool,
     })
+    const requestPayload = {
+      transferMode: draft.transferMode,
+      transferEnabled: Boolean(draft.transferEnabled),
+      dailyLimit: daily,
+      weeklyLimit: weekly,
+      cooldownMinutes: cool,
+      pending: Array.isArray(cfg.pending) ? cfg.pending : [],
+      logs: Array.isArray(next.logs) ? next.logs : [],
+    }
     try {
-      console.log('[device-control-ui] payload sent', next)
-      const saved = await putDeviceControlSettings(next)
+      console.log('[device-control-ui] payload sent', requestPayload)
+      const saved = await putDeviceControlSettings(requestPayload)
       console.log('[device-control-ui] saved settings response', saved)
       const hydrated = normalizeDeviceControlFromServer(saved)
       setCfg(hydrated)
