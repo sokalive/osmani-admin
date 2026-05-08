@@ -4,6 +4,7 @@ import * as billing from '../billingStore.js'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
+import { getSyncStreamClientsSnapshot } from './liveSync.js'
 
 export const deviceSecurityRouter = Router()
 
@@ -889,6 +890,21 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
       },
     })
     await client.query('COMMIT')
+    const connected = getSyncStreamClientsSnapshot()
+    const sourceNorm = String(codeRow.source_device_id || '').trim().toLowerCase()
+    const sourceFound = connected.clients.some(
+      (c) => String(c.device_id || '').trim().toLowerCase() === sourceNorm,
+    )
+    console.log('[transfer-sse] before emit transfer_confirmation_required', {
+      event: 'transfer_confirmation_required',
+      source_device_id: codeRow.source_device_id,
+      target_device_id: targetDeviceId,
+      pending_transfer_id: pendingTransferId,
+      code,
+      connected_clients_count: connected.count,
+      source_client_found: sourceFound,
+      connected_clients: connected.clients,
+    })
     emitTransferScoped('transfer_confirmation_required', {
       code,
       pending_transfer_id: pendingTransferId,
