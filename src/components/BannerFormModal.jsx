@@ -308,8 +308,8 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
     e.preventDefault()
     setSubmitError(null)
 
-    const title = form.title.trim()
-    const description = form.description.trim()
+    const title = String(form.title ?? '').trim()
+    const description = String(form.description ?? '').trim()
     if (!title) {
       setSubmitError('Title is required.')
       return
@@ -391,7 +391,7 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       badgeAutomation: true,
       badge: '',
       badgeEnabled: form.badgeEnabled,
-      badgeColor: form.badgeColor.trim() || '#FBBF24',
+      badgeColor: String(form.badgeColor ?? '').trim() || '#FBBF24',
       badgeBlink: form.badgeBlink,
       badgePriority: Number.isFinite(Number(form.badgePriority)) ? Number(form.badgePriority) : 0,
       enableCountdown: form.enableCountdown,
@@ -403,8 +403,8 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       isEnabled: form.isEnabled,
       useTimer: isDailyRepeat,
       repeatMode: isDailyRepeat ? 'daily' : 'none',
-      startTime: isDailyRepeat ? form.startTime.trim() : '',
-      endTime: isDailyRepeat ? form.endTime.trim() : '',
+      startTime: isDailyRepeat ? String(form.startTime ?? '').trim() : '',
+      endTime: isDailyRepeat ? String(form.endTime ?? '').trim() : '',
       timezone: (form.timezone || '').trim() || 'UTC',
       weekdayMask: Number.isFinite(Number(form.weekdayMask))
         ? Math.min(127, Math.max(0, Math.floor(Number(form.weekdayMask))))

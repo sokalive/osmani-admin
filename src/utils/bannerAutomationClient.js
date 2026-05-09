@@ -138,13 +138,13 @@ export function computeAutomationForAll(rows, now = new Date()) {
       const s = new Date(r.event_start).getTime()
       return !Number.isNaN(s) && s > t
     })
-  const firstUpcoming = upcoming[0] ?? null
-    .sort((a, b) => {
+  const firstUpcoming =
+    [...upcoming].sort((a, b) => {
       const da = eventStartMs(a)
       const db = eventStartMs(b)
       if (da !== db) return da - db
       return sortOrderKey(a) - sortOrderKey(b)
-    })
+    })[0] ?? null
 
   for (const row of rows) {
     const id = Number(row.id)
@@ -285,8 +285,8 @@ export function formToEngineRow(form, draftId) {
     repeat_mode: useTimer ? 'daily' : 'none',
     event_timer: useTimer,
     weekday_mask,
-    daily_start: form.useTimer ? form.startTime : null,
-    daily_end: form.useTimer ? form.endTime : null,
+    daily_start: useTimer ? form.startTime : null,
+    daily_end: useTimer ? form.endTime : null,
     sort_order: Number(form.sortOrder) || 0,
     enabled: form.isEnabled !== false,
   }

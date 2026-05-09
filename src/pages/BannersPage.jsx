@@ -9,9 +9,15 @@ import { formatWeekdayMaskAbbrev, WEEKDAY_MASK_ALL } from '../utils/bannerAutoma
 
 function normalizeBanner(b) {
   if (!b || typeof b !== 'object') return null
+  const raw = b.createdAt ?? b.created_at
+  let createdAt = new Date(0)
+  if (raw != null && raw !== '') {
+    const d = new Date(raw)
+    if (!Number.isNaN(d.getTime())) createdAt = d
+  }
   return {
     ...b,
-    createdAt: b.createdAt ? new Date(b.createdAt) : new Date(0),
+    createdAt,
   }
 }
 
@@ -39,7 +45,7 @@ function bannerPayloadForApi(b, overrides = {}) {
     badgeAutomation: m.badgeAutomation !== false && m.badge_automation !== false,
     badge: m.badge ?? '',
     badgeEnabled: m.badgeEnabled ?? m.badge_enabled ?? true,
-    badgeColor: (m.badgeColor ?? m.badge_color ?? '#FBBF24').trim() || '#FBBF24',
+    badgeColor: String(m.badgeColor ?? m.badge_color ?? '#FBBF24').trim() || '#FBBF24',
     badgeBlink: Boolean(m.badgeBlink ?? m.badge_blink),
     badgePriority: Number(m.badgePriority ?? m.badge_priority) || 0,
     enableCountdown: Boolean(m.enableCountdown ?? m.enable_countdown),
@@ -294,10 +300,10 @@ function BannersPage() {
 
               const useAuto = (b.badgeAutomation ?? b.badge_automation) !== false
               const label = useAuto
-                ? (b.effectiveBadge ?? '').trim() || String(b.badge ?? '').trim()
+                ? String(b.effectiveBadge ?? '').trim() || String(b.badge ?? '').trim()
                 : String(b.badge ?? '').trim()
               const badgeOn = (b.badgeEnabled ?? b.badge_enabled) !== false && label
-              const badgeColor = (b.badgeColor ?? b.badge_color ?? '#FBBF24').trim() || '#FBBF24'
+              const badgeColor = String(b.badgeColor ?? b.badge_color ?? '#FBBF24').trim() || '#FBBF24'
               const badgeBlink = Boolean(b.badgeBlink ?? b.badge_blink)
 
               return (
@@ -343,7 +349,7 @@ function BannersPage() {
 
                   <div className="relative aspect-[21/9] overflow-hidden bg-slate-800">
                     <img
-                      src={b.image}
+                      src={String(b.image ?? '')}
                       alt=""
                       className={`h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04] ${
                         !b.isEnabled ? 'brightness-[0.85]' : ''
@@ -371,7 +377,7 @@ function BannersPage() {
                   <div className="flex flex-1 flex-col p-4">
                     <div className="flex items-start justify-between gap-2">
                       <h2 className="line-clamp-2 text-lg font-bold leading-snug text-white">
-                        {b.title}
+                        {String(b.title ?? '')}
                       </h2>
                       <span
                         className={`shrink-0 rounded-lg px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide transition-colors duration-300 ${
@@ -389,7 +395,7 @@ function BannersPage() {
                             : 'Not shown'}
                       </span>
                     </div>
-                    <p className="mt-1 line-clamp-2 text-sm text-slate-400">{b.description}</p>
+                    <p className="mt-1 line-clamp-2 text-sm text-slate-400">{String(b.description ?? '')}</p>
 
                     <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-wide">
                       <span

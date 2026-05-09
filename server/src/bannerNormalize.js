@@ -35,12 +35,14 @@ export function bannerToPublicResponse(row, req, automationEntry = null, now = n
   const eventEnd = formatTsForApi(row.event_end)
   const rid = row.redirect_channel_id != null ? Number(row.redirect_channel_id) : null
   const sortOrder = Number(row.sort_order) || 0
-  const repeatMode = String(row.repeat_mode ?? '').trim().toLowerCase() === 'daily' ? 'daily' : 'none'
-  const timezone = row.timezone == null ? '' : String(row.timezone)
-  const weekdayMask =
-    row.weekday_mask != null && row.weekday_mask !== ''
-      ? Math.min(127, Math.max(0, Number(row.weekday_mask)))
-      : 127
+  const repeatModeRaw = String(row.repeat_mode ?? '').trim().toLowerCase()
+  const repeatMode = repeatModeRaw === 'daily' ? 'daily' : 'none'
+  const timezone = row.timezone == null || row.timezone === '' ? 'UTC' : String(row.timezone)
+  const weekdayMaskRaw =
+    row.weekday_mask != null && row.weekday_mask !== '' ? Number(row.weekday_mask) : 127
+  const weekdayMask = Number.isFinite(weekdayMaskRaw)
+    ? Math.min(127, Math.max(0, Math.floor(weekdayMaskRaw)))
+    : 127
   const createdAt = formatTsForApi(row.created_at)
   const updatedAt = formatTsForApi(row.updated_at) ?? createdAt
   const badgeAutomation = row.badge_automation !== false && row.badge_automation !== 0
@@ -117,12 +119,14 @@ export function bannerToResponse(row, req, automationEntry = null, now = new Dat
   const eventEnd = formatTsForApi(row.event_end)
   const rid = row.redirect_channel_id != null ? Number(row.redirect_channel_id) : null
   const sortOrder = Number(row.sort_order) || 0
-  const repeatMode = String(row.repeat_mode ?? '').trim().toLowerCase() === 'daily' ? 'daily' : 'none'
-  const timezone = row.timezone == null ? '' : String(row.timezone)
-  const weekdayMask =
-    row.weekday_mask != null && row.weekday_mask !== ''
-      ? Math.min(127, Math.max(0, Number(row.weekday_mask)))
-      : 127
+  const repeatModeRaw = String(row.repeat_mode ?? '').trim().toLowerCase()
+  const repeatMode = repeatModeRaw === 'daily' ? 'daily' : 'none'
+  const timezone = row.timezone == null || row.timezone === '' ? 'UTC' : String(row.timezone)
+  const weekdayMaskRaw =
+    row.weekday_mask != null && row.weekday_mask !== '' ? Number(row.weekday_mask) : 127
+  const weekdayMask = Number.isFinite(weekdayMaskRaw)
+    ? Math.min(127, Math.max(0, Math.floor(weekdayMaskRaw)))
+    : 127
   const createdIso = ca instanceof Date ? ca.toISOString() : formatTsForApi(ca)
   const updatedIso =
     (ua instanceof Date ? ua.toISOString() : formatTsForApi(ua)) ?? createdIso
@@ -162,8 +166,6 @@ export function bannerToResponse(row, req, automationEntry = null, now = new Dat
     enabled: Boolean(row.enabled),
     eventTimer: useTimer,
     repeat_mode: repeatMode,
-    repeatMode,
-    timezone,
     dailyStart: formatTimeForApi(row.daily_start),
     dailyEnd: formatTimeForApi(row.daily_end),
     weekdayMask,

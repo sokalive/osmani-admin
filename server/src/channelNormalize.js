@@ -8,7 +8,8 @@ const DISPLAY_SECTION_LABEL = {
   movies: 'Movies',
 }
 
-function normalizeDisplaySection(v) {
+/** Coerce legacy/unknown values to general | sports | movies (never null). */
+export function normalizeDisplaySection(v) {
   const s = String(v ?? '').trim().toLowerCase()
   const alias = {
     general: 'general',
@@ -229,6 +230,7 @@ export function channelToResponse(c, req) {
   const m = migrateStoredChannel({ ...c })
   const rel = m.thumbnail || null
   const thumbFull = resolveThumbnailForApi(rel, req)
+  const displaySection = normalizeDisplaySection(m.displaySection ?? m.display_section)
 
   const isActive = Boolean(m.isActive)
   const showInApp = Boolean(m.showInApp)
@@ -245,8 +247,8 @@ export function channelToResponse(c, req) {
     is_active: isActive,
     show_in_app: showInApp,
     accessType: m.accessType === 'premium' ? 'premium' : 'free',
-    display_section: m.displaySection || 'general',
-    displaySection: m.displaySection || 'general',
+    display_section: displaySection,
+    displaySection,
     category: m.category || 'General',
     bottomTab: (m.bottomTab || m.category || 'General').trim() || 'General',
     backupStream1: m.backupStream1 ?? '',

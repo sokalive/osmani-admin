@@ -136,13 +136,13 @@ export function computeAutomationForAll(rows, now = new Date()) {
       return !Number.isNaN(s) && s > t
     })
 
-  const firstUpcoming = upcoming[0] ?? null
-    .sort((a, b) => {
+  const firstUpcoming =
+    [...upcoming].sort((a, b) => {
       const da = eventStartMs(a)
       const db = eventStartMs(b)
       if (da !== db) return da - db
       return sortOrderKey(a) - sortOrderKey(b)
-    })
+    })[0] ?? null
 
   for (const row of rows) {
     const id = Number(row.id)

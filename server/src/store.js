@@ -2,7 +2,7 @@
  * Channel persistence — PostgreSQL (replaces previous JSON file storage).
  * Legacy JSON implementation is preserved as a comment block at the end of this file.
  */
-import { normalizePlayerType } from './channelNormalize.js'
+import { normalizeDisplaySection, normalizePlayerType } from './channelNormalize.js'
 import { ensureChannelsTable } from './db/channelsTable.js'
 import { getPool } from './db/pool.js'
 
@@ -15,7 +15,7 @@ function rowToChannel(row) {
     name: row.name ?? '',
     url: row.url ?? '',
     thumbnail: row.thumbnail ?? null,
-    displaySection: row.display_section ?? 'general',
+    displaySection: normalizeDisplaySection(row.display_section),
     category: row.category ?? 'General',
     bottomTab: row.bottom_tab ?? 'General',
     isLive: Boolean(row.is_live),
@@ -40,7 +40,7 @@ function channelToRowParams(c) {
     c.name ?? '',
     c.url ?? '',
     c.thumbnail ?? null,
-    c.displaySection ?? 'general',
+    normalizeDisplaySection(c.displaySection),
     c.category ?? 'General',
     c.bottomTab ?? 'General',
     Boolean(c.isLive),

@@ -26,9 +26,7 @@ export async function ensureChannelsTable(client) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       CONSTRAINT channels_access_type_check CHECK (access_type IN ('free', 'premium')),
-      CONSTRAINT channels_display_section_check CHECK (
-        display_section IN ('general', 'sports', 'movies', 'kids', 'news', 'music', 'docs')
-      )
+      CONSTRAINT channels_display_section_check CHECK (display_section IN ('general', 'sports', 'movies'))
     );
   `)
 
@@ -50,5 +48,33 @@ export async function ensureChannelsTable(client) {
       ELSE 'general'
     END
     WHERE display_section IS NULL OR TRIM(display_section) = '';
+  `)
+
+  /**
+   * Migrate legacy sections (kids/news/music/docs…) and infer sports vs movies from text.
+   * Only updates rows outside the canonical mobile set.
+   */
+  await client.query(`
+    UPDATE channels
+    SET display_section = CASE
+      WHEN lower(trim(coalesce(name, '') || ' ' || coalesce(category, '') || ' ' || coalesce(bottom_tab, ''))) ~
+           '(sport|espn|soccer|football|michez|michezo|match|fixture|premier|epl|uefa|fifa|nfl|nba|cricket|rugby|boxing|mma|olymp|mlb|nhl|bundes|laliga|eredivis|serie.?a|liga|golf|tennis)'
+        THEN 'sports'
+      WHEN lower(trim(coalesce(name, '') || ' ' || coalesce(category, '') || ' ' || coalesce(bottom_tab, ''))) ~
+           '(movie|tamthilia|film|cinema|sinema|vod|bollywood|hollywood|anime|drama|series|shows?|binge|screen|thriller)'
+        THEN 'movies'
+      ELSE 'general'
+    END,
+    updated_at = now()
+    WHERE display_section IS NULL
+       OR trim(display_section) = ''
+       OR display_section NOT IN ('general', 'sports', 'movies');
+  `)
+
+  await client.query(`
+    ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_display_section_check;
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD CONSTRAINT channels_display_section_check CHECK (display_section IN ('general', 'sports', 'movies'));
   `)
 }
