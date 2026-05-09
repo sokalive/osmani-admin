@@ -640,6 +640,39 @@ export async function getLatestCompletedTransactionForDevice(deviceId) {
   return rows[0] ?? null
 }
 
+/**
+ * Amount/currency/duration for subscription verify (Account screen).
+ * Latest completed txn + plan row (plan included even if soft-deleted for historical TX).
+ */
+export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT
+       t.amount,
+       t.currency,
+       t.plan_id,
+       COALESCE(p.duration_days, 0)::int AS plan_duration_days
+     FROM transactions t
+     LEFT JOIN plans p ON p.id = t.plan_id
+     WHERE t.device_id = $1
+       AND t.status = 'completed'
+       AND t.plan_id IS NOT NULL
+     ORDER BY t.created_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  const r = rows[0]
+  if (!r) return null
+  return {
+    amount: r.amount != null ? Number(r.amount) : null,
+    currency: r.currency != null ? String(r.currency).trim() || 'TZS' : 'TZS',
+    plan_id: r.plan_id != null ? Number(r.plan_id) : null,
+    plan_duration_days: Number(r.plan_duration_days) || 0,
+  }
+}
+
 /** Repair path: completed txn exists but device_subscriptions not yet updated. */
 export async function tryFinalizeActivationForDevice(deviceId) {
   const txn = await getLatestCompletedTransactionForDevice(deviceId)

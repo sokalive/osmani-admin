@@ -85,6 +85,32 @@ function rowToPublicStatus(row) {
 }
 
 /**
+ * Stable verify payload for mobile Account screen + normalizeVerifyResponse consumers:
+ * includes camelCase (expiresAt) and snake_case (expires_at, plan_duration_days) mirrors.
+ */
+export function normalizeVerifyResponse(pub, txnSummary) {
+  const expiresAt = pub.expiresAt ?? null
+  const amount =
+    txnSummary != null && txnSummary.amount != null ? Number(txnSummary.amount) : null
+  const currency =
+    txnSummary != null && txnSummary.currency != null
+      ? String(txnSummary.currency).trim() || null
+      : null
+  const planDurationDays =
+    txnSummary != null && txnSummary.plan_duration_days != null
+      ? Number(txnSummary.plan_duration_days)
+      : null
+  return {
+    ...pub,
+    expires_at: expiresAt,
+    amount,
+    currency,
+    plan_duration_days: planDurationDays,
+    planDurationDays,
+  }
+}
+
+/**
  * Shared path for GET /subscription-status and POST /subscription/verify:
  * presence touch, reconcile + activate, then access state + plans.
  */
@@ -103,10 +129,31 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
 
   const row = await billing.getDeviceSubscriptionAccessState(d, fp)
   const pub = rowToPublicStatus(row)
+  const txnSummary = await billing.getLatestCompletedSubscriptionTxnSummary(d)
+  const normalized = normalizeVerifyResponse(pub, txnSummary)
+
+  if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
+    console.log('[subscription_verify_debug]', {
+      deviceId: shortRef(d),
+      verifyPayload: {
+        active: normalized.active,
+        expiresAt: normalized.expiresAt ? shortRef(normalized.expiresAt, 28) : null,
+        expires_at: normalized.expires_at ? shortRef(normalized.expires_at, 28) : null,
+      },
+      txnSummary,
+      normalizedSubscription: {
+        amount: normalized.amount,
+        currency: normalized.currency,
+        plan_duration_days: normalized.plan_duration_days,
+        planDurationDays: normalized.planDurationDays,
+      },
+    })
+  }
+
   if (!pub.active) {
     const plans = await billing.listPlansWithSubscriberCounts().catch(() => [])
     return {
-      ...pub,
+      ...normalized,
       playbackAllowed: false,
       plans: Array.isArray(plans)
         ? plans.map((p) => ({
@@ -118,7 +165,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         : [],
     }
   }
-  return { ...pub, playbackAllowed: true }
+  return { ...normalized, playbackAllowed: true }
 }
 
 /** GET /subscription-status — primary unlock check by device_id (poll every ~3s as fallback). */
