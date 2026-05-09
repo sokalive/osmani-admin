@@ -88,6 +88,15 @@ function rowToPublicStatus(row) {
  * Stable verify payload for mobile Account screen + normalizeVerifyResponse consumers:
  * includes camelCase (expiresAt) and snake_case (expires_at, plan_duration_days) mirrors.
  */
+function coercePlanDurationDays(txnSummary) {
+  if (txnSummary == null) return null
+  const v = txnSummary.plan_duration_days
+  if (v === undefined || v === null) return null
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.trunc(n)
+}
+
 export function normalizeVerifyResponse(pub, txnSummary) {
   const expiresAt = pub.expiresAt ?? null
   const amount =
@@ -96,17 +105,22 @@ export function normalizeVerifyResponse(pub, txnSummary) {
     txnSummary != null && txnSummary.currency != null
       ? String(txnSummary.currency).trim() || null
       : null
-  const planDurationDays =
-    txnSummary != null && txnSummary.plan_duration_days != null
-      ? Number(txnSummary.plan_duration_days)
-      : null
+  const planDurationDays = coercePlanDurationDays(txnSummary)
+
+  if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
+    console.log('[subscription_duration_normalized]', {
+      txnSummaryPlanDurationRaw: txnSummary?.plan_duration_days,
+      normalizedPlanDurationDays: planDurationDays,
+    })
+  }
+
   return {
     ...pub,
     expires_at: expiresAt,
     amount,
     currency,
     plan_duration_days: planDurationDays,
-    planDurationDays,
+    planDurationDays: planDurationDays,
   }
 }
 

@@ -642,35 +642,54 @@ export async function getLatestCompletedTransactionForDevice(deviceId) {
 
 /**
  * Amount/currency/duration for subscription verify (Account screen).
- * Latest completed txn + plan row (plan included even if soft-deleted for historical TX).
+ * Uses latest completed txn, then resolves duration from plans via plan_id (same as activation),
+ * so duration_days does not depend on SQL JOIN quirks or nullable aggregates.
  */
 export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
-  const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return null
-  const { rows } = await pool.query(
-    `SELECT
-       t.amount,
-       t.currency,
-       t.plan_id,
-       COALESCE(p.duration_days, 0)::int AS plan_duration_days
-     FROM transactions t
-     LEFT JOIN plans p ON p.id = t.plan_id
-     WHERE t.device_id = $1
-       AND t.status = 'completed'
-       AND t.plan_id IS NOT NULL
-     ORDER BY t.created_at DESC
-     LIMIT 1`,
-    [d],
-  )
-  const r = rows[0]
-  if (!r) return null
-  return {
-    amount: r.amount != null ? Number(r.amount) : null,
-    currency: r.currency != null ? String(r.currency).trim() || 'TZS' : 'TZS',
-    plan_id: r.plan_id != null ? Number(r.plan_id) : null,
-    plan_duration_days: Number(r.plan_duration_days) || 0,
+
+  const txn = await getLatestCompletedTransactionForDevice(deviceId)
+  if (!txn) return null
+
+  const planId = txn.plan_id != null ? Number(txn.plan_id) : null
+  const planRow = planId != null ? await getPlanRowByIdAny(planId) : null
+
+  let planDurationDays = null
+  if (planRow != null && planRow.duration_days != null) {
+    const n = Number(planRow.duration_days)
+    if (Number.isFinite(n) && n >= 0) planDurationDays = Math.trunc(n)
   }
+
+  const out = {
+    amount: txn.amount != null ? Number(txn.amount) : null,
+    currency: txn.currency != null ? String(txn.currency).trim() || 'TZS' : 'TZS',
+    plan_id: planId,
+    plan_duration_days: planDurationDays,
+  }
+
+  if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
+    console.log('[subscription_duration_debug]', {
+      deviceId: d.length > 22 ? `${d.slice(0, 20)}…` : d,
+      latestTxnRow: {
+        order_id: txn.order_id,
+        plan_id: txn.plan_id,
+        amount: txn.amount,
+        currency: txn.currency,
+      },
+      joinedPlanRow: planRow
+        ? {
+            id: planRow.id,
+            duration_days: planRow.duration_days,
+            deleted_at: planRow.deleted_at ?? null,
+          }
+        : null,
+      duration_days_from_plan: planRow?.duration_days,
+      normalizedPlanDurationDays: out.plan_duration_days,
+    })
+  }
+
+  return out
 }
 
 /** Repair path: completed txn exists but device_subscriptions not yet updated. */
