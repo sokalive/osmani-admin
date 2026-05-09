@@ -6,10 +6,6 @@ import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deleteBanner, getBannersManage, postBanner, putBanner } from '../lib/api'
 import { formatWeekdayMaskAbbrev, WEEKDAY_MASK_ALL } from '../utils/bannerAutomationClient'
-import {
-  canBannerReceiveInteractions,
-  isBannerShownInCarousel,
-} from '../utils/bannerSchedule'
 
 function normalizeBanner(b) {
   if (!b || typeof b !== 'object') return null
@@ -288,9 +284,8 @@ function BannersPage() {
         ) : (
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {sortedBanners.map((b, index) => {
-              const now = new Date()
-              const shown = isBannerShownInCarousel(b, now)
-              const interactive = canBannerReceiveInteractions(b, now)
+              const shown = b.isActive !== false
+              const interactive = shown && (b.isEnabled !== false)
               void tick
 
               const activeBorder = b.isActive

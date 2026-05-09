@@ -35,6 +35,7 @@ export function isNowInDailyWindow(startTime, endTime, now = new Date()) {
 
 /** Bits 0–6 = Sun–Sat (matches `Date#getDay()`). Default 127 = all days. */
 export const WEEKDAY_MASK_ALL = 127
+export const ENDED_GRACE_MS = 3 * 60 * 1000
 function usesDailyRepeat(row) {
   const mode = String(row?.repeat_mode ?? '').trim().toLowerCase()
   return mode === 'daily' || Boolean(row?.event_timer)
@@ -87,6 +88,21 @@ export function isBannerEnded(row, now = new Date()) {
   return now.getTime() >= e
 }
 
+function endedDeltaMs(row, now = new Date()) {
+  if (row?.event_end == null || row.event_end === '') return null
+  const e = new Date(row.event_end).getTime()
+  if (Number.isNaN(e)) return null
+  return now.getTime() - e
+}
+
+function formatHoursMinutes(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '0:00'
+  const totalMin = Math.max(1, Math.ceil(ms / 60000))
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return `${h}:${String(m).padStart(2, '0')}`
+}
+
 export function comingSoonHours() {
   const n = Number(process.env.BANNER_COMING_SOON_HOURS ?? '72')
   return Number.isFinite(n) && n > 0 ? n : 72
@@ -119,6 +135,8 @@ export function computeAutomationForAll(rows, now = new Date()) {
       const s = new Date(r.event_start).getTime()
       return !Number.isNaN(s) && s > t
     })
+
+  const firstUpcoming = upcoming[0] ?? null
     .sort((a, b) => {
       const da = eventStartMs(a)
       const db = eventStartMs(b)
@@ -131,6 +149,17 @@ export function computeAutomationForAll(rows, now = new Date()) {
     if (!Number.isFinite(id)) continue
 
     if (isBannerEnded(row, now)) {
+      const deltaEnded = endedDeltaMs(row, now)
+      if (deltaEnded != null && deltaEnded > ENDED_GRACE_MS && firstUpcoming) {
+        const nextStart = eventStartMs(firstUpcoming)
+        const wait = nextStart - t
+        map.set(id, {
+          schedule_phase: 'COMING_SOON',
+          computed_badge: 'COMING SOON',
+          display_badge: `NEXT COMING SOON ${formatHoursMinutes(wait)}`,
+        })
+        continue
+      }
       map.set(id, {
         schedule_phase: 'ENDED',
         computed_badge: 'ENDED',

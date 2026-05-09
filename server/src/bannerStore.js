@@ -44,7 +44,7 @@ const SELECT_PUBLIC = `
  */
 const PUBLIC_VISIBILITY_WHERE = `
   b.active = true
-  AND (b.event_end IS NULL OR NOW() < b.event_end)
+  AND (b.event_end IS NULL OR NOW() < (b.event_end + INTERVAL '3 minutes'))
 `
 
 /** Public GET /api/banners — production spec only (no enabled / daily timer filter). */

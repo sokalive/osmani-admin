@@ -1,5 +1,5 @@
 import {
-  isBannerLiveNow,
+  isBannerEnded,
   resolveDisplayBadge,
 } from './bannerScheduleEngine.js'
 import { resolveThumbnailForApi } from './channelNormalize.js'
@@ -86,10 +86,10 @@ export function bannerToPublicResponse(row, req, automationEntry = null, now = n
     schedulePhase: automationEntry?.schedule_phase ?? null,
     computed_badge: automationEntry?.computed_badge ?? '',
     computedBadge: automationEntry?.computed_badge ?? '',
-    is_visible_now: isBannerLiveNow(row, now),
-    isVisibleNow: isBannerLiveNow(row, now),
-    can_interact: Boolean(row.enabled) && isBannerLiveNow(row, now),
-    canInteract: Boolean(row.enabled) && isBannerLiveNow(row, now),
+    is_visible_now: Boolean(row.active) && !isBannerEnded(row, now),
+    isVisibleNow: Boolean(row.active) && !isBannerEnded(row, now),
+    can_interact: Boolean(row.enabled) && Boolean(row.active) && !isBannerEnded(row, now),
+    canInteract: Boolean(row.enabled) && Boolean(row.active) && !isBannerEnded(row, now),
     event_timer: useTimer,
     eventTimer: useTimer,
     repeat_mode: repeatMode,
@@ -185,7 +185,7 @@ export function bannerToResponse(row, req, automationEntry = null, now = new Dat
     schedule_phase: automationEntry?.schedule_phase ?? null,
     computedBadge: automationEntry?.computed_badge ?? '',
     computed_badge: automationEntry?.computed_badge ?? '',
-    isVisibleNow: isBannerLiveNow(row, now),
-    is_visible_now: isBannerLiveNow(row, now),
+    isVisibleNow: Boolean(row.active) && !isBannerEnded(row, now),
+    is_visible_now: Boolean(row.active) && !isBannerEnded(row, now),
   }
 }

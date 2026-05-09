@@ -10,8 +10,6 @@ import {
   WEEKDAY_MASK_ALL,
 } from '../utils/bannerAutomationClient'
 import {
-  canBannerReceiveInteractions,
-  isBannerShownInCarousel,
   parseTimeToMinutes,
 } from '../utils/bannerSchedule'
 
@@ -156,6 +154,20 @@ function formatCountdown(ms) {
   return parts.join(' ')
 }
 
+function formatCountdownSw(ms) {
+  if (ms <= 0) return 'sek 0'
+  const s = Math.floor(ms / 1000)
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  const parts = []
+  if (d) parts.push(`${d}siku`)
+  if (d || h) parts.push(`${h}saa`)
+  parts.push(`${m}dak ${sec}sek`)
+  return parts.join(' ')
+}
+
 /**
  * Shared Add / Edit banner form — matches Channel modal chrome (dark + amber).
  */
@@ -279,13 +291,13 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
     if (startIso) {
       const t0 = new Date(startIso).getTime()
       if (!Number.isNaN(t0) && now < t0) {
-        return `Starts in ${formatCountdown(t0 - now)}`
+        return `Starts in ${formatCountdown(t0 - now)} · Huanza baada ya ${formatCountdownSw(t0 - now)}`
       }
     }
     if (endIso) {
       const t1 = new Date(endIso).getTime()
       if (!Number.isNaN(t1) && now < t1) {
-        return `Ends in ${formatCountdown(t1 - now)}`
+        return `Ends in ${formatCountdown(t1 - now)} · Inaisha baada ya ${formatCountdownSw(t1 - now)}`
       }
     }
     if (startIso || endIso) return 'Event window (preview)'
@@ -407,32 +419,9 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
   const isEdit = variant === 'edit'
   const eventStartIso = datetimeLocalToIso(form.eventStartLocal)
   const eventEndIso = datetimeLocalToIso(form.eventEndLocal)
-  const previewNow = new Date(clock)
   const isDailyRepeat = form.repeatMode === 'daily'
-  const carouselProbe = useMemo(
-    () => ({
-      isActive: form.isActive,
-      isEnabled: form.isEnabled,
-      useTimer: isDailyRepeat,
-      startTime: form.startTime,
-      endTime: form.endTime,
-      eventStart: eventStartIso,
-      eventEnd: eventEndIso,
-      weekdayMask: form.weekdayMask,
-    }),
-    [
-      form.isActive,
-      form.isEnabled,
-      isDailyRepeat,
-      form.startTime,
-      form.endTime,
-      form.weekdayMask,
-      eventStartIso,
-      eventEndIso,
-    ],
-  )
-  const slotWouldShow = isBannerShownInCarousel(carouselProbe, previewNow)
-  const tapsWouldWork = canBannerReceiveInteractions(carouselProbe, previewNow)
+  const slotWouldShow = form.isActive !== false
+  const tapsWouldWork = slotWouldShow && form.isEnabled !== false
 
   const previewDraftId =
     variant === 'edit' && banner?.id != null ? Number(banner.id) : -999999
@@ -475,7 +464,7 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
     const tStart = eventStartIso ? new Date(eventStartIso).getTime() : null
     const nowMs = clock
     if (tEnd != null && !Number.isNaN(tEnd) && nowMs >= tEnd) {
-      lines.push('Transition · past event end → ENDED when automation is on')
+      lines.push('Transition · ENDED is shown for 3 minutes, then NEXT COMING SOON X:XX')
     } else if (tStart != null && !Number.isNaN(tStart) && nowMs < tStart) {
       lines.push('Transition · until start → COMING SOON / NEXT based on queue')
     } else if (isDailyRepeat && slotWouldShow) {
@@ -498,14 +487,10 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
 
   const carouselVisibilityHint = useMemo(() => {
     if (!form.isActive) return 'Inactive — hidden from the carousel.'
-    if (!slotWouldShow) {
-      return isDailyRepeat
-        ? 'Outside allowed weekdays or outside the daily time window — hidden.'
-        : 'Outside event dates — hidden.'
-    }
+    if (!slotWouldShow) return 'Active state is required for carousel visibility.'
     if (!form.isEnabled) return 'Shown in carousel; taps / navigation disabled.'
-    return 'Shown in carousel; taps enabled (matches app runtime rules).'
-  }, [form.isActive, form.isEnabled, isDailyRepeat, slotWouldShow])
+    return 'Shown in carousel at all times; timer only affects badge/countdown/repeat cycle.'
+  }, [form.isActive, form.isEnabled, slotWouldShow])
 
   const previewImageSrc =
     imageDataUrl ||

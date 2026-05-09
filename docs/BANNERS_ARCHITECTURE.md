@@ -15,6 +15,7 @@ This document describes how the Osmani admin banner system aligns with a **Lovab
 | Public API semantics | Raw DB `badge` | **`badge`** is **display** (automated or manual); **`badge_manual`** when automation is on |
 | **Day-of-week** for daily repeat | N/A | **`weekday_mask`** (0–127, Sun=bit0 … Sat=bit6). Default **127** = all days; existing rows unchanged. |
 | Admin schedule UI | Basic timer | **Scheduling** section: one-time vs daily repeat, weekdays, schedule + transition preview (matches engine). |
+| Event timer vs visibility | Previously mixed | Timer now drives badge/countdown/repeat state only; active banners stay visible in admin preview cards. |
 
 ## Database
 
@@ -46,6 +47,7 @@ When **`event_timer`** is true: daily start/end required, start ≠ end (same cl
 - **`GET /api/banners`**: public list; each row is augmented with `schedule_phase`, `computed_badge`, effective display `badge`, `repeat_mode`, `timezone`, and visibility flags. See `server/src/bannerNormalize.js`.
 - **`GET /api/banners/manage`**: same automation map for admin listing/editing; manage payloads expose both stored fields and computed **`effectiveBadge`** / **`schedulePhase`** where relevant.
 - **`GET /api/settings`**: includes `banner_engine` / `bannerEngine` config block (`sseEvent`, defaults, and `comingSoonHours`).
+- ENDED phase now has a 3-minute grace window before automatic transition label: `NEXT COMING SOON X:XX`.
 - Automation is computed once per request via **`computeAutomationForAll`** in `server/src/bannerScheduleEngine.js`.
 
 ### Consumer note (breaking-ish)
