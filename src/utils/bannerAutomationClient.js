@@ -3,6 +3,21 @@
  * Used for admin modal preview only; production labels come from GET /api/banners.
  */
 export const PREVIEW_COMING_SOON_HOURS = 72
+export const WEEKDAY_MASK_ALL = 127
+
+const DAY_ABBREV = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/** Short label for weekday bitmask (Sun=0 … Sat=6). */
+export function formatWeekdayMaskAbbrev(mask, { allLabel = 'Every day' } = {}) {
+  const m = mask == null || mask === '' ? WEEKDAY_MASK_ALL : Number(mask)
+  if (!Number.isFinite(m) || m <= 0) return ''
+  if ((m & 127) === 127) return allLabel
+  const parts = []
+  for (let d = 0; d < 7; d += 1) {
+    if (m & (1 << d)) parts.push(DAY_ABBREV[d])
+  }
+  return parts.join(' · ')
+}
 
 function parseTimeToMinutes(value) {
   if (value == null) return null
@@ -50,18 +65,27 @@ function isNowInEventWindow(eventStart, eventEnd, now = new Date()) {
   return true
 }
 
+function isWeekdayAllowed(mask, now = new Date()) {
+  const raw = mask == null || mask === '' ? WEEKDAY_MASK_ALL : Number(mask)
+  if (!Number.isFinite(raw) || raw < 0) return false
+  if (raw === 0) return false
+  const day = now.getDay()
+  return (raw & (1 << day)) !== 0
+}
+
 function isBannerLiveNow(row, now = new Date()) {
   if (!row?.active) return false
   if (!isNowInEventWindow(row.event_start, row.event_end, now)) return false
   if (!row.event_timer) return true
+  const mask = row.weekday_mask ?? WEEKDAY_MASK_ALL
+  if (!isWeekdayAllowed(mask, now)) return false
   return isNowInDailyWindow(row.daily_start, row.daily_end, now)
 }
 
 function isWaitingForDailyWindow(row, now = new Date()) {
   if (!row?.active || !row.event_timer) return false
   if (!isNowInEventWindow(row.event_start, row.event_end, now)) return false
-  if (isNowInDailyWindow(row.daily_start, row.daily_end, now)) return false
-  return true
+  return !isBannerLiveNow(row, now)
 }
 
 function isBannerEnded(row, now = new Date()) {
@@ -175,6 +199,12 @@ export function computeAutomationForAll(rows, now = new Date()) {
 /** Map GET /api/banners/manage row → engine row */
 export function manageApiRowToEngine(b) {
   if (!b) return null
+  const wm =
+    b.weekdayMask != null && b.weekdayMask !== ''
+      ? Number(b.weekdayMask)
+      : b.weekday_mask != null && b.weekday_mask !== ''
+        ? Number(b.weekday_mask)
+        : WEEKDAY_MASK_ALL
   return {
     id: Number(b.id),
     active: b.isActive !== false && b.active !== false,
@@ -183,6 +213,7 @@ export function manageApiRowToEngine(b) {
     event_start: b.eventStart ?? b.event_start ?? null,
     event_end: b.eventEnd ?? b.event_end ?? null,
     event_timer: Boolean(b.useTimer ?? b.eventTimer ?? b.event_timer),
+    weekday_mask: Number.isFinite(wm) ? Math.min(127, Math.max(0, wm)) : WEEKDAY_MASK_ALL,
     daily_start: b.dailyStart ?? b.startTime ?? null,
     daily_end: b.dailyEnd ?? b.endTime ?? null,
     sort_order: Number(b.sortOrder ?? b.sort_order) || 0,
@@ -201,6 +232,12 @@ export function datetimeLocalToIso(local) {
 export function formToEngineRow(form, draftId) {
   const es = datetimeLocalToIso(form.eventStartLocal)
   const ee = datetimeLocalToIso(form.eventEndLocal)
+  const wmRaw = Number(form.weekdayMask)
+  const weekday_mask = form.useTimer
+    ? Number.isFinite(wmRaw)
+      ? Math.min(127, Math.max(0, Math.floor(wmRaw)))
+      : WEEKDAY_MASK_ALL
+    : WEEKDAY_MASK_ALL
   return {
     id: draftId,
     active: form.isActive !== false,
@@ -209,6 +246,7 @@ export function formToEngineRow(form, draftId) {
     event_start: es,
     event_end: ee,
     event_timer: Boolean(form.useTimer),
+    weekday_mask,
     daily_start: form.useTimer ? form.startTime : null,
     daily_end: form.useTimer ? form.endTime : null,
     sort_order: Number(form.sortOrder) || 0,

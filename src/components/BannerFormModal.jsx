@@ -6,14 +6,23 @@ import { getChannels } from '../lib/api'
 import {
   buildPreviewAutomationMap,
   formToEngineRow,
+  formatWeekdayMaskAbbrev,
+  WEEKDAY_MASK_ALL,
 } from '../utils/bannerAutomationClient'
 import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
-  isNowInDailyWindow,
-  isNowInEventWindow,
   parseTimeToMinutes,
 } from '../utils/bannerSchedule'
+
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function toggleWeekdayBit(mask, dayIndex) {
+  const base = Number.isFinite(Number(mask)) ? Math.floor(Number(mask)) : WEEKDAY_MASK_ALL
+  const next = base ^ (1 << dayIndex)
+  if ((next & 127) === 0) return base
+  return next
+}
 
 function isChannelEligible(c) {
   if (!c || typeof c !== 'object') return false
@@ -79,9 +88,18 @@ function emptyForm() {
     isActive: true,
     isEnabled: true,
     useTimer: false,
+    weekdayMask: WEEKDAY_MASK_ALL,
     startTime: '09:00',
     endTime: '17:00',
   }
+}
+
+function maskFromBanner(banner) {
+  const v = banner?.weekdayMask ?? banner?.weekday_mask
+  if (v == null || v === '') return WEEKDAY_MASK_ALL
+  const n = Number(v)
+  if (!Number.isFinite(n)) return WEEKDAY_MASK_ALL
+  return Math.min(127, Math.max(0, Math.floor(n)))
 }
 
 function bannerToForm(banner) {
@@ -111,6 +129,7 @@ function bannerToForm(banner) {
     isActive: banner.isActive !== false,
     isEnabled: banner.isEnabled !== false,
     useTimer: Boolean(banner.useTimer),
+    weekdayMask: maskFromBanner(banner),
     startTime: typeof banner.startTime === 'string' && banner.startTime ? banner.startTime : '09:00',
     endTime: typeof banner.endTime === 'string' && banner.endTime ? banner.endTime : '17:00',
   }
@@ -314,6 +333,11 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
         setSubmitError('Start and end time must be different.')
         return
       }
+      const wm = Number(form.weekdayMask)
+      if (!Number.isFinite(wm) || wm <= 0 || (wm & 127) === 0) {
+        setSubmitError('Select at least one weekday for daily repeat.')
+        return
+      }
     }
 
     if (channelsLoading) {
@@ -360,6 +384,9 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       useTimer: form.useTimer,
       startTime: form.useTimer ? form.startTime.trim() : '',
       endTime: form.useTimer ? form.endTime.trim() : '',
+      weekdayMask: Number.isFinite(Number(form.weekdayMask))
+        ? Math.min(127, Math.max(0, Math.floor(Number(form.weekdayMask))))
+        : WEEKDAY_MASK_ALL,
     }
     if (isEdit && banner?.id) {
       payload.id = banner.id
@@ -371,23 +398,30 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
   const eventStartIso = datetimeLocalToIso(form.eventStartLocal)
   const eventEndIso = datetimeLocalToIso(form.eventEndLocal)
   const previewNow = new Date(clock)
-  const previewSlot = {
-    isActive: form.isActive,
-    useTimer: form.useTimer,
-    startTime: form.startTime,
-    endTime: form.endTime,
-    eventStart: eventStartIso,
-    eventEnd: eventEndIso,
-  }
-  const slotWouldShow = isBannerShownInCarousel(previewSlot, previewNow)
-  const tapsWouldWork = canBannerReceiveInteractions(
-    { ...previewSlot, isEnabled: form.isEnabled },
-    previewNow,
+  const carouselProbe = useMemo(
+    () => ({
+      isActive: form.isActive,
+      isEnabled: form.isEnabled,
+      useTimer: form.useTimer,
+      startTime: form.startTime,
+      endTime: form.endTime,
+      eventStart: eventStartIso,
+      eventEnd: eventEndIso,
+      weekdayMask: form.weekdayMask,
+    }),
+    [
+      form.isActive,
+      form.isEnabled,
+      form.useTimer,
+      form.startTime,
+      form.endTime,
+      form.weekdayMask,
+      eventStartIso,
+      eventEndIso,
+    ],
   )
-  const timerWindowNow = form.useTimer
-    ? isNowInDailyWindow(form.startTime, form.endTime, previewNow)
-    : true
-  const eventWindowNow = isNowInEventWindow(eventStartIso, eventEndIso, previewNow)
+  const slotWouldShow = isBannerShownInCarousel(carouselProbe, previewNow)
+  const tapsWouldWork = canBannerReceiveInteractions(carouselProbe, previewNow)
 
   const previewDraftId =
     variant === 'edit' && banner?.id != null ? Number(banner.id) : -999999
@@ -402,6 +436,67 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       : form.badge.trim()
 
   const previewBadgeVisible = form.badgeEnabled && previewBadgeText.length > 0
+
+  const schedulePreviewLines = useMemo(() => {
+    const lines = []
+    const phase = previewAutomation?.schedule_phase
+    if (phase) {
+      lines.push(`Phase · ${String(phase).replace(/_/g, ' ')}`)
+    }
+    if (form.badgeAutomation !== false && previewBadgeText) {
+      lines.push(`Auto badge · ${previewBadgeText}`)
+    }
+    if (eventStartIso) {
+      lines.push(`Event starts · ${new Date(eventStartIso).toLocaleString()}`)
+    } else {
+      lines.push('Event starts · not set (open-ended)')
+    }
+    if (eventEndIso) {
+      lines.push(`Event ends · ${new Date(eventEndIso).toLocaleString()}`)
+    } else {
+      lines.push('Event ends · not set (open-ended)')
+    }
+    if (form.useTimer) {
+      lines.push(`Daily window · ${form.startTime}–${form.endTime} (${formatWeekdayMaskAbbrev(form.weekdayMask)})`)
+    } else {
+      lines.push('Schedule · one-time / always on during the event dates (no daily window)')
+    }
+    const tEnd = eventEndIso ? new Date(eventEndIso).getTime() : null
+    const tStart = eventStartIso ? new Date(eventStartIso).getTime() : null
+    const nowMs = clock
+    if (tEnd != null && !Number.isNaN(tEnd) && nowMs >= tEnd) {
+      lines.push('Transition · past event end → ENDED when automation is on')
+    } else if (tStart != null && !Number.isNaN(tStart) && nowMs < tStart) {
+      lines.push('Transition · until start → COMING SOON / NEXT based on queue')
+    } else if (form.useTimer && slotWouldShow) {
+      lines.push('Transition · LIVE NOW while inside windows')
+    }
+    return lines
+  }, [
+    previewAutomation?.schedule_phase,
+    previewBadgeText,
+    form.badgeAutomation,
+    eventStartIso,
+    eventEndIso,
+    form.useTimer,
+    form.startTime,
+    form.endTime,
+    form.weekdayMask,
+    clock,
+    slotWouldShow,
+  ])
+
+  const carouselVisibilityHint = useMemo(() => {
+    if (!form.isActive) return 'Inactive — hidden from the carousel.'
+    if (!slotWouldShow) {
+      return form.useTimer
+        ? 'Outside allowed weekdays or outside the daily time window — hidden.'
+        : 'Outside event dates — hidden.'
+    }
+    if (!form.isEnabled) return 'Shown in carousel; taps / navigation disabled.'
+    return 'Shown in carousel; taps enabled (matches app runtime rules).'
+  }, [form.isActive, form.isEnabled, form.useTimer, slotWouldShow])
+
   const previewImageSrc =
     imageDataUrl ||
     (typeof imagePreview === 'string' && !imagePreview.startsWith('blob:') ? imagePreview : null) ||
@@ -580,6 +675,163 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
                 </div>
               </div>
 
+              <div className="rounded-xl border border-slate-600/50 bg-slate-900/40 p-4">
+                <p className={labelClassName()}>Scheduling</p>
+                <p className="mb-4 text-[11px] leading-relaxed text-slate-500">
+                  One-time shows whenever event dates allow (no daily window). Daily repeat restricts to
+                  selected weekdays and a daily local time window — same rules as production.
+                </p>
+
+                <div className="flex flex-wrap gap-2 rounded-lg border border-slate-600/50 bg-slate-900/50 p-2">
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, useTimer: false }))}
+                    className={`rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wide transition-colors ${
+                      !form.useTimer
+                        ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/40'
+                        : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50 hover:bg-slate-800'
+                    }`}
+                  >
+                    One-time
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, useTimer: true }))}
+                    className={`rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wide transition-colors ${
+                      form.useTimer
+                        ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/40'
+                        : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50 hover:bg-slate-800'
+                    }`}
+                  >
+                    Daily repeat
+                  </button>
+                </div>
+
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor={`${formId}-ev-start`} className={labelClassName()}>
+                      Event start
+                    </label>
+                    <input
+                      id={`${formId}-ev-start`}
+                      type="datetime-local"
+                      value={form.eventStartLocal}
+                      onChange={(e) => setForm((f) => ({ ...f, eventStartLocal: e.target.value }))}
+                      className={inputClassName()}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor={`${formId}-ev-end`} className={labelClassName()}>
+                      Event end
+                    </label>
+                    <input
+                      id={`${formId}-ev-end`}
+                      type="datetime-local"
+                      value={form.eventEndLocal}
+                      onChange={(e) => setForm((f) => ({ ...f, eventEndLocal: e.target.value }))}
+                      className={inputClassName()}
+                    />
+                  </div>
+                </div>
+
+                <AnimatePresence initial={false}>
+                  {form.useTimer ? (
+                    <motion.div
+                      key="daily-repeat-fields"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mt-4 space-y-4">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div>
+                            <label htmlFor={`${formId}-start`} className={labelClassName()}>
+                              Daily start
+                            </label>
+                            <input
+                              id={`${formId}-start`}
+                              type="time"
+                              value={form.startTime}
+                              onChange={(e) => setForm((f) => ({ ...f, startTime: e.target.value }))}
+                              className={inputClassName()}
+                            />
+                          </div>
+                          <div>
+                            <label htmlFor={`${formId}-end`} className={labelClassName()}>
+                              Daily end
+                            </label>
+                            <input
+                              id={`${formId}-end`}
+                              type="time"
+                              value={form.endTime}
+                              onChange={(e) => setForm((f) => ({ ...f, endTime: e.target.value }))}
+                              className={inputClassName()}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <span className={labelClassName()}>Days (local)</span>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {WEEKDAY_LABELS.map((label, i) => {
+                              const on = Boolean((Number(form.weekdayMask) >> i) & 1)
+                              return (
+                                <button
+                                  key={label}
+                                  type="button"
+                                  onClick={() =>
+                                    setForm((f) => ({
+                                      ...f,
+                                      weekdayMask: toggleWeekdayBit(f.weekdayMask, i),
+                                    }))
+                                  }
+                                  className={`rounded-lg px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                                    on
+                                      ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/35'
+                                      : 'bg-slate-800/90 text-slate-500 ring-1 ring-slate-600/55 hover:bg-slate-800'
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              )
+                            })}
+                          </div>
+                          <p className="mt-1.5 text-[11px] text-slate-500">
+                            Pick at least one day ({formatWeekdayMaskAbbrev(form.weekdayMask)}).
+                          </p>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
+
+                <div className="mt-4 rounded-lg border border-slate-600/50 bg-slate-900/55 px-3 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    Schedule &amp; transition preview
+                  </p>
+                  <ul className="mt-2 space-y-1.5 text-[11px] leading-snug text-slate-300">
+                    {schedulePreviewLines.map((line, idx) => (
+                      <li key={`sched-line-${idx}`} className="flex gap-2">
+                        <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-amber-400/80" aria-hidden />
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p
+                    className={`mt-3 rounded-lg px-3 py-2 text-xs font-medium transition-colors duration-300 ${
+                      tapsWouldWork
+                        ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30'
+                        : slotWouldShow && !form.isEnabled
+                          ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-400/30'
+                          : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50'
+                    }`}
+                  >
+                    {carouselVisibilityHint}
+                  </p>
+                </div>
+              </div>
+
               <div>
                 <p className={labelClassName()}>Advanced</p>
                 <div className="space-y-4 rounded-xl border border-slate-700/60 bg-slate-900/35 p-4">
@@ -692,33 +944,6 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
                     />
                   </div>
 
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor={`${formId}-ev-start`} className={labelClassName()}>
-                        Event start
-                      </label>
-                      <input
-                        id={`${formId}-ev-start`}
-                        type="datetime-local"
-                        value={form.eventStartLocal}
-                        onChange={(e) => setForm((f) => ({ ...f, eventStartLocal: e.target.value }))}
-                        className={inputClassName()}
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor={`${formId}-ev-end`} className={labelClassName()}>
-                        Event end
-                      </label>
-                      <input
-                        id={`${formId}-ev-end`}
-                        type="datetime-local"
-                        value={form.eventEndLocal}
-                        onChange={(e) => setForm((f) => ({ ...f, eventEndLocal: e.target.value }))}
-                        className={inputClassName()}
-                      />
-                    </div>
-                  </div>
-
                   <div>
                     <label htmlFor={`${formId}-redirect`} className={labelClassName()}>
                       Redirect channel
@@ -772,102 +997,6 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
                   </div>
                 </div>
               </div>
-
-              <div className="rounded-xl border border-slate-600/50 bg-slate-900/40 px-3 py-3 transition-all duration-300">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <span className="text-sm font-medium text-slate-300">Event timer</span>
-                    <p className="mt-0.5 text-[11px] text-slate-500">
-                      When on, the banner only appears during the daily window (local time).
-                    </p>
-                  </div>
-                  <ToggleSwitch
-                    checked={form.useTimer}
-                    onChange={(next) => setForm((f) => ({ ...f, useTimer: next }))}
-                    aria-label="Event timer"
-                  />
-                </div>
-              </div>
-
-              <AnimatePresence initial={false}>
-                {form.useTimer ? (
-                  <motion.div
-                    key="timer-fields"
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                    className="overflow-hidden"
-                  >
-                    <div className="space-y-4 pt-1 pb-2">
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <div>
-                          <label htmlFor={`${formId}-start`} className={labelClassName()}>
-                            Daily start
-                          </label>
-                          <input
-                            id={`${formId}-start`}
-                            type="time"
-                            value={form.startTime}
-                            onChange={(e) => setForm((f) => ({ ...f, startTime: e.target.value }))}
-                            className={inputClassName()}
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor={`${formId}-end`} className={labelClassName()}>
-                            Daily end
-                          </label>
-                          <input
-                            id={`${formId}-end`}
-                            type="time"
-                            value={form.endTime}
-                            onChange={(e) => setForm((f) => ({ ...f, endTime: e.target.value }))}
-                            className={inputClassName()}
-                          />
-                        </div>
-                      </div>
-                      <p
-                        className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors duration-300 ${
-                          tapsWouldWork
-                            ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30'
-                            : slotWouldShow && !form.isEnabled
-                              ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-400/30'
-                              : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50'
-                        }`}
-                      >
-                        {!timerWindowNow
-                          ? 'Outside today’s daily window — slot hidden while timer is on.'
-                          : !eventWindowNow
-                            ? 'Outside event date window — slot hidden.'
-                            : tapsWouldWork
-                              ? 'Inside windows — slot visible and taps enabled.'
-                              : slotWouldShow && !form.isEnabled
-                                ? 'Inside windows — slot would show; taps disabled (enable off).'
-                                : 'Inside windows but inactive — slot hidden.'}
-                      </p>
-                    </div>
-                  </motion.div>
-                ) : null}
-              </AnimatePresence>
-              {!form.useTimer ? (
-                <p
-                  className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors duration-300 ${
-                    tapsWouldWork
-                      ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30'
-                      : slotWouldShow && !form.isEnabled
-                        ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-400/30'
-                        : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50'
-                  }`}
-                >
-                  {!eventWindowNow
-                    ? 'Outside event date window — slot hidden.'
-                    : tapsWouldWork
-                      ? 'Visible (no daily timer) — taps follow Enabled.'
-                      : slotWouldShow && !form.isEnabled
-                        ? 'Would show; taps disabled.'
-                        : 'Not shown (inactive or other rules).'}
-                </p>
-              ) : null}
 
               {submitError ? (
                 <p className="rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-200 ring-1 ring-red-400/30">

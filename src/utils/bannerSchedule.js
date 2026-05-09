@@ -1,3 +1,14 @@
+/** Bits 0–6 = Sun–Sat (matches `Date#getDay()`). Default 127 = all days. */
+const WEEKDAY_MASK_ALL = 127
+
+function isWeekdayAllowed(mask, now = new Date()) {
+  const raw = mask == null || mask === '' ? WEEKDAY_MASK_ALL : Number(mask)
+  if (!Number.isFinite(raw) || raw < 0) return false
+  if (raw === 0) return false
+  const day = now.getDay()
+  return (raw & (1 << day)) !== 0
+}
+
 /**
  * Daily window using local time. Times are "HH:mm" (24h).
  * Overnight windows (e.g. 22:00–06:00) are supported.
@@ -36,7 +47,7 @@ export function isNowInEventWindow(eventStart, eventEnd, now = new Date()) {
   }
   if (endRaw != null && endRaw !== '') {
     const e = new Date(endRaw).getTime()
-    if (!Number.isNaN(e) && t > e) return false
+    if (!Number.isNaN(e) && t >= e) return false
   }
   return true
 }
@@ -48,6 +59,8 @@ export function isBannerShownInCarousel(banner, now = new Date()) {
   const ee = banner.eventEnd ?? banner.event_end
   if (!isNowInEventWindow(es, ee, now)) return false
   if (!banner?.useTimer) return true
+  const mask = banner.weekdayMask ?? banner.weekday_mask ?? WEEKDAY_MASK_ALL
+  if (!isWeekdayAllowed(mask, now)) return false
   return isNowInDailyWindow(banner.startTime, banner.endTime, now)
 }
 

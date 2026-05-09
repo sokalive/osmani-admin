@@ -13,12 +13,15 @@ This document describes how the Osmani admin banner system aligns with a **Lovab
 | Sort order + drag-and-drop | Yes | Yes |
 | Live preview in modal | Yes (schedule helpers) | Yes; preview uses same automation rules |
 | Public API semantics | Raw DB `badge` | **`badge`** is **display** (automated or manual); **`badge_manual`** when automation is on |
+| **Day-of-week** for daily repeat | N/A | **`weekday_mask`** (0–127, Sun=bit0 … Sat=bit6). Default **127** = all days; existing rows unchanged. |
+| Admin schedule UI | Basic timer | **Scheduling** section: one-time vs daily repeat, weekdays, schedule + transition preview (matches engine). |
 
 ## Database
 
-### Column added
+### Columns added (additive migrations)
 
 - **`badge_automation`** (`BOOLEAN NOT NULL DEFAULT true`)
+- **`weekday_mask`** (`SMALLINT NOT NULL DEFAULT 127`) — bitmask of allowed weekdays when **`event_timer`** is true; ignored for effective visibility when daily repeat is off (engine treats non-repeat banners as “any day”).
 
 Defined and migrated in `server/src/db/bannersTable.js` via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 
@@ -28,8 +31,13 @@ On deploy, when the column is first present:
 
 - Existing rows with **non-empty** `badge` text are set to **`badge_automation = false`** so legacy custom copy is preserved and still shown.
 - Empty-badge rows keep automation **on** (default).
+- **`weekday_mask`** defaults to **127** (all days) for all existing rows, so legacy daily-repeat banners behave as before.
 
 No destructive schema changes; only additive column + one-time data fix.
+
+### Validation (API)
+
+When **`event_timer`** is true: daily start/end required, start ≠ end (same clock minute), and **`weekday_mask`** must have at least one weekday bit set (server returns **400** with a clear message).
 
 ## API and normalization
 
@@ -58,10 +66,10 @@ Banner images remain URLs backed by **`GET /uploads/*`** and **`UPLOAD_DIR`** as
 
 ## Deployment checklist
 
-1. Deploy API **before or with** admin static site so new fields exist when the editor saves `badgeAutomation`.
-2. Ensure PostgreSQL migrations run on startup (existing `ensureBannersTable` path) so **`badge_automation`** exists.
+1. Deploy API **before or with** admin static site so new fields exist when the editor saves `badgeAutomation`, **`weekdayMask`**, etc.
+2. Ensure PostgreSQL migrations run on startup (existing `ensureBannersTable` path) so **`badge_automation`** and **`weekday_mask`** exist.
 3. Optionally set **`BANNER_COMING_SOON_HOURS`** on the API service if you want a non-default window.
-4. Verify **`GET /api/banners`** and admin **Banners** page show expected phases after deploy.
+4. Verify **`GET /api/banners`** and admin **Banners** page show expected phases after deploy; drag reorder saves **sequentially** to avoid overlapping PUT races.
 
 ## Files of reference
 

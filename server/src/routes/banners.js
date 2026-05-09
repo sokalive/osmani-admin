@@ -3,7 +3,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import { bannerToPublicResponse, bannerToResponse } from '../bannerNormalize.js'
-import { computeAutomationForAll } from '../bannerScheduleEngine.js'
+import { computeAutomationForAll, WEEKDAY_MASK_ALL } from '../bannerScheduleEngine.js'
 import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
@@ -68,6 +68,33 @@ function parseTimeToPg(v) {
   return s
 }
 
+function parseWeekdayMask(b) {
+  const raw = b.weekday_mask ?? b.weekdayMask
+  if (raw === undefined || raw === null || raw === '') return WEEKDAY_MASK_ALL
+  if (Array.isArray(raw)) {
+    let m = 0
+    for (const d of raw) {
+      const x = Number(d)
+      if (Number.isFinite(x) && x >= 0 && x <= 6) m |= 1 << x
+    }
+    return m === 0 ? WEEKDAY_MASK_ALL : m
+  }
+  const n = Number.parseInt(String(raw), 10)
+  if (!Number.isFinite(n)) return WEEKDAY_MASK_ALL
+  return Math.min(127, Math.max(0, Math.floor(n)))
+}
+
+function dailyClockMinutesFromPg(v) {
+  if (v == null || v === '') return null
+  const s = String(v).trim().slice(0, 5)
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s)
+  if (!m) return null
+  const h = Number(m[1])
+  const min = Number(m[2])
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) return null
+  return h * 60 + min
+}
+
 function parseMaybeTimestamptz(v) {
   if (v === undefined || v === null || v === '') return null
   const s = String(v).trim()
@@ -96,6 +123,7 @@ function parseBannerFields(req) {
   const useTimer = parseBool(b.event_timer ?? b.eventTimer ?? b.useTimer, false)
   const daily_start = useTimer ? parseTimeToPg(b.daily_start ?? b.dailyStart ?? b.startTime) : null
   const daily_end = useTimer ? parseTimeToPg(b.daily_end ?? b.dailyEnd ?? b.endTime) : null
+  const weekday_mask = parseWeekdayMask(b)
   const badge_priority = Number.parseInt(String(b.badge_priority ?? b.badgePriority ?? 0), 10)
   return {
     title: String(b.title ?? '').trim(),
@@ -114,6 +142,7 @@ function parseBannerFields(req) {
     redirect_channel_id: parseRedirectChannelId(b),
     sort_order: Number.parseInt(String(b.sort_order ?? b.sortOrder ?? 0), 10) || 0,
     event_timer: useTimer,
+    weekday_mask,
     daily_start,
     daily_end,
   }
@@ -133,6 +162,16 @@ function validateBannerFields(fields) {
   if (fields.event_timer) {
     if (!fields.daily_start || !fields.daily_end) {
       errors.push('daily start and end times are required when event timer is enabled')
+    } else {
+      const ds = dailyClockMinutesFromPg(fields.daily_start)
+      const de = dailyClockMinutesFromPg(fields.daily_end)
+      if (ds != null && de != null && ds === de) {
+        errors.push('daily start and end times must be different')
+      }
+    }
+    const wm = Number(fields.weekday_mask)
+    if (!Number.isFinite(wm) || wm <= 0 || (wm & 127) === 0) {
+      errors.push('select at least one weekday when daily repeat is enabled')
     }
   }
   return errors

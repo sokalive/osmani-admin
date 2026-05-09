@@ -35,6 +35,10 @@ export function bannerToPublicResponse(row, req, automationEntry = null, now = n
   const eventEnd = formatTsForApi(row.event_end)
   const rid = row.redirect_channel_id != null ? Number(row.redirect_channel_id) : null
   const sortOrder = Number(row.sort_order) || 0
+  const weekdayMask =
+    row.weekday_mask != null && row.weekday_mask !== ''
+      ? Math.min(127, Math.max(0, Number(row.weekday_mask)))
+      : 127
   const createdAt = formatTsForApi(row.created_at)
   const updatedAt = formatTsForApi(row.updated_at) ?? createdAt
   const badgeAutomation = row.badge_automation !== false && row.badge_automation !== 0
@@ -89,6 +93,8 @@ export function bannerToPublicResponse(row, req, automationEntry = null, now = n
     dailyStart: formatTimeForApi(row.daily_start),
     daily_end: formatTimeForApi(row.daily_end),
     dailyEnd: formatTimeForApi(row.daily_end),
+    weekday_mask: weekdayMask,
+    weekdayMask,
   }
 }
 
@@ -105,6 +111,10 @@ export function bannerToResponse(row, req, automationEntry = null, now = new Dat
   const eventEnd = formatTsForApi(row.event_end)
   const rid = row.redirect_channel_id != null ? Number(row.redirect_channel_id) : null
   const sortOrder = Number(row.sort_order) || 0
+  const weekdayMask =
+    row.weekday_mask != null && row.weekday_mask !== ''
+      ? Math.min(127, Math.max(0, Number(row.weekday_mask)))
+      : 127
   const createdIso = ca instanceof Date ? ca.toISOString() : formatTsForApi(ca)
   const updatedIso =
     (ua instanceof Date ? ua.toISOString() : formatTsForApi(ua)) ?? createdIso
@@ -142,6 +152,8 @@ export function bannerToResponse(row, req, automationEntry = null, now = new Dat
     eventTimer: Boolean(row.event_timer),
     dailyStart: formatTimeForApi(row.daily_start),
     dailyEnd: formatTimeForApi(row.daily_end),
+    weekdayMask,
+    weekday_mask: weekdayMask,
     is_active: Boolean(row.active),
     badge_enabled: Boolean(row.badge_enabled),
     badge_color: String(row.badge_color ?? '#FBBF24').trim() || '#FBBF24',

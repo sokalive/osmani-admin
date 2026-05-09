@@ -33,6 +33,17 @@ export function isNowInDailyWindow(startTime, endTime, now = new Date()) {
   return cur >= start || cur < end
 }
 
+/** Bits 0–6 = Sun–Sat (matches `Date#getDay()`). Default 127 = all days. */
+export const WEEKDAY_MASK_ALL = 127
+
+export function isWeekdayAllowed(mask, now = new Date()) {
+  const raw = mask == null || mask === '' ? WEEKDAY_MASK_ALL : Number(mask)
+  if (!Number.isFinite(raw) || raw < 0) return false
+  if (raw === 0) return false
+  const day = now.getDay()
+  return (raw & (1 << day)) !== 0
+}
+
 export function isNowInEventWindow(eventStart, eventEnd, now = new Date()) {
   const startRaw = eventStart ?? null
   const endRaw = eventEnd ?? null
@@ -53,15 +64,16 @@ export function isBannerLiveNow(row, now = new Date()) {
   if (!row?.active) return false
   if (!isNowInEventWindow(row.event_start, row.event_end, now)) return false
   if (!row.event_timer) return true
+  const mask = row.weekday_mask ?? WEEKDAY_MASK_ALL
+  if (!isWeekdayAllowed(mask, now)) return false
   return isNowInDailyWindow(row.daily_start, row.daily_end, now)
 }
 
-/** In event date range but waiting for today's daily window (repeat shows). */
+/** In event date range but not currently live (wrong weekday, outside daily window, etc.). */
 export function isWaitingForDailyWindow(row, now = new Date()) {
   if (!row?.active || !row.event_timer) return false
   if (!isNowInEventWindow(row.event_start, row.event_end, now)) return false
-  if (isNowInDailyWindow(row.daily_start, row.daily_end, now)) return false
-  return true
+  return !isBannerLiveNow(row, now)
 }
 
 export function isBannerEnded(row, now = new Date()) {

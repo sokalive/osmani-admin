@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { GripVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 import BannerFormModal from '../components/BannerFormModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deleteBanner, getBannersManage, postBanner, putBanner } from '../lib/api'
+import { formatWeekdayMaskAbbrev, WEEKDAY_MASK_ALL } from '../utils/bannerAutomationClient'
 import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
@@ -23,6 +24,11 @@ function bannerPayloadForApi(b, overrides = {}) {
   const m = { ...b, ...overrides }
   const useTimer = Boolean(m.useTimer ?? m.eventTimer)
   const sortOrder = Number(m.sortOrder ?? m.sort_order) || 0
+  const wmRaw = m.weekdayMask ?? m.weekday_mask
+  const weekdayMask =
+    wmRaw != null && wmRaw !== '' && Number.isFinite(Number(wmRaw))
+      ? Math.min(127, Math.max(0, Math.floor(Number(wmRaw))))
+      : WEEKDAY_MASK_ALL
   return {
     title: m.title ?? '',
     description: m.description ?? '',
@@ -48,6 +54,7 @@ function bannerPayloadForApi(b, overrides = {}) {
     useTimer,
     startTime: useTimer ? (m.startTime ?? m.dailyStart ?? '09:00') : '',
     endTime: useTimer ? (m.endTime ?? m.dailyEnd ?? '17:00') : '',
+    weekdayMask,
   }
 }
 
@@ -69,6 +76,8 @@ function BannersPage() {
   const [addOpen, setAddOpen] = useState(false)
   const [editingBanner, setEditingBanner] = useState(null)
   const [dragBannerId, setDragBannerId] = useState(null)
+  const [sortSaving, setSortSaving] = useState(false)
+  const sortSaveLockRef = useRef(false)
 
   const loadBanners = useCallback(async () => {
     try {
@@ -95,7 +104,7 @@ function BannersPage() {
   }, [loadBanners])
 
   useEffect(() => {
-    const id = window.setInterval(() => setTick((n) => n + 1), 60_000)
+    const id = window.setInterval(() => setTick((n) => n + 1), 15_000)
     return () => window.clearInterval(id)
   }, [])
 
@@ -112,15 +121,22 @@ function BannersPage() {
 
   const persistSortOrder = useCallback(
     async (ordered) => {
+      if (sortSaveLockRef.current) return
+      sortSaveLockRef.current = true
+      setSortSaving(true)
       try {
-        await Promise.all(
-          ordered.map((b, i) => putBanner(b.id, bannerPayloadForApi(b, { sortOrder: i }))),
-        )
+        for (let i = 0; i < ordered.length; i += 1) {
+          const b = ordered[i]
+          await putBanner(b.id, bannerPayloadForApi(b, { sortOrder: i }))
+        }
         await loadBanners()
         showToast('success', 'Banner order saved.')
       } catch (e) {
         showToast('error', e?.message || 'Could not save order')
         await loadBanners()
+      } finally {
+        sortSaveLockRef.current = false
+        setSortSaving(false)
       }
     },
     [loadBanners, showToast],
@@ -143,6 +159,7 @@ function BannersPage() {
       })
       const next = reorderById(sorted, fromId, targetId)
       if (next === sorted) return
+      if (sortSaveLockRef.current) return
       setDragBannerId(null)
       await persistSortOrder(next)
     },
@@ -212,7 +229,7 @@ function BannersPage() {
             <p className="mt-1 max-w-xl text-sm text-slate-400">
               Schedule badges (LIVE NOW, COMING SOON, COMING NEXT, ENDED) are computed server-side
               from dates, daily repeat windows, and order. Drag the handle to reorder; preview updates
-              every minute.
+              every 15s.
             </p>
           </div>
           <button
@@ -298,14 +315,20 @@ function BannersPage() {
                   <div
                     role="button"
                     tabIndex={0}
-                    draggable
+                    draggable={!sortSaving}
                     onDragStart={(e) => {
+                      if (sortSaving) {
+                        e.preventDefault()
+                        return
+                      }
                       e.dataTransfer.setData('text/plain', String(b.id))
                       e.dataTransfer.effectAllowed = 'move'
                       setDragBannerId(b.id)
                     }}
                     onDragEnd={() => setDragBannerId(null)}
-                    className="absolute left-2 top-2 z-20 flex cursor-grab items-center justify-center rounded-lg bg-black/50 p-1.5 text-slate-300 ring-1 ring-white/15 transition-colors hover:bg-black/70 hover:text-amber-200 active:cursor-grabbing"
+                    className={`absolute left-2 top-2 z-20 flex items-center justify-center rounded-lg bg-black/50 p-1.5 text-slate-300 ring-1 ring-white/15 transition-colors hover:bg-black/70 hover:text-amber-200 ${
+                      sortSaving ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+                    }`}
                     aria-label={`Drag to reorder ${b.title}`}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') e.preventDefault()
@@ -392,6 +415,14 @@ function BannersPage() {
                           No timer
                         </span>
                       )}
+                      {b.useTimer ? (
+                        <span
+                          className="max-w-[200px] truncate rounded-md bg-indigo-500/15 px-2 py-0.5 text-indigo-100 ring-1 ring-indigo-400/30"
+                          title={formatWeekdayMaskAbbrev(b.weekdayMask ?? b.weekday_mask)}
+                        >
+                          {formatWeekdayMaskAbbrev(b.weekdayMask ?? b.weekday_mask)}
+                        </span>
+                      ) : null}
                       {b.enableCountdown ?? b.enable_countdown ? (
                         <span className="rounded-md bg-cyan-500/20 px-2 py-0.5 text-cyan-100 ring-1 ring-cyan-400/35">
                           Countdown
