@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -138,28 +138,39 @@ function AnalyticsPage() {
     }
   }, [showToast])
 
+  const loadRef = useRef(load)
   useEffect(() => {
-    load()
-    const id = window.setInterval(load, 5000)
+    loadRef.current = load
+  }, [load])
+
+  useEffect(() => {
+    void load()
+    const id = window.setInterval(() => void loadRef.current(), 5000)
     return () => window.clearInterval(id)
   }, [load])
 
   useEffect(() => {
     const es = new EventSource(syncStreamUrl(['analytics']))
-    const onSync = () => {
-      void load()
+    let debounceTimer = null
+    const scheduleSync = () => {
+      if (debounceTimer != null) window.clearTimeout(debounceTimer)
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null
+        void loadRef.current()
+      }, 400)
     }
-    es.addEventListener('snapshot', onSync)
-    es.addEventListener('analytics.install', onSync)
-    es.addEventListener('analytics.session_start', onSync)
-    es.addEventListener('analytics.session_heartbeat', onSync)
-    es.addEventListener('analytics.session_end', onSync)
-    es.addEventListener('analytics.transaction_updated', onSync)
-    es.addEventListener('analytics.subscription_updated', onSync)
+    es.addEventListener('snapshot', scheduleSync)
+    es.addEventListener('analytics.install', scheduleSync)
+    es.addEventListener('analytics.session_start', scheduleSync)
+    es.addEventListener('analytics.session_heartbeat', scheduleSync)
+    es.addEventListener('analytics.session_end', scheduleSync)
+    es.addEventListener('analytics.transaction_updated', scheduleSync)
+    es.addEventListener('analytics.subscription_updated', scheduleSync)
     return () => {
+      if (debounceTimer != null) window.clearTimeout(debounceTimer)
       es.close()
     }
-  }, [load])
+  }, [])
 
   const onlineNow = Number(overview?.onlineNow) || 0
   const newUsersToday = Number(overview?.newUsersToday) || 0
@@ -213,14 +224,18 @@ function AnalyticsPage() {
   const vRev = useCountUp(revenueTodayValue, { duration: 1000 })
   const vInstalls = useCountUp(totalInstallsBase, { duration: 1200 })
 
-  const topLocations = useMemo(
-    () =>
-      (Array.isArray(locations) ? locations : []).slice(0, 8).map((r) => ({
-        country: String(r.country || 'Unknown'),
-        users: Number(r.users) || 0,
-      })),
-    [locations],
-  )
+  const topLocations = useMemo(() => {
+    const list = (Array.isArray(locations) ? locations : []).slice(0, 8)
+    const out = []
+    for (const r of list) {
+      if (!r || typeof r !== 'object') continue
+      const country = String(r.country ?? '').trim() || 'Unknown Location'
+      const usersRaw = Number(r.users ?? 0)
+      const users = Number.isFinite(usersRaw) ? Math.max(0, Math.floor(usersRaw)) : 0
+      out.push({ country, users })
+    }
+    return out
+  }, [locations])
 
   return (
     <>

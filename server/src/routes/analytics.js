@@ -1,8 +1,8 @@
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
 import {
+  mergeLocationBucketsByNormalizedLabel,
   normalizeLocationPayload,
-  sanitizeStoredLocationDisplay,
 } from '../lib/analyticsLocation.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 
@@ -243,16 +243,16 @@ analyticsRouter.get('/locations', async (_req, res) => {
        FROM live_sessions
        WHERE country IS NOT NULL AND trim(country) <> ''
          AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
-       GROUP BY country
-       ORDER BY users DESC`,
+       GROUP BY country`,
       [LIVE_SESSION_ACTIVE_INTERVAL],
     )
-    res.json(
+    const merged = mergeLocationBucketsByNormalizedLabel(
       rows.map((r) => ({
-        country: sanitizeStoredLocationDisplay(String(r.country)),
+        country: r.country == null ? '' : String(r.country),
         users: Number(r.users) || 0,
       })),
     )
+    res.json(merged)
   } catch (e) {
     console.error('[analytics/locations]', e)
     res.status(200).json([])
@@ -337,7 +337,7 @@ analyticsRouter.post('/session/start', async (req, res) => {
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())
        ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = EXCLUDED.channel_id,
+         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
          country = COALESCE(EXCLUDED.country, live_sessions.country),
          updated_at = now()`,
       [deviceId, channelId, country],

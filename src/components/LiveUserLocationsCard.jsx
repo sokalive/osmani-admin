@@ -30,17 +30,19 @@ function flagEmoji(countryCode) {
 function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
   const rows = useMemo(() => {
     const list = Array.isArray(locations) ? locations : []
-    const mapped = list
-      .map((row) => {
-        const locationLabel = String(row?.country ?? '').trim() || 'Unknown Location'
-        const count = Math.max(0, Math.floor(Number(row?.users) || 0))
-        return {
-          locationLabel,
-          countryCode: isoFromLocationLabel(locationLabel),
-          count,
-        }
+    const mapped = []
+    for (const row of list) {
+      if (!row || typeof row !== 'object') continue
+      const locationLabel = String(row.country ?? row.label ?? '').trim() || 'Unknown Location'
+      const n = Number(row.users ?? row.count ?? 0)
+      const count = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0
+      if (count <= 0 || !locationLabel) continue
+      mapped.push({
+        locationLabel,
+        countryCode: isoFromLocationLabel(locationLabel),
+        count,
       })
-      .filter((r) => r.count > 0 && r.locationLabel)
+    }
     mapped.sort((a, b) => b.count - a.count || a.locationLabel.localeCompare(b.locationLabel))
     return mapped
   }, [locations])
@@ -57,10 +59,10 @@ function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
         <h2 className="text-base font-bold tracking-tight text-[#FFFFFF]">Live User Locations</h2>
       </div>
 
-      <div className="card-content live-user-locations-scroll flex min-h-0 w-full flex-1 overflow-y-scroll">
-        <ul className="live-locations-list w-full shrink-0">
-          {rows.map((row) => (
-            <li key={row.locationLabel} className="live-location-row">
+      <div className="card-content live-user-locations-scroll flex min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-scroll">
+        <ul className="live-locations-list w-full shrink-0" role="list">
+          {rows.map((row, idx) => (
+            <li key={`${idx}-${row.locationLabel}`} className="live-location-row">
               <span className="flex min-w-0 flex-1 items-start gap-2.5 py-0.5">
                 <span
                   className="mt-0.5 inline-flex shrink-0 items-center justify-center leading-none"

@@ -50,25 +50,35 @@ function titlePlace(s) {
     .join(' ')
 }
 
+function countryFallbackLabel(code) {
+  const c = String(code || '').slice(0, 2).toUpperCase()
+  if (!/^[A-Z]{2}$/.test(c)) return ''
+  const name = COUNTRY_NAME[c]
+  return name ? `${c} • ${name}` : ''
+}
+
 /** Prefer `TZ • Dar es Salaam`; accept legacy delimiters `|`, `-`. */
 export function coerceCompositeLabel(legacyRaw) {
-  const rawIn = tidy(legacyRaw.replace(/\s*[|−\-]\s*/g, ' • '))
+  const rawIn = tidy(String(legacyRaw ?? '').replace(/\s*[|−\-]\s*/g, ' • '))
   if (!rawIn) return ''
   const m = /^([A-Za-z]{2})\s*[•·]\s*(.+)$/u.exec(rawIn)
   if (m) {
     const c = m[1].toUpperCase()
-    const rest = tidy(m[2])
-    if (!rest || ispOrProviderLike(rest)) return UNKNOWN_LOCATION
-    if (/^unknown$/i.test(rest)) {
-      const fallback = COUNTRY_NAME[c]
-      return `${c} • ${fallback ?? UNKNOWN_LOCATION}`
+    const fb = countryFallbackLabel(c)
+    const restRaw = tidy(m[2])
+    if (!restRaw || ispOrProviderLike(restRaw)) return fb || UNKNOWN_LOCATION
+    if (/^unknown$/i.test(restRaw)) return fb || UNKNOWN_LOCATION
+    return `${c} • ${titlePlace(restRaw)}`
+  }
+  if (/^[A-Za-z]{2}$/u.test(rawIn)) return countryFallbackLabel(rawIn)
+  const leadIso = /^([A-Za-z]{2})\b/.exec(rawIn)
+  if (ispOrProviderLike(rawIn)) {
+    if (leadIso) {
+      const fb = countryFallbackLabel(leadIso[1])
+      if (fb) return fb
     }
+    return UNKNOWN_LOCATION
   }
-  if (/^[A-Za-z]{2}$/u.test(rawIn)) {
-    const c = rawIn.toUpperCase()
-    return `${c} • ${COUNTRY_NAME[c] ?? 'Unknown'}`
-  }
-  if (ispOrProviderLike(rawIn)) return UNKNOWN_LOCATION
   return ''
 }
 
@@ -106,7 +116,7 @@ export function normalizeLocationPayload(body = {}) {
     } else if (composite && composite !== UNKNOWN_LOCATION) {
       out = composite
     } else {
-      out = `${cc} • ${COUNTRY_NAME[cc] ?? 'Unknown'}`
+      out = countryFallbackLabel(cc) || UNKNOWN_LOCATION
     }
   } else if (composite) {
     out = composite
@@ -130,8 +140,35 @@ export function normalizeLocationPayload(body = {}) {
 export function sanitizeStoredLocationDisplay(raw) {
   const sIn = tidy(raw)
   if (!sIn) return UNKNOWN_LOCATION
-  if (ispOrProviderLike(sIn)) return UNKNOWN_LOCATION
-  const c = coerceCompositeLabel(sIn)
-  if (c) return c
+  if (!ispOrProviderLike(sIn)) {
+    const c = coerceCompositeLabel(sIn)
+    if (c && c !== UNKNOWN_LOCATION) return c
+  }
+  const leadIso = /^([A-Za-z]{2})\b/.exec(sIn)
+  if (leadIso) {
+    const fb = countryFallbackLabel(leadIso[1])
+    if (fb) return fb
+  }
+  const c2 = coerceCompositeLabel(sIn)
+  if (c2 && c2 !== UNKNOWN_LOCATION) return c2
   return UNKNOWN_LOCATION
+}
+
+/** Merge COUNT buckets that share the same full normalized CC • place label. */
+export function mergeLocationBucketsByNormalizedLabel(rows) {
+  const acc = new Map()
+  const list = Array.isArray(rows) ? rows : []
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue
+    const raw = row.country ?? row.country_code ?? ''
+    const usersRaw = Number(row.users ?? row.user_count ?? 0)
+    const users = Number.isFinite(usersRaw) ? Math.floor(Math.max(0, usersRaw)) : 0
+    if (!users) continue
+    const label = sanitizeStoredLocationDisplay(raw)
+    if (!label) continue
+    acc.set(label, (acc.get(label) || 0) + users)
+  }
+  return [...acc.entries()]
+    .map(([country, users]) => ({ country, users }))
+    .sort((a, b) => b.users - a.users || String(a.country).localeCompare(String(b.country)))
 }
