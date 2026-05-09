@@ -429,4 +429,14 @@ export async function ensureBillingTables(client) {
     VALUES (1, '')
     ON CONFLICT (id) DO NOTHING;
   `)
+
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS expires_at_snapshot TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS manual_admin_blocked BOOLEAN NOT NULL DEFAULT false;
+  `)
 }

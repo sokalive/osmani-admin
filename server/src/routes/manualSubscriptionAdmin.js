@@ -106,10 +106,102 @@ manualSubscriptionAdminRouter.post('/setup-pin', requireAdminToken, rateLimitSet
   }
 })
 
+function logManualSubscriptionAudit(action, deviceId) {
+  console.log(
+    '[manual_subscription_audit]',
+    JSON.stringify({
+      action,
+      device_id: deviceId,
+      timestamp: new Date().toISOString(),
+    }),
+  )
+}
+
+manualSubscriptionAdminRouter.get('/history', requireAdminToken, async (_req, res) => {
+  try {
+    const rows = await billing.listManualSubscriptionHistoryAdmin({ limit: 500 })
+    res.json({ ok: true, rows })
+  } catch (e) {
+    console.error('[manual_subscription history]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+manualSubscriptionAdminRouter.post('/block', requireAdminToken, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    const out = await billing.setManualAdminBlocked(deviceId, true)
+    if (!out.updated) {
+      return res.status(404).json({ ok: false, error: 'No subscription row for this device' })
+    }
+    logManualSubscriptionAudit('block', deviceId)
+    deviceSubscriptionBus.emit('update', { deviceId })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId,
+      orderId: 'manual_admin_block',
+    })
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('[manual_subscription block]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+manualSubscriptionAdminRouter.post('/unblock', requireAdminToken, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    const out = await billing.setManualAdminBlocked(deviceId, false)
+    if (!out.updated) {
+      return res.status(404).json({ ok: false, error: 'No subscription row for this device' })
+    }
+    logManualSubscriptionAudit('unblock', deviceId)
+    deviceSubscriptionBus.emit('update', { deviceId })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId,
+      orderId: 'manual_admin_unblock',
+    })
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('[manual_subscription unblock]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+manualSubscriptionAdminRouter.delete('/history/:grantId', requireAdminToken, async (req, res) => {
+  try {
+    const grantId = Number(req.params.grantId)
+    if (!Number.isFinite(grantId) || grantId < 1) {
+      return res.status(400).json({ ok: false, error: 'Invalid grant id' })
+    }
+    const deleted = await billing.softDeleteManualGrant(grantId)
+    if (!deleted) {
+      return res.status(404).json({ ok: false, error: 'Grant not found or already deleted' })
+    }
+    logManualSubscriptionAudit('delete', deleted.deviceId)
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('[manual_subscription delete history]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 manualSubscriptionAdminRouter.post('/grant', requireAdminToken, rateLimitGrant, async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
-    const pin = String(body.pin ?? '')
+    const pin = String(body.pin ?? '').trim()
+    if (!pin) {
+      return res.status(400).json({ ok: false, error: 'PIN is required' })
+    }
     if (!(await billing.verifyManualSubscriptionGrantPin(pin))) {
       console.warn('[manual_grant] invalid PIN', {
         ip: String(req.headers['x-forwarded-for'] ?? '').slice(0, 40),
@@ -135,17 +227,7 @@ manualSubscriptionAdminRouter.post('/grant', requireAdminToken, rateLimitGrant, 
       orderId: `manual_grant:${result.grantId}`,
     })
 
-    console.log(
-      '[manual_grant_audit]',
-      JSON.stringify({
-        action: 'manual_subscription_grant',
-        device_id: deviceId,
-        duration_days: durationDays,
-        grant_id: result.grantId,
-        expires_at: result.expiresAt,
-        at: new Date().toISOString(),
-      }),
-    )
+    logManualSubscriptionAudit('grant', deviceId)
 
     if (process.env.MANUAL_SUBSCRIPTION_DEBUG === '1') {
       console.log('[manual_grant_debug]', {

@@ -14,8 +14,6 @@ function normalizeApiBase(raw) {
 export const API_BASE = normalizeApiBase(API_BASE_ENV)
 export const API_ORIGIN = API_BASE.replace(/\/api$/i, '')
 
-console.log('API_BASE:', API_BASE)
-
 async function parseJsonSafe(res) {
   const text = await res.text()
   if (!text) return null
@@ -193,25 +191,69 @@ export function subscriptionStreamUrl(deviceId) {
 export const postAcknowledgeManualGift = (body) =>
   apiPost('/subscription/acknowledge-manual-gift', body)
 
-/** Must match server ADMIN_API_TOKEN / APP_UPDATE_ADMIN_TOKEN and PIN verification (MANUAL_SUBSCRIPTION_ADMIN_PIN or DB hash). */
-const MANUAL_SUB_INTERNAL_ADMIN_TOKEN = '3030'
-const MANUAL_SUB_INTERNAL_GRANT_PIN = '3030'
+/** Matches server ADMIN_API_TOKEN / APP_UPDATE_ADMIN_TOKEN (optional override via VITE_ADMIN_API_TOKEN). */
+function manualSubscriptionAdminHeaders() {
+  const token = String(import.meta.env.VITE_ADMIN_API_TOKEN ?? '').trim() || '3030'
+  return {
+    'Content-Type': 'application/json',
+    'X-Admin-Token': token,
+  }
+}
 
-/** Admin: grant stacked subscription days to a device (server still validates token + PIN). */
-export async function postManualSubscriptionGrant({ deviceId, durationDays }) {
+/** Admin: grant stacked subscription days (PIN validated only on server). */
+export async function postManualSubscriptionGrant({ deviceId, durationDays, pin }) {
   const res = await fetch(joinPath('/admin/manual-subscription/grant'), {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Admin-Token': MANUAL_SUB_INTERNAL_ADMIN_TOKEN,
-    },
+    headers: manualSubscriptionAdminHeaders(),
     body: JSON.stringify({
       device_id: String(deviceId ?? '').trim(),
       duration_days: Number(durationDays),
-      pin: MANUAL_SUB_INTERNAL_GRANT_PIN,
+      pin: String(pin ?? ''),
     }),
   })
   const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function getManualSubscriptionHistory() {
+  const res = await fetch(joinPath('/admin/manual-subscription/history'), {
+    headers: manualSubscriptionAdminHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionBlock(deviceId) {
+  const res = await fetch(joinPath('/admin/manual-subscription/block'), {
+    method: 'POST',
+    headers: manualSubscriptionAdminHeaders(),
+    body: JSON.stringify({ device_id: String(deviceId ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionUnblock(deviceId) {
+  const res = await fetch(joinPath('/admin/manual-subscription/unblock'), {
+    method: 'POST',
+    headers: manualSubscriptionAdminHeaders(),
+    body: JSON.stringify({ device_id: String(deviceId ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function deleteManualSubscriptionGrant(grantId) {
+  const id = Number(grantId)
+  const res = await fetch(joinPath(`/admin/manual-subscription/history/${encodeURIComponent(String(id))}`), {
+    method: 'DELETE',
+    headers: manualSubscriptionAdminHeaders(),
+  })
+  const body = res.status === 204 ? null : await parseJsonSafe(res)
   if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
   return body
 }

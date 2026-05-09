@@ -536,7 +536,7 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
        ds.updated_at,
        ds.transaction_id,
        (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
-       COALESCE(ad.is_blocked, false) AS blocked_now,
+       (COALESCE(ds.manual_admin_blocked, false) OR COALESCE(ad.is_blocked, false)) AS blocked_now,
        ad.block_reason
      FROM device_subscriptions ds
      LEFT JOIN admin_devices ad
@@ -602,6 +602,11 @@ export async function grantManualDeviceSubscription(deviceId, durationDays) {
     console.warn('[manual_grant] unexpected upsert skip — order_id should be unique:', orderId)
   }
 
+  await pool.query(
+    `UPDATE manual_subscription_grants SET expires_at_snapshot = $2::timestamptz WHERE id = $1`,
+    [grantId, expiresAt],
+  )
+
   return {
     grantId,
     nonce: String(nonce),
@@ -621,7 +626,7 @@ export async function getOldestPendingManualGrant(deviceId) {
   const { rows } = await pool.query(
     `SELECT id, nonce, duration_days, created_at
      FROM manual_subscription_grants
-     WHERE device_id = $1 AND acknowledged_at IS NULL
+     WHERE device_id = $1 AND acknowledged_at IS NULL AND deleted_at IS NULL
      ORDER BY created_at ASC
      LIMIT 1`,
     [d],
@@ -637,10 +642,98 @@ export async function acknowledgeManualGrantByNonce(deviceId, nonce) {
   const { rowCount } = await pool.query(
     `UPDATE manual_subscription_grants
      SET acknowledged_at = now()
-     WHERE device_id = $1 AND nonce = $2::uuid AND acknowledged_at IS NULL`,
+     WHERE device_id = $1 AND nonce = $2::uuid AND acknowledged_at IS NULL AND deleted_at IS NULL`,
     [d, n],
   )
   return Number(rowCount) > 0
+}
+
+/** Admin: history of manual grants (excludes soft-deleted rows). */
+export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
+  const pool = requirePool()
+  const lim = Math.min(1000, Math.max(1, Number(limit) || 500))
+  const { rows } = await pool.query(
+    `SELECT
+       g.id,
+       g.device_id,
+       g.duration_days,
+       g.created_at AS granted_at,
+       g.expires_at_snapshot,
+       COALESCE(ds.manual_admin_blocked, false) AS manual_admin_blocked,
+       COALESCE(
+         (SELECT bool_or(ad.is_blocked) FROM admin_devices ad WHERE ad.device_id = g.device_id),
+         false
+       ) AS admin_device_blocked,
+       ds.expires_at AS subscription_expires_at,
+       ds.status AS subscription_status
+     FROM manual_subscription_grants g
+     LEFT JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     WHERE g.deleted_at IS NULL
+     ORDER BY g.created_at DESC
+     LIMIT $1`,
+    [lim],
+  )
+
+  return rows.map((r) => {
+    const snap = r.expires_at_snapshot
+    const subExp = r.subscription_expires_at
+    const rawExp = snap ?? subExp
+    const expDate =
+      rawExp instanceof Date ? rawExp : rawExp != null ? new Date(rawExp) : null
+    const validTime = expDate != null && !Number.isNaN(expDate.getTime()) && expDate.getTime() > Date.now()
+    const manualBlocked = r.manual_admin_blocked === true
+    const deviceBlocked = r.admin_device_blocked === true
+    const effectiveBlocked = manualBlocked || deviceBlocked
+    const subscriptionActive =
+      String(r.subscription_status ?? '') === 'active' && validTime && !effectiveBlocked
+
+    return {
+      id: Number(r.id),
+      deviceId: String(r.device_id ?? ''),
+      durationDays: Number(r.duration_days) || 0,
+      grantedAt:
+        r.granted_at instanceof Date ? r.granted_at.toISOString() : r.granted_at != null
+          ? new Date(r.granted_at).toISOString()
+          : null,
+      expiresAt: expDate && !Number.isNaN(expDate.getTime()) ? expDate.toISOString() : null,
+      manualAdminBlocked: manualBlocked,
+      adminDeviceBlocked: deviceBlocked,
+      effectiveBlocked,
+      subscriptionActive,
+    }
+  })
+}
+
+/** Toggle manual admin block on device_subscriptions (playback follows verify / blocked_now). */
+export async function setManualAdminBlocked(deviceId, blocked) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) throw new Error('device_id required')
+  const b = Boolean(blocked)
+  const { rowCount } = await pool.query(
+    `UPDATE device_subscriptions
+     SET manual_admin_blocked = $2, updated_at = now()
+     WHERE device_id = $1`,
+    [d, b],
+  )
+  return { updated: Number(rowCount) > 0 }
+}
+
+/** Soft-delete a manual grant row from admin history (does not revoke subscription time). */
+export async function softDeleteManualGrant(grantId) {
+  const pool = requirePool()
+  const id = Number(grantId)
+  if (!Number.isFinite(id) || id < 1) throw new Error('Invalid grant id')
+  const { rows } = await pool.query(
+    `UPDATE manual_subscription_grants
+     SET deleted_at = now()
+     WHERE id = $1 AND deleted_at IS NULL
+     RETURNING id, device_id`,
+    [id],
+  )
+  const row = rows[0]
+  if (!row) return null
+  return { id: Number(row.id), deviceId: String(row.device_id ?? '') }
 }
 
 /**
