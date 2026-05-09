@@ -177,13 +177,13 @@ body {
   background: transparent;
 }
 
-/* Internal list scroll tiles — taller thumb, stable gutter, scrollbar on viewport only */
+/* Internal list scroll tiles — slim bar, strong thumb contrast (Firefox + scoped WebKit below) */
 .live-user-locations-scroll,
 .dashboard-mwc-list-scroll {
   scrollbar-gutter: stable;
   padding-right: 4px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.75) rgba(15, 23, 42, 0.55);
+  scrollbar-color: #34d399 rgb(30 41 59 / 0.92);
 }
 
 /* Scroll viewport: column layout, vertical scroll inside fixed card footprint */
@@ -234,28 +234,41 @@ body {
 
 .live-user-locations-scroll::-webkit-scrollbar,
 .dashboard-mwc-list-scroll::-webkit-scrollbar {
-  width: 8px;
+  width: 10px;
 }
 
 .live-user-locations-scroll::-webkit-scrollbar-track,
 .dashboard-mwc-list-scroll::-webkit-scrollbar-track {
   margin: 4px 0;
   border-radius: 9999px;
-  background: rgba(15, 23, 42, 0.72);
+  background: rgb(30 41 59 / 0.88);
+  box-shadow:
+    inset 0 0 0 1px rgb(148 163 184 / 0.22),
+    inset 0 1px 0 rgb(255 255 255 / 0.05);
 }
 
 .live-user-locations-scroll::-webkit-scrollbar-thumb,
 .dashboard-mwc-list-scroll::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.78);
+  background: linear-gradient(180deg, #4ade80 0%, #22c55e 52%, #16a34a 100%);
   border-radius: 9999px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+  border: 1px solid rgb(21 128 61 / 0.55);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 0 10px rgb(74 222 128 / 0.28);
 }
 
 .live-user-locations-scroll::-webkit-scrollbar-thumb:hover,
 .dashboard-mwc-list-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(203, 213, 225, 0.85);
-  background-clip: padding-box;
+  background: linear-gradient(180deg, #6ee7b7 0%, #34d399 52%, #22c55e 100%);
+  border-color: rgb(34 197 94 / 0.65);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.38),
+    0 0 12px rgb(110 231 183 / 0.35);
+}
+
+.live-user-locations-scroll::-webkit-scrollbar-thumb:active,
+.dashboard-mwc-list-scroll::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(180deg, #bbf7d0 0%, #4ade80 52%, #22c55e 100%);
 }
 
 /* Stat cards — stack from top (Total App Installs, Peak Viewers) */
