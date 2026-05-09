@@ -185,19 +185,31 @@ body {
   scrollbar-color: rgba(148, 163, 184, 0.75) rgba(15, 23, 42, 0.55);
 }
 
+.dashboard-card > .live-user-locations-scroll.card-content {
+  /* Flex child must shrink below content height so vertical scroll activates */
+  flex: 1 1 0%;
+  min-height: 0;
+}
+
 .live-user-locations-scroll::-webkit-scrollbar {
   width: 8px;
 }
 
+.live-user-locations-scroll::-webkit-scrollbar-track {
+  margin: 4px 0;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
 .live-user-locations-scroll::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.72);
+  background: rgba(148, 163, 184, 0.78);
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
 .live-user-locations-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(203, 213, 225, 0.78);
+  background: rgba(203, 213, 225, 0.85);
   background-clip: padding-box;
 }
 
@@ -257,7 +269,11 @@ body {
 }
 
 .live-location-row {
+  box-sizing: border-box;
   display: flex;
+  width: 100%;
+  min-height: 44px;
+  flex-shrink: 0;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;

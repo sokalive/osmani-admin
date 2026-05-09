@@ -26,34 +26,6 @@ const OVERVIEW_FALLBACK = {
   newUsersToday: 0,
 }
 
-/** ISO-ish code for flag; non-ASCII uses globe in card. */
-function isoFromLocationLabel(display) {
-  const s = String(display || '').trim()
-  if (!s) return '__'
-  const m = /^([A-Z]{2})\s*[•·]\s*/u.exec(s)
-  if (m) return m[1]
-  if (/^[A-Za-z]{2}$/.test(s)) return s.toUpperCase()
-  return '__'
-}
-
-function expandLocationsForCard(rows) {
-  if (!Array.isArray(rows)) return []
-  const out = []
-  for (const row of rows) {
-    const n = Math.min(5000, Math.max(0, Math.floor(Number(row.users) || 0)))
-    const locationLabel = String(row.country || '').trim() || 'Unknown Location'
-    const cc = isoFromLocationLabel(locationLabel)
-    for (let i = 0; i < n; i += 1) {
-      out.push({
-        countryCode: cc,
-        countryName: locationLabel,
-        status: 'online',
-      })
-    }
-  }
-  return out
-}
-
 function DashboardPage() {
   const { showToast } = useToast()
   const [overview, setOverview] = useState(OVERVIEW_FALLBACK)
@@ -142,11 +114,6 @@ function DashboardPage() {
     return n.toLocaleString('en-TZ')
   }, [overview])
 
-  const liveUsersList = useMemo(
-    () => expandLocationsForCard(locations),
-    [locations],
-  )
-
   const channelNameById = useMemo(() => {
     const m = new Map()
     for (const row of Array.isArray(channelCatalog) ? channelCatalog : []) {
@@ -192,7 +159,7 @@ function DashboardPage() {
             <StatCard key={`top-${section1Cards[0].title}`} {...section1Cards[0]} />
             <MostWatchedChannelsListCard channels={mostWatched} />
             <MostWatchedChannelsCard channels={topFiveEligible} />
-            <LiveUserLocationsCard users={liveUsersList} />
+            <LiveUserLocationsCard locations={locations} />
           </section>
         </div>
         <LiveUsersTrendSection points={trend} />
