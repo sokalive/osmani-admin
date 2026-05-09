@@ -1,6 +1,36 @@
 import path from 'node:path'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
+const DISPLAY_SECTIONS = new Set(['general', 'sports', 'movies', 'kids', 'news', 'music', 'docs'])
+const DISPLAY_SECTION_LABEL = {
+  general: 'General',
+  sports: 'Sports',
+  movies: 'Movies',
+  kids: 'Kids',
+  news: 'News',
+  music: 'Music',
+  docs: 'Docs',
+}
+
+function normalizeDisplaySection(v) {
+  const s = String(v ?? '').trim().toLowerCase()
+  const alias = {
+    general: 'general',
+    sports: 'sports',
+    movies: 'movies',
+    kids: 'kids',
+    news: 'news',
+    music: 'music',
+    docs: 'docs',
+  }
+  const mapped = alias[s] ?? s
+  return DISPLAY_SECTIONS.has(mapped) ? mapped : 'general'
+}
+
+function displaySectionToCategoryLabel(section) {
+  const s = normalizeDisplaySection(section)
+  return DISPLAY_SECTION_LABEL[s] || 'General'
+}
 
 /** Canonical playerType for API + storage */
 export function normalizePlayerType(v) {
@@ -38,6 +68,7 @@ export function migrateStoredChannel(c) {
         ? String(c.thumbnailUrl).trim()
         : null
   const category = (c.category || 'General').trim() || 'General'
+  const displaySection = normalizeDisplaySection(c.displaySection ?? c.display_section)
   const bottomTabRaw =
     c.bottomTab != null && String(c.bottomTab).trim() !== ''
       ? String(c.bottomTab).trim()
@@ -61,6 +92,7 @@ export function migrateStoredChannel(c) {
     accessType,
     thumbnail,
     category,
+    displaySection,
     bottomTab: bottomTabRaw || 'General',
     playerType: normalizePlayerType(c.playerType),
     url: (c.url || '').trim(),
@@ -115,7 +147,11 @@ export function parseChannelInput(body, file, existing = null) {
     accessType = ex.accessType === 'premium' ? 'premium' : 'free'
   }
 
-  const category = str(b.category || b.displaySection, 'General') || 'General'
+  const displaySection = normalizeDisplaySection(
+    b.display_section ?? b.displaySection ?? b.category ?? b.display_section_label,
+  )
+  const categoryRaw = str(b.category, '')
+  const category = categoryRaw || displaySectionToCategoryLabel(displaySection)
   const bottomTab =
     str(b.bottomTab || b.bottomTabsDisplay || b.bottom_tabs_display, '') ||
     (ex != null ? ex.bottomTab : '') ||
@@ -124,6 +160,7 @@ export function parseChannelInput(body, file, existing = null) {
   return {
     name: str(b.name),
     url: str(b.url || b.streamUrlPrimary),
+    displaySection,
     category,
     bottomTab: bottomTab || category,
     thumbnail: thumbnail || null,
@@ -147,6 +184,7 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
     id,
     name: parsed.name,
     url: parsed.url,
+    displaySection: parsed.displaySection,
     category: parsed.category,
     bottomTab: parsed.bottomTab,
     thumbnail: parsed.thumbnail ?? base.thumbnail ?? null,
@@ -215,6 +253,8 @@ export function channelToResponse(c, req) {
     is_active: isActive,
     show_in_app: showInApp,
     accessType: m.accessType === 'premium' ? 'premium' : 'free',
+    display_section: m.displaySection || 'general',
+    displaySection: m.displaySection || 'general',
     category: m.category || 'General',
     bottomTab: (m.bottomTab || m.category || 'General').trim() || 'General',
     backupStream1: m.backupStream1 ?? '',

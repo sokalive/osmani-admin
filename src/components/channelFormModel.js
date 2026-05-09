@@ -1,12 +1,19 @@
 export const SECTION_OPTIONS = [
-  'Sports',
-  'Movies',
-  'Kids',
-  'News',
-  'Music',
-  'Docs',
-  'General',
+  { value: 'general', label: 'General' },
+  { value: 'sports', label: 'Sports' },
+  { value: 'movies', label: 'Movies' },
+  { value: 'kids', label: 'Kids' },
+  { value: 'news', label: 'News' },
+  { value: 'music', label: 'Music' },
+  { value: 'docs', label: 'Docs' },
 ]
+
+const SECTION_LABEL_BY_VALUE = Object.fromEntries(SECTION_OPTIONS.map((x) => [x.value, x.label]))
+
+export function sectionValueToLabel(value) {
+  const v = String(value ?? '').trim().toLowerCase()
+  return SECTION_LABEL_BY_VALUE[v] || 'General'
+}
 
 export const PLAYER_TYPES = ['Exo', 'WebView', 'VLC', 'Native', 'IJK']
 
@@ -26,7 +33,7 @@ export function emptyFormState() {
   return {
     id: '',
     name: '',
-    displaySection: 'General',
+    displaySection: 'general',
     streamUrlPrimary: '',
     backupStream1: '',
     backupStream2: '',
@@ -48,7 +55,9 @@ export function channelToForm(channel) {
   return {
     id: channel.id,
     name: channel.name ?? '',
-    displaySection: channel.displaySection ?? channel.category ?? 'General',
+    displaySection: String(channel.displaySection ?? channel.display_section ?? 'general')
+      .trim()
+      .toLowerCase() || 'general',
     streamUrlPrimary: channel.streamUrlPrimary ?? '',
     backupStream1: channel.backupStream1 ?? '',
     backupStream2: channel.backupStream2 ?? '',
@@ -57,7 +66,11 @@ export function channelToForm(channel) {
     userAgent: channel.userAgent ?? '',
     playerType: channel.playerType ?? 'Exo',
     accessPremium: Boolean(channel.accessPremium),
-    bottomTabsDisplay: channel.bottomTabsDisplay ?? channel.category ?? 'General',
+    bottomTabsDisplay:
+      channel.bottomTabsDisplay ??
+      channel.bottomTab ??
+      sectionValueToLabel(channel.displaySection ?? channel.display_section) ??
+      'General',
     live: Boolean(channel.live),
     hd: channel.hd !== false,
     active: channel.active !== false,

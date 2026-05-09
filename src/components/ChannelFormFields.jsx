@@ -46,8 +46,8 @@ function ChannelFormFields({
           className={sc}
         >
           {SECTION_OPTIONS.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
             </option>
           ))}
         </select>
@@ -211,8 +211,8 @@ function ChannelFormFields({
           className={sc}
         >
           {SECTION_OPTIONS.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
+            <option key={`bottom-${opt.value}`} value={opt.label}>
+              {opt.label}
             </option>
           ))}
         </select>

@@ -8,6 +8,25 @@ const CATEGORY_GRADIENTS = {
   General: 'from-indigo-600 to-purple-700',
 }
 
+const DISPLAY_SECTION_TO_LABEL = {
+  general: 'General',
+  sports: 'Sports',
+  movies: 'Movies',
+  kids: 'Kids',
+  news: 'News',
+  music: 'Music',
+  docs: 'Docs',
+}
+
+function normalizeDisplaySection(value) {
+  const v = String(value ?? '').trim().toLowerCase()
+  return DISPLAY_SECTION_TO_LABEL[v] ? v : 'general'
+}
+
+function displaySectionLabel(value) {
+  return DISPLAY_SECTION_TO_LABEL[normalizeDisplaySection(value)] || 'General'
+}
+
 const API_BASE_ENV = String(
   import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
 ).trim()
@@ -43,7 +62,8 @@ function resolveThumbnailUrl(c) {
 
 /** API row → UI channel object for table + modal */
 export function uiFromApiRow(c) {
-  const category = c.category || 'General'
+  const displaySection = normalizeDisplaySection(c.displaySection ?? c.display_section)
+  const category = c.category || displaySectionLabel(displaySection) || 'General'
   const accessPremium =
     c.accessType === 'premium' || Boolean(c.accessPremium === true || c.access_premium === true)
   const live = c.isLive !== undefined ? Boolean(c.isLive) : Boolean(c.live)
@@ -65,7 +85,7 @@ export function uiFromApiRow(c) {
     id: String(c.id),
     name: c.name ?? '',
     category,
-    displaySection: category,
+    displaySection,
     bottomTabsDisplay,
     /** Absolute URL for list/avatar; null if no image */
     thumbnail,
@@ -91,12 +111,15 @@ export function uiFromApiRow(c) {
 export function channelFormDataFromSubmit(submitPayload) {
   const s = submitPayload
   const fd = new FormData()
+  const displaySection = normalizeDisplaySection(s.displaySection)
   fd.append('name', (s.name ?? '').trim())
   fd.append('url', (s.streamUrlPrimary ?? '').trim())
-  fd.append('category', ((s.displaySection ?? 'General').trim() || 'General'))
+  fd.append('displaySection', displaySection)
+  fd.append('display_section', displaySection)
+  fd.append('category', displaySectionLabel(displaySection))
   fd.append(
     'bottomTab',
-    ((s.bottomTabsDisplay ?? s.displaySection ?? 'General').trim() || 'General'),
+    ((s.bottomTabsDisplay ?? displaySectionLabel(displaySection) ?? 'General').trim() || 'General'),
   )
   fd.append('isLive', String(Boolean(s.live)))
   fd.append('isHD', String(s.hd !== false))
@@ -126,10 +149,13 @@ export function channelFormDataFromSubmit(submitPayload) {
 
 /** Modal submit payload → JSON body (quick toggles / non-file updates) */
 export function apiBodyFromFormSubmit(s) {
+  const displaySection = normalizeDisplaySection(s.displaySection)
   return {
     name: s.name?.trim() ?? '',
-    category: (s.displaySection ?? 'General').trim() || 'General',
-    bottomTab: (s.bottomTabsDisplay ?? s.displaySection ?? 'General').trim() || 'General',
+    displaySection,
+    display_section: displaySection,
+    category: displaySectionLabel(displaySection),
+    bottomTab: (s.bottomTabsDisplay ?? displaySectionLabel(displaySection) ?? 'General').trim() || 'General',
     url: (s.streamUrlPrimary ?? '').trim(),
     backupStream1: (s.backupStream1 ?? '').trim(),
     backupStream2: (s.backupStream2 ?? '').trim(),
@@ -151,10 +177,13 @@ export function apiBodyFromFormSubmit(s) {
 
 /** UI channel → API JSON body (e.g. toggle access) */
 export function apiBodyFromUiChannel(ch) {
+  const displaySection = normalizeDisplaySection(ch.displaySection)
   return {
     name: ch.name ?? '',
-    category: ch.category ?? ch.displaySection ?? 'General',
-    bottomTab: ch.bottomTabsDisplay ?? ch.displaySection ?? ch.category ?? 'General',
+    displaySection,
+    display_section: displaySection,
+    category: ch.category ?? displaySectionLabel(displaySection) ?? 'General',
+    bottomTab: ch.bottomTabsDisplay ?? displaySectionLabel(displaySection) ?? ch.category ?? 'General',
     url: ch.streamUrlPrimary ?? '',
     backupStream1: ch.backupStream1 ?? '',
     backupStream2: ch.backupStream2 ?? '',

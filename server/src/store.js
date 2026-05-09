@@ -15,6 +15,7 @@ function rowToChannel(row) {
     name: row.name ?? '',
     url: row.url ?? '',
     thumbnail: row.thumbnail ?? null,
+    displaySection: row.display_section ?? 'general',
     category: row.category ?? 'General',
     bottomTab: row.bottom_tab ?? 'General',
     isLive: Boolean(row.is_live),
@@ -39,6 +40,7 @@ function channelToRowParams(c) {
     c.name ?? '',
     c.url ?? '',
     c.thumbnail ?? null,
+    c.displaySection ?? 'general',
     c.category ?? 'General',
     c.bottomTab ?? 'General',
     Boolean(c.isLive),
@@ -75,7 +77,7 @@ export async function readChannels() {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
   const { rows } = await pool.query(
-    `SELECT id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
+    `SELECT id, name, url, thumbnail, display_section, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
             access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
             created_at, updated_at
      FROM channels ORDER BY id ASC`,
@@ -94,7 +96,7 @@ export async function getChannelById(id) {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
   const { rows } = await pool.query(
-    `SELECT id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
+    `SELECT id, name, url, thumbnail, display_section, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
             access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
             created_at, updated_at
      FROM channels WHERE id = $1`,
@@ -109,10 +111,10 @@ export async function insertChannel(c) {
   const p = channelToRowParams(c)
   await pool.query(
     `INSERT INTO channels (
-       id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
+       id, name, url, thumbnail, display_section, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
        access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
        created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::timestamptz,$19::timestamptz)`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::timestamptz,$20::timestamptz)`,
     p,
   )
 }
@@ -123,10 +125,10 @@ export async function updateChannel(c) {
   const p = channelToRowParams(c)
   await pool.query(
     `UPDATE channels SET
-       name = $2, url = $3, thumbnail = $4, category = $5, bottom_tab = $6,
-       is_live = $7, is_hd = $8, is_active = $9, show_in_app = $10, access_type = $11,
-       backup_stream_1 = $12, backup_stream_2 = $13, origin = $14, referer = $15, user_agent = $16,
-       player_type = $17, created_at = $18::timestamptz, updated_at = $19::timestamptz
+       name = $2, url = $3, thumbnail = $4, display_section = $5, category = $6, bottom_tab = $7,
+       is_live = $8, is_hd = $9, is_active = $10, show_in_app = $11, access_type = $12,
+       backup_stream_1 = $13, backup_stream_2 = $14, origin = $15, referer = $16, user_agent = $17,
+       player_type = $18, created_at = $19::timestamptz, updated_at = $20::timestamptz
      WHERE id = $1`,
     p,
   )
