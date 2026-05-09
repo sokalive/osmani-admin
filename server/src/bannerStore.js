@@ -17,7 +17,7 @@ export async function ensureBannersStorage() {
 /** Admin / detail: full row + optional channel name for CMS. */
 const SELECT_BASE = `
   SELECT b.id, b.title, b.description, b.image, b.active, b.enabled, b.badge,
-         b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
+         b.badge_automation, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
          b.enable_countdown, b.event_start, b.event_end,
          b.redirect_channel_id, b.sort_order, b.event_timer, b.daily_start, b.daily_end,
          b.created_at, b.updated_at,
@@ -29,23 +29,20 @@ const SELECT_BASE = `
 /** Public list: spec fields only (no join). */
 const SELECT_PUBLIC = `
   SELECT b.id, b.title, b.description, b.image,
-         b.active, b.badge, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
+         b.active, b.badge, b.badge_automation, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
          b.enable_countdown, b.event_start, b.event_end,
-         b.redirect_channel_id, b.sort_order, b.created_at, b.updated_at
+         b.redirect_channel_id, b.sort_order, b.event_timer, b.daily_start, b.daily_end,
+         b.created_at, b.updated_at
   FROM banners b
 `
 
 /**
- * Visibility: active AND (no event bounds OR within [event_start, event_end) style window).
- * Matches: (event_start IS NULL AND event_end IS NULL)
- *       OR (event_start <= NOW() AND (event_end IS NULL OR NOW() < event_end))
+ * Non-ended banners only: includes upcoming (future event_start) for COMING SOON / NEXT badges.
+ * Daily repeat window is evaluated in Node (bannerScheduleEngine), not SQL.
  */
 const PUBLIC_VISIBILITY_WHERE = `
   b.active = true
-  AND (
-    (b.event_start IS NULL AND b.event_end IS NULL)
-    OR (b.event_start <= NOW() AND (b.event_end IS NULL OR NOW() < b.event_end))
-  )
+  AND (b.event_end IS NULL OR NOW() < b.event_end)
 `
 
 /** Public GET /api/banners — production spec only (no enabled / daily timer filter). */
@@ -80,12 +77,12 @@ export async function insertBanner(payload) {
   if (!pool) throw new Error('DATABASE_URL is required.')
   const { rows } = await pool.query(
     `INSERT INTO banners (
-       title, description, image, active, enabled, badge,
+       title, description, image, active, enabled, badge, badge_automation,
        badge_enabled, badge_color, badge_blink, badge_priority,
        enable_countdown, event_start, event_end,
        redirect_channel_id, sort_order,
        event_timer, daily_start, daily_end
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::timestamptz,$13::timestamptz,$14,$15,$16,$17::time,$18::time)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::timestamptz,$14::timestamptz,$15,$16,$17,$18::time,$19::time)
      RETURNING id`,
     [
       payload.title,
@@ -94,6 +91,7 @@ export async function insertBanner(payload) {
       payload.active,
       payload.enabled,
       payload.badge,
+      payload.badge_automation,
       payload.badge_enabled,
       payload.badge_color,
       payload.badge_blink,
@@ -116,11 +114,11 @@ export async function updateBanner(id, payload) {
   if (!pool) throw new Error('DATABASE_URL is required.')
   const { rows } = await pool.query(
     `UPDATE banners SET
-       title = $2, description = $3, image = $4, active = $5, enabled = $6, badge = $7,
-       badge_enabled = $8, badge_color = $9, badge_blink = $10, badge_priority = $11,
-       enable_countdown = $12, event_start = $13::timestamptz, event_end = $14::timestamptz,
-       redirect_channel_id = $15, sort_order = $16, event_timer = $17,
-       daily_start = $18::time, daily_end = $19::time,
+       title = $2, description = $3, image = $4, active = $5, enabled = $6, badge = $7, badge_automation = $8,
+       badge_enabled = $9, badge_color = $10, badge_blink = $11, badge_priority = $12,
+       enable_countdown = $13, event_start = $14::timestamptz, event_end = $15::timestamptz,
+       redirect_channel_id = $16, sort_order = $17, event_timer = $18,
+       daily_start = $19::time, daily_end = $20::time,
        updated_at = now()
      WHERE id = $1
      RETURNING id`,
@@ -132,6 +130,7 @@ export async function updateBanner(id, payload) {
       payload.active,
       payload.enabled,
       payload.badge,
+      payload.badge_automation,
       payload.badge_enabled,
       payload.badge_color,
       payload.badge_blink,

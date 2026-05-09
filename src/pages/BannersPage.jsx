@@ -27,6 +27,7 @@ function bannerPayloadForApi(b, overrides = {}) {
     title: m.title ?? '',
     description: m.description ?? '',
     image: m.image ?? '',
+    badgeAutomation: m.badgeAutomation !== false && m.badge_automation !== false,
     badge: m.badge ?? '',
     badgeEnabled: m.badgeEnabled ?? m.badge_enabled ?? true,
     badgeColor: (m.badgeColor ?? m.badge_color ?? '#FBBF24').trim() || '#FBBF24',
@@ -209,8 +210,9 @@ function BannersPage() {
               Banners
             </h1>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
-              Manage hero tiles and routing. Public list uses active, enabled, event dates, and
-              optional daily timer. Drag the handle to reorder; preview updates every minute.
+              Schedule badges (LIVE NOW, COMING SOON, COMING NEXT, ENDED) are computed server-side
+              from dates, daily repeat windows, and order. Drag the handle to reorder; preview updates
+              every minute.
             </p>
           </div>
           <button
@@ -227,6 +229,7 @@ function BannersPage() {
           variant="add"
           isOpen={addOpen}
           banner={null}
+          peerBanners={sortedBanners}
           onClose={() => setAddOpen(false)}
           onSubmit={handleAddSubmit}
         />
@@ -235,6 +238,7 @@ function BannersPage() {
           variant="edit"
           isOpen={Boolean(editingBanner)}
           banner={editingBanner}
+          peerBanners={sortedBanners.filter((x) => x.id !== editingBanner?.id)}
           onClose={() => setEditingBanner(null)}
           onSubmit={handleEditSubmit}
         />
@@ -267,7 +271,11 @@ function BannersPage() {
                 ? 'border-emerald-500/40 shadow-[0_0_32px_rgba(16,185,129,0.2)] ring-2 ring-emerald-400/25'
                 : 'border-slate-600/50 shadow-none ring-1 ring-slate-700/60 grayscale-[0.25]'
 
-              const badgeOn = (b.badgeEnabled ?? b.badge_enabled) !== false && b.badge
+              const useAuto = (b.badgeAutomation ?? b.badge_automation) !== false
+              const label = useAuto
+                ? (b.effectiveBadge ?? '').trim() || String(b.badge ?? '').trim()
+                : String(b.badge ?? '').trim()
+              const badgeOn = (b.badgeEnabled ?? b.badge_enabled) !== false && label
               const badgeColor = (b.badgeColor ?? b.badge_color ?? '#FBBF24').trim() || '#FBBF24'
               const badgeBlink = Boolean(b.badgeBlink ?? b.badge_blink)
 
@@ -322,7 +330,7 @@ function BannersPage() {
                         }`}
                         style={{ backgroundColor: badgeColor, color: '#0f172a' }}
                       >
-                        {b.badge}
+                        {label}
                       </span>
                     ) : null}
                     {!b.isEnabled ? (
@@ -387,6 +395,11 @@ function BannersPage() {
                       {b.enableCountdown ?? b.enable_countdown ? (
                         <span className="rounded-md bg-cyan-500/20 px-2 py-0.5 text-cyan-100 ring-1 ring-cyan-400/35">
                           Countdown
+                        </span>
+                      ) : null}
+                      {b.schedulePhase ? (
+                        <span className="rounded-md bg-fuchsia-500/20 px-2 py-0.5 text-fuchsia-100 ring-1 ring-fuchsia-400/35">
+                          {String(b.schedulePhase).replace(/_/g, ' ')}
                         </span>
                       ) : null}
                     </div>

@@ -11,6 +11,7 @@ export async function ensureBannersTable(client) {
       active BOOLEAN NOT NULL DEFAULT true,
       enabled BOOLEAN NOT NULL DEFAULT true,
       badge TEXT NOT NULL DEFAULT '',
+      badge_automation BOOLEAN NOT NULL DEFAULT true,
       badge_enabled BOOLEAN NOT NULL DEFAULT true,
       badge_color TEXT NOT NULL DEFAULT '#FBBF24',
       badge_blink BOOLEAN NOT NULL DEFAULT false,
@@ -46,5 +47,17 @@ export async function ensureBannersTable(client) {
 
   await client.query(`
     ALTER TABLE banners ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+  `)
+
+  await client.query(`
+    ALTER TABLE banners ADD COLUMN IF NOT EXISTS badge_automation BOOLEAN NOT NULL DEFAULT true;
+  `)
+
+  /** Preserve legacy custom badge text: turn off automation where admins already set copy. */
+  await client.query(`
+    UPDATE banners
+    SET badge_automation = false
+    WHERE badge_automation = true
+      AND TRIM(COALESCE(badge, '')) <> '';
   `)
 }

@@ -4,6 +4,10 @@ import { X } from 'lucide-react'
 import ToggleSwitch from './ToggleSwitch'
 import { getChannels } from '../lib/api'
 import {
+  buildPreviewAutomationMap,
+  formToEngineRow,
+} from '../utils/bannerAutomationClient'
+import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
   isNowInDailyWindow,
@@ -62,6 +66,7 @@ function emptyForm() {
     title: '',
     description: '',
     badge: '',
+    badgeAutomation: true,
     badgeEnabled: true,
     badgeColor: '#FBBF24',
     badgeBlink: false,
@@ -87,6 +92,7 @@ function bannerToForm(banner) {
     title: banner.title ?? '',
     description: banner.description ?? '',
     badge: banner.badge ?? '',
+    badgeAutomation: (banner.badgeAutomation ?? banner.badge_automation) !== false,
     badgeEnabled: banner.badgeEnabled ?? banner.badge_enabled ?? true,
     badgeColor: banner.badgeColor ?? banner.badge_color ?? '#FBBF24',
     badgeBlink: Boolean(banner.badgeBlink ?? banner.badge_blink),
@@ -127,7 +133,7 @@ function formatCountdown(ms) {
 /**
  * Shared Add / Edit banner form — matches Channel modal chrome (dark + amber).
  */
-function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
+function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, onSubmit }) {
   const formId = useId()
   const [form, setForm] = useState(() => bannerToForm(banner))
   const [imagePreview, setImagePreview] = useState(null)
@@ -338,6 +344,7 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
       title,
       description,
       image: imageUrl,
+      badgeAutomation: form.badgeAutomation !== false,
       badge: form.badge.trim(),
       badgeEnabled: form.badgeEnabled,
       badgeColor: form.badgeColor.trim() || '#FBBF24',
@@ -382,7 +389,19 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
     : true
   const eventWindowNow = isNowInEventWindow(eventStartIso, eventEndIso, previewNow)
 
-  const previewBadgeVisible = form.badgeEnabled && form.badge.trim().length > 0
+  const previewDraftId =
+    variant === 'edit' && banner?.id != null ? Number(banner.id) : -999999
+  const previewAutomation = useMemo(() => {
+    const draft = formToEngineRow(form, previewDraftId)
+    return buildPreviewAutomationMap(peerBanners, draft, new Date(clock)).get(previewDraftId)
+  }, [form, peerBanners, previewDraftId, clock])
+
+  const previewBadgeText =
+    form.badgeAutomation !== false
+      ? (previewAutomation?.display_badge || '').trim() || form.badge.trim()
+      : form.badge.trim()
+
+  const previewBadgeVisible = form.badgeEnabled && previewBadgeText.length > 0
   const previewImageSrc =
     imageDataUrl ||
     (typeof imagePreview === 'string' && !imagePreview.startsWith('blob:') ? imagePreview : null) ||
@@ -505,7 +524,7 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                         color: '#0f172a',
                       }}
                     >
-                      {form.badge.trim()}
+                      {previewBadgeText}
                     </span>
                   ) : null}
                   {form.enableCountdown && countdownPreviewText ? (
@@ -564,9 +583,24 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
               <div>
                 <p className={labelClassName()}>Advanced</p>
                 <div className="space-y-4 rounded-xl border border-slate-700/60 bg-slate-900/35 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-2">
+                    <div>
+                      <span className="text-sm text-slate-300">Automatic schedule badge</span>
+                      <p className="mt-0.5 max-w-md text-[11px] text-slate-500">
+                        LIVE NOW · COMING SOON · COMING NEXT · ENDED are generated from dates,
+                        daily repeat, and sort order. Turn off only if you need a fixed custom label.
+                      </p>
+                    </div>
+                    <ToggleSwitch
+                      checked={form.badgeAutomation !== false}
+                      onChange={(next) => setForm((f) => ({ ...f, badgeAutomation: next }))}
+                      aria-label="Automatic schedule badge"
+                    />
+                  </div>
+
                   <div>
                     <label htmlFor={`${formId}-badge`} className={labelClassName()}>
-                      Badge text
+                      {form.badgeAutomation !== false ? 'Optional custom subtitle' : 'Badge text'}
                     </label>
                     <input
                       id={`${formId}-badge`}
@@ -574,7 +608,11 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                       value={form.badge}
                       onChange={(e) => setForm((f) => ({ ...f, badge: e.target.value }))}
                       className={inputClassName()}
-                      placeholder='e.g. "LIVE NOW"'
+                      placeholder={
+                        form.badgeAutomation !== false
+                          ? 'Leave empty to use schedule labels only'
+                          : 'e.g. SPECIAL EVENT'
+                      }
                     />
                   </div>
 

@@ -1,3 +1,7 @@
+import {
+  isBannerLiveNow,
+  resolveDisplayBadge,
+} from './bannerScheduleEngine.js'
 import { resolveThumbnailForApi } from './channelNormalize.js'
 
 function formatTimeForApi(t) {
@@ -22,8 +26,9 @@ function fullImageUrl(row, req) {
 /**
  * GET /api/banners — production public shape only (no legacy timer / enabled fields).
  * Includes snake_case + camelCase aliases where applicable.
+ * `badge` is the effective label (automation or manual). Pass automationEntry from computeAutomationForAll.
  */
-export function bannerToPublicResponse(row, req) {
+export function bannerToPublicResponse(row, req, automationEntry = null, now = new Date()) {
   if (!row) return null
   const imageUrl = fullImageUrl(row, req)
   const eventStart = formatTsForApi(row.event_start)
@@ -32,6 +37,8 @@ export function bannerToPublicResponse(row, req) {
   const sortOrder = Number(row.sort_order) || 0
   const createdAt = formatTsForApi(row.created_at)
   const updatedAt = formatTsForApi(row.updated_at) ?? createdAt
+  const badgeAutomation = row.badge_automation !== false && row.badge_automation !== 0
+  const effectiveBadge = resolveDisplayBadge(row, automationEntry)
 
   return {
     id: Number(row.id),
@@ -41,7 +48,11 @@ export function bannerToPublicResponse(row, req) {
     imageUrl: imageUrl,
     is_active: Boolean(row.active),
     isActive: Boolean(row.active),
-    badge: row.badge ?? '',
+    badge: effectiveBadge,
+    badge_manual: String(row.badge ?? '').trim(),
+    badgeManual: String(row.badge ?? '').trim(),
+    badge_automation: badgeAutomation,
+    badgeAutomation,
     badge_enabled: Boolean(row.badge_enabled),
     badgeEnabled: Boolean(row.badge_enabled),
     badge_color: String(row.badge_color ?? '#FBBF24').trim() || '#FBBF24',
@@ -64,13 +75,28 @@ export function bannerToPublicResponse(row, req) {
     createdAt,
     updated_at: updatedAt,
     updatedAt,
+    schedule_phase: automationEntry?.schedule_phase ?? null,
+    schedulePhase: automationEntry?.schedule_phase ?? null,
+    computed_badge: automationEntry?.computed_badge ?? '',
+    computedBadge: automationEntry?.computed_badge ?? '',
+    is_visible_now: isBannerLiveNow(row, now),
+    isVisibleNow: isBannerLiveNow(row, now),
+    can_interact: Boolean(row.enabled) && isBannerLiveNow(row, now),
+    canInteract: Boolean(row.enabled) && isBannerLiveNow(row, now),
+    event_timer: Boolean(row.event_timer),
+    eventTimer: Boolean(row.event_timer),
+    daily_start: formatTimeForApi(row.daily_start),
+    dailyStart: formatTimeForApi(row.daily_start),
+    daily_end: formatTimeForApi(row.daily_end),
+    dailyEnd: formatTimeForApi(row.daily_end),
   }
 }
 
 /**
  * CMS / manage / mutate responses — full row + legacy daily timer fields for admin UI.
+ * `badge` stays manual DB copy for editors; `effectiveBadge` is what users see when automation is on.
  */
-export function bannerToResponse(row, req) {
+export function bannerToResponse(row, req, automationEntry = null, now = new Date()) {
   if (!row) return null
   const ca = row.created_at
   const ua = row.updated_at
@@ -82,6 +108,7 @@ export function bannerToResponse(row, req) {
   const createdIso = ca instanceof Date ? ca.toISOString() : formatTsForApi(ca)
   const updatedIso =
     (ua instanceof Date ? ua.toISOString() : formatTsForApi(ua)) ?? createdIso
+  const effectiveBadge = resolveDisplayBadge(row, automationEntry)
 
   return {
     id: Number(row.id),
@@ -93,6 +120,8 @@ export function bannerToResponse(row, req) {
     isActive: Boolean(row.active),
     isEnabled: Boolean(row.enabled),
     badge: row.badge ?? '',
+    effectiveBadge,
+    badgeAutomation: row.badge_automation !== false && row.badge_automation !== 0,
     badgeEnabled: Boolean(row.badge_enabled),
     badgeColor: String(row.badge_color ?? '#FBBF24').trim() || '#FBBF24',
     badgeBlink: Boolean(row.badge_blink),
@@ -125,5 +154,12 @@ export function bannerToResponse(row, req) {
     sort_order: sortOrder,
     created_at: createdIso,
     updated_at: updatedIso,
+    badge_automation: row.badge_automation !== false && row.badge_automation !== 0,
+    schedulePhase: automationEntry?.schedule_phase ?? null,
+    schedule_phase: automationEntry?.schedule_phase ?? null,
+    computedBadge: automationEntry?.computed_badge ?? '',
+    computed_badge: automationEntry?.computed_badge ?? '',
+    isVisibleNow: isBannerLiveNow(row, now),
+    is_visible_now: isBannerLiveNow(row, now),
   }
 }

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import { bannerToPublicResponse, bannerToResponse } from '../bannerNormalize.js'
+import { computeAutomationForAll } from '../bannerScheduleEngine.js'
 import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
@@ -75,6 +76,13 @@ function parseMaybeTimestamptz(v) {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+function manageRowResponse(row, req) {
+  if (!row) return null
+  const now = new Date()
+  const m = computeAutomationForAll([row], now)
+  return bannerToResponse(row, req, m.get(Number(row.id)), now)
+}
+
 function parseBadgeColor(v) {
   const raw = String(v ?? '#FBBF24').trim()
   if (!raw) return '#FBBF24'
@@ -94,6 +102,7 @@ function parseBannerFields(req) {
     description: String(b.description ?? '').trim(),
     active: parseBool(b.active ?? b.isActive, true),
     enabled: parseBool(b.enabled ?? b.isEnabled, true),
+    badge_automation: parseBool(b.badge_automation ?? b.badgeAutomation, true),
     badge: String(b.badge ?? '').trim(),
     badge_enabled: parseBool(b.badge_enabled ?? b.badgeEnabled, true),
     badge_color: parseBadgeColor(b.badge_color ?? b.badgeColor),
@@ -170,7 +179,9 @@ async function unlinkUploadIfAny(imagePath) {
 bannersRouter.get('/', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersPublic()
-    res.json(rows.map((r) => bannerToPublicResponse(r, req)))
+    const now = new Date()
+    const auto = computeAutomationForAll(rows, now)
+    res.json(rows.map((r) => bannerToPublicResponse(r, req, auto.get(Number(r.id)), now)))
   } catch (e) {
     console.error('[banners] GET / failed:', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -181,7 +192,9 @@ bannersRouter.get('/', async (req, res) => {
 bannersRouter.get('/manage', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersManage()
-    res.json(rows.map((r) => bannerToResponse(r, req)))
+    const now = new Date()
+    const auto = computeAutomationForAll(rows, now)
+    res.json(rows.map((r) => bannerToResponse(r, req, auto.get(Number(r.id)), now)))
   } catch (e) {
     console.error('[banners] GET /manage failed:', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -227,7 +240,7 @@ bannersRouter.post('/', maybeUploadBanner, async (req, res) => {
       action: 'created',
       bannerId: inserted.id,
     })
-    res.status(201).json(bannerToResponse(full, req))
+    res.status(201).json(manageRowResponse(full, req))
   } catch (e) {
     console.error('[banners] POST / failed:', e)
     if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
@@ -298,7 +311,7 @@ bannersRouter.put('/:id', maybeUploadBanner, async (req, res) => {
       action: 'updated',
       bannerId: id,
     })
-    res.json(bannerToResponse(full, req))
+    res.json(manageRowResponse(full, req))
   } catch (e) {
     console.error('[banners] PUT /:id failed:', e)
     if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
