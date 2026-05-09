@@ -108,6 +108,34 @@ export function channelFormDataFromSubmit(submitPayload) {
   const s = submitPayload
   const fd = new FormData()
   const displaySection = normalizeDisplaySection(s.displaySection)
+  const logicalPayload = {
+    name: (s.name ?? '').trim(),
+    url: (s.streamUrlPrimary ?? '').trim(),
+    displaySection,
+    display_section: displaySection,
+    category: displaySectionLabel(displaySection),
+    bottomTab:
+      ((s.bottomTabsDisplay ?? displaySectionLabel(displaySection) ?? 'General').trim() || 'General'),
+    isLive: Boolean(s.live),
+    isHD: s.hd !== false,
+    isActive: s.active !== false,
+    showInApp: s.showInApp !== false,
+    accessType: s.accessPremium ? 'premium' : 'free',
+    backupStream1: (s.backupStream1 ?? '').trim(),
+    backupStream2: (s.backupStream2 ?? '').trim(),
+    origin: (s.origin ?? '').trim(),
+    referer: (s.referer ?? '').trim(),
+    userAgent: (s.userAgent ?? '').trim(),
+    playerType: PLAYER_UI_TO_API[(s.playerType ?? 'Exo').trim() || 'Exo'] ?? 'exo',
+    hasThumbnailBlob: Boolean(s.thumbnailFile instanceof Blob),
+    existingThumbnailSent:
+      typeof s.thumbnailPreviewUrl === 'string' &&
+      !!s.thumbnailPreviewUrl &&
+      !s.thumbnailPreviewUrl.startsWith('blob:'),
+  }
+  if (import.meta.env.DEV) {
+    console.log('[channels multipart save] outgoing JSON:', JSON.stringify(logicalPayload))
+  }
   fd.append('name', (s.name ?? '').trim())
   fd.append('url', (s.streamUrlPrimary ?? '').trim())
   fd.append('displaySection', displaySection)

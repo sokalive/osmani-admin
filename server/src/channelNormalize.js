@@ -61,7 +61,9 @@ export function migrateStoredChannel(c) {
         ? String(c.thumbnailUrl).trim()
         : null
   const category = (c.category || 'General').trim() || 'General'
-  const displaySection = normalizeDisplaySection(c.displaySection ?? c.display_section)
+  const displaySection = normalizeDisplaySection(
+    readFirstNonEmptyField(c, ['display_section', 'displaySection', 'display_section_label', 'category']),
+  )
   const bottomTabRaw =
     c.bottomTab != null && String(c.bottomTab).trim() !== ''
       ? String(c.bottomTab).trim()
@@ -108,6 +110,25 @@ function str(v, d = '') {
 }
 
 /**
+ * multipart / JSON parsers may expose empty strings before real values or arrays for duplicate keys.
+ * `'' ?? fallback` wrongly keeps ''; we must skip empty and take the first usable string.
+ */
+export function readFirstNonEmptyField(obj, keys) {
+  if (!obj || typeof obj !== 'object') return ''
+  for (const key of keys) {
+    const raw = obj[key]
+    if (raw === undefined || raw === null) continue
+    const parts = Array.isArray(raw) ? raw : [raw]
+    for (const part of parts) {
+      if (part === undefined || part === null) continue
+      const s = String(part).trim()
+      if (s !== '') return s
+    }
+  }
+  return ''
+}
+
+/**
  * Build canonical channel fields from multipart or JSON body + optional uploaded file.
  * @param {Record<string, string>} body - req.body
  * @param {Express.Multer.File | undefined} file - multer file
@@ -141,7 +162,12 @@ export function parseChannelInput(body, file, existing = null) {
   }
 
   const displaySection = normalizeDisplaySection(
-    b.display_section ?? b.displaySection ?? b.category ?? b.display_section_label,
+    readFirstNonEmptyField(b, [
+      'display_section',
+      'displaySection',
+      'display_section_label',
+      'category',
+    ]),
   )
   const categoryRaw = str(b.category, '')
   const category = categoryRaw || displaySectionToCategoryLabel(displaySection)
