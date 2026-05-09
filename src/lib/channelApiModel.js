@@ -133,9 +133,7 @@ export function channelFormDataFromSubmit(submitPayload) {
       !!s.thumbnailPreviewUrl &&
       !s.thumbnailPreviewUrl.startsWith('blob:'),
   }
-  if (import.meta.env.DEV) {
-    console.log('[channels multipart save] outgoing JSON:', JSON.stringify(logicalPayload))
-  }
+  console.log('[channels multipart save] outgoing JSON:', JSON.stringify(logicalPayload))
   fd.append('name', (s.name ?? '').trim())
   fd.append('url', (s.streamUrlPrimary ?? '').trim())
   fd.append('displaySection', displaySection)
