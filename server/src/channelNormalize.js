@@ -64,8 +64,15 @@ export function migrateStoredChannel(c) {
         ? String(c.thumbnailUrl).trim()
         : null
   const category = (c.category || 'General').trim() || 'General'
+  const fromDisplayKeys = readFirstNonEmptyField(
+    c,
+    ['display_section', 'display_section_label', 'displaySection'],
+    { preferLastPart: true, preferLastKey: true },
+  )
   const displaySection = normalizeDisplaySection(
-    readFirstNonEmptyField(c, ['display_section', 'displaySection', 'display_section_label', 'category']),
+    fromDisplayKeys !== ''
+      ? fromDisplayKeys
+      : readFirstNonEmptyField(c, ['category'], { preferLastPart: true }),
   )
   const bottomTabRaw =
     c.bottomTab != null && String(c.bottomTab).trim() !== ''
@@ -114,19 +121,48 @@ function str(v, d = '') {
 
 /**
  * multipart / JSON parsers may expose empty strings before real values or arrays for duplicate keys.
- * `'' ?? fallback` wrongly keeps ''; we must skip empty and take the first usable string.
+ * For a single field, we usually want the **first** non-empty (leading empties stripped).
+ * For duplicate keys (array of 2+ values), HTTP / busboy typically **appends** — the last
+ * non-empty value is the user’s final choice; otherwise `[ "general", "sports" ]` wrongly
+ * resolves to `general` and persists the wrong `display_section`.
  */
-export function readFirstNonEmptyField(obj, keys) {
+function pickNonEmptyParts(raw, preferLastPart) {
+  if (raw === undefined || raw === null) return ''
+  const parts = Array.isArray(raw) ? raw : [raw]
+  const nonempty = []
+  for (const part of parts) {
+    if (part === undefined || part === null) continue
+    const s = String(part).trim()
+    if (s !== '') nonempty.push(s)
+  }
+  if (nonempty.length === 0) return ''
+  if (preferLastPart) return nonempty[nonempty.length - 1]
+  return nonempty[0]
+}
+
+/**
+ * @param {boolean} [options.preferLastPart] - for each key, use last non-empty array element (multipart duplicates)
+ * @param {boolean} [options.preferLastKey] - after reading each key’s value, if multiple keys match, last key wins (camelCase last)
+ */
+export function readFirstNonEmptyField(obj, keys, options = {}) {
+  const preferLastPart = options.preferLastPart === true
+  const preferLastKey = options.preferLastKey === true
   if (!obj || typeof obj !== 'object') return ''
+  if (preferLastKey) {
+    let last = ''
+    for (const key of keys) {
+      const raw = obj[key]
+      if (raw === undefined || raw === null) continue
+      const picked = pickNonEmptyParts(raw, preferLastPart)
+      if (picked !== '') last = picked
+    }
+    return last
+  }
   for (const key of keys) {
     const raw = obj[key]
     if (raw === undefined || raw === null) continue
-    const parts = Array.isArray(raw) ? raw : [raw]
-    for (const part of parts) {
-      if (part === undefined || part === null) continue
-      const s = String(part).trim()
-      if (s !== '') return s
-    }
+    const picked = pickNonEmptyParts(raw, preferLastPart)
+    if (picked !== '') return picked
   }
   return ''
 }
@@ -164,12 +200,12 @@ export function parseChannelInput(body, file, existing = null) {
     accessType = ex.accessType === 'premium' ? 'premium' : 'free'
   }
 
-  /** display_* only first — `category` alone can be stale (e.g. "General") and must not trump DB section. */
-  const sectionExplicit = readFirstNonEmptyField(b, [
-    'display_section',
-    'displaySection',
-    'display_section_label',
-  ])
+  /** Prefer camelCase (admin) over snake_case; duplicate multipart fields → last value wins. */
+  const sectionExplicit = readFirstNonEmptyField(
+    b,
+    ['display_section', 'display_section_label', 'displaySection'],
+    { preferLastPart: true, preferLastKey: true },
+  )
   let sectionSource = ''
   if (sectionExplicit !== '') {
     sectionSource = sectionExplicit
@@ -177,7 +213,7 @@ export function parseChannelInput(body, file, existing = null) {
     sectionSource = String(ex.displaySection ?? ex.display_section ?? '').trim()
   }
   if (sectionSource === '') {
-    sectionSource = readFirstNonEmptyField(b, ['category'])
+    sectionSource = readFirstNonEmptyField(b, ['category'], { preferLastPart: true })
   }
   const displaySection = normalizeDisplaySection(sectionSource)
 
