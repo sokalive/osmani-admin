@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity } from 'lucide-react'
 import LiveUserLocationsCard from '../components/LiveUserLocationsCard'
 import LiveUsersTrendSection from '../components/LiveUsersTrendSection'
@@ -26,20 +26,27 @@ const OVERVIEW_FALLBACK = {
   newUsersToday: 0,
 }
 
+/** ISO-ish code for flag; non-ASCII uses globe in card. */
+function isoFromLocationLabel(display) {
+  const s = String(display || '').trim()
+  if (!s) return '__'
+  const m = /^([A-Z]{2})\s*[•·]\s*/u.exec(s)
+  if (m) return m[1]
+  if (/^[A-Za-z]{2}$/.test(s)) return s.toUpperCase()
+  return '__'
+}
+
 function expandLocationsForCard(rows) {
   if (!Array.isArray(rows)) return []
   const out = []
   for (const row of rows) {
     const n = Math.min(5000, Math.max(0, Math.floor(Number(row.users) || 0)))
-    const country = String(row.country || '').trim()
-    const cc =
-      country.length === 2
-        ? country.toUpperCase()
-        : country.slice(0, 2).toUpperCase() || 'TZ'
+    const locationLabel = String(row.country || '').trim() || 'Unknown Location'
+    const cc = isoFromLocationLabel(locationLabel)
     for (let i = 0; i < n; i += 1) {
       out.push({
-        countryCode: cc || 'TZ',
-        countryName: country || 'Tanzania',
+        countryCode: cc,
+        countryName: locationLabel,
         status: 'online',
       })
     }
@@ -95,28 +102,39 @@ function DashboardPage() {
     }
   }, [showToast])
 
+  const loadRef = useRef(load)
   useEffect(() => {
-    load()
-    const id = window.setInterval(load, 5000)
+    loadRef.current = load
+  }, [load])
+
+  useEffect(() => {
+    void load()
+    const id = window.setInterval(() => void loadRef.current(), 5000)
     return () => window.clearInterval(id)
   }, [load])
 
   useEffect(() => {
     const es = new EventSource(syncStreamUrl(['analytics']))
-    const onSync = () => {
-      void load()
+    let debounceTimer = null
+    const scheduleSync = () => {
+      if (debounceTimer != null) window.clearTimeout(debounceTimer)
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null
+        void loadRef.current()
+      }, 400)
     }
-    es.addEventListener('snapshot', onSync)
-    es.addEventListener('analytics.install', onSync)
-    es.addEventListener('analytics.session_start', onSync)
-    es.addEventListener('analytics.session_heartbeat', onSync)
-    es.addEventListener('analytics.session_end', onSync)
-    es.addEventListener('analytics.transaction_updated', onSync)
-    es.addEventListener('analytics.subscription_updated', onSync)
+    es.addEventListener('snapshot', scheduleSync)
+    es.addEventListener('analytics.install', scheduleSync)
+    es.addEventListener('analytics.session_start', scheduleSync)
+    es.addEventListener('analytics.session_heartbeat', scheduleSync)
+    es.addEventListener('analytics.session_end', scheduleSync)
+    es.addEventListener('analytics.transaction_updated', scheduleSync)
+    es.addEventListener('analytics.subscription_updated', scheduleSync)
     return () => {
+      if (debounceTimer != null) window.clearTimeout(debounceTimer)
       es.close()
     }
-  }, [load])
+  }, [])
 
   const installsFormatted = useMemo(() => {
     const n = Number(overview?.totalInstalls)

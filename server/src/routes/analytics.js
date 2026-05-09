@@ -1,5 +1,9 @@
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
+import {
+  normalizeLocationPayload,
+  sanitizeStoredLocationDisplay,
+} from '../lib/analyticsLocation.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 export const analyticsRouter = Router()
@@ -12,8 +16,20 @@ const OVERVIEW_ZERO = {
   totalInstalls: 0,
 }
 
-const SESSION_TTL_SECONDS = Math.max(30, Number(process.env.ANALYTICS_SESSION_TTL_SECONDS) || 180)
-const SESSION_TTL_INTERVAL = `${SESSION_TTL_SECONDS} seconds`
+/** Rows older than this are deleted by cleanup (presence row retention). */
+const SESSION_PRUNE_SECONDS = Math.max(60, Number(process.env.ANALYTICS_SESSION_PRUNE_SECONDS) || Number(process.env.ANALYTICS_SESSION_TTL_SECONDS) || 180)
+const SESSION_PRUNE_INTERVAL = `${SESSION_PRUNE_SECONDS} seconds`
+
+/**
+ * Dashboard \"still live\" window — excludes rows after brief heartbeat gaps without DELETE-on-stop flicker.
+ * Recommended 20–45s — default 36 (env ANALYTICS_LIVE_PRESENCE_WINDOW_SECONDS).
+ */
+const _livePresenceEnv = Number(process.env.ANALYTICS_LIVE_PRESENCE_WINDOW_SECONDS)
+const LIVE_PRESENCE_WINDOW_SECONDS = Math.min(
+  45,
+  Math.max(20, Number.isFinite(_livePresenceEnv) && _livePresenceEnv > 0 ? _livePresenceEnv : 36),
+)
+const LIVE_SESSION_ACTIVE_INTERVAL = `${LIVE_PRESENCE_WINDOW_SECONDS} seconds`
 
 function numOrZero(v) {
   const n = Number(v)
@@ -51,8 +67,8 @@ function parseChannelIdFromBody(body) {
   )
 }
 
-function parseCountryFromBody(body) {
-  return parseText(body?.country ?? body?.country_code ?? body?.countryCode)
+function locationLabelFromBody(body) {
+  return normalizeLocationPayload(body ?? {})
 }
 
 function parseInstallInstanceId(v) {
@@ -66,7 +82,7 @@ async function cleanupStaleSessions(pool) {
     await pool.query(
       `DELETE FROM live_sessions
        WHERE COALESCE(updated_at, started_at, now()) < (now() - $1::interval)`,
-      [SESSION_TTL_INTERVAL],
+      [SESSION_PRUNE_INTERVAL],
     )
   } catch (e) {
     console.error('[analytics] cleanupStaleSessions:', e)
@@ -111,7 +127,7 @@ analyticsRouter.get('/overview', async (_req, res) => {
        WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
       'overview.onlineNow',
       (r) => numOrZero(r?.c),
-      [SESSION_TTL_INTERVAL],
+      [LIVE_SESSION_ACTIVE_INTERVAL],
     )
     const dauTodayRaw = await safeQueryScalar(
       pool,
@@ -158,7 +174,8 @@ analyticsRouter.get('/overview', async (_req, res) => {
       newUsersToday: newUsersTodayRaw ?? 0,
       revenueToday: revenueTodayRaw ?? 0,
       totalInstalls: totalInstallsRaw ?? 0,
-      sessionTtlSeconds: SESSION_TTL_SECONDS,
+      sessionTtlSeconds: SESSION_PRUNE_SECONDS,
+      livePresenceWindowSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
       ...(degraded ? { degraded: true } : {}),
     })
   } catch (e) {
@@ -191,7 +208,7 @@ analyticsRouter.get('/channels', async (_req, res) => {
          AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
        GROUP BY channel_id
        ORDER BY viewers DESC`,
-      [SESSION_TTL_INTERVAL],
+      [LIVE_SESSION_ACTIVE_INTERVAL],
     )
     const mapped = rows.map((r) => ({
       channel_id: String(r.channel_id),
@@ -228,11 +245,11 @@ analyticsRouter.get('/locations', async (_req, res) => {
          AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
        GROUP BY country
        ORDER BY users DESC`,
-      [SESSION_TTL_INTERVAL],
+      [LIVE_SESSION_ACTIVE_INTERVAL],
     )
     res.json(
       rows.map((r) => ({
-        country: String(r.country),
+        country: sanitizeStoredLocationDisplay(String(r.country)),
         users: Number(r.users) || 0,
       })),
     )
@@ -314,7 +331,7 @@ analyticsRouter.post('/session/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelId = parseChannelIdFromBody(req.body)
-    const country = parseCountryFromBody(req.body)
+    const country = locationLabelFromBody(req.body)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -344,7 +361,7 @@ analyticsRouter.post('/session/heartbeat', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelId = parseChannelIdFromBody(req.body)
-    const country = parseCountryFromBody(req.body)
+    const country = locationLabelFromBody(req.body)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -373,7 +390,10 @@ analyticsRouter.post('/session/end', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    await pool.query(`DELETE FROM live_sessions WHERE device_id = $1`, [deviceId])
+    await pool.query(
+      `UPDATE live_sessions SET channel_id = NULL, updated_at = now() WHERE device_id = $1`,
+      [deviceId],
+    )
     liveSyncBus.publish('analytics.session_end', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
@@ -394,7 +414,7 @@ analyticsRouter.post('/presence/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelId = parseChannelIdFromBody(req.body)
-    const country = parseCountryFromBody(req.body)
+    const country = locationLabelFromBody(req.body)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -424,7 +444,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelId = parseChannelIdFromBody(req.body)
-    const country = parseCountryFromBody(req.body)
+    const country = locationLabelFromBody(req.body)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -453,7 +473,10 @@ analyticsRouter.post('/presence/stop', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    await pool.query(`DELETE FROM live_sessions WHERE device_id = $1`, [deviceId])
+    await pool.query(
+      `UPDATE live_sessions SET channel_id = NULL, updated_at = now() WHERE device_id = $1`,
+      [deviceId],
+    )
     liveSyncBus.publish('analytics.session_end', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {

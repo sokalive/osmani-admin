@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { ensureBillingTables } from './db/billingTables.js'
 import { getPool } from './db/pool.js'
+import { normalizeLocationPayload } from './lib/analyticsLocation.js'
 
 export async function ensureBillingStorage() {
   const pool = getPool()
@@ -423,7 +424,8 @@ export async function touchLivePresence({ deviceId, country = null, channelId = 
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return null
-  const safeCountry = sanitizePresenceText(country, 32)
+  const rawLab = normalizeLocationPayload({ country: country ?? '' })
+  const safeCountry = rawLab ? sanitizePresenceText(rawLab, 120) : null
   const safeChannel = sanitizePresenceText(channelId, 128)
   await pool.query(
     `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)

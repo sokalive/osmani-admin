@@ -4,7 +4,7 @@ import { MapPin } from 'lucide-react'
 /** Regional-indicator pair → flag emoji (ISO 3166-1 alpha-2). */
 function flagEmoji(countryCode) {
   const code = (countryCode || '').toUpperCase()
-  if (code.length !== 2) return '🌐'
+  if (code === '__' || code.length !== 2 || !/^[A-Z]{2}$/.test(code)) return '🌐'
   const A = 0x1f1e6
   const chars = [...code].map((c) => A + (c.charCodeAt(0) - 65))
   try {
@@ -14,18 +14,19 @@ function flagEmoji(countryCode) {
   }
 }
 
-function aggregateOnlineByCountry(users) {
+function aggregateOnlineByPlace(users) {
   const map = new Map()
   for (const u of users) {
     if (u.status !== 'online') continue
-    const key = u.countryCode
-    const existing = map.get(key)
+    const locationLabel = String(u.countryName || '').trim() || 'Unknown Location'
+    const existing = map.get(locationLabel)
     if (existing) {
       existing.count += 1
     } else {
-      map.set(key, {
-        countryCode: key,
-        countryName: u.countryName,
+      map.set(locationLabel, {
+        locationLabel,
+        countryCode: u.countryCode,
+        countryName: locationLabel,
         count: 1,
       })
     }
@@ -37,7 +38,7 @@ function aggregateOnlineByCountry(users) {
  * Same footprint as other `.dashboard-card` tiles — header fixed, list scrolls inside.
  */
 function LiveUserLocationsCard({ users, className = 'dashboard-card' }) {
-  const rows = useMemo(() => aggregateOnlineByCountry(users), [users])
+  const rows = useMemo(() => aggregateOnlineByPlace(users), [users])
 
   return (
     <article
@@ -51,23 +52,23 @@ function LiveUserLocationsCard({ users, className = 'dashboard-card' }) {
         <h2 className="text-base font-bold tracking-tight text-[#FFFFFF]">Live User Locations</h2>
       </div>
 
-      <div className="card-content">
+      <div className="card-content live-user-locations-scroll">
         <ul className="live-locations-list">
           {rows.map((row) => (
-            <li key={row.countryCode} className="live-location-row">
-              <span className="flex min-w-0 flex-1 items-center gap-2.5">
+            <li key={row.locationLabel} className="live-location-row">
+              <span className="flex min-w-0 flex-1 items-start gap-2.5 py-0.5">
                 <span
-                  className="inline-flex shrink-0 items-center justify-center leading-none"
+                  className="mt-0.5 inline-flex shrink-0 items-center justify-center leading-none"
                   style={{ fontSize: '18px' }}
                   aria-hidden
                 >
                   {flagEmoji(row.countryCode)}
                 </span>
-                <span className="truncate text-[15px] font-semibold text-[#FFFFFF]">
-                  {row.countryName}
+                <span className="break-words text-left text-[15px] font-semibold leading-snug text-[#FFFFFF]">
+                  {row.locationLabel}
                 </span>
               </span>
-              <span className="shrink-0 text-[14px] font-medium tabular-nums text-[#BFC7D5]">
+              <span className="mt-0.5 shrink-0 text-[14px] font-medium tabular-nums text-[#BFC7D5]">
                 {row.count} users
               </span>
             </li>

@@ -177,6 +177,30 @@ body {
   background: transparent;
 }
 
+/* Live User Locations — taller thumb, stable gutter, clearer vertical stack */
+.live-user-locations-scroll {
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.75) rgba(15, 23, 42, 0.55);
+}
+
+.live-user-locations-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.live-user-locations-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.72);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.live-user-locations-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(203, 213, 225, 0.78);
+  background-clip: padding-box;
+}
+
 /* Stat cards — stack from top (Total App Installs, Peak Viewers) */
 .card-total {
   display: flex;
@@ -226,7 +250,7 @@ body {
 .live-locations-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -234,10 +258,10 @@ body {
 
 .live-location-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0;
+  gap: 14px;
+  padding: 10px 2px 12px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
