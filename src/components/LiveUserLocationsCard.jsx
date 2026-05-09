@@ -59,11 +59,11 @@ function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
         <h2 className="text-base font-bold tracking-tight text-[#FFFFFF]">Live User Locations</h2>
       </div>
 
-      <div className="card-content live-user-locations-scroll flex min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-scroll">
-        <ul className="live-locations-list w-full shrink-0" role="list">
+      <div className="card-content live-user-locations-scroll">
+        <ul className="live-locations-list" role="list">
           {rows.map((row, idx) => (
             <li key={`${idx}-${row.locationLabel}`} className="live-location-row">
-              <span className="flex min-w-0 flex-1 items-start gap-2.5 py-0.5">
+              <span className="live-location-main flex flex-nowrap items-start gap-2.5 py-0.5">
                 <span
                   className="mt-0.5 inline-flex shrink-0 items-center justify-center leading-none"
                   style={{ fontSize: '18px' }}
@@ -71,12 +71,12 @@ function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
                 >
                   {flagEmoji(row.countryCode)}
                 </span>
-                <span className="break-words text-left text-[15px] font-semibold leading-snug text-[#FFFFFF]">
+                <span className="min-w-0 flex-1 break-words text-left text-[15px] font-semibold leading-snug text-[#FFFFFF]">
                   {row.locationLabel}
                 </span>
               </span>
-              <span className="mt-0.5 shrink-0 self-start text-[14px] font-medium tabular-nums text-[#BFC7D5]">
-                {row.count} users
+              <span className="live-location-count mt-0.5 shrink-0 text-right text-[14px] font-medium tabular-nums text-[#BFC7D5]">
+                {row.count} {row.count === 1 ? 'user' : 'users'}
               </span>
             </li>
           ))}

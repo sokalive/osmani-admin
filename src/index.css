@@ -185,10 +185,33 @@ body {
   scrollbar-color: rgba(148, 163, 184, 0.75) rgba(15, 23, 42, 0.55);
 }
 
-.dashboard-card > .live-user-locations-scroll.card-content {
-  /* Flex child must shrink below content height so vertical scroll activates */
+/* Live User Locations — scroll viewport: column layout, scrollbar on this element only */
+.dashboard-card > .card-content.live-user-locations-scroll {
   flex: 1 1 0%;
   min-height: 0;
+  max-height: 100%;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.live-location-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.live-location-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding-left: 8px;
 }
 
 .live-user-locations-scroll::-webkit-scrollbar {
@@ -260,22 +283,28 @@ body {
 
 /* Live User Locations (Peak Viewers slot) */
 .live-locations-list {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 14px;
   list-style: none;
   margin: 0;
   padding: 0;
+  width: 100%;
+  flex: 0 0 auto;
+  align-self: stretch;
 }
 
 .live-location-row {
   box-sizing: border-box;
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  justify-content: space-between;
   width: 100%;
   min-height: 44px;
   flex-shrink: 0;
-  align-items: flex-start;
-  justify-content: space-between;
   gap: 14px;
   padding: 10px 2px 12px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
