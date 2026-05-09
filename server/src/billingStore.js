@@ -494,6 +494,80 @@ export async function touchLivePresence({ deviceId, country = null, channelId = 
   return { deviceId: d, country: safeCountry, channelId: safeChannel }
 }
 
+const MANUAL_GRANT_DURATION_DAYS = new Set([1, 7, 30, 90])
+
+/**
+ * Admin-only manual subscription extension using same stacking math as payments.
+ * Inserts grant row (nonce for one-time gift popup), then upserts device_subscriptions.
+ */
+export async function grantManualDeviceSubscription(deviceId, durationDays) {
+  const d = String(deviceId ?? '').trim()
+  const days = Number(durationDays)
+  if (!d || !MANUAL_GRANT_DURATION_DAYS.has(days)) {
+    throw new Error('Invalid device_id or duration_days (allowed: 1, 7, 30, 90)')
+  }
+
+  const pool = requirePool()
+  const ins = await pool.query(
+    `INSERT INTO manual_subscription_grants (device_id, duration_days)
+     VALUES ($1, $2)
+     RETURNING id, nonce`,
+    [d, days],
+  )
+  const grantId = Number(ins.rows[0]?.id)
+  const nonce = ins.rows[0]?.nonce
+  if (!grantId || nonce == null) throw new Error('manual grant insert failed')
+
+  const stack = await computeDeviceSubscriptionExpiryAfterPurchase(d, days)
+  const expiresAt = stack.expiresAt
+  const orderId = `manual_grant:${grantId}`
+
+  const { skipped } = await upsertDeviceSubscriptionActive({ deviceId: d, orderId, expiresAt })
+  if (skipped) {
+    console.warn('[manual_grant] unexpected upsert skip — order_id should be unique:', orderId)
+  }
+
+  return {
+    grantId,
+    nonce: String(nonce),
+    expiresAt,
+    durationDays: days,
+    stackedFromExpiresAt: stack.previousExpiresAt ?? null,
+    anchorAt: stack.anchorAt ?? null,
+    skipped,
+  }
+}
+
+/** FIFO pending manual gift for verify popup (oldest unacknowledged grant first). */
+export async function getOldestPendingManualGrant(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT id, nonce, duration_days, created_at
+     FROM manual_subscription_grants
+     WHERE device_id = $1 AND acknowledged_at IS NULL
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [d],
+  )
+  return rows[0] ?? null
+}
+
+export async function acknowledgeManualGrantByNonce(deviceId, nonce) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  const n = String(nonce ?? '').trim()
+  if (!d || !n) return false
+  const { rowCount } = await pool.query(
+    `UPDATE manual_subscription_grants
+     SET acknowledged_at = now()
+     WHERE device_id = $1 AND nonce = $2::uuid AND acknowledged_at IS NULL`,
+    [d, n],
+  )
+  return Number(rowCount) > 0
+}
+
 /**
  * Webhook-driven activation. Skips entirely if transaction_id (order_id) already applied.
  * Renewals overwrite the same device_id row with a newer order/expiry only when not a duplicate webhook.

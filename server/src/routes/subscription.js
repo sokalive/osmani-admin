@@ -164,10 +164,27 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     })
   }
 
+  const pendingGift = await billing.getOldestPendingManualGrant(d)
+  const manualGift =
+    pendingGift != null
+      ? {
+          showPopup: true,
+          nonce: String(pendingGift.nonce),
+          grantId: Number(pendingGift.id),
+          durationDays: Number(pendingGift.duration_days),
+          title: 'Hongera!',
+          body:
+            'Umepokea kifurushi cha ofa kutoka kwa muhudumu wetu. Sasa unaweza kutazama channel zote kuanzia sasa.',
+          ctaLabel: 'ASANTE',
+        }
+      : null
+
+  const withGift = { ...normalized, manualGift }
+
   if (!pub.active) {
     const plans = await billing.listPlansWithSubscriberCounts().catch(() => [])
     return {
-      ...normalized,
+      ...withGift,
       playbackAllowed: false,
       plans: Array.isArray(plans)
         ? plans.map((p) => ({
@@ -179,8 +196,27 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         : [],
     }
   }
-  return { ...normalized, playbackAllowed: true }
+  return { ...withGift, playbackAllowed: true }
 }
+
+subscriptionRouter.post('/acknowledge-manual-gift', async (req, res) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(b.device_id ?? b.deviceId ?? '').trim()
+    const nonce = String(b.nonce ?? '').trim()
+    if (!deviceId || !nonce) {
+      return res.status(400).json({ ok: false, error: 'device_id and nonce required' })
+    }
+    const ok = await billing.acknowledgeManualGrantByNonce(deviceId, nonce)
+    if (process.env.MANUAL_SUBSCRIPTION_DEBUG === '1') {
+      console.log('[manual_gift_ack]', { deviceId: shortRef(deviceId), ok })
+    }
+    res.json({ ok })
+  } catch (e) {
+    console.error('[acknowledge-manual-gift]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
 
 /** GET /subscription-status — primary unlock check by device_id (poll every ~3s as fallback). */
 subscriptionRouter.get('/subscription-status', async (req, res) => {

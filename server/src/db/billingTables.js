@@ -398,4 +398,21 @@ export async function ensureBillingTables(client) {
     INSERT INTO zenopay_settings (id) VALUES (1)
     ON CONFLICT (id) DO NOTHING;
   `)
+
+  /** Admin manual subscription grants (gift UX + audit trail); device unlock uses device_subscriptions */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS manual_subscription_grants (
+      id SERIAL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      duration_days INTEGER NOT NULL,
+      nonce UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+      acknowledged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS manual_subscription_grants_device_pending_idx
+    ON manual_subscription_grants (device_id, created_at ASC)
+    WHERE acknowledged_at IS NULL;
+  `)
 }

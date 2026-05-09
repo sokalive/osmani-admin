@@ -21,6 +21,7 @@ import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentPro
 import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
+import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 
 const FILES = {
@@ -59,7 +60,9 @@ restApi.get('/', (_req, res) => {
       '/payment-status/:order_id',
       '/subscription-status',
       '/subscription/verify',
+      '/subscription/acknowledge-manual-gift',
       '/subscription-stream',
+      '/admin/manual-subscription/grant',
       '/analytics/overview',
       '/analytics/channels',
       '/analytics/locations',
@@ -146,6 +149,7 @@ restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
 restApi.use(deviceSecurityRouter)
+restApi.use('/admin/manual-subscription', manualSubscriptionAdminRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)

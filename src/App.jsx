@@ -14,6 +14,7 @@ import SecurityAlertsPage from './pages/SecurityAlertsPage'
 import SecurityLogsPage from './pages/SecurityLogsPage'
 import ServerHealthPage from './pages/ServerHealthPage'
 import TransferCodesPage from './pages/TransferCodesPage'
+import ManualSubscriptionPage from './pages/ManualSubscriptionPage'
 import TransactionsPage from './pages/TransactionsPage'
 import UsersPage from './pages/UsersPage'
 import WhatsAppPage from './pages/WhatsAppPage'
@@ -45,6 +46,7 @@ function App() {
               <Route path="/security-alerts" element={<SecurityAlertsPage />} />
               <Route path="/security-logs" element={<SecurityLogsPage />} />
               <Route path="/transfer-codes" element={<TransferCodesPage />} />
+              <Route path="/manual-subscription" element={<ManualSubscriptionPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </div>

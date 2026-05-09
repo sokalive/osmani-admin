@@ -189,6 +189,40 @@ export function subscriptionStreamUrl(deviceId) {
   return `${API_BASE}/subscription-stream?device_id=${d}`
 }
 
+/** Mobile: dismiss one-time manual gift popup after user taps ASANTE */
+export const postAcknowledgeManualGift = (body) =>
+  apiPost('/subscription/acknowledge-manual-gift', body)
+
+/**
+ * Admin: grant stacked subscription days to a device (requires server ADMIN_API_TOKEN + MANUAL_SUBSCRIPTION_ADMIN_PIN).
+ * Set VITE_ADMIN_API_TOKEN in the admin SPA env to match the API host.
+ */
+export async function postManualSubscriptionGrant({ deviceId, durationDays, pin }) {
+  const token = String(import.meta.env.VITE_ADMIN_API_TOKEN || '').trim()
+  if (!token) {
+    throw new ApiError(
+      'Configure VITE_ADMIN_API_TOKEN (must match server ADMIN_API_TOKEN / APP_UPDATE_ADMIN_TOKEN)',
+      400,
+      null,
+    )
+  }
+  const res = await fetch(joinPath('/admin/manual-subscription/grant'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Admin-Token': token,
+    },
+    body: JSON.stringify({
+      device_id: String(deviceId ?? '').trim(),
+      duration_days: Number(durationDays),
+      pin: String(pin ?? ''),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
 export function syncStreamUrl(topics = ['analytics']) {
   const normalized = Array.isArray(topics)
     ? topics.map((x) => String(x || '').trim()).filter(Boolean)
