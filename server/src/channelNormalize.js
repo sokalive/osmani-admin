@@ -8,61 +8,37 @@ const DISPLAY_SECTION_LABEL = {
   movies: 'Movies',
 }
 
-/** Lowercase tokens → canonical slug (includes common singular + Swahili tab labels). */
-const DISPLAY_SECTION_ALIAS = {
-  general: 'general',
-  sports: 'sports',
-  movies: 'movies',
-  sport: 'sports',
-  movie: 'movies',
-  tamthilia: 'movies',
-  sinema: 'movies',
+const DISPLAY_SECTION_BODY_KEYS = ['display_section', 'displaySection']
+
+/** Request body sent an invalid slug (not general | sports | movies). */
+export class InvalidDisplaySectionError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'InvalidDisplaySectionError'
+  }
 }
 
-/** Coerce legacy/unknown values to general | sports | movies (never null). */
-export function normalizeDisplaySection(v) {
+/**
+ * Strict slug parse: only `general` | `sports` | `movies` (trim, lowercase, strip invisible).
+ * Returns null if empty or not allowed.
+ */
+export function parseCanonicalDisplaySection(v) {
   const s = String(v ?? '')
     .replace(/\uFEFF|[\u200B-\u200D\u2060]/g, '')
     .trim()
     .toLowerCase()
-  const mapped = DISPLAY_SECTION_ALIAS[s] ?? s
-  return DISPLAY_SECTIONS.has(mapped) ? mapped : 'general'
+  if (s === '') return null
+  return DISPLAY_SECTIONS.has(s) ? s : null
 }
 
-/**
- * Infer which category string should drive display_section when `category` is an array or
- * comma-joined multipart noise (e.g. [ "Movies", "General" ] prefers Movies; avoids
- * preferLastPart pinning non-movies sections when a trailing "General" duplicates).
- */
-export function inferSectionSourceFromCategoryField(raw) {
-  const pieces = []
-  const consume = (t) => {
-    const trimmed = String(t ?? '').trim()
-    if (!trimmed) return
-    if (trimmed.includes(',')) {
-      for (const frag of trimmed.split(',')) {
-        const f = frag.trim()
-        if (f) pieces.push(f)
-      }
-      return
-    }
-    pieces.push(trimmed)
-  }
-  if (Array.isArray(raw)) {
-    for (const item of raw) consume(item)
-  } else {
-    consume(raw)
-  }
-  if (pieces.length === 0) return ''
-  for (let i = pieces.length - 1; i >= 0; i--) {
-    if (normalizeDisplaySection(pieces[i]) !== 'general') return pieces[i]
-  }
-  return pieces[pieces.length - 1]
+/** DB/API read path: unknown junk → `general` (CHECK constraint should prevent invalid DB). */
+export function normalizeDisplaySection(v) {
+  return parseCanonicalDisplaySection(v) ?? 'general'
 }
 
 function displaySectionToCategoryLabel(section) {
   const s = normalizeDisplaySection(section)
-  return DISPLAY_SECTION_LABEL[s] || 'General'
+  return DISPLAY_SECTION_LABEL[s] ?? 'General'
 }
 
 /** Canonical playerType for API + storage */
@@ -101,13 +77,12 @@ export function migrateStoredChannel(c) {
         ? String(c.thumbnailUrl).trim()
         : null
   const category = (c.category || 'General').trim() || 'General'
-  const fromDisplayKeys = readFirstNonEmptyField(
-    c,
-    ['display_section', 'display_section_label', 'displaySection'],
-    { preferLastPart: true, preferLastKey: true },
-  )
+  const fromDisplayKeys = readFirstNonEmptyField(c, DISPLAY_SECTION_BODY_KEYS, {
+    preferLastPart: true,
+    preferLastKey: true,
+  })
   const displaySection = normalizeDisplaySection(
-    fromDisplayKeys !== '' ? fromDisplayKeys : inferSectionSourceFromCategoryField(c.category),
+    fromDisplayKeys !== '' ? fromDisplayKeys : c.displaySection ?? c.display_section,
   )
   const bottomTabRaw =
     c.bottomTab != null && String(c.bottomTab).trim() !== ''
@@ -235,42 +210,44 @@ export function parseChannelInput(body, file, existing = null) {
     accessType = ex.accessType === 'premium' ? 'premium' : 'free'
   }
 
-  /** Prefer camelCase (admin) over snake_case; duplicate multipart fields → last value wins. */
-  const sectionExplicit = readFirstNonEmptyField(
-    b,
-    ['display_section', 'display_section_label', 'displaySection'],
-    { preferLastPart: true, preferLastKey: true },
-  )
-  let sectionSource = ''
-  if (sectionExplicit !== '') {
-    sectionSource = sectionExplicit
-  } else if (ex != null) {
-    sectionSource = String(ex.displaySection ?? ex.display_section ?? '').trim()
-  }
-  if (sectionSource === '') {
-    sectionSource = inferSectionSourceFromCategoryField(b.category)
-  }
-  const displaySection = normalizeDisplaySection(sectionSource)
+  /** Only `display_section` / `displaySection` (multipart duplicates: last wins). */
+  const sectionExplicit = readFirstNonEmptyField(b, DISPLAY_SECTION_BODY_KEYS, {
+    preferLastPart: true,
+    preferLastKey: true,
+  })
 
-  if (process.env.DISPLAY_SECTION_PIPELINE_DEBUG === '1') {
+  let displaySection
+  if (sectionExplicit !== '') {
+    const slug = parseCanonicalDisplaySection(sectionExplicit)
+    if (slug == null) {
+      throw new InvalidDisplaySectionError(
+        `display_section must be exactly one of: general, sports, movies (received: ${JSON.stringify(String(sectionExplicit).slice(0, 120))})`,
+      )
+    }
+    displaySection = slug
+  } else if (ex != null) {
+    displaySection = normalizeDisplaySection(ex.displaySection ?? ex.display_section)
+  } else {
+    displaySection = 'general'
+  }
+
+  if (process.env.DISPLAY_SECTION_STRICT_DEBUG === '1') {
     console.log(
       '[display_section] parseChannelInput',
       JSON.stringify({
-        sectionExplicit: sectionExplicit || null,
-        sectionSource: sectionSource || null,
+        incomingExplicit: sectionExplicit || null,
+        existingStored: ex != null ? normalizeDisplaySection(ex.displaySection ?? ex.display_section) : null,
         resolved: displaySection,
-        bodyKeys: Object.keys(b),
+        wasOmitted: sectionExplicit === '',
       }),
     )
   }
 
   const categoryRaw = str(b.category, '')
-  let category = categoryRaw || displaySectionToCategoryLabel(displaySection)
-  if (
-    categoryRaw !== '' &&
-    normalizeDisplaySection(categoryRaw) !== displaySection
-  ) {
-    category = displaySectionToCategoryLabel(displaySection)
+  const expectedCategory = displaySectionToCategoryLabel(displaySection)
+  let category = categoryRaw || expectedCategory
+  if (categoryRaw !== '' && categoryRaw.trim() !== expectedCategory) {
+    category = expectedCategory
   }
   const bottomTab =
     str(b.bottomTab || b.bottomTabsDisplay || b.bottom_tabs_display, '') ||

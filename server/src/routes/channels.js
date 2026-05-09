@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Router } from 'express'
 import {
+  InvalidDisplaySectionError,
   channelToResponse,
   mergeChannelRecord,
   migrateStoredChannel,
@@ -91,8 +92,18 @@ channelsRouter.post('/', maybeUpload, async (req, res) => {
     })
     const createdBody = channelToResponse(created, req)
     logChannelStreamDiagWrite(createdBody, { scope: 'channels.POST_response' })
+    if (process.env.DISPLAY_SECTION_STRICT_DEBUG === '1') {
+      console.log(
+        '[display_section] POST persist',
+        JSON.stringify({ id: created.id, finalDisplaySection: created.displaySection }),
+      )
+    }
     res.status(201).json(createdBody)
   } catch (e) {
+    if (e instanceof InvalidDisplaySectionError || e?.name === 'InvalidDisplaySectionError') {
+      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
+      return res.status(400).json({ error: e.message })
+    }
     console.error('[channels] POST / failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
@@ -127,12 +138,14 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
     await updateChannel(updated)
 
-    if (process.env.DISPLAY_SECTION_PIPELINE_DEBUG === '1') {
+    if (process.env.DISPLAY_SECTION_STRICT_DEBUG === '1') {
       console.log(
-        '[display_section] PUT persisted',
+        '[display_section] PUT persist',
         JSON.stringify({
           id: updated.id,
-          display_section: updated.displaySection,
+          storedDisplaySectionBefore: existingRow.displaySection,
+          incomingBodyKeys: Object.keys(req.body || {}),
+          finalDisplaySection: updated.displaySection,
         }),
       )
     }
@@ -145,6 +158,10 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
     logChannelStreamDiagWrite(updatedBody, { scope: 'channels.PUT_response' })
     res.json(updatedBody)
   } catch (e) {
+    if (e instanceof InvalidDisplaySectionError || e?.name === 'InvalidDisplaySectionError') {
+      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
+      return res.status(400).json({ error: e.message })
+    }
     console.error('[channels] PUT /:id failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
