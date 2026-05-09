@@ -330,8 +330,63 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput) {
 /** --- Subscriptions --- */
 
 /**
- * Expiry at end-of-window: start of calendar day after N days from now, then +18:00 (server TZ / UTC per DB).
- * Same shape as: DATE_TRUNC('day', now() + interval 'N days') + interval '18 hours'
+ * Expiry at end-of-window: DATE_TRUNC('day', anchor + N days) + 18 hours (DB NOW / TZ consistent).
+ * Anchor is subscription stacking baseline for renewals (existing expiry while active; otherwise now).
+ */
+export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, durationDays) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) throw new Error('computeDeviceSubscriptionExpiryAfterPurchase: deviceId required')
+  const days = Math.max(1, Number(durationDays) || 30)
+  const { rows } = await pool.query(
+    `WITH cur AS (
+       SELECT expires_at FROM device_subscriptions WHERE device_id = $1 LIMIT 1
+     ),
+     anchor AS (
+       SELECT
+         (SELECT expires_at FROM cur) AS previous_expires_at,
+         CASE
+           WHEN EXISTS (SELECT 1 FROM cur WHERE expires_at > now())
+           THEN (SELECT expires_at FROM cur)
+           ELSE now()
+         END AS anchor_at
+     ),
+     raw AS (
+       SELECT
+         anchor.previous_expires_at,
+         anchor.anchor_at,
+         (
+           date_trunc('day', anchor.anchor_at + ($2::int * interval '1 day'))
+           + interval '18 hours'
+         )::timestamptz AS computed_expires_at
+       FROM anchor
+     )
+     SELECT
+       raw.previous_expires_at,
+       raw.anchor_at,
+       CASE
+         WHEN raw.previous_expires_at IS NOT NULL AND raw.previous_expires_at > now()
+         THEN GREATEST(raw.computed_expires_at, raw.previous_expires_at)
+         ELSE raw.computed_expires_at
+       END AS expires_at
+     FROM raw`,
+    [d, days],
+  )
+  const row = rows[0]
+  if (!row?.expires_at) throw new Error('computeDeviceSubscriptionExpiryAfterPurchase: no result')
+  const toIso = (v) =>
+    v == null ? null : v instanceof Date ? v.toISOString() : String(v)
+  return {
+    expiresAt: toIso(row.expires_at),
+    previousExpiresAt: toIso(row.previous_expires_at),
+    anchorAt: toIso(row.anchor_at),
+    purchasedDurationDays: days,
+  }
+}
+
+/**
+ * Expiry at end-of-window from **now** (no stacking — legacy helper).
+ * Prefer {@link computeDeviceSubscriptionExpiryAfterPurchase} for device activation.
  */
 export async function subscriptionExpiresAtEndOfDay(durationDays) {
   const pool = requirePool()
@@ -525,7 +580,20 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
       orderId,
     }
   }
-  const expiresAt = await subscriptionExpiresAtEndOfDay(plan.duration_days)
+  const stack = await computeDeviceSubscriptionExpiryAfterPurchase(deviceId, plan.duration_days)
+  const expiresAt = stack.expiresAt
+
+  if (process.env.SUBSCRIPTION_STACK_DEBUG === '1') {
+    console.log('[subscription_stack] activate', {
+      deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+      orderId: orderId.length > 26 ? `${orderId.slice(0, 24)}…` : orderId,
+      currentExpiryBefore: stack.previousExpiresAt,
+      anchorAt: stack.anchorAt,
+      purchasedDurationDays: stack.purchasedDurationDays,
+      finalExpiresAt: expiresAt,
+    })
+  }
+
   const { skipped } = await upsertDeviceSubscriptionActive({ deviceId, orderId, expiresAt })
   return {
     activated: !skipped,
