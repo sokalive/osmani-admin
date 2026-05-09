@@ -197,6 +197,48 @@ export const postAcknowledgeManualGift = (body) =>
  * Admin: grant stacked subscription days to a device (requires server ADMIN_API_TOKEN + MANUAL_SUBSCRIPTION_ADMIN_PIN).
  * Set VITE_ADMIN_API_TOKEN in the admin SPA env to match the API host.
  */
+export async function getManualSubscriptionPinStatus() {
+  const token = String(import.meta.env.VITE_ADMIN_API_TOKEN || '').trim()
+  if (!token) {
+    throw new ApiError(
+      'Configure VITE_ADMIN_API_TOKEN (must match server ADMIN_API_TOKEN / APP_UPDATE_ADMIN_TOKEN)',
+      400,
+      null,
+    )
+  }
+  const res = await fetch(joinPath('/admin/manual-subscription/pin-status'), {
+    headers: { 'X-Admin-Token': token },
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionSetupPin({ pin, confirmPin }) {
+  const token = String(import.meta.env.VITE_ADMIN_API_TOKEN || '').trim()
+  if (!token) {
+    throw new ApiError(
+      'Configure VITE_ADMIN_API_TOKEN (must match server ADMIN_API_TOKEN / APP_UPDATE_ADMIN_TOKEN)',
+      400,
+      null,
+    )
+  }
+  const res = await fetch(joinPath('/admin/manual-subscription/setup-pin'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Admin-Token': token,
+    },
+    body: JSON.stringify({
+      pin: String(pin ?? ''),
+      confirm_pin: String(confirmPin ?? ''),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
 export async function postManualSubscriptionGrant({ deviceId, durationDays, pin }) {
   const token = String(import.meta.env.VITE_ADMIN_API_TOKEN || '').trim()
   if (!token) {

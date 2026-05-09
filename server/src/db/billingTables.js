@@ -415,4 +415,18 @@ export async function ensureBillingTables(client) {
     ON manual_subscription_grants (device_id, created_at ASC)
     WHERE acknowledged_at IS NULL;
   `)
+
+  /** Hashed Manual Subscription admin PIN (first-time setup); env MANUAL_SUBSCRIPTION_ADMIN_PIN remains legacy fallback */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS manual_subscription_admin_pin (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      pin_hash TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    INSERT INTO manual_subscription_admin_pin (id, pin_hash)
+    VALUES (1, '')
+    ON CONFLICT (id) DO NOTHING;
+  `)
 }

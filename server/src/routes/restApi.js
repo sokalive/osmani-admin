@@ -63,6 +63,8 @@ restApi.get('/', (_req, res) => {
       '/subscription/acknowledge-manual-gift',
       '/subscription-stream',
       '/admin/manual-subscription/grant',
+      '/admin/manual-subscription/pin-status',
+      '/admin/manual-subscription/setup-pin',
       '/analytics/overview',
       '/analytics/channels',
       '/analytics/locations',

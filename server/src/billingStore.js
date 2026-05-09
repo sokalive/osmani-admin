@@ -22,6 +22,81 @@ function requirePool() {
   return pool
 }
 
+/** Manual Subscription admin PIN (scrypt; env pin remains legacy until DB hash is set). */
+export const MANUAL_SUBSCRIPTION_PIN_MIN_LENGTH = 6
+
+const MANUAL_PIN_SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }
+
+function hashManualPinScrypt(plain) {
+  const salt = crypto.randomBytes(16)
+  const hash = crypto.scryptSync(String(plain), salt, 64, MANUAL_PIN_SCRYPT_PARAMS)
+  return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`
+}
+
+function verifyManualPinHashScrypt(plain, stored) {
+  const parts = String(stored ?? '').split('$')
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false
+  try {
+    const salt = Buffer.from(parts[1], 'hex')
+    const expected = Buffer.from(parts[2], 'hex')
+    const hash = crypto.scryptSync(String(plain), salt, 64, MANUAL_PIN_SCRYPT_PARAMS)
+    return hash.length === expected.length && crypto.timingSafeEqual(hash, expected)
+  } catch {
+    return false
+  }
+}
+
+/** True if env PIN (legacy) or DB hash row is non-empty. */
+export async function isManualSubscriptionPinConfigured() {
+  const envPin = String(process.env.MANUAL_SUBSCRIPTION_ADMIN_PIN ?? '').trim()
+  if (envPin.length >= 4) return true
+  const pool = requirePool()
+  const { rows } = await pool.query(`SELECT pin_hash FROM manual_subscription_admin_pin WHERE id = 1`)
+  const h = rows[0]?.pin_hash
+  return typeof h === 'string' && h.trim().length > 0
+}
+
+/** Verify grant PIN: prefer DB scrypt hash; else legacy env MANUAL_SUBSCRIPTION_ADMIN_PIN. */
+export async function verifyManualSubscriptionGrantPin(submitted) {
+  const pin = String(submitted ?? '')
+  const pool = requirePool()
+  const { rows } = await pool.query(`SELECT pin_hash FROM manual_subscription_admin_pin WHERE id = 1`)
+  const stored = rows[0]?.pin_hash
+  if (typeof stored === 'string' && stored.startsWith('scrypt$')) {
+    return verifyManualPinHashScrypt(pin, stored)
+  }
+  const envPin = process.env.MANUAL_SUBSCRIPTION_ADMIN_PIN
+  if (envPin != null && String(envPin).trim().length >= 4) {
+    const a = crypto.createHash('sha256').update(pin, 'utf8').digest()
+    const b = crypto.createHash('sha256').update(String(envPin), 'utf8').digest()
+    return a.length === b.length && crypto.timingSafeEqual(a, b)
+  }
+  return false
+}
+
+/** First-time only; refuses if already configured (env or DB). Stores scrypt hash only. */
+export async function setupManualSubscriptionPinFirstTime(plain) {
+  if (await isManualSubscriptionPinConfigured()) {
+    const err = new Error('PIN already configured')
+    err.code = 'PIN_ALREADY_CONFIGURED'
+    throw err
+  }
+  const p = String(plain ?? '')
+  if (p.length < MANUAL_SUBSCRIPTION_PIN_MIN_LENGTH) {
+    const err = new Error(`PIN must be at least ${MANUAL_SUBSCRIPTION_PIN_MIN_LENGTH} characters`)
+    err.code = 'PIN_TOO_SHORT'
+    throw err
+  }
+  const hashed = hashManualPinScrypt(p)
+  const pool = requirePool()
+  await pool.query(
+    `INSERT INTO manual_subscription_admin_pin (id, pin_hash, updated_at)
+     VALUES (1, $1, now())
+     ON CONFLICT (id) DO UPDATE SET pin_hash = EXCLUDED.pin_hash, updated_at = now()`,
+    [hashed],
+  )
+}
+
 function sanitizePresenceText(v, max = 120) {
   const s = String(v ?? '').trim()
   if (!s) return null
