@@ -177,16 +177,18 @@ body {
   background: transparent;
 }
 
-/* Live User Locations — taller thumb, stable gutter, clearer vertical stack */
-.live-user-locations-scroll {
+/* Internal list scroll tiles — taller thumb, stable gutter, scrollbar on viewport only */
+.live-user-locations-scroll,
+.dashboard-mwc-list-scroll {
   scrollbar-gutter: stable;
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.75) rgba(15, 23, 42, 0.55);
 }
 
-/* Live User Locations — scroll viewport: column layout, scrollbar on this element only */
-.dashboard-card > .card-content.live-user-locations-scroll {
+/* Scroll viewport: column layout, vertical scroll inside fixed card footprint */
+.dashboard-card > .card-content.live-user-locations-scroll,
+.dashboard-card > .card-content.dashboard-mwc-list-scroll {
   flex: 1 1 0%;
   min-height: 0;
   max-height: 100%;
@@ -202,6 +204,22 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+.dashboard-card > .card-content.dashboard-mwc-list-scroll .dashboard-mwc-list {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  align-self: stretch;
+}
+
+.dashboard-card > .card-content.dashboard-mwc-list-scroll .dashboard-mwc-row {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 100%;
+  min-width: 0;
+}
+
 .live-location-main {
   flex: 1 1 auto;
   min-width: 0;
@@ -214,24 +232,28 @@ body {
   padding-left: 8px;
 }
 
-.live-user-locations-scroll::-webkit-scrollbar {
+.live-user-locations-scroll::-webkit-scrollbar,
+.dashboard-mwc-list-scroll::-webkit-scrollbar {
   width: 8px;
 }
 
-.live-user-locations-scroll::-webkit-scrollbar-track {
+.live-user-locations-scroll::-webkit-scrollbar-track,
+.dashboard-mwc-list-scroll::-webkit-scrollbar-track {
   margin: 4px 0;
   border-radius: 9999px;
   background: rgba(15, 23, 42, 0.72);
 }
 
-.live-user-locations-scroll::-webkit-scrollbar-thumb {
+.live-user-locations-scroll::-webkit-scrollbar-thumb,
+.dashboard-mwc-list-scroll::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.78);
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
-.live-user-locations-scroll::-webkit-scrollbar-thumb:hover {
+.live-user-locations-scroll::-webkit-scrollbar-thumb:hover,
+.dashboard-mwc-list-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(203, 213, 225, 0.85);
   background-clip: padding-box;
 }

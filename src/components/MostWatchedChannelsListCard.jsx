@@ -22,10 +22,10 @@ function MostWatchedChannelsListCard({ channels, className = 'dashboard-card' })
         <h2 className="text-base font-bold tracking-tight text-white">Most Watched Channels</h2>
       </div>
 
-      <div className="card-content">
+      <div className="card-content dashboard-mwc-list-scroll">
         <ul className="channel-list dashboard-mwc-list">
           {sorted.map((row) => (
-            <li key={row.id} className="channel-item dashboard-mwc-row min-h-0">
+            <li key={row.id} className="channel-item dashboard-mwc-row">
               <span className="dashboard-mwc-channel-name min-w-0 flex-1 truncate">
                 {row.name}
               </span>
