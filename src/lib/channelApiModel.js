@@ -12,10 +12,6 @@ const DISPLAY_SECTION_TO_LABEL = {
   general: 'General',
   sports: 'Sports',
   movies: 'Movies',
-  kids: 'Kids',
-  news: 'News',
-  music: 'Music',
-  docs: 'Docs',
 }
 
 function normalizeDisplaySection(value) {

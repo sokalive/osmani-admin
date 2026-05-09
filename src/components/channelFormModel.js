@@ -2,10 +2,6 @@ export const SECTION_OPTIONS = [
   { value: 'general', label: 'General' },
   { value: 'sports', label: 'Sports' },
   { value: 'movies', label: 'Movies' },
-  { value: 'kids', label: 'Kids' },
-  { value: 'news', label: 'News' },
-  { value: 'music', label: 'Music' },
-  { value: 'docs', label: 'Docs' },
 ]
 
 const SECTION_LABEL_BY_VALUE = Object.fromEntries(SECTION_OPTIONS.map((x) => [x.value, x.label]))
@@ -52,12 +48,14 @@ export function emptyFormState() {
 
 export function channelToForm(channel) {
   if (!channel) return emptyFormState()
+  const sectionRaw = String(channel.displaySection ?? channel.display_section ?? 'general')
+    .trim()
+    .toLowerCase()
+  const section = sectionRaw === 'sports' || sectionRaw === 'movies' ? sectionRaw : 'general'
   return {
     id: channel.id,
     name: channel.name ?? '',
-    displaySection: String(channel.displaySection ?? channel.display_section ?? 'general')
-      .trim()
-      .toLowerCase() || 'general',
+    displaySection: section,
     streamUrlPrimary: channel.streamUrlPrimary ?? '',
     backupStream1: channel.backupStream1 ?? '',
     backupStream2: channel.backupStream2 ?? '',

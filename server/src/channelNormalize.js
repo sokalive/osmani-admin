@@ -1,15 +1,11 @@
 import path from 'node:path'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
-const DISPLAY_SECTIONS = new Set(['general', 'sports', 'movies', 'kids', 'news', 'music', 'docs'])
+const DISPLAY_SECTIONS = new Set(['general', 'sports', 'movies'])
 const DISPLAY_SECTION_LABEL = {
   general: 'General',
   sports: 'Sports',
   movies: 'Movies',
-  kids: 'Kids',
-  news: 'News',
-  music: 'Music',
-  docs: 'Docs',
 }
 
 function normalizeDisplaySection(v) {
@@ -18,10 +14,6 @@ function normalizeDisplaySection(v) {
     general: 'general',
     sports: 'sports',
     movies: 'movies',
-    kids: 'kids',
-    news: 'news',
-    music: 'music',
-    docs: 'docs',
   }
   const mapped = alias[s] ?? s
   return DISPLAY_SECTIONS.has(mapped) ? mapped : 'general'
