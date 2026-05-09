@@ -1,7 +1,8 @@
+/** `label` = canonical English (bottom tabs / category alignment); optional `sectionSelectLabel` overrides Display Section dropdown text only (values unchanged). */
 export const SECTION_OPTIONS = [
   { value: 'general', label: 'General' },
   { value: 'sports', label: 'Sports' },
-  { value: 'movies', label: 'Movies' },
+  { value: 'movies', label: 'Movies', sectionSelectLabel: 'Tamthilia' },
 ]
 
 const SECTION_LABEL_BY_VALUE = Object.fromEntries(SECTION_OPTIONS.map((x) => [x.value, x.label]))
