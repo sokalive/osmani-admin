@@ -1,5 +1,9 @@
 /** Bits 0–6 = Sun–Sat (matches `Date#getDay()`). Default 127 = all days. */
 const WEEKDAY_MASK_ALL = 127
+function usesDailyRepeat(banner) {
+  const mode = String(banner?.repeatMode ?? banner?.repeat_mode ?? '').trim().toLowerCase()
+  return mode === 'daily' || Boolean(banner?.useTimer)
+}
 
 function isWeekdayAllowed(mask, now = new Date()) {
   const raw = mask == null || mask === '' ? WEEKDAY_MASK_ALL : Number(mask)
@@ -58,7 +62,7 @@ export function isBannerShownInCarousel(banner, now = new Date()) {
   const es = banner.eventStart ?? banner.event_start
   const ee = banner.eventEnd ?? banner.event_end
   if (!isNowInEventWindow(es, ee, now)) return false
-  if (!banner?.useTimer) return true
+  if (!usesDailyRepeat(banner)) return true
   const mask = banner.weekdayMask ?? banner.weekday_mask ?? WEEKDAY_MASK_ALL
   if (!isWeekdayAllowed(mask, now)) return false
   return isNowInDailyWindow(banner.startTime, banner.endTime, now)

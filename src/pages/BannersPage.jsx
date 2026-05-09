@@ -23,6 +23,13 @@ function normalizeBanner(b) {
 function bannerPayloadForApi(b, overrides = {}) {
   const m = { ...b, ...overrides }
   const useTimer = Boolean(m.useTimer ?? m.eventTimer)
+  const repeatMode =
+    String(m.repeatMode ?? m.repeat_mode ?? '').trim().toLowerCase() === 'daily'
+      ? 'daily'
+      : useTimer
+        ? 'daily'
+        : 'none'
+  const timezone = String(m.timezone ?? '').trim() || 'UTC'
   const sortOrder = Number(m.sortOrder ?? m.sort_order) || 0
   const wmRaw = m.weekdayMask ?? m.weekday_mask
   const weekdayMask =
@@ -52,6 +59,8 @@ function bannerPayloadForApi(b, overrides = {}) {
     isActive: m.isActive !== false && m.is_active !== false,
     isEnabled: m.isEnabled !== false && m.enabled !== false,
     useTimer,
+    repeatMode,
+    timezone,
     startTime: useTimer ? (m.startTime ?? m.dailyStart ?? '09:00') : '',
     endTime: useTimer ? (m.endTime ?? m.dailyEnd ?? '17:00') : '',
     weekdayMask,
@@ -408,11 +417,11 @@ function BannersPage() {
                       </span>
                       {b.useTimer ? (
                         <span className="rounded-md bg-violet-500/20 px-2 py-0.5 text-violet-200 ring-1 ring-violet-400/35">
-                          Timer {b.startTime}–{b.endTime}
+                          Daily {b.startTime}–{b.endTime}
                         </span>
                       ) : (
                         <span className="rounded-md bg-slate-800/80 px-2 py-0.5 text-slate-500 ring-1 ring-slate-700/60">
-                          No timer
+                          One-time
                         </span>
                       )}
                       {b.useTimer ? (
@@ -421,6 +430,11 @@ function BannersPage() {
                           title={formatWeekdayMaskAbbrev(b.weekdayMask ?? b.weekday_mask)}
                         >
                           {formatWeekdayMaskAbbrev(b.weekdayMask ?? b.weekday_mask)}
+                        </span>
+                      ) : null}
+                      {b.useTimer ? (
+                        <span className="max-w-[160px] truncate rounded-md bg-sky-500/15 px-2 py-0.5 text-sky-100 ring-1 ring-sky-400/30">
+                          {String(b.timezone || 'UTC')}
                         </span>
                       ) : null}
                       {b.enableCountdown ?? b.enable_countdown ? (

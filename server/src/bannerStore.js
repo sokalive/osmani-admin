@@ -19,7 +19,8 @@ const SELECT_BASE = `
   SELECT b.id, b.title, b.description, b.image, b.active, b.enabled, b.badge,
          b.badge_automation, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
          b.enable_countdown, b.event_start, b.event_end,
-         b.redirect_channel_id, b.sort_order, b.event_timer, b.weekday_mask, b.daily_start, b.daily_end,
+         b.redirect_channel_id, b.sort_order, b.event_timer, b.repeat_mode, b.timezone,
+         b.weekday_mask, b.daily_start, b.daily_end,
          b.created_at, b.updated_at,
          c.name AS redirect_channel_name
   FROM banners b
@@ -31,7 +32,8 @@ const SELECT_PUBLIC = `
   SELECT b.id, b.title, b.description, b.image,
          b.active, b.badge, b.badge_automation, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
          b.enable_countdown, b.event_start, b.event_end,
-         b.redirect_channel_id, b.sort_order, b.event_timer, b.weekday_mask, b.daily_start, b.daily_end,
+         b.redirect_channel_id, b.sort_order, b.event_timer, b.repeat_mode, b.timezone,
+         b.weekday_mask, b.daily_start, b.daily_end,
          b.created_at, b.updated_at
   FROM banners b
 `
@@ -81,8 +83,8 @@ export async function insertBanner(payload) {
        badge_enabled, badge_color, badge_blink, badge_priority,
        enable_countdown, event_start, event_end,
        redirect_channel_id, sort_order,
-       event_timer, weekday_mask, daily_start, daily_end
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::timestamptz,$14::timestamptz,$15,$16,$17,$18,$19::time,$20::time)
+       event_timer, repeat_mode, timezone, weekday_mask, daily_start, daily_end
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::timestamptz,$14::timestamptz,$15,$16,$17,$18,$19,$20,$21::time,$22::time)
      RETURNING id`,
     [
       payload.title,
@@ -102,6 +104,8 @@ export async function insertBanner(payload) {
       payload.redirect_channel_id,
       payload.sort_order,
       payload.event_timer,
+      payload.repeat_mode,
+      payload.timezone,
       payload.weekday_mask,
       payload.daily_start,
       payload.daily_end,
@@ -119,7 +123,7 @@ export async function updateBanner(id, payload) {
        badge_enabled = $9, badge_color = $10, badge_blink = $11, badge_priority = $12,
        enable_countdown = $13, event_start = $14::timestamptz, event_end = $15::timestamptz,
        redirect_channel_id = $16, sort_order = $17, event_timer = $18,
-       weekday_mask = $19, daily_start = $20::time, daily_end = $21::time,
+       repeat_mode = $19, timezone = $20, weekday_mask = $21, daily_start = $22::time, daily_end = $23::time,
        updated_at = now()
      WHERE id = $1
      RETURNING id`,
@@ -142,6 +146,8 @@ export async function updateBanner(id, payload) {
       payload.redirect_channel_id,
       payload.sort_order,
       payload.event_timer,
+      payload.repeat_mode,
+      payload.timezone,
       payload.weekday_mask,
       payload.daily_start,
       payload.daily_end,

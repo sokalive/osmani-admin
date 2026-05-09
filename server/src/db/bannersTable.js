@@ -22,6 +22,8 @@ export async function ensureBannersTable(client) {
       redirect_channel_id INTEGER REFERENCES channels (id) ON DELETE SET NULL,
       sort_order INTEGER NOT NULL DEFAULT 0,
       event_timer BOOLEAN NOT NULL DEFAULT false,
+      repeat_mode TEXT NOT NULL DEFAULT 'none',
+      timezone TEXT,
       weekday_mask SMALLINT NOT NULL DEFAULT 127,
       daily_start TIME,
       daily_end TIME,
@@ -52,6 +54,14 @@ export async function ensureBannersTable(client) {
 
   await client.query(`
     ALTER TABLE banners ADD COLUMN IF NOT EXISTS badge_automation BOOLEAN NOT NULL DEFAULT true;
+  `)
+
+  await client.query(`
+    ALTER TABLE banners ADD COLUMN IF NOT EXISTS repeat_mode TEXT NOT NULL DEFAULT 'none';
+  `)
+
+  await client.query(`
+    ALTER TABLE banners ADD COLUMN IF NOT EXISTS timezone TEXT;
   `)
 
   await client.query(`

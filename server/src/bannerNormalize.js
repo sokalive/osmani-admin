@@ -35,6 +35,8 @@ export function bannerToPublicResponse(row, req, automationEntry = null, now = n
   const eventEnd = formatTsForApi(row.event_end)
   const rid = row.redirect_channel_id != null ? Number(row.redirect_channel_id) : null
   const sortOrder = Number(row.sort_order) || 0
+  const repeatMode = String(row.repeat_mode ?? '').trim().toLowerCase() === 'daily' ? 'daily' : 'none'
+  const timezone = row.timezone == null ? '' : String(row.timezone)
   const weekdayMask =
     row.weekday_mask != null && row.weekday_mask !== ''
       ? Math.min(127, Math.max(0, Number(row.weekday_mask)))
@@ -43,6 +45,7 @@ export function bannerToPublicResponse(row, req, automationEntry = null, now = n
   const updatedAt = formatTsForApi(row.updated_at) ?? createdAt
   const badgeAutomation = row.badge_automation !== false && row.badge_automation !== 0
   const effectiveBadge = resolveDisplayBadge(row, automationEntry)
+  const useTimer = repeatMode === 'daily' || Boolean(row.event_timer)
 
   return {
     id: Number(row.id),
@@ -87,8 +90,11 @@ export function bannerToPublicResponse(row, req, automationEntry = null, now = n
     isVisibleNow: isBannerLiveNow(row, now),
     can_interact: Boolean(row.enabled) && isBannerLiveNow(row, now),
     canInteract: Boolean(row.enabled) && isBannerLiveNow(row, now),
-    event_timer: Boolean(row.event_timer),
-    eventTimer: Boolean(row.event_timer),
+    event_timer: useTimer,
+    eventTimer: useTimer,
+    repeat_mode: repeatMode,
+    repeatMode,
+    timezone,
     daily_start: formatTimeForApi(row.daily_start),
     dailyStart: formatTimeForApi(row.daily_start),
     daily_end: formatTimeForApi(row.daily_end),
@@ -111,6 +117,8 @@ export function bannerToResponse(row, req, automationEntry = null, now = new Dat
   const eventEnd = formatTsForApi(row.event_end)
   const rid = row.redirect_channel_id != null ? Number(row.redirect_channel_id) : null
   const sortOrder = Number(row.sort_order) || 0
+  const repeatMode = String(row.repeat_mode ?? '').trim().toLowerCase() === 'daily' ? 'daily' : 'none'
+  const timezone = row.timezone == null ? '' : String(row.timezone)
   const weekdayMask =
     row.weekday_mask != null && row.weekday_mask !== ''
       ? Math.min(127, Math.max(0, Number(row.weekday_mask)))
@@ -119,6 +127,7 @@ export function bannerToResponse(row, req, automationEntry = null, now = new Dat
   const updatedIso =
     (ua instanceof Date ? ua.toISOString() : formatTsForApi(ua)) ?? createdIso
   const effectiveBadge = resolveDisplayBadge(row, automationEntry)
+  const useTimer = repeatMode === 'daily' || Boolean(row.event_timer)
 
   return {
     id: Number(row.id),
@@ -142,14 +151,19 @@ export function bannerToResponse(row, req, automationEntry = null, now = new Dat
     redirectChannelId: rid,
     redirectChannel: row.redirect_channel_name != null ? String(row.redirect_channel_name) : '',
     sortOrder,
-    useTimer: Boolean(row.event_timer),
+    useTimer,
+    repeatMode,
+    timezone,
     startTime: formatTimeForApi(row.daily_start),
     endTime: formatTimeForApi(row.daily_end),
     createdAt: createdIso,
     updatedAt: updatedIso,
     active: Boolean(row.active),
     enabled: Boolean(row.enabled),
-    eventTimer: Boolean(row.event_timer),
+    eventTimer: useTimer,
+    repeat_mode: repeatMode,
+    repeatMode,
+    timezone,
     dailyStart: formatTimeForApi(row.daily_start),
     dailyEnd: formatTimeForApi(row.daily_end),
     weekdayMask,

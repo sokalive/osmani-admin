@@ -8,14 +8,37 @@ const defaults = {
   freeMode: false,
   emergencyMode: false,
   maintenanceMode: false,
+  bannerEngine: {
+    sseEvent: 'banners_changed',
+    defaultRepeatMode: 'none',
+    defaultTimezone: 'UTC',
+    comingSoonHours: Number(process.env.BANNER_COMING_SOON_HOURS ?? 72) || 72,
+  },
 }
 
 function normalizeSettings(obj) {
   const o = obj && typeof obj === 'object' ? obj : {}
+  const beSource =
+    (o.bannerEngine && typeof o.bannerEngine === 'object' && o.bannerEngine) ||
+    (o.banner_engine && typeof o.banner_engine === 'object' && o.banner_engine) ||
+    {}
+  const be = beSource
+  const comingSoonHoursNum = Number(be.comingSoonHours ?? defaults.bannerEngine.comingSoonHours)
+  const bannerEngine = {
+    sseEvent: 'banners_changed',
+    defaultRepeatMode: String(be.defaultRepeatMode ?? defaults.bannerEngine.defaultRepeatMode).toLowerCase() === 'daily'
+      ? 'daily'
+      : 'none',
+    defaultTimezone: String(be.defaultTimezone ?? defaults.bannerEngine.defaultTimezone).trim() || 'UTC',
+    comingSoonHours:
+      Number.isFinite(comingSoonHoursNum) && comingSoonHoursNum > 0 ? comingSoonHoursNum : 72,
+  }
   return {
     freeMode: Boolean(o.freeMode),
     emergencyMode: Boolean(o.emergencyMode),
     maintenanceMode: Boolean(o.maintenanceMode),
+    bannerEngine,
+    banner_engine: bannerEngine,
   }
 }
 

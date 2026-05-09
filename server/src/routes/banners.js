@@ -120,10 +120,18 @@ function parseBadgeColor(v) {
 
 function parseBannerFields(req) {
   const b = req.body || {}
-  const useTimer = parseBool(b.event_timer ?? b.eventTimer ?? b.useTimer, false)
+  const repeatModeRaw = String(b.repeat_mode ?? b.repeatMode ?? '').trim().toLowerCase()
+  const repeat_mode = repeatModeRaw === 'daily' ? 'daily' : 'none'
+  const useTimer = repeat_mode === 'daily' || parseBool(b.event_timer ?? b.eventTimer ?? b.useTimer, false)
   const daily_start = useTimer ? parseTimeToPg(b.daily_start ?? b.dailyStart ?? b.startTime) : null
   const daily_end = useTimer ? parseTimeToPg(b.daily_end ?? b.dailyEnd ?? b.endTime) : null
   const weekday_mask = parseWeekdayMask(b)
+  const timezone = (() => {
+    const tz = b.timezone
+    if (tz == null) return null
+    const s = String(tz).trim()
+    return s || null
+  })()
   const badge_priority = Number.parseInt(String(b.badge_priority ?? b.badgePriority ?? 0), 10)
   return {
     title: String(b.title ?? '').trim(),
@@ -142,6 +150,8 @@ function parseBannerFields(req) {
     redirect_channel_id: parseRedirectChannelId(b),
     sort_order: Number.parseInt(String(b.sort_order ?? b.sortOrder ?? 0), 10) || 0,
     event_timer: useTimer,
+    repeat_mode,
+    timezone,
     weekday_mask,
     daily_start,
     daily_end,
@@ -274,7 +284,7 @@ bannersRouter.post('/', maybeUploadBanner, async (req, res) => {
       image: imagePath,
     })
     const full = await bannerStore.getBannerById(inserted.id)
-    liveSyncBus.publish('config.banners_changed', {
+    liveSyncBus.publish('banners_changed', {
       topics: ['config'],
       action: 'created',
       bannerId: inserted.id,
@@ -345,7 +355,7 @@ bannersRouter.put('/:id', maybeUploadBanner, async (req, res) => {
       return res.status(404).json({ error: 'Banner not found' })
     }
     const full = await bannerStore.getBannerById(id)
-    liveSyncBus.publish('config.banners_changed', {
+    liveSyncBus.publish('banners_changed', {
       topics: ['config'],
       action: 'updated',
       bannerId: id,
@@ -370,7 +380,7 @@ bannersRouter.delete('/:id', async (req, res) => {
     }
     await bannerStore.deleteBannerById(id)
     await unlinkUploadIfAny(existing.image)
-    liveSyncBus.publish('config.banners_changed', {
+    liveSyncBus.publish('banners_changed', {
       topics: ['config'],
       action: 'deleted',
       bannerId: id,

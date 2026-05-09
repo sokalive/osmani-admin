@@ -4,6 +4,10 @@
  */
 export const PREVIEW_COMING_SOON_HOURS = 72
 export const WEEKDAY_MASK_ALL = 127
+function usesDailyRepeat(row) {
+  const mode = String(row?.repeat_mode ?? '').trim().toLowerCase()
+  return mode === 'daily' || Boolean(row?.event_timer)
+}
 
 const DAY_ABBREV = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -76,14 +80,14 @@ function isWeekdayAllowed(mask, now = new Date()) {
 function isBannerLiveNow(row, now = new Date()) {
   if (!row?.active) return false
   if (!isNowInEventWindow(row.event_start, row.event_end, now)) return false
-  if (!row.event_timer) return true
+  if (!usesDailyRepeat(row)) return true
   const mask = row.weekday_mask ?? WEEKDAY_MASK_ALL
   if (!isWeekdayAllowed(mask, now)) return false
   return isNowInDailyWindow(row.daily_start, row.daily_end, now)
 }
 
 function isWaitingForDailyWindow(row, now = new Date()) {
-  if (!row?.active || !row.event_timer) return false
+  if (!row?.active || !usesDailyRepeat(row)) return false
   if (!isNowInEventWindow(row.event_start, row.event_end, now)) return false
   return !isBannerLiveNow(row, now)
 }
@@ -199,6 +203,7 @@ export function computeAutomationForAll(rows, now = new Date()) {
 /** Map GET /api/banners/manage row → engine row */
 export function manageApiRowToEngine(b) {
   if (!b) return null
+  const repeatMode = String(b.repeatMode ?? b.repeat_mode ?? '').trim().toLowerCase()
   const wm =
     b.weekdayMask != null && b.weekdayMask !== ''
       ? Number(b.weekdayMask)
@@ -212,7 +217,9 @@ export function manageApiRowToEngine(b) {
     badge_automation: b.badgeAutomation !== false && b.badge_automation !== false,
     event_start: b.eventStart ?? b.event_start ?? null,
     event_end: b.eventEnd ?? b.event_end ?? null,
-    event_timer: Boolean(b.useTimer ?? b.eventTimer ?? b.event_timer),
+    repeat_mode: repeatMode === 'daily' ? 'daily' : 'none',
+    event_timer:
+      repeatMode === 'daily' || Boolean(b.useTimer ?? b.eventTimer ?? b.event_timer),
     weekday_mask: Number.isFinite(wm) ? Math.min(127, Math.max(0, wm)) : WEEKDAY_MASK_ALL,
     daily_start: b.dailyStart ?? b.startTime ?? null,
     daily_end: b.dailyEnd ?? b.endTime ?? null,
@@ -232,8 +239,10 @@ export function datetimeLocalToIso(local) {
 export function formToEngineRow(form, draftId) {
   const es = datetimeLocalToIso(form.eventStartLocal)
   const ee = datetimeLocalToIso(form.eventEndLocal)
+  const repeatMode = String(form.repeatMode ?? '').trim().toLowerCase()
+  const useTimer = repeatMode === 'daily' || Boolean(form.useTimer)
   const wmRaw = Number(form.weekdayMask)
-  const weekday_mask = form.useTimer
+  const weekday_mask = useTimer
     ? Number.isFinite(wmRaw)
       ? Math.min(127, Math.max(0, Math.floor(wmRaw)))
       : WEEKDAY_MASK_ALL
@@ -245,7 +254,8 @@ export function formToEngineRow(form, draftId) {
     badge_automation: form.badgeAutomation !== false,
     event_start: es,
     event_end: ee,
-    event_timer: Boolean(form.useTimer),
+    repeat_mode: useTimer ? 'daily' : 'none',
+    event_timer: useTimer,
     weekday_mask,
     daily_start: form.useTimer ? form.startTime : null,
     daily_end: form.useTimer ? form.endTime : null,

@@ -87,8 +87,9 @@ function emptyForm() {
     sortOrder: 0,
     isActive: true,
     isEnabled: true,
-    useTimer: false,
+    repeatMode: 'none',
     weekdayMask: WEEKDAY_MASK_ALL,
+    timezone: 'UTC',
     startTime: '09:00',
     endTime: '17:00',
   }
@@ -106,6 +107,11 @@ function bannerToForm(banner) {
   if (!banner) return emptyForm()
   const es = banner.eventStart ?? banner.event_start
   const ee = banner.eventEnd ?? banner.event_end
+  const repeatMode = String(banner.repeatMode ?? banner.repeat_mode ?? '').toLowerCase() === 'daily'
+    ? 'daily'
+    : Boolean(banner.useTimer)
+      ? 'daily'
+      : 'none'
   return {
     title: banner.title ?? '',
     description: banner.description ?? '',
@@ -128,8 +134,9 @@ function bannerToForm(banner) {
     sortOrder: Number.isFinite(Number(banner.sortOrder)) ? Number(banner.sortOrder) : 0,
     isActive: banner.isActive !== false,
     isEnabled: banner.isEnabled !== false,
-    useTimer: Boolean(banner.useTimer),
+    repeatMode,
     weekdayMask: maskFromBanner(banner),
+    timezone: String(banner.timezone ?? '').trim() || 'UTC',
     startTime: typeof banner.startTime === 'string' && banner.startTime ? banner.startTime : '09:00',
     endTime: typeof banner.endTime === 'string' && banner.endTime ? banner.endTime : '17:00',
   }
@@ -322,7 +329,8 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       return
     }
 
-    if (form.useTimer) {
+    const isDailyRepeat = form.repeatMode === 'daily'
+    if (isDailyRepeat) {
       const s = parseTimeToMinutes(form.startTime)
       const en = parseTimeToMinutes(form.endTime)
       if (s == null || en == null) {
@@ -368,8 +376,8 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       title,
       description,
       image: imageUrl,
-      badgeAutomation: form.badgeAutomation !== false,
-      badge: form.badge.trim(),
+      badgeAutomation: true,
+      badge: '',
       badgeEnabled: form.badgeEnabled,
       badgeColor: form.badgeColor.trim() || '#FBBF24',
       badgeBlink: form.badgeBlink,
@@ -381,9 +389,11 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       sortOrder: Number.isFinite(Number(form.sortOrder)) ? Number(form.sortOrder) : 0,
       isActive: form.isActive,
       isEnabled: form.isEnabled,
-      useTimer: form.useTimer,
-      startTime: form.useTimer ? form.startTime.trim() : '',
-      endTime: form.useTimer ? form.endTime.trim() : '',
+      useTimer: isDailyRepeat,
+      repeatMode: isDailyRepeat ? 'daily' : 'none',
+      startTime: isDailyRepeat ? form.startTime.trim() : '',
+      endTime: isDailyRepeat ? form.endTime.trim() : '',
+      timezone: (form.timezone || '').trim() || 'UTC',
       weekdayMask: Number.isFinite(Number(form.weekdayMask))
         ? Math.min(127, Math.max(0, Math.floor(Number(form.weekdayMask))))
         : WEEKDAY_MASK_ALL,
@@ -398,11 +408,12 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
   const eventStartIso = datetimeLocalToIso(form.eventStartLocal)
   const eventEndIso = datetimeLocalToIso(form.eventEndLocal)
   const previewNow = new Date(clock)
+  const isDailyRepeat = form.repeatMode === 'daily'
   const carouselProbe = useMemo(
     () => ({
       isActive: form.isActive,
       isEnabled: form.isEnabled,
-      useTimer: form.useTimer,
+      useTimer: isDailyRepeat,
       startTime: form.startTime,
       endTime: form.endTime,
       eventStart: eventStartIso,
@@ -412,7 +423,7 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
     [
       form.isActive,
       form.isEnabled,
-      form.useTimer,
+      isDailyRepeat,
       form.startTime,
       form.endTime,
       form.weekdayMask,
@@ -431,9 +442,7 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
   }, [form, peerBanners, previewDraftId, clock])
 
   const previewBadgeText =
-    form.badgeAutomation !== false
-      ? (previewAutomation?.display_badge || '').trim() || form.badge.trim()
-      : form.badge.trim()
+    (previewAutomation?.display_badge || '').trim()
 
   const previewBadgeVisible = form.badgeEnabled && previewBadgeText.length > 0
 
@@ -443,7 +452,7 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
     if (phase) {
       lines.push(`Phase · ${String(phase).replace(/_/g, ' ')}`)
     }
-    if (form.badgeAutomation !== false && previewBadgeText) {
+    if (previewBadgeText) {
       lines.push(`Auto badge · ${previewBadgeText}`)
     }
     if (eventStartIso) {
@@ -456,8 +465,9 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
     } else {
       lines.push('Event ends · not set (open-ended)')
     }
-    if (form.useTimer) {
+    if (isDailyRepeat) {
       lines.push(`Daily window · ${form.startTime}–${form.endTime} (${formatWeekdayMaskAbbrev(form.weekdayMask)})`)
+      lines.push(`Timezone · ${form.timezone || 'UTC'}`)
     } else {
       lines.push('Schedule · one-time / always on during the event dates (no daily window)')
     }
@@ -468,19 +478,19 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       lines.push('Transition · past event end → ENDED when automation is on')
     } else if (tStart != null && !Number.isNaN(tStart) && nowMs < tStart) {
       lines.push('Transition · until start → COMING SOON / NEXT based on queue')
-    } else if (form.useTimer && slotWouldShow) {
+    } else if (isDailyRepeat && slotWouldShow) {
       lines.push('Transition · LIVE NOW while inside windows')
     }
     return lines
   }, [
     previewAutomation?.schedule_phase,
     previewBadgeText,
-    form.badgeAutomation,
     eventStartIso,
     eventEndIso,
-    form.useTimer,
+    isDailyRepeat,
     form.startTime,
     form.endTime,
+    form.timezone,
     form.weekdayMask,
     clock,
     slotWouldShow,
@@ -489,13 +499,13 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
   const carouselVisibilityHint = useMemo(() => {
     if (!form.isActive) return 'Inactive — hidden from the carousel.'
     if (!slotWouldShow) {
-      return form.useTimer
+      return isDailyRepeat
         ? 'Outside allowed weekdays or outside the daily time window — hidden.'
         : 'Outside event dates — hidden.'
     }
     if (!form.isEnabled) return 'Shown in carousel; taps / navigation disabled.'
     return 'Shown in carousel; taps enabled (matches app runtime rules).'
-  }, [form.isActive, form.isEnabled, form.useTimer, slotWouldShow])
+  }, [form.isActive, form.isEnabled, isDailyRepeat, slotWouldShow])
 
   const previewImageSrc =
     imageDataUrl ||
@@ -685,9 +695,9 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
                 <div className="flex flex-wrap gap-2 rounded-lg border border-slate-600/50 bg-slate-900/50 p-2">
                   <button
                     type="button"
-                    onClick={() => setForm((f) => ({ ...f, useTimer: false }))}
+                    onClick={() => setForm((f) => ({ ...f, repeatMode: 'none' }))}
                     className={`rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wide transition-colors ${
-                      !form.useTimer
+                      form.repeatMode !== 'daily'
                         ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/40'
                         : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50 hover:bg-slate-800'
                     }`}
@@ -696,9 +706,9 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
                   </button>
                   <button
                     type="button"
-                    onClick={() => setForm((f) => ({ ...f, useTimer: true }))}
+                    onClick={() => setForm((f) => ({ ...f, repeatMode: 'daily' }))}
                     className={`rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wide transition-colors ${
-                      form.useTimer
+                      form.repeatMode === 'daily'
                         ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/40'
                         : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50 hover:bg-slate-800'
                     }`}
@@ -735,7 +745,7 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
                 </div>
 
                 <AnimatePresence initial={false}>
-                  {form.useTimer ? (
+                  {isDailyRepeat ? (
                     <motion.div
                       key="daily-repeat-fields"
                       initial={{ height: 0, opacity: 0 }}
@@ -745,7 +755,7 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
                       className="overflow-hidden"
                     >
                       <div className="mt-4 space-y-4">
-                        <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="grid gap-4 sm:grid-cols-3">
                           <div>
                             <label htmlFor={`${formId}-start`} className={labelClassName()}>
                               Daily start
@@ -768,6 +778,19 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
                               value={form.endTime}
                               onChange={(e) => setForm((f) => ({ ...f, endTime: e.target.value }))}
                               className={inputClassName()}
+                            />
+                          </div>
+                          <div>
+                            <label htmlFor={`${formId}-timezone`} className={labelClassName()}>
+                              Timezone
+                            </label>
+                            <input
+                              id={`${formId}-timezone`}
+                              type="text"
+                              value={form.timezone}
+                              onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))}
+                              className={inputClassName()}
+                              placeholder="e.g. Africa/Dar_es_Salaam or UTC"
                             />
                           </div>
                         </div>
@@ -835,37 +858,12 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
               <div>
                 <p className={labelClassName()}>Advanced</p>
                 <div className="space-y-4 rounded-xl border border-slate-700/60 bg-slate-900/35 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-2">
-                    <div>
-                      <span className="text-sm text-slate-300">Automatic schedule badge</span>
-                      <p className="mt-0.5 max-w-md text-[11px] text-slate-500">
-                        LIVE NOW · COMING SOON · COMING NEXT · ENDED are generated from dates,
-                        daily repeat, and sort order. Turn off only if you need a fixed custom label.
-                      </p>
-                    </div>
-                    <ToggleSwitch
-                      checked={form.badgeAutomation !== false}
-                      onChange={(next) => setForm((f) => ({ ...f, badgeAutomation: next }))}
-                      aria-label="Automatic schedule badge"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor={`${formId}-badge`} className={labelClassName()}>
-                      {form.badgeAutomation !== false ? 'Optional custom subtitle' : 'Badge text'}
-                    </label>
-                    <input
-                      id={`${formId}-badge`}
-                      type="text"
-                      value={form.badge}
-                      onChange={(e) => setForm((f) => ({ ...f, badge: e.target.value }))}
-                      className={inputClassName()}
-                      placeholder={
-                        form.badgeAutomation !== false
-                          ? 'Leave empty to use schedule labels only'
-                          : 'e.g. SPECIAL EVENT'
-                      }
-                    />
+                  <div className="rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-2">
+                    <span className="text-sm text-slate-300">Automatic schedule badge</span>
+                    <p className="mt-0.5 max-w-md text-[11px] text-slate-500">
+                      LIVE NOW · COMING SOON · COMING NEXT · ENDED are always generated from schedule
+                      rules and ordering. Manual status typing is disabled for compatibility.
+                    </p>
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-600/50 bg-slate-900/50 px-3 py-2">
