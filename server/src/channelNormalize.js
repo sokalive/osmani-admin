@@ -8,19 +8,56 @@ const DISPLAY_SECTION_LABEL = {
   movies: 'Movies',
 }
 
+/** Lowercase tokens → canonical slug (includes common singular + Swahili tab labels). */
+const DISPLAY_SECTION_ALIAS = {
+  general: 'general',
+  sports: 'sports',
+  movies: 'movies',
+  sport: 'sports',
+  movie: 'movies',
+  tamthilia: 'movies',
+  sinema: 'movies',
+}
+
 /** Coerce legacy/unknown values to general | sports | movies (never null). */
 export function normalizeDisplaySection(v) {
   const s = String(v ?? '')
     .replace(/\uFEFF|[\u200B-\u200D\u2060]/g, '')
     .trim()
     .toLowerCase()
-  const alias = {
-    general: 'general',
-    sports: 'sports',
-    movies: 'movies',
-  }
-  const mapped = alias[s] ?? s
+  const mapped = DISPLAY_SECTION_ALIAS[s] ?? s
   return DISPLAY_SECTIONS.has(mapped) ? mapped : 'general'
+}
+
+/**
+ * Infer which category string should drive display_section when `category` is an array or
+ * comma-joined multipart noise (e.g. [ "Movies", "General" ] prefers Movies; avoids
+ * preferLastPart pinning non-movies sections when a trailing "General" duplicates).
+ */
+export function inferSectionSourceFromCategoryField(raw) {
+  const pieces = []
+  const consume = (t) => {
+    const trimmed = String(t ?? '').trim()
+    if (!trimmed) return
+    if (trimmed.includes(',')) {
+      for (const frag of trimmed.split(',')) {
+        const f = frag.trim()
+        if (f) pieces.push(f)
+      }
+      return
+    }
+    pieces.push(trimmed)
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) consume(item)
+  } else {
+    consume(raw)
+  }
+  if (pieces.length === 0) return ''
+  for (let i = pieces.length - 1; i >= 0; i--) {
+    if (normalizeDisplaySection(pieces[i]) !== 'general') return pieces[i]
+  }
+  return pieces[pieces.length - 1]
 }
 
 function displaySectionToCategoryLabel(section) {
@@ -70,9 +107,7 @@ export function migrateStoredChannel(c) {
     { preferLastPart: true, preferLastKey: true },
   )
   const displaySection = normalizeDisplaySection(
-    fromDisplayKeys !== ''
-      ? fromDisplayKeys
-      : readFirstNonEmptyField(c, ['category'], { preferLastPart: true }),
+    fromDisplayKeys !== '' ? fromDisplayKeys : inferSectionSourceFromCategoryField(c.category),
   )
   const bottomTabRaw =
     c.bottomTab != null && String(c.bottomTab).trim() !== ''
@@ -213,7 +248,7 @@ export function parseChannelInput(body, file, existing = null) {
     sectionSource = String(ex.displaySection ?? ex.display_section ?? '').trim()
   }
   if (sectionSource === '') {
-    sectionSource = readFirstNonEmptyField(b, ['category'], { preferLastPart: true })
+    sectionSource = inferSectionSourceFromCategoryField(b.category)
   }
   const displaySection = normalizeDisplaySection(sectionSource)
 
