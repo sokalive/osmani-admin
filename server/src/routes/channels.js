@@ -126,6 +126,16 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
 
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
     await updateChannel(updated)
+
+    if (process.env.DISPLAY_SECTION_PIPELINE_DEBUG === '1') {
+      console.log(
+        '[display_section] PUT persisted',
+        JSON.stringify({
+          id: updated.id,
+          display_section: updated.displaySection,
+        }),
+      )
+    }
     liveSyncBus.publish('config.channels_changed', {
       topics: ['config'],
       action: 'updated',

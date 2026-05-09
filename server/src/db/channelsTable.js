@@ -68,7 +68,7 @@ export async function ensureChannelsTable(client) {
     updated_at = now()
     WHERE display_section IS NULL
        OR trim(display_section) = ''
-       OR display_section NOT IN ('general', 'sports', 'movies');
+       OR lower(trim(coalesce(display_section, ''))) NOT IN ('general', 'sports', 'movies');
   `)
 
   await client.query(`

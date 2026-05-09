@@ -10,7 +10,10 @@ const DISPLAY_SECTION_LABEL = {
 
 /** Coerce legacy/unknown values to general | sports | movies (never null). */
 export function normalizeDisplaySection(v) {
-  const s = String(v ?? '').trim().toLowerCase()
+  const s = String(v ?? '')
+    .replace(/\uFEFF|[\u200B-\u200D\u2060]/g, '')
+    .trim()
+    .toLowerCase()
   const alias = {
     general: 'general',
     sports: 'sports',
@@ -161,16 +164,43 @@ export function parseChannelInput(body, file, existing = null) {
     accessType = ex.accessType === 'premium' ? 'premium' : 'free'
   }
 
-  const displaySection = normalizeDisplaySection(
-    readFirstNonEmptyField(b, [
-      'display_section',
-      'displaySection',
-      'display_section_label',
-      'category',
-    ]),
-  )
+  /** display_* only first — `category` alone can be stale (e.g. "General") and must not trump DB section. */
+  const sectionExplicit = readFirstNonEmptyField(b, [
+    'display_section',
+    'displaySection',
+    'display_section_label',
+  ])
+  let sectionSource = ''
+  if (sectionExplicit !== '') {
+    sectionSource = sectionExplicit
+  } else if (ex != null) {
+    sectionSource = String(ex.displaySection ?? ex.display_section ?? '').trim()
+  }
+  if (sectionSource === '') {
+    sectionSource = readFirstNonEmptyField(b, ['category'])
+  }
+  const displaySection = normalizeDisplaySection(sectionSource)
+
+  if (process.env.DISPLAY_SECTION_PIPELINE_DEBUG === '1') {
+    console.log(
+      '[display_section] parseChannelInput',
+      JSON.stringify({
+        sectionExplicit: sectionExplicit || null,
+        sectionSource: sectionSource || null,
+        resolved: displaySection,
+        bodyKeys: Object.keys(b),
+      }),
+    )
+  }
+
   const categoryRaw = str(b.category, '')
-  const category = categoryRaw || displaySectionToCategoryLabel(displaySection)
+  let category = categoryRaw || displaySectionToCategoryLabel(displaySection)
+  if (
+    categoryRaw !== '' &&
+    normalizeDisplaySection(categoryRaw) !== displaySection
+  ) {
+    category = displaySectionToCategoryLabel(displaySection)
+  }
   const bottomTab =
     str(b.bottomTab || b.bottomTabsDisplay || b.bottom_tabs_display, '') ||
     (ex != null ? ex.bottomTab : '') ||
