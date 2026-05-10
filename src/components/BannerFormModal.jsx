@@ -12,6 +12,7 @@ import {
 import {
   parseTimeToMinutes,
 } from '../utils/bannerSchedule'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -445,12 +446,12 @@ function BannerFormModal({ variant, isOpen, banner, peerBanners = [], onClose, o
       lines.push(`Auto badge · ${previewBadgeText}`)
     }
     if (eventStartIso) {
-      lines.push(`Event starts · ${new Date(eventStartIso).toLocaleString()}`)
+      lines.push(`Event starts · ${formatAdminDateTime(eventStartIso)}`)
     } else {
       lines.push('Event starts · not set (open-ended)')
     }
     if (eventEndIso) {
-      lines.push(`Event ends · ${new Date(eventEndIso).toLocaleString()}`)
+      lines.push(`Event ends · ${formatAdminDateTime(eventEndIso)}`)
     } else {
       lines.push('Event ends · not set (open-ended)')
     }

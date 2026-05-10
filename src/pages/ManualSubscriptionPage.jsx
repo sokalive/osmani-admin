@@ -15,6 +15,7 @@ import {
   postOfferCodeGenerate,
   postOfferCodeUnblock,
 } from '../lib/api'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
 const DURATIONS = [
   { days: 1, label: 'Siku 1' },
@@ -37,23 +38,6 @@ function tabBtn(active) {
       ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/40'
       : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800/80 hover:text-slate-200'
   }`
-}
-
-function fmtWhen(iso) {
-  if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return '—'
-    return d.toLocaleString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return '—'
-  }
 }
 
 function ManualSubscriptionPage() {
@@ -236,7 +220,7 @@ function ManualSubscriptionPage() {
       })
       setFlash({
         type: 'success',
-        message: `Kifurushi kimewekwa. Muda wa mwisho: ${out.expiresAt ?? '—'} (grant #${out.grantId ?? '—'})`,
+        message: `Kifurushi kimewekwa. Muda wa mwisho: ${formatAdminDateTime(out.expiresAt, { fallback: '—' })} (grant #${out.grantId ?? '—'})`,
       })
       void loadHistory()
     } catch (err) {
@@ -450,8 +434,8 @@ function ManualSubscriptionPage() {
                             {shortDev}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{row.durationDays} siku</td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{fmtWhen(row.grantedAt)}</td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{fmtWhen(row.expiresAt)}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.grantedAt)}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.expiresAt)}</td>
                           <td className="px-3 py-2.5">
                             <span
                               className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold ring-1 ${st.className}`}
@@ -631,12 +615,12 @@ function ManualSubscriptionPage() {
                           <tr key={row.id} className="bg-slate-950/20 hover:bg-slate-900/40">
                             <td className="whitespace-nowrap px-3 py-2.5 font-mono text-sm text-amber-100">{row.code}</td>
                             <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{row.durationDays} siku</td>
-                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{fmtWhen(row.createdAt)}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.createdAt)}</td>
                             <td className="max-w-[140px] truncate px-3 py-2.5 font-mono text-xs text-slate-400" title={row.usedByDevice || ''}>
                               {row.usedByDevice || '—'}
                             </td>
-                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{fmtWhen(row.usedAt)}</td>
-                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{fmtWhen(row.expiresAt)}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.usedAt)}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.expiresAt)}</td>
                             <td className="px-3 py-2.5">
                               <span
                                 className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold ring-1 ${offerStatusStyle(st)}`}

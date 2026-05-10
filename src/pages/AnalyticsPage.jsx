@@ -27,6 +27,7 @@ import {
   syncStreamUrl,
   getAnalyticsTrend,
 } from '../lib/api'
+import { formatAdminTimeShort } from '../lib/formatAdminDateTime'
 import { formatTsh } from '../lib/formatMoney'
 import { useCountUp } from '../hooks/useCountUp'
 
@@ -183,12 +184,7 @@ function AnalyticsPage() {
     const rows = Array.isArray(trend) ? trend : []
     const sliced = rows.slice(Math.max(0, rows.length - 12))
     return sliced.map((r) => ({
-      label: new Date(r.time).toLocaleTimeString('en-GB', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        timeZone: 'Africa/Dar_es_Salaam',
-      }),
+      label: formatAdminTimeShort(r.time),
       revenue: Number(r.users) || 0,
     }))
   }, [trend])
@@ -197,12 +193,7 @@ function AnalyticsPage() {
     const rows = Array.isArray(trend) ? trend : []
     const sliced = rows.slice(Math.max(0, rows.length - 96))
     return sliced.map((r) => ({
-      label: new Date(r.time).toLocaleTimeString('en-GB', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        timeZone: 'Africa/Dar_es_Salaam',
-      }),
+      label: formatAdminTimeShort(r.time),
       revenue: Number(r.users) || 0,
     }))
   }, [trend])
@@ -248,7 +239,7 @@ function AnalyticsPage() {
             {lastUpdated ? (
               <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2 py-0.5 text-xs">
                 <RefreshCw className="h-3 w-3" />
-                Updated {lastUpdated.toLocaleTimeString('en-GB')}
+                Updated {formatAdminTimeShort(lastUpdated)}
               </span>
             ) : null}
           </div>

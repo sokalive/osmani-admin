@@ -17,6 +17,7 @@ import {
   postTransferCodesBulkDelete,
   putTransferCode,
 } from '../lib/api'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
 import { appendSecurityLog } from '../lib/securityActivityLog'
 
@@ -177,7 +178,7 @@ function TransferCodesPage() {
         actor: 'Admin',
         eventType: 'Code transfer',
         status: 'completed',
-        detail: `issued ${created?.code || 'transfer code'} · expires ${(created?.expiresAt || '').slice(0, 10)}`,
+        detail: `issued ${created?.code || 'transfer code'} · expires ${formatAdminDateTime(created?.expiresAt, { fallback: '—' })}`,
       })
       showFlash('success', 'New transfer code generated.')
     } catch (e) {

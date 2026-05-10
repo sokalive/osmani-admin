@@ -4,6 +4,7 @@ import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { getNotifications, postNotification, putNotification } from '../lib/api'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
 const AUDIENCES = [
   { value: 'all', label: 'All users' },
@@ -382,10 +383,10 @@ function NotificationsPage() {
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-slate-400">
                         {n.sentAt
-                          ? new Date(n.sentAt).toLocaleString()
+                          ? formatAdminDateTime(n.sentAt)
                           : n.scheduleAt
-                            ? `Due ${new Date(n.scheduleAt).toLocaleString()}`
-                            : new Date(n.createdAt).toLocaleString()}
+                            ? `Due ${formatAdminDateTime(n.scheduleAt)}`
+                            : formatAdminDateTime(n.createdAt)}
                       </td>
                       <td className="px-4 py-3 text-right">
                         {n.status === 'sent' ? (

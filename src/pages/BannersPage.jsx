@@ -5,6 +5,7 @@ import BannerFormModal from '../components/BannerFormModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deleteBanner, getBannersManage, postBanner, putBanner } from '../lib/api'
+import { formatAdminDateOnly } from '../lib/formatAdminDateTime'
 import { formatWeekdayMaskAbbrev, WEEKDAY_MASK_ALL } from '../utils/bannerAutomationClient'
 
 function normalizeBanner(b) {
@@ -458,13 +459,7 @@ function BannersPage() {
                     <p className="mt-1 text-[11px] text-slate-500">
                       Order {b.sortOrder ?? b.sort_order ?? 0}
                       {' · '}
-                      {b.createdAt instanceof Date
-                        ? b.createdAt.toLocaleDateString(undefined, {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                          })
-                        : ''}
+                      {b.createdAt instanceof Date ? formatAdminDateOnly(b.createdAt) : ''}
                     </p>
 
                     <div className="mt-auto flex justify-end gap-1 pt-4">

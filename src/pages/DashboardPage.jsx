@@ -15,6 +15,7 @@ import {
   syncStreamUrl,
   getAnalyticsTrend,
 } from '../lib/api'
+import { formatAdminTimeShort } from '../lib/formatAdminDateTime'
 
 const emerald =
   'bg-gradient-to-br from-emerald-400/92 via-emerald-500/88 to-emerald-700/90'
@@ -52,12 +53,7 @@ function DashboardPage() {
       setTrend(
         Array.isArray(t)
           ? t.map((x) => ({
-              time: new Date(x.time).toLocaleTimeString('en-GB', {
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false,
-                timeZone: 'Africa/Dar_es_Salaam',
-              }),
+              time: formatAdminTimeShort(x.time),
               users: Number(x.users) || 0,
             }))
           : [],

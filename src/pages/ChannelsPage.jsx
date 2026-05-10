@@ -3,6 +3,7 @@ import ChannelFormModal from '../components/ChannelFormModal'
 import ChannelRow from '../components/ChannelRow'
 import ChannelsToolbar from '../components/ChannelsToolbar'
 import Topbar from '../components/Topbar'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 import { useDeviceSubscription } from '../context/DeviceSubscriptionContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import {
@@ -181,7 +182,8 @@ function ChannelsPage() {
           </h1>
           {isSubscribed ? (
             <p className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
-              Device subscription active{expiresAt ? ` · until ${expiresAt}` : ''} (consumer app mirrors this
+              Device subscription active
+              {expiresAt ? ` · until ${formatAdminDateTime(expiresAt)}` : ''} (consumer app mirrors this
               from global store)
             </p>
           ) : null}

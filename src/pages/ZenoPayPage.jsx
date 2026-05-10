@@ -14,6 +14,7 @@ import {
   putZenopaySettings,
   subscriptionStreamUrl,
 } from '../lib/api'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
 function defaultSettings() {
   return {
@@ -312,7 +313,7 @@ function ZenoPayPage() {
                 </p>
                 {cfg.lastTestAt ? (
                   <p className="mt-1 text-xs text-slate-500">
-                    Last check: {new Date(cfg.lastTestAt).toLocaleString()}
+                    Last check: {formatAdminDateTime(cfg.lastTestAt)}
                   </p>
                 ) : null}
                 {failed && cfg.lastTestMessage ? (

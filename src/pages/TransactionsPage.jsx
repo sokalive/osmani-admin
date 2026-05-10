@@ -3,6 +3,7 @@ import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deleteTransactionsBulk, getTransactions } from '../lib/api'
 import { endOfDay, isSameLocalDay, startOfDay } from '../lib/dates'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 import { formatTsh } from '../lib/formatMoney'
 
 const PAGE_SIZE = 10
@@ -30,21 +31,6 @@ function statusBadgeClass(status) {
 function statusLabel(status) {
   if (!status) return ''
   return String(status).toUpperCase()
-}
-
-function formatEatDateTime(iso) {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '-'
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Africa/Dar_es_Salaam',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(d)
 }
 
 /** Today buckets: sum of amounts + transaction counts per status */
@@ -339,7 +325,7 @@ function TransactionsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-slate-300 tabular-nums">
-                      {formatEatDateTime(row.created_at)}
+                      {formatAdminDateTime(row.created_at)}
                     </td>
                   </tr>
                 ))}
