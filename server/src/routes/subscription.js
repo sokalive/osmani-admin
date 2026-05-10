@@ -199,24 +199,41 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   return { ...withGift, playbackAllowed: true }
 }
 
-subscriptionRouter.post('/acknowledge-manual-gift', async (req, res) => {
+/**
+ * POST /api/subscription/acknowledge-manual-gift
+ * Body: { device_id, manual_gift_ack_key } — ack key is the grant nonce from verify `manualGift`.
+ * Legacy: nonce, manualGiftAckKey (camelCase).
+ */
+async function handleAcknowledgeManualGift(req, res) {
   try {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const deviceId = String(b.device_id ?? b.deviceId ?? '').trim()
-    const nonce = String(b.nonce ?? '').trim()
-    if (!deviceId || !nonce) {
-      return res.status(400).json({ ok: false, error: 'device_id and nonce required' })
+    const ackKey = String(
+      b.manual_gift_ack_key ?? b.manualGiftAckKey ?? b.nonce ?? b.manual_gift_nonce ?? '',
+    ).trim()
+    if (!deviceId || !ackKey) {
+      return res.status(400).json({
+        ok: false,
+        error: 'device_id and manual_gift_ack_key are required',
+      })
     }
-    const ok = await billing.acknowledgeManualGrantByNonce(deviceId, nonce)
+    const ok = await billing.acknowledgeManualGrantByNonce(deviceId, ackKey)
     if (process.env.MANUAL_SUBSCRIPTION_DEBUG === '1') {
       console.log('[manual_gift_ack]', { deviceId: shortRef(deviceId), ok })
     }
-    res.json({ ok })
+    if (!ok) {
+      return res.status(404).json({ ok: false, error: 'No pending manual gift matched' })
+    }
+    res.json({ ok: true })
   } catch (e) {
     console.error('[acknowledge-manual-gift]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
-})
+}
+
+subscriptionRouter.post('/subscription/acknowledge-manual-gift', handleAcknowledgeManualGift)
+/** @deprecated Prefer POST /subscription/acknowledge-manual-gift */
+subscriptionRouter.post('/acknowledge-manual-gift', handleAcknowledgeManualGift)
 
 /** GET /subscription-status — primary unlock check by device_id (poll every ~3s as fallback). */
 subscriptionRouter.get('/subscription-status', async (req, res) => {
