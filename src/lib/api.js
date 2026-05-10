@@ -258,6 +258,62 @@ export async function deleteManualSubscriptionGrant(grantId) {
   return body
 }
 
+export async function postOfferCodeGenerate({ durationDays, pin }) {
+  const res = await fetch(joinPath('/admin/offer-codes/generate'), {
+    method: 'POST',
+    headers: manualSubscriptionAdminHeaders(),
+    body: JSON.stringify({
+      duration_days: Number(durationDays),
+      pin: String(pin ?? ''),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function getOfferCodesHistory() {
+  const res = await fetch(joinPath('/admin/offer-codes/history'), {
+    headers: manualSubscriptionAdminHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postOfferCodeBlock(code) {
+  const res = await fetch(joinPath('/admin/offer-codes/block'), {
+    method: 'POST',
+    headers: manualSubscriptionAdminHeaders(),
+    body: JSON.stringify({ code: String(code ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postOfferCodeUnblock(code) {
+  const res = await fetch(joinPath('/admin/offer-codes/unblock'), {
+    method: 'POST',
+    headers: manualSubscriptionAdminHeaders(),
+    body: JSON.stringify({ code: String(code ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function deleteOfferCode(code) {
+  const c = String(code ?? '').trim()
+  const res = await fetch(joinPath(`/admin/offer-codes/${encodeURIComponent(c)}`), {
+    method: 'DELETE',
+    headers: manualSubscriptionAdminHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
 export function syncStreamUrl(topics = ['analytics']) {
   const normalized = Array.isArray(topics)
     ? topics.map((x) => String(x || '').trim()).filter(Boolean)

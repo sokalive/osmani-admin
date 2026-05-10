@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Gift, History } from 'lucide-react'
+import { Gift, History, Ticket } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   deleteManualSubscriptionGrant,
+  deleteOfferCode,
   getManualSubscriptionHistory,
+  getOfferCodesHistory,
   postManualSubscriptionBlock,
   postManualSubscriptionGrant,
   postManualSubscriptionUnblock,
+  postOfferCodeBlock,
+  postOfferCodeGenerate,
+  postOfferCodeUnblock,
 } from '../lib/api'
 
 const DURATIONS = [
@@ -64,6 +69,14 @@ function ManualSubscriptionPage() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyBusyId, setHistoryBusyId] = useState(null)
 
+  const [offerDurationDays, setOfferDurationDays] = useState(7)
+  const [offerPin, setOfferPin] = useState('')
+  const [generatedOfferCode, setGeneratedOfferCode] = useState('')
+  const [offerBusy, setOfferBusy] = useState(false)
+  const [offerRows, setOfferRows] = useState([])
+  const [offerLoading, setOfferLoading] = useState(false)
+  const [offerBusyCode, setOfferBusyCode] = useState(null)
+
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
     try {
@@ -77,9 +90,131 @@ function ManualSubscriptionPage() {
     }
   }, [showToast])
 
+  const loadOfferHistory = useCallback(async () => {
+    setOfferLoading(true)
+    try {
+      const out = await getOfferCodesHistory()
+      const rows = Array.isArray(out?.rows) ? out.rows : []
+      setOfferRows(rows)
+    } catch (err) {
+      showToast('error', err?.message || 'Historie ya codes haikuweza kupakiwa')
+    } finally {
+      setOfferLoading(false)
+    }
+  }, [showToast])
+
   useEffect(() => {
     if (tab === 'history') void loadHistory()
   }, [tab, loadHistory])
+
+  useEffect(() => {
+    if (tab === 'offer') void loadOfferHistory()
+  }, [tab, loadOfferHistory])
+
+  async function handleOfferGenerate(e) {
+    e?.preventDefault?.()
+    if (!offerPin.trim()) {
+      showToast('error', 'Ingiza PIN')
+      return
+    }
+    setOfferBusy(true)
+    try {
+      const out = await postOfferCodeGenerate({
+        durationDays: offerDurationDays,
+        pin: offerPin.trim(),
+      })
+      setGeneratedOfferCode(String(out.code ?? ''))
+      showToast('success', 'Code imetengenezwa')
+      void loadOfferHistory()
+    } catch (err) {
+      showToast('error', err?.message || 'Imeshindikana')
+    } finally {
+      setOfferBusy(false)
+    }
+  }
+
+  async function regenerateOfferAfterCopy() {
+    if (!offerPin.trim()) {
+      showToast('error', 'Ingiza PIN kutengeneza code mpya')
+      setGeneratedOfferCode('')
+      return
+    }
+    setOfferBusy(true)
+    try {
+      const out = await postOfferCodeGenerate({
+        durationDays: offerDurationDays,
+        pin: offerPin.trim(),
+      })
+      setGeneratedOfferCode(String(out.code ?? ''))
+      void loadOfferHistory()
+    } catch (err) {
+      showToast('error', err?.message || 'Code mpya haikutengenezwa')
+      setGeneratedOfferCode('')
+    } finally {
+      setOfferBusy(false)
+    }
+  }
+
+  async function handleCopyOfferCode() {
+    if (!generatedOfferCode) return
+    try {
+      await navigator.clipboard.writeText(generatedOfferCode)
+      showToast('success', 'Imenakiliwa')
+      await regenerateOfferAfterCopy()
+    } catch {
+      showToast('error', 'Unakili umeshindwa')
+    }
+  }
+
+  async function handleOfferBlock(code) {
+    setOfferBusyCode(`b:${code}`)
+    try {
+      await postOfferCodeBlock(code)
+      showToast('success', 'Code imezuiwa')
+      await loadOfferHistory()
+    } catch (err) {
+      showToast('error', err?.message || 'Imeshindikana')
+    } finally {
+      setOfferBusyCode(null)
+    }
+  }
+
+  async function handleOfferUnblock(code) {
+    setOfferBusyCode(`u:${code}`)
+    try {
+      await postOfferCodeUnblock(code)
+      showToast('success', 'Code imefunguliwa')
+      await loadOfferHistory()
+    } catch (err) {
+      showToast('error', err?.message || 'Imeshindikana')
+    } finally {
+      setOfferBusyCode(null)
+    }
+  }
+
+  async function handleOfferDelete(code) {
+    if (!window.confirm(`Futa code ${code}?`)) return
+    setOfferBusyCode(`d:${code}`)
+    try {
+      await deleteOfferCode(code)
+      showToast('success', 'Code imefutwa')
+      await loadOfferHistory()
+    } catch (err) {
+      showToast('error', err?.message || 'Imeshindikana')
+    } finally {
+      setOfferBusyCode(null)
+    }
+  }
+
+  function offerStatusStyle(status) {
+    const s = String(status ?? '').toUpperCase()
+    if (s === 'UNUSED') return 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30'
+    if (s === 'USED') return 'bg-slate-600/40 text-slate-200 ring-slate-500/25'
+    if (s === 'BLOCKED') return 'bg-rose-500/15 text-rose-200 ring-rose-500/30'
+    if (s === 'EXPIRED') return 'bg-amber-500/15 text-amber-200 ring-amber-500/30'
+    if (s === 'DELETED') return 'bg-slate-800/80 text-slate-500 ring-slate-600/40'
+    return 'bg-slate-600/40 text-slate-300 ring-slate-500/25'
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -192,6 +327,12 @@ function ManualSubscriptionPage() {
               HISTORY
             </span>
           </button>
+          <button type="button" className={tabBtn(tab === 'offer')} onClick={() => setTab('offer')}>
+            <span className="inline-flex items-center gap-2">
+              <Ticket className="h-4 w-4 opacity-90" aria-hidden />
+              OFFER CODES
+            </span>
+          </button>
         </div>
 
         {tab === 'grant' ? (
@@ -256,7 +397,7 @@ function ManualSubscriptionPage() {
               </button>
             </form>
           </section>
-        ) : (
+        ) : tab === 'history' ? (
           <section className="min-w-0 space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-4 ring-1 ring-white/[0.04] sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-slate-400">Historia ya mikopo ya mikono (manual grants).</p>
@@ -357,6 +498,189 @@ function ManualSubscriptionPage() {
               </table>
             </div>
           </section>
+        ) : (
+          <div className="flex flex-col gap-8">
+            <section className="max-w-xl space-y-5 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
+              <h2 className="text-lg font-semibold text-white">Tengeneza code</h2>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  void handleOfferGenerate(e)
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <label
+                    htmlFor="oc-duration"
+                    className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400"
+                  >
+                    Muda wa kifurushi
+                  </label>
+                  <select
+                    id="oc-duration"
+                    className={selectClass()}
+                    value={offerDurationDays}
+                    onChange={(e) => setOfferDurationDays(Number(e.target.value))}
+                  >
+                    {DURATIONS.map((o) => (
+                      <option key={o.days} value={o.days}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label
+                    htmlFor="oc-pin"
+                    className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400"
+                  >
+                    PIN ya uhakiki
+                  </label>
+                  <input
+                    id="oc-pin"
+                    type="password"
+                    className={inputClass()}
+                    value={offerPin}
+                    onChange={(e) => setOfferPin(e.target.value)}
+                    placeholder="Ingiza PIN"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="submit"
+                    disabled={offerBusy}
+                    className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-6 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] disabled:opacity-60"
+                  >
+                    {offerBusy ? 'Inatengeneza…' : 'TENGENEZA CODE'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={offerBusy || !generatedOfferCode}
+                    onClick={() => void handleCopyOfferCode()}
+                    className="rounded-xl border border-slate-600 bg-slate-800/90 px-6 py-3 text-sm font-bold text-slate-100 hover:bg-slate-700 disabled:opacity-40"
+                  >
+                    COPY CODE
+                  </button>
+                </div>
+                {generatedOfferCode ? (
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-400/90">Code ya sasa</p>
+                    <p className="mt-1 font-mono text-2xl font-bold tracking-[0.2em] text-amber-100">
+                      {generatedOfferCode}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">Bonyeza TENGENEZA CODE au baada ya kunakili utapata code mpya.</p>
+                )}
+              </form>
+            </section>
+
+            <section className="min-w-0 space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-4 ring-1 ring-white/[0.04] sm:p-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-slate-400">Historia ya offer codes.</p>
+                <button
+                  type="button"
+                  disabled={offerLoading}
+                  onClick={() => void loadOfferHistory()}
+                  className="rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {offerLoading ? 'Inapakia…' : 'Onyesha upya'}
+                </button>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-slate-700/50">
+                <table className="min-w-[960px] w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700/60 bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+                      <th className="px-3 py-3 font-semibold">Code</th>
+                      <th className="px-3 py-3 font-semibold">Muda</th>
+                      <th className="px-3 py-3 font-semibold">Iliundwa</th>
+                      <th className="px-3 py-3 font-semibold">Imetumia</th>
+                      <th className="px-3 py-3 font-semibold">Wakati wa matumizi</th>
+                      <th className="px-3 py-3 font-semibold">Mwisho wa code</th>
+                      <th className="px-3 py-3 font-semibold">Hali</th>
+                      <th className="px-3 py-3 font-semibold">Vitendo</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {offerLoading && offerRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                          Inapakia…
+                        </td>
+                      </tr>
+                    ) : offerRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                          Hakuna codes bado.
+                        </td>
+                      </tr>
+                    ) : (
+                      offerRows.map((row) => {
+                        const st = String(row.status ?? '').toUpperCase()
+                        const bb = offerBusyCode === `b:${row.code}`
+                        const ub = offerBusyCode === `u:${row.code}`
+                        const db = offerBusyCode === `d:${row.code}`
+                        const canBlock =
+                          (st === 'UNUSED' || st === 'EXPIRED') && !row.deletedAt
+                        const canUnblock = st === 'BLOCKED' && !row.deletedAt
+                        const canDelete = !row.deletedAt && st !== 'USED'
+                        return (
+                          <tr key={row.id} className="bg-slate-950/20 hover:bg-slate-900/40">
+                            <td className="whitespace-nowrap px-3 py-2.5 font-mono text-sm text-amber-100">{row.code}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{row.durationDays} siku</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{fmtWhen(row.createdAt)}</td>
+                            <td className="max-w-[140px] truncate px-3 py-2.5 font-mono text-xs text-slate-400" title={row.usedByDevice || ''}>
+                              {row.usedByDevice || '—'}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{fmtWhen(row.usedAt)}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{fmtWhen(row.expiresAt)}</td>
+                            <td className="px-3 py-2.5">
+                              <span
+                                className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold ring-1 ${offerStatusStyle(st)}`}
+                              >
+                                {st}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <div className="flex flex-wrap gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={!canBlock || bb || ub || db}
+                                  onClick={() => void handleOfferBlock(row.code)}
+                                  className="rounded-md bg-rose-600/90 px-2 py-1 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-40"
+                                >
+                                  {bb ? '…' : 'BLOCK'}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!canUnblock || bb || ub || db}
+                                  onClick={() => void handleOfferUnblock(row.code)}
+                                  className="rounded-md bg-emerald-700/90 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40"
+                                >
+                                  {ub ? '…' : 'UNBLOCK'}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!canDelete || bb || ub || db}
+                                  onClick={() => void handleOfferDelete(row.code)}
+                                  className="rounded-md border border-slate-600 bg-slate-800/80 px-2 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                                >
+                                  {db ? '…' : 'DELETE'}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
         )}
       </main>
     </>

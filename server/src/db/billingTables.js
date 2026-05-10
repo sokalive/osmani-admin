@@ -439,4 +439,38 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS manual_admin_blocked BOOLEAN NOT NULL DEFAULT false;
   `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS offer_codes (
+      id SERIAL PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      duration_days INTEGER NOT NULL,
+      created_by TEXT NOT NULL DEFAULT 'admin',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      used_by_device TEXT,
+      used_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL,
+      blocked BOOLEAN NOT NULL DEFAULT false,
+      deleted_at TIMESTAMPTZ,
+      failed_attempts INTEGER NOT NULL DEFAULT 0,
+      lock_until TIMESTAMPTZ
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS offer_codes_created_at_idx ON offer_codes (created_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS offer_codes_used_at_idx ON offer_codes (used_at DESC)
+    WHERE used_at IS NOT NULL;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS offer_code_device_attempts (
+      device_id TEXT PRIMARY KEY,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      lock_until TIMESTAMPTZ,
+      lock_tier INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
 }

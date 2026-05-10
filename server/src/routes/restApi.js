@@ -22,6 +22,7 @@ import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
 import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
+import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 
 const FILES = {
@@ -61,7 +62,13 @@ restApi.get('/', (_req, res) => {
       '/subscription-status',
       '/subscription/verify',
       '/subscription/acknowledge-manual-gift',
+      '/subscription/redeem-offer-code',
       '/subscription-stream',
+      '/admin/offer-codes/generate',
+      '/admin/offer-codes/history',
+      '/admin/offer-codes/block',
+      '/admin/offer-codes/unblock',
+      '/admin/offer-codes/:code',
       '/admin/manual-subscription/grant',
       '/admin/manual-subscription/history',
       '/admin/manual-subscription/block',
@@ -156,6 +163,7 @@ restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
 restApi.use(deviceSecurityRouter)
 restApi.use('/admin/manual-subscription', manualSubscriptionAdminRouter)
+restApi.use('/admin/offer-codes', offerCodesAdminRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)

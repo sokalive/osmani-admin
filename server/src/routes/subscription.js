@@ -235,6 +235,68 @@ subscriptionRouter.post('/subscription/acknowledge-manual-gift', handleAcknowled
 /** @deprecated Prefer POST /subscription/acknowledge-manual-gift */
 subscriptionRouter.post('/acknowledge-manual-gift', handleAcknowledgeManualGift)
 
+function manualGiftPayloadFromGrant(grant) {
+  if (!grant) return null
+  return {
+    showPopup: true,
+    nonce: String(grant.nonce),
+    grantId: Number(grant.grantId),
+    durationDays: Number(grant.durationDays),
+    title: 'Hongera!',
+    body:
+      'Umepokea kifurushi cha ofa kutoka kwa muhudumu wetu. Sasa unaweza kutazama channel zote kuanzia sasa.',
+    ctaLabel: 'ASANTE',
+  }
+}
+
+/**
+ * POST /api/subscription/redeem-offer-code — applies stacked manual subscription + popup gift (same engine as admin manual grant).
+ */
+subscriptionRouter.post('/subscription/redeem-offer-code', async (req, res) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(b.device_id ?? b.deviceId ?? '').trim()
+    const offerCode = String(b.offer_code ?? b.offerCode ?? '').trim()
+
+    const result = await billing.redeemOfferCodeForDevice(deviceId, offerCode)
+
+    if (result.locked === true) {
+      return res.status(429).json({
+        ok: false,
+        locked: true,
+        remaining_seconds: result.remainingSeconds ?? 0,
+      })
+    }
+
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: result.error || 'Redeem failed',
+      })
+    }
+
+    const grant = result.grant
+    const manualGift = manualGiftPayloadFromGrant(grant)
+    const manualGiftAckKey = grant ? String(grant.grantId) : ''
+
+    deviceSubscriptionBus.emit('update', { deviceId })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId,
+      orderId: `offer_code:${grant?.grantId ?? ''}`,
+    })
+
+    res.json({
+      ok: true,
+      manualGift,
+      manualGiftAckKey,
+    })
+  } catch (e) {
+    console.error('[redeem-offer-code]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** GET /subscription-status — primary unlock check by device_id (poll every ~3s as fallback). */
 subscriptionRouter.get('/subscription-status', async (req, res) => {
   try {
