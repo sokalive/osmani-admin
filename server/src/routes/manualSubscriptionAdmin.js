@@ -3,6 +3,7 @@ import * as billing from '../billingStore.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+import { adminSecurityPinFromBody, verifyAdminSecurityPin } from '../lib/adminSecurityPin.js'
 
 export const manualSubscriptionAdminRouter = Router()
 manualSubscriptionAdminRouter.use(requireAdminPanelAccess)
@@ -163,6 +164,120 @@ manualSubscriptionAdminRouter.post('/unblock', async (req, res) => {
     res.json({ ok: true })
   } catch (e) {
     console.error('[manual_subscription unblock]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+manualSubscriptionAdminRouter.post('/bulk-block', async (req, res) => {
+  try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const rawIds = body.device_ids ?? body.deviceIds
+    const deviceIds = Array.isArray(rawIds)
+      ? [...new Set(rawIds.map((x) => String(x ?? '').trim()).filter(Boolean))]
+      : []
+    const slice = deviceIds.slice(0, 500)
+    if (slice.length === 0) {
+      return res.status(400).json({ ok: false, error: 'device_ids required' })
+    }
+    let blocked = 0
+    let notFound = 0
+    for (const deviceId of slice) {
+      const out = await billing.setManualAdminBlocked(deviceId, true)
+      if (out.updated) {
+        blocked += 1
+        logManualSubscriptionAudit('bulk_block', deviceId)
+        deviceSubscriptionBus.emit('update', { deviceId })
+        liveSyncBus.publish('analytics.subscription_updated', {
+          topics: ['analytics'],
+          deviceId,
+          orderId: 'manual_admin_bulk_block',
+        })
+      } else {
+        notFound += 1
+      }
+    }
+    res.json({ ok: true, blocked, not_found: notFound })
+  } catch (e) {
+    console.error('[manual_subscription bulk-block]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+manualSubscriptionAdminRouter.post('/bulk-unblock', async (req, res) => {
+  try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const rawIds = body.device_ids ?? body.deviceIds
+    const deviceIds = Array.isArray(rawIds)
+      ? [...new Set(rawIds.map((x) => String(x ?? '').trim()).filter(Boolean))]
+      : []
+    const slice = deviceIds.slice(0, 500)
+    if (slice.length === 0) {
+      return res.status(400).json({ ok: false, error: 'device_ids required' })
+    }
+    let unblocked = 0
+    let notFound = 0
+    for (const deviceId of slice) {
+      const out = await billing.setManualAdminBlocked(deviceId, false)
+      if (out.updated) {
+        unblocked += 1
+        logManualSubscriptionAudit('bulk_unblock', deviceId)
+        deviceSubscriptionBus.emit('update', { deviceId })
+        liveSyncBus.publish('analytics.subscription_updated', {
+          topics: ['analytics'],
+          deviceId,
+          orderId: 'manual_admin_bulk_unblock',
+        })
+      } else {
+        notFound += 1
+      }
+    }
+    res.json({ ok: true, unblocked, not_found: notFound })
+  } catch (e) {
+    console.error('[manual_subscription bulk-unblock]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+manualSubscriptionAdminRouter.post('/history/bulk-delete', async (req, res) => {
+  try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const raw = body.grant_ids ?? body.grantIds
+    const nums = Array.isArray(raw)
+      ? [...new Set(raw.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n >= 1))]
+      : []
+    const slice = nums.slice(0, 500)
+    if (slice.length === 0) {
+      return res.status(400).json({ ok: false, error: 'grant_ids required' })
+    }
+    let deleted = 0
+    let notFound = 0
+    for (const grantId of slice) {
+      const del = await billing.softDeleteManualGrant(grantId)
+      if (del) {
+        deleted += 1
+        logManualSubscriptionAudit('bulk_delete_grant', del.deviceId)
+      } else {
+        notFound += 1
+      }
+    }
+    res.json({ ok: true, deleted, not_found: notFound })
+  } catch (e) {
+    console.error('[manual_subscription bulk-delete]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

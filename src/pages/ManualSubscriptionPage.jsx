@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Gift, History, Ticket } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
+import SecurityPinModal from '../components/SecurityPinModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import {
@@ -9,9 +10,15 @@ import {
   getManualSubscriptionHistory,
   getOfferCodesHistory,
   postManualSubscriptionBlock,
+  postManualSubscriptionBulkBlock,
+  postManualSubscriptionBulkUnblock,
   postManualSubscriptionGrant,
+  postManualSubscriptionHistoryBulkDelete,
   postManualSubscriptionUnblock,
   postOfferCodeBlock,
+  postOfferCodesBulkBlock,
+  postOfferCodesBulkDelete,
+  postOfferCodesBulkUnblock,
   postOfferCodeGenerate,
   postOfferCodeUnblock,
 } from '../lib/api'
@@ -60,6 +67,20 @@ function ManualSubscriptionPage() {
   const [offerRows, setOfferRows] = useState([])
   const [offerLoading, setOfferLoading] = useState(false)
   const [offerBusyCode, setOfferBusyCode] = useState(null)
+
+  const [histSelected, setHistSelected] = useState(() => new Set())
+  const [offerSelected, setOfferSelected] = useState(() => new Set())
+  const [bulkPinExec, setBulkPinExec] = useState(null)
+  const [bulkPinBusy, setBulkPinBusy] = useState(false)
+  const [bulkPinError, setBulkPinError] = useState('')
+
+  useEffect(() => {
+    if (tab !== 'history') setHistSelected(new Set())
+  }, [tab])
+
+  useEffect(() => {
+    if (tab !== 'offer') setOfferSelected(new Set())
+  }, [tab])
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -276,8 +297,45 @@ function ManualSubscriptionPage() {
     return { text: 'Siyo hai', className: 'bg-slate-600/40 text-slate-300 ring-slate-500/25' }
   }
 
+  const allHistChecked = useMemo(
+    () => historyRows.length > 0 && historyRows.every((r) => histSelected.has(r.id)),
+    [historyRows, histSelected],
+  )
+
+  const allOfferChecked = useMemo(
+    () => offerRows.length > 0 && offerRows.every((r) => offerSelected.has(r.code)),
+    [offerRows, offerSelected],
+  )
+
+  async function handleBulkPinSubmit(pin) {
+    if (!bulkPinExec) return
+    setBulkPinBusy(true)
+    setBulkPinError('')
+    try {
+      await bulkPinExec(pin)
+      setBulkPinExec(null)
+      showToast('success', 'Imefanikiwa')
+      await loadHistory()
+      await loadOfferHistory()
+    } catch (err) {
+      const msg = err?.message || 'Imeshindikana'
+      setBulkPinError(msg)
+      showToast('error', msg)
+    } finally {
+      setBulkPinBusy(false)
+    }
+  }
+
   return (
     <>
+      <SecurityPinModal
+        open={bulkPinExec != null}
+        title="Ingiza Security PIN"
+        errorText={bulkPinError}
+        busy={bulkPinBusy}
+        onClose={() => !bulkPinBusy && setBulkPinExec(null)}
+        onSubmit={handleBulkPinSubmit}
+      />
       <Topbar />
       <main className="mt-6 flex min-h-0 flex-1 flex-col gap-6">
         {flash ? (
@@ -395,10 +453,107 @@ function ManualSubscriptionPage() {
               </button>
             </div>
 
+            {histSelected.size > 0 ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2">
+                <span className="text-xs font-semibold text-amber-100">
+                  Umechagua {histSelected.size}
+                </span>
+                <button
+                  type="button"
+                  disabled={bulkPinBusy}
+                  onClick={() => {
+                    const deviceIds = [
+                      ...new Set(
+                        historyRows.filter((r) => histSelected.has(r.id)).map((r) => r.deviceId),
+                      ),
+                    ].filter(Boolean)
+                    if (deviceIds.length === 0) {
+                      showToast('error', 'Hakuna device IDs')
+                      return
+                    }
+                    setBulkPinError('')
+                    setBulkPinExec(async (securityPin) => {
+                      await postManualSubscriptionBulkBlock({ deviceIds, securityPin })
+                      setHistSelected(new Set())
+                    })
+                  }}
+                  className="rounded-md bg-rose-600/90 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-40"
+                >
+                  BLOCK ULIOCHAGUA
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkPinBusy}
+                  onClick={() => {
+                    const deviceIds = [
+                      ...new Set(
+                        historyRows.filter((r) => histSelected.has(r.id)).map((r) => r.deviceId),
+                      ),
+                    ].filter(Boolean)
+                    if (deviceIds.length === 0) {
+                      showToast('error', 'Hakuna device IDs')
+                      return
+                    }
+                    setBulkPinError('')
+                    setBulkPinExec(async (securityPin) => {
+                      await postManualSubscriptionBulkUnblock({ deviceIds, securityPin })
+                      setHistSelected(new Set())
+                    })
+                  }}
+                  className="rounded-md bg-emerald-700/90 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-600 disabled:opacity-40"
+                >
+                  UNBLOCK ULIOCHAGUA
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkPinBusy}
+                  onClick={() => {
+                    const grantIds = [...histSelected].map((x) => Number(x)).filter((n) => n > 0)
+                    if (grantIds.length === 0) return
+                    if (
+                      !window.confirm(
+                        `Futa rekodi ${grantIds.length} kwenye historia? (Huduma ya kifurushi hubaki.)`,
+                      )
+                    ) {
+                      return
+                    }
+                    setBulkPinError('')
+                    setBulkPinExec(async (securityPin) => {
+                      await postManualSubscriptionHistoryBulkDelete({ grantIds, securityPin })
+                      setHistSelected(new Set())
+                    })
+                  }}
+                  className="rounded-md border border-slate-600 bg-slate-800/90 px-2.5 py-1.5 text-[11px] font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                >
+                  FUTA ULIOCHAGUA
+                </button>
+              </div>
+            ) : null}
+
             <div className="overflow-x-auto rounded-xl border border-slate-700/50">
-              <table className="min-w-[880px] w-full border-collapse text-left text-sm">
+              <table className="min-w-[920px] w-full border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-700/60 bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+                    <th className="w-10 px-2 py-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500"
+                        checked={allHistChecked}
+                        onChange={() =>
+                          setHistSelected((prev) => {
+                            if (
+                              historyRows.length > 0 &&
+                              historyRows.every((r) => prev.has(r.id))
+                            ) {
+                              return new Set()
+                            }
+                            return new Set(historyRows.map((r) => r.id))
+                          })
+                        }
+                        title="Chagua zote"
+                        aria-label="Chagua zote"
+                      />
+                    </th>
                     <th className="px-3 py-3 font-semibold">Device ID</th>
                     <th className="px-3 py-3 font-semibold">Muda</th>
                     <th className="px-3 py-3 font-semibold">Alipotolewa</th>
@@ -410,13 +565,13 @@ function ManualSubscriptionPage() {
                 <tbody className="divide-y divide-slate-800/80">
                   {historyLoading && historyRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-3 py-8 text-center text-slate-500">
+                      <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
                         Inapakia…
                       </td>
                     </tr>
                   ) : historyRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-3 py-8 text-center text-slate-500">
+                      <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
                         Hakuna rekodi bado.
                       </td>
                     </tr>
@@ -430,6 +585,22 @@ function ManualSubscriptionPage() {
                       const delBusy = historyBusyId === `d:${row.id}`
                       return (
                         <tr key={row.id} className="bg-slate-950/20 hover:bg-slate-900/40">
+                          <td className="px-2 py-2.5 align-middle">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500"
+                              checked={histSelected.has(row.id)}
+                              onChange={() =>
+                                setHistSelected((prev) => {
+                                  const n = new Set(prev)
+                                  if (n.has(row.id)) n.delete(row.id)
+                                  else n.add(row.id)
+                                  return n
+                                })
+                              }
+                              aria-label={`Chagua ${shortDev}`}
+                            />
+                          </td>
                           <td className="max-w-[200px] truncate px-3 py-2.5 font-mono text-xs text-slate-200" title={row.deviceId}>
                             {shortDev}
                           </td>
@@ -574,10 +745,90 @@ function ManualSubscriptionPage() {
                 </button>
               </div>
 
+              {offerSelected.size > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2">
+                  <span className="text-xs font-semibold text-amber-100">
+                    Umechagua {offerSelected.size}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={bulkPinBusy}
+                    onClick={() => {
+                      const codes = [...offerSelected]
+                      setBulkPinError('')
+                      setBulkPinExec(async (securityPin) => {
+                        await postOfferCodesBulkBlock({ codes, securityPin })
+                        setOfferSelected(new Set())
+                      })
+                    }}
+                    className="rounded-md bg-rose-600/90 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-40"
+                  >
+                    BLOCK ULIOCHAGUA
+                  </button>
+                  <button
+                    type="button"
+                    disabled={bulkPinBusy}
+                    onClick={() => {
+                      const codes = [...offerSelected]
+                      setBulkPinError('')
+                      setBulkPinExec(async (securityPin) => {
+                        await postOfferCodesBulkUnblock({ codes, securityPin })
+                        setOfferSelected(new Set())
+                      })
+                    }}
+                    className="rounded-md bg-emerald-700/90 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-600 disabled:opacity-40"
+                  >
+                    UNBLOCK ULIOCHAGUA
+                  </button>
+                  <button
+                    type="button"
+                    disabled={bulkPinBusy}
+                    onClick={() => {
+                      const codes = [...offerSelected]
+                      if (
+                        !window.confirm(
+                          `Futa au futa rekodi kwa codes ${codes.length}? (Server atarudisha kosa kwa code zisizoweza.)`,
+                        )
+                      ) {
+                        return
+                      }
+                      setBulkPinError('')
+                      setBulkPinExec(async (securityPin) => {
+                        await postOfferCodesBulkDelete({ codes, securityPin })
+                        setOfferSelected(new Set())
+                      })
+                    }}
+                    className="rounded-md border border-slate-600 bg-slate-800/90 px-2.5 py-1.5 text-[11px] font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                  >
+                    FUTA ULIOCHAGUA
+                  </button>
+                </div>
+              ) : null}
+
               <div className="overflow-x-auto rounded-xl border border-slate-700/50">
-                <table className="min-w-[960px] w-full border-collapse text-left text-sm">
+                <table className="min-w-[1000px] w-full border-collapse text-left text-sm">
                   <thead>
                     <tr className="border-b border-slate-700/60 bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+                      <th className="w-10 px-2 py-3">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500"
+                          checked={allOfferChecked}
+                          onChange={() =>
+                            setOfferSelected((prev) => {
+                              if (
+                                offerRows.length > 0 &&
+                                offerRows.every((r) => prev.has(r.code))
+                              ) {
+                                return new Set()
+                              }
+                              return new Set(offerRows.map((r) => r.code))
+                            })
+                          }
+                          title="Chagua zote"
+                          aria-label="Chagua zote"
+                        />
+                      </th>
                       <th className="px-3 py-3 font-semibold">Code</th>
                       <th className="px-3 py-3 font-semibold">Muda</th>
                       <th className="px-3 py-3 font-semibold">Iliundwa</th>
@@ -591,13 +842,13 @@ function ManualSubscriptionPage() {
                   <tbody className="divide-y divide-slate-800/80">
                     {offerLoading && offerRows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                        <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
                           Inapakia…
                         </td>
                       </tr>
                     ) : offerRows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                        <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
                           Hakuna codes bado.
                         </td>
                       </tr>
@@ -613,6 +864,22 @@ function ManualSubscriptionPage() {
                         const canDelete = !row.deletedAt && st !== 'USED'
                         return (
                           <tr key={row.id} className="bg-slate-950/20 hover:bg-slate-900/40">
+                            <td className="px-2 py-2.5 align-middle">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500"
+                                checked={offerSelected.has(row.code)}
+                                onChange={() =>
+                                  setOfferSelected((prev) => {
+                                    const n = new Set(prev)
+                                    if (n.has(row.code)) n.delete(row.code)
+                                    else n.add(row.code)
+                                    return n
+                                  })
+                                }
+                                aria-label={`Chagua code ${row.code}`}
+                              />
+                            </td>
                             <td className="whitespace-nowrap px-3 py-2.5 font-mono text-sm text-amber-100">{row.code}</td>
                             <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{row.durationDays} siku</td>
                             <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.createdAt)}</td>

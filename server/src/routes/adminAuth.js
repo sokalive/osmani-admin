@@ -5,6 +5,10 @@ import { adminAuthAudit } from '../lib/adminAuthAudit.js'
 import { signAdminJwt, verifyAdminJwt } from '../lib/adminJwt.js'
 import { sendAdminOtpEmail } from '../lib/resendOtpMail.js'
 import { isAdminPanelAuthRequired } from '../middleware/adminPanelAuthGate.js'
+import {
+  adminSecurityPinFromBody,
+  verifyAdminSecurityPin,
+} from '../lib/adminSecurityPin.js'
 
 export const adminAuthRouter = Router()
 
@@ -103,6 +107,37 @@ function pendingJwt(user, fpHash) {
     },
     { ttlSeconds: 900 },
   )
+}
+
+function requireAdminSecurityPin(req, res, next) {
+  const pin = adminSecurityPinFromBody(req)
+  if (!pin) {
+    return res.status(400).json({ ok: false, error: 'security_pin required' })
+  }
+  if (!verifyAdminSecurityPin(pin)) {
+    adminAuthAudit('security_pin_denied', { email: req.adminEmail, path: req.path })
+    return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+  }
+  next()
+}
+
+function currentSessionFingerprintHash(req) {
+  const raw = String(req.headers['x-admin-device-fingerprint'] ?? '').trim()
+  return authStore.hashAdminDeviceFingerprint(raw)
+}
+
+function confirmCurrentDeviceOk(req) {
+  const body = req.body && typeof req.body === 'object' ? req.body : {}
+  return body.confirm_current_device === true || body.confirmCurrentDevice === true
+}
+
+/** Block / delete / force-OTP on the same trusted device as this session needs explicit confirmation. */
+function sendCurrentDeviceConfirm(res) {
+  return res.status(409).json({
+    ok: false,
+    code: 'CONFIRM_CURRENT_DEVICE',
+    error: 'Hii ni kifaa unachokitumia sasa. Thibitisha kuendelea.',
+  })
 }
 
 adminAuthRouter.get('/status', (_req, res) => {
@@ -398,6 +433,19 @@ adminAuthRouter.get('/me', attachAdminReq, async (req, res) => {
   }
 })
 
+adminAuthRouter.post('/verify-security-pin', attachAdminReq, (req, res) => {
+  const pin = adminSecurityPinFromBody(req)
+  if (!pin) {
+    return res.status(400).json({ ok: false, error: 'security_pin required' })
+  }
+  if (!verifyAdminSecurityPin(pin)) {
+    adminAuthAudit('security_pin_denied', { email: req.adminEmail, gate: 'admin_security_page' })
+    return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+  }
+  adminAuthAudit('security_pin_gate_ok', { email: req.adminEmail })
+  res.json({ ok: true })
+})
+
 adminAuthRouter.get('/devices', attachAdminReq, async (req, res) => {
   try {
     const rows = await authStore.listTrustedDevicesForUser(req.adminUserId)
@@ -422,8 +470,14 @@ adminAuthRouter.get('/devices', attachAdminReq, async (req, res) => {
   }
 })
 
-adminAuthRouter.post('/devices/:id/block', attachAdminReq, async (req, res) => {
+adminAuthRouter.post('/devices/:id/block', attachAdminReq, requireAdminSecurityPin, async (req, res) => {
   try {
+    const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
+    if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
+    const curHash = currentSessionFingerprintHash(req)
+    if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
+      return sendCurrentDeviceConfirm(res)
+    }
     const ok = await authStore.setDeviceBlocked(req.params.id, req.adminUserId, true)
     if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
     adminAuthAudit('device_blocked', { device_id: req.params.id, email: req.adminEmail })
@@ -433,7 +487,7 @@ adminAuthRouter.post('/devices/:id/block', attachAdminReq, async (req, res) => {
   }
 })
 
-adminAuthRouter.post('/devices/:id/unblock', attachAdminReq, async (req, res) => {
+adminAuthRouter.post('/devices/:id/unblock', attachAdminReq, requireAdminSecurityPin, async (req, res) => {
   try {
     const ok = await authStore.setDeviceBlocked(req.params.id, req.adminUserId, false)
     if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
@@ -444,8 +498,14 @@ adminAuthRouter.post('/devices/:id/unblock', attachAdminReq, async (req, res) =>
   }
 })
 
-adminAuthRouter.delete('/devices/:id', attachAdminReq, async (req, res) => {
+adminAuthRouter.delete('/devices/:id', attachAdminReq, requireAdminSecurityPin, async (req, res) => {
   try {
+    const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
+    if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
+    const curHash = currentSessionFingerprintHash(req)
+    if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
+      return sendCurrentDeviceConfirm(res)
+    }
     const ok = await authStore.deleteTrustedDevice(req.params.id, req.adminUserId)
     if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
     adminAuthAudit('device_removed', { device_id: req.params.id })
@@ -455,8 +515,14 @@ adminAuthRouter.delete('/devices/:id', attachAdminReq, async (req, res) => {
   }
 })
 
-adminAuthRouter.post('/devices/:id/force-otp', attachAdminReq, async (req, res) => {
+adminAuthRouter.post('/devices/:id/force-otp', attachAdminReq, requireAdminSecurityPin, async (req, res) => {
   try {
+    const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
+    if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
+    const curHash = currentSessionFingerprintHash(req)
+    if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
+      return sendCurrentDeviceConfirm(res)
+    }
     const ok = await authStore.setDeviceForceOtp(req.params.id, req.adminUserId, true)
     if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
     adminAuthAudit('device_force_otp', { device_id: req.params.id })

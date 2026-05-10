@@ -49,6 +49,14 @@ export async function getTrustedDeviceRow(userId, fpHash) {
   return rows[0] ?? null
 }
 
+export async function getTrustedDeviceRowById(deviceRowId, userId) {
+  const { rows } = await pool().query(
+    `SELECT * FROM admin_panel_trusted_devices WHERE id = $1 AND admin_user_id = $2 LIMIT 1`,
+    [deviceRowId, userId],
+  )
+  return rows[0] ?? null
+}
+
 export async function touchTrustedDeviceLastUsed(deviceRowId) {
   await pool().query(`UPDATE admin_panel_trusted_devices SET last_used_at = now() WHERE id = $1`, [deviceRowId])
 }

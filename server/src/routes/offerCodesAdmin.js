@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+import { adminSecurityPinFromBody, verifyAdminSecurityPin } from '../lib/adminSecurityPin.js'
 
 export const offerCodesAdminRouter = Router()
 offerCodesAdminRouter.use(requireAdminPanelAccess)
@@ -49,6 +50,102 @@ offerCodesAdminRouter.get('/history', async (_req, res) => {
     res.json({ ok: true, rows })
   } catch (e) {
     console.error('[offer-codes history]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+offerCodesAdminRouter.post('/bulk-block', async (req, res) => {
+  try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const raw = body.codes
+    const codes = Array.isArray(raw)
+      ? [...new Set(raw.map((c) => billing.normalizeOfferCode(String(c ?? '').trim())).filter(Boolean))]
+      : []
+    const slice = codes.slice(0, 500)
+    if (slice.length === 0) return res.status(400).json({ ok: false, error: 'codes required' })
+    let blocked = 0
+    let notFound = 0
+    for (const code of slice) {
+      const okRow = await billing.setOfferCodeBlockedByCode(code, true)
+      if (okRow) {
+        blocked += 1
+        billing.offerCodeAudit('bulk_blocked', { code: billing.normalizeOfferCode(code) })
+      } else {
+        notFound += 1
+      }
+    }
+    res.json({ ok: true, blocked, not_found: notFound })
+  } catch (e) {
+    console.error('[offer-codes bulk-block]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+offerCodesAdminRouter.post('/bulk-unblock', async (req, res) => {
+  try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const raw = body.codes
+    const codes = Array.isArray(raw)
+      ? [...new Set(raw.map((c) => billing.normalizeOfferCode(String(c ?? '').trim())).filter(Boolean))]
+      : []
+    const slice = codes.slice(0, 500)
+    if (slice.length === 0) return res.status(400).json({ ok: false, error: 'codes required' })
+    let unblocked = 0
+    let notFound = 0
+    for (const code of slice) {
+      const okRow = await billing.setOfferCodeBlockedByCode(code, false)
+      if (okRow) {
+        unblocked += 1
+        billing.offerCodeAudit('bulk_unblocked', { code: billing.normalizeOfferCode(code) })
+      } else {
+        notFound += 1
+      }
+    }
+    res.json({ ok: true, unblocked, not_found: notFound })
+  } catch (e) {
+    console.error('[offer-codes bulk-unblock]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+offerCodesAdminRouter.post('/bulk-delete', async (req, res) => {
+  try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const raw = body.codes
+    const codes = Array.isArray(raw)
+      ? [...new Set(raw.map((c) => billing.normalizeOfferCode(String(c ?? '').trim())).filter(Boolean))]
+      : []
+    const slice = codes.slice(0, 500)
+    if (slice.length === 0) return res.status(400).json({ ok: false, error: 'codes required' })
+    let deleted = 0
+    let notFound = 0
+    for (const code of slice) {
+      const okRow = await billing.softDeleteOfferCodeByCode(code)
+      if (okRow) {
+        deleted += 1
+        billing.offerCodeAudit('bulk_deleted', { code: billing.normalizeOfferCode(code) })
+      } else {
+        notFound += 1
+      }
+    }
+    res.json({ ok: true, deleted, not_found: notFound })
+  } catch (e) {
+    console.error('[offer-codes bulk-delete]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
