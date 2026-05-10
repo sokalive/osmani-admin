@@ -20,31 +20,35 @@ import UsersPage from './pages/UsersPage'
 import WhatsAppPage from './pages/WhatsAppPage'
 import ZenoPayPage from './pages/ZenoPayPage'
 
-/** Shared dashboard routes (wrapped by layout + guards in App.jsx). */
-export function DashboardRoutes() {
-  return (
-    <>
-      <Route path="/" element={<DashboardPage />} />
-      <Route path="/channels" element={<ChannelsPage />} />
-      <Route path="/banners" element={<BannersPage />} />
-      <Route path="/plans" element={<PlansPage />} />
-      <Route path="/transactions" element={<TransactionsPage />} />
-      <Route path="/users" element={<UsersPage />} />
-      <Route path="/notifications" element={<NotificationsPage />} />
-      <Route path="/payment-providers" element={<PaymentProvidersPage />} />
-      <Route path="/analytics" element={<AnalyticsPage />} />
-      <Route path="/zenopay" element={<ZenoPayPage />} />
-      <Route path="/whatsapp" element={<WhatsAppPage />} />
-      <Route path="/app-update" element={<AppUpdatePage />} />
-      <Route path="/server-health" element={<ServerHealthPage />} />
-      <Route path="/popup-settings" element={<PopupSettingsPage />} />
-      <Route path="/device-control" element={<DeviceControlPage />} />
-      <Route path="/security-alerts" element={<SecurityAlertsPage />} />
-      <Route path="/security-logs" element={<SecurityLogsPage />} />
-      <Route path="/transfer-codes" element={<TransferCodesPage />} />
-      <Route path="/manual-subscription" element={<ManualSubscriptionPage />} />
-      <Route path="/admin-security" element={<AdminSecurityPage />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </>
-  )
-}
+/**
+ * Route elements for use under a pathless layout route (`<Route element={…}>`).
+ * Must be direct children of `<Routes>` (as an array); do not wrap in a component
+ * or Fragment — React Router will not register nested `<Route>` in that case.
+ */
+export const dashboardRouteElements = [
+  <Route key="home" index element={<DashboardPage />} />,
+  <Route key="channels" path="channels" element={<ChannelsPage />} />,
+  <Route key="banners" path="banners" element={<BannersPage />} />,
+  <Route key="plans" path="plans" element={<PlansPage />} />,
+  <Route key="transactions" path="transactions" element={<TransactionsPage />} />,
+  <Route key="users" path="users" element={<UsersPage />} />,
+  <Route key="notifications" path="notifications" element={<NotificationsPage />} />,
+  <Route
+    key="payment-providers"
+    path="payment-providers"
+    element={<PaymentProvidersPage />}
+  />,
+  <Route key="analytics" path="analytics" element={<AnalyticsPage />} />,
+  <Route key="zenopay" path="zenopay" element={<ZenoPayPage />} />,
+  <Route key="whatsapp" path="whatsapp" element={<WhatsAppPage />} />,
+  <Route key="app-update" path="app-update" element={<AppUpdatePage />} />,
+  <Route key="server-health" path="server-health" element={<ServerHealthPage />} />,
+  <Route key="popup-settings" path="popup-settings" element={<PopupSettingsPage />} />,
+  <Route key="device-control" path="device-control" element={<DeviceControlPage />} />,
+  <Route key="security-alerts" path="security-alerts" element={<SecurityAlertsPage />} />,
+  <Route key="security-logs" path="security-logs" element={<SecurityLogsPage />} />,
+  <Route key="transfer-codes" path="transfer-codes" element={<TransferCodesPage />} />,
+  <Route key="manual-subscription" path="manual-subscription" element={<ManualSubscriptionPage />} />,
+  <Route key="admin-security" path="admin-security" element={<AdminSecurityPage />} />,
+  <Route key="fallback" path="*" element={<Navigate to="/" replace />} />,
+]

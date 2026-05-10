@@ -208,8 +208,24 @@ export function adminPanelApiHeaders() {
   return h
 }
 
+/**
+ * Probe panel auth gate. Never throws: use when bootstrapping the SPA so a missing
+ * `/admin/auth/status` (404) or network error cannot blank the shell.
+ */
 export async function getAdminAuthStatus() {
-  return apiGet('/admin/auth/status')
+  try {
+    const res = await fetch(joinPath('/admin/auth/status'))
+    const body = await parseJsonSafe(res)
+    if (!res.ok) {
+      return { panelAuthRequired: false }
+    }
+    if (body && typeof body === 'object') {
+      return body
+    }
+    return { panelAuthRequired: false }
+  } catch {
+    return { panelAuthRequired: false }
+  }
 }
 
 export function postAdminLogin(body) {
