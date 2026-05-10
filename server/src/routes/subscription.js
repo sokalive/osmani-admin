@@ -3,8 +3,11 @@ import * as billing from '../billingStore.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 
 export const subscriptionRouter = Router()
+
+const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(1500, Number(process.env.MODE_SSE_POLL_MS) || 2500))
 
 function countryFromRequest(req) {
   const raw =
@@ -85,6 +88,46 @@ function rowToPublicStatus(row) {
 }
 
 /**
+ * Stable verify payload for mobile Account screen + normalizeVerifyResponse consumers:
+ * includes camelCase (expiresAt) and snake_case (expires_at, plan_duration_days) mirrors.
+ */
+function coercePlanDurationDays(txnSummary) {
+  if (txnSummary == null) return null
+  const v = txnSummary.plan_duration_days
+  if (v === undefined || v === null) return null
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.trunc(n)
+}
+
+export function normalizeVerifyResponse(pub, txnSummary) {
+  const expiresAt = pub.expiresAt ?? null
+  const amount =
+    txnSummary != null && txnSummary.amount != null ? Number(txnSummary.amount) : null
+  const currency =
+    txnSummary != null && txnSummary.currency != null
+      ? String(txnSummary.currency).trim() || null
+      : null
+  const planDurationDays = coercePlanDurationDays(txnSummary)
+
+  if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
+    console.log('[subscription_duration_normalized]', {
+      txnSummaryPlanDurationRaw: txnSummary?.plan_duration_days,
+      normalizedPlanDurationDays: planDurationDays,
+    })
+  }
+
+  return {
+    ...pub,
+    expires_at: expiresAt,
+    amount,
+    currency,
+    plan_duration_days: planDurationDays,
+    planDurationDays: planDurationDays,
+  }
+}
+
+/**
  * Shared path for GET /subscription-status and POST /subscription/verify:
  * presence touch, reconcile + activate, then access state + plans.
  */
@@ -103,10 +146,48 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
 
   const row = await billing.getDeviceSubscriptionAccessState(d, fp)
   const pub = rowToPublicStatus(row)
+  const txnSummary = await billing.getLatestCompletedSubscriptionTxnSummary(d)
+  const normalized = normalizeVerifyResponse(pub, txnSummary)
+
+  if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
+    console.log('[subscription_verify_debug]', {
+      deviceId: shortRef(d),
+      verifyPayload: {
+        active: normalized.active,
+        expiresAt: normalized.expiresAt ? shortRef(normalized.expiresAt, 28) : null,
+        expires_at: normalized.expires_at ? shortRef(normalized.expires_at, 28) : null,
+      },
+      txnSummary,
+      normalizedSubscription: {
+        amount: normalized.amount,
+        currency: normalized.currency,
+        plan_duration_days: normalized.plan_duration_days,
+        planDurationDays: normalized.planDurationDays,
+      },
+    })
+  }
+
+  const pendingGift = await billing.getOldestPendingManualGrant(d)
+  const manualGift =
+    pendingGift != null
+      ? {
+          showPopup: true,
+          nonce: String(pendingGift.nonce),
+          grantId: Number(pendingGift.id),
+          durationDays: Number(pendingGift.duration_days),
+          title: 'Hongera!',
+          body:
+            'Umepokea kifurushi cha ofa kutoka kwa muhudumu wetu. Sasa unaweza kutazama channel zote kuanzia sasa.',
+          ctaLabel: 'ASANTE',
+        }
+      : null
+
+  const withGift = { ...normalized, manualGift }
+
   if (!pub.active) {
     const plans = await billing.listPlansWithSubscriberCounts().catch(() => [])
     return {
-      ...pub,
+      ...withGift,
       playbackAllowed: false,
       plans: Array.isArray(plans)
         ? plans.map((p) => ({
@@ -118,8 +199,106 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         : [],
     }
   }
-  return { ...pub, playbackAllowed: true }
+  return { ...withGift, playbackAllowed: true }
 }
+
+/**
+ * POST /api/subscription/acknowledge-manual-gift
+ * Body: { device_id, manual_gift_ack_key } — ack key is the grant nonce from verify `manualGift`.
+ * Legacy: nonce, manualGiftAckKey (camelCase).
+ */
+async function handleAcknowledgeManualGift(req, res) {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(b.device_id ?? b.deviceId ?? '').trim()
+    const ackKey = String(
+      b.manual_gift_ack_key ?? b.manualGiftAckKey ?? b.nonce ?? b.manual_gift_nonce ?? '',
+    ).trim()
+    if (!deviceId || !ackKey) {
+      return res.status(400).json({
+        ok: false,
+        error: 'device_id and manual_gift_ack_key are required',
+      })
+    }
+    const ok = await billing.acknowledgeManualGrantFlexible(deviceId, ackKey)
+    if (process.env.MANUAL_SUBSCRIPTION_DEBUG === '1') {
+      console.log('[manual_gift_ack]', { deviceId: shortRef(deviceId), ok })
+    }
+    if (!ok) {
+      return res.status(404).json({ ok: false, error: 'No pending manual gift matched' })
+    }
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('[acknowledge-manual-gift]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+}
+
+subscriptionRouter.post('/subscription/acknowledge-manual-gift', handleAcknowledgeManualGift)
+/** @deprecated Prefer POST /subscription/acknowledge-manual-gift */
+subscriptionRouter.post('/acknowledge-manual-gift', handleAcknowledgeManualGift)
+
+function manualGiftPayloadFromGrant(grant) {
+  if (!grant) return null
+  return {
+    showPopup: true,
+    nonce: String(grant.nonce),
+    grantId: Number(grant.grantId),
+    durationDays: Number(grant.durationDays),
+    title: 'Hongera!',
+    body:
+      'Umepokea kifurushi cha ofa kutoka kwa muhudumu wetu. Sasa unaweza kutazama channel zote kuanzia sasa.',
+    ctaLabel: 'ASANTE',
+  }
+}
+
+/**
+ * POST /api/subscription/redeem-offer-code — applies stacked manual subscription + popup gift (same engine as admin manual grant).
+ */
+subscriptionRouter.post('/subscription/redeem-offer-code', async (req, res) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(b.device_id ?? b.deviceId ?? '').trim()
+    const offerCode = String(b.offer_code ?? b.offerCode ?? '').trim()
+
+    const result = await billing.redeemOfferCodeForDevice(deviceId, offerCode)
+
+    if (result.locked === true) {
+      return res.status(429).json({
+        ok: false,
+        locked: true,
+        remaining_seconds: result.remainingSeconds ?? 0,
+      })
+    }
+
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: result.error || 'Redeem failed',
+      })
+    }
+
+    const grant = result.grant
+    const manualGift = manualGiftPayloadFromGrant(grant)
+    const manualGiftAckKey = grant ? String(grant.grantId) : ''
+
+    deviceSubscriptionBus.emit('update', { deviceId })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId,
+      orderId: `offer_code:${grant?.grantId ?? ''}`,
+    })
+
+    res.json({
+      ok: true,
+      manualGift,
+      manualGiftAckKey,
+    })
+  } catch (e) {
+    console.error('[redeem-offer-code]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
 
 /** GET /subscription-status — primary unlock check by device_id (poll every ~3s as fallback). */
 subscriptionRouter.get('/subscription-status', async (req, res) => {
@@ -234,6 +413,26 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   }
   send()
 
+  const writeAppModesEvent = async (reason) => {
+    try {
+      const p = await loadGlobalAppModesPayload()
+      res.write(`event: app_modes\ndata: ${JSON.stringify({ ...p, reason })}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] app_modes push failed:', e)
+    }
+  }
+  void writeAppModesEvent('init')
+
+  const modeSyncHandler = (packet) => {
+    if (!packet?.payload?.modes) return
+    void writeAppModesEvent(String(packet.event || 'settings'))
+  }
+  liveSyncBus.on('sync', modeSyncHandler)
+
+  const modePoll = setInterval(() => {
+    void writeAppModesEvent('poll')
+  }, MODE_SSE_POLL_MS)
+
   const handler = async (payload) => {
     if (!payload || payload.deviceId !== deviceId) return
     try {
@@ -253,7 +452,9 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
 
   req.on('close', () => {
     clearInterval(ping)
+    clearInterval(modePoll)
     deviceSubscriptionBus.off('update', handler)
+    liveSyncBus.off('sync', modeSyncHandler)
     try {
       res.end()
     } catch (e) {

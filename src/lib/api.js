@@ -1,3 +1,5 @@
+import { getAdminDeviceFingerprintRaw } from './adminDeviceFingerprint'
+
 const API_BASE_ENV = String(
   import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
 ).trim()
@@ -13,8 +15,6 @@ function normalizeApiBase(raw) {
 
 export const API_BASE = normalizeApiBase(API_BASE_ENV)
 export const API_ORIGIN = API_BASE.replace(/\/api$/i, '')
-
-console.log('API_BASE:', API_BASE)
 
 async function parseJsonSafe(res) {
   const text = await res.text()
@@ -187,6 +187,330 @@ export const getSubscriptionStatus = (deviceId) =>
 export function subscriptionStreamUrl(deviceId) {
   const d = encodeURIComponent(String(deviceId ?? '').trim())
   return `${API_BASE}/subscription-stream?device_id=${d}`
+}
+
+/** Mobile: dismiss one-time manual gift popup after user taps ASANTE */
+export const postAcknowledgeManualGift = (body) =>
+  apiPost('/subscription/acknowledge-manual-gift', body)
+
+/** Matches server ADMIN_API_TOKEN + optional Bearer session when ADMIN_PANEL_AUTH_REQUIRED=true. */
+export function adminPanelApiHeaders() {
+  const legacyToken = String(import.meta.env.VITE_ADMIN_API_TOKEN ?? '').trim() || '3030'
+  const h = {
+    'Content-Type': 'application/json',
+    'X-Admin-Token': legacyToken,
+    'X-Admin-Device-Fingerprint': getAdminDeviceFingerprintRaw(),
+  }
+  if (typeof sessionStorage !== 'undefined') {
+    const jwt = sessionStorage.getItem('osmani_admin_token')
+    if (jwt) h.Authorization = `Bearer ${jwt}`
+  }
+  return h
+}
+
+/**
+ * Probe panel auth gate. Never throws: use when bootstrapping the SPA so a missing
+ * `/admin/auth/status` (404) or network error cannot blank the shell.
+ */
+export async function getAdminAuthStatus() {
+  try {
+    const res = await fetch(joinPath('/admin/auth/status'))
+    const body = await parseJsonSafe(res)
+    if (!res.ok) {
+      return { panelAuthRequired: false }
+    }
+    if (body && typeof body === 'object') {
+      return body
+    }
+    return { panelAuthRequired: false }
+  } catch {
+    return { panelAuthRequired: false }
+  }
+}
+
+export function postAdminLogin(body) {
+  return apiPost('/admin/auth/login', body)
+}
+
+export function postAdminVerifyOtp(body) {
+  return apiPost('/admin/auth/verify-otp', body)
+}
+
+export function postAdminResendOtp(body) {
+  return apiPost('/admin/auth/resend-otp', body)
+}
+
+export function postAdminEmergencyPin(body) {
+  return apiPost('/admin/auth/emergency-pin', body)
+}
+
+export async function getAdminAuthDevices() {
+  const res = await fetch(joinPath('/admin/auth/devices'), {
+    headers: adminPanelApiHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postVerifyAdminSecurityPin(securityPin) {
+  const res = await fetch(joinPath('/admin/auth/verify-security-pin'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({ security_pin: String(securityPin ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+function adminTrustedDeviceMutationBody(opts = {}) {
+  return JSON.stringify({
+    security_pin: String(opts.securityPin ?? opts.security_pin ?? '').trim(),
+    confirm_current_device: opts.confirmCurrentDevice === true || opts.confirm_current_device === true,
+  })
+}
+
+export async function postAdminDeviceBlock(id, opts = {}) {
+  const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/block`), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: adminTrustedDeviceMutationBody(opts),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postAdminDeviceUnblock(id, opts = {}) {
+  const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/unblock`), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: adminTrustedDeviceMutationBody(opts),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function deleteAdminTrustedDevice(id, opts = {}) {
+  const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}`), {
+    method: 'DELETE',
+    headers: adminPanelApiHeaders(),
+    body: adminTrustedDeviceMutationBody(opts),
+  })
+  const body = res.status === 204 ? null : await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postAdminDeviceForceOtp(id, opts = {}) {
+  const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/force-otp`), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: adminTrustedDeviceMutationBody(opts),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+/** Admin: grant stacked subscription days (PIN validated only on server). */
+export async function postManualSubscriptionGrant({ deviceId, durationDays, pin }) {
+  const res = await fetch(joinPath('/admin/manual-subscription/grant'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      device_id: String(deviceId ?? '').trim(),
+      duration_days: Number(durationDays),
+      pin: String(pin ?? ''),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function getManualSubscriptionHistory() {
+  const res = await fetch(joinPath('/admin/manual-subscription/history'), {
+    headers: adminPanelApiHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionBlock(deviceId) {
+  const res = await fetch(joinPath('/admin/manual-subscription/block'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({ device_id: String(deviceId ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionUnblock(deviceId) {
+  const res = await fetch(joinPath('/admin/manual-subscription/unblock'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({ device_id: String(deviceId ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function deleteManualSubscriptionGrant(grantId) {
+  const id = Number(grantId)
+  const res = await fetch(joinPath(`/admin/manual-subscription/history/${encodeURIComponent(String(id))}`), {
+    method: 'DELETE',
+    headers: adminPanelApiHeaders(),
+  })
+  const body = res.status === 204 ? null : await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postOfferCodeGenerate({ durationDays, pin }) {
+  const res = await fetch(joinPath('/admin/offer-codes/generate'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      duration_days: Number(durationDays),
+      pin: String(pin ?? ''),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function getOfferCodesHistory() {
+  const res = await fetch(joinPath('/admin/offer-codes/history'), {
+    headers: adminPanelApiHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postOfferCodeBlock(code) {
+  const res = await fetch(joinPath('/admin/offer-codes/block'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({ code: String(code ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postOfferCodeUnblock(code) {
+  const res = await fetch(joinPath('/admin/offer-codes/unblock'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({ code: String(code ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function deleteOfferCode(code) {
+  const c = String(code ?? '').trim()
+  const res = await fetch(joinPath(`/admin/offer-codes/${encodeURIComponent(c)}`), {
+    method: 'DELETE',
+    headers: adminPanelApiHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionBulkBlock({ deviceIds, securityPin }) {
+  const res = await fetch(joinPath('/admin/manual-subscription/bulk-block'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      device_ids: Array.isArray(deviceIds) ? deviceIds : [],
+      security_pin: String(securityPin ?? '').trim(),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionBulkUnblock({ deviceIds, securityPin }) {
+  const res = await fetch(joinPath('/admin/manual-subscription/bulk-unblock'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      device_ids: Array.isArray(deviceIds) ? deviceIds : [],
+      security_pin: String(securityPin ?? '').trim(),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionHistoryBulkDelete({ grantIds, securityPin }) {
+  const res = await fetch(joinPath('/admin/manual-subscription/history/bulk-delete'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      grant_ids: Array.isArray(grantIds) ? grantIds : [],
+      security_pin: String(securityPin ?? '').trim(),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postOfferCodesBulkBlock({ codes, securityPin }) {
+  const res = await fetch(joinPath('/admin/offer-codes/bulk-block'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      codes: Array.isArray(codes) ? codes : [],
+      security_pin: String(securityPin ?? '').trim(),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postOfferCodesBulkUnblock({ codes, securityPin }) {
+  const res = await fetch(joinPath('/admin/offer-codes/bulk-unblock'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      codes: Array.isArray(codes) ? codes : [],
+      security_pin: String(securityPin ?? '').trim(),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postOfferCodesBulkDelete({ codes, securityPin }) {
+  const res = await fetch(joinPath('/admin/offer-codes/bulk-delete'), {
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      codes: Array.isArray(codes) ? codes : [],
+      security_pin: String(securityPin ?? '').trim(),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
 }
 
 export function syncStreamUrl(topics = ['analytics']) {

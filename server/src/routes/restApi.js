@@ -21,6 +21,9 @@ import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentPro
 import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
+import { adminAuthRouter } from './adminAuth.js'
+import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
+import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 
 const FILES = {
@@ -59,7 +62,35 @@ restApi.get('/', (_req, res) => {
       '/payment-status/:order_id',
       '/subscription-status',
       '/subscription/verify',
+      '/subscription/acknowledge-manual-gift',
+      '/subscription/redeem-offer-code',
       '/subscription-stream',
+      '/admin/offer-codes/generate',
+      '/admin/offer-codes/history',
+      '/admin/offer-codes/block',
+      '/admin/offer-codes/unblock',
+      '/admin/offer-codes/bulk-block',
+      '/admin/offer-codes/bulk-unblock',
+      '/admin/offer-codes/bulk-delete',
+      '/admin/offer-codes/:code',
+      '/admin/auth/status',
+      '/admin/auth/login',
+      '/admin/auth/verify-otp',
+      '/admin/auth/resend-otp',
+      '/admin/auth/me',
+      '/admin/auth/devices',
+      '/admin/auth/verify-security-pin',
+      '/admin/auth/emergency-pin',
+      '/admin/manual-subscription/grant',
+      '/admin/manual-subscription/history',
+      '/admin/manual-subscription/block',
+      '/admin/manual-subscription/unblock',
+      '/admin/manual-subscription/bulk-block',
+      '/admin/manual-subscription/bulk-unblock',
+      '/admin/manual-subscription/history/bulk-delete',
+      '/admin/manual-subscription/history/:grantId',
+      '/admin/manual-subscription/pin-status',
+      '/admin/manual-subscription/setup-pin',
       '/analytics/overview',
       '/analytics/channels',
       '/analytics/locations',
@@ -146,6 +177,9 @@ restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
 restApi.use(deviceSecurityRouter)
+restApi.use('/admin/auth', adminAuthRouter)
+restApi.use('/admin/manual-subscription', manualSubscriptionAdminRouter)
+restApi.use('/admin/offer-codes', offerCodesAdminRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)

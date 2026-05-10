@@ -388,13 +388,18 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
       weeklyLimit: live.weeklyLimit,
       cooldownMinutes: live.cooldownMinutes,
       pending: pendingRows.rows
-        .filter((r) => ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked'].includes(String(r.status)))
+        .filter((r) =>
+          ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked'].includes(
+            String(r.status),
+          ),
+        )
         .map((r) => ({
-        id: String(r.id),
-        deviceLabel: `${r.source_device_id} -> ${r.target_device_id || 'pending'}`,
-        requestedAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
-        status: String(r.status),
-      })),
+          id: String(r.id),
+          sourceDeviceId: String(r.source_device_id ?? ''),
+          deviceLabel: `${r.source_device_id} -> ${r.target_device_id || 'pending'}`,
+          requestedAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+          status: String(r.status),
+        })),
       logs: logsRows.rows.map((r) => ({
         id: String(r.id),
         at: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),

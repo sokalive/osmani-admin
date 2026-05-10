@@ -1,6 +1,8 @@
 import crypto from 'node:crypto'
+import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
 import { getPool } from './db/pool.js'
+import { normalizeLocationPayload } from './lib/analyticsLocation.js'
 
 export async function ensureBillingStorage() {
   const pool = getPool()
@@ -13,12 +15,90 @@ export async function ensureBillingStorage() {
   } finally {
     client.release()
   }
+  await ensureBootstrapAdminPanelUser().catch((err) => {
+    console.error('[admin-panel-bootstrap]', err?.message || err)
+  })
 }
 
 function requirePool() {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required.')
   return pool
+}
+
+/** Manual Subscription admin PIN (scrypt; env pin remains legacy until DB hash is set). */
+export const MANUAL_SUBSCRIPTION_PIN_MIN_LENGTH = 6
+
+const MANUAL_PIN_SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }
+
+function hashManualPinScrypt(plain) {
+  const salt = crypto.randomBytes(16)
+  const hash = crypto.scryptSync(String(plain), salt, 64, MANUAL_PIN_SCRYPT_PARAMS)
+  return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`
+}
+
+function verifyManualPinHashScrypt(plain, stored) {
+  const parts = String(stored ?? '').split('$')
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false
+  try {
+    const salt = Buffer.from(parts[1], 'hex')
+    const expected = Buffer.from(parts[2], 'hex')
+    const hash = crypto.scryptSync(String(plain), salt, 64, MANUAL_PIN_SCRYPT_PARAMS)
+    return hash.length === expected.length && crypto.timingSafeEqual(hash, expected)
+  } catch {
+    return false
+  }
+}
+
+/** True if env PIN (legacy) or DB hash row is non-empty. */
+export async function isManualSubscriptionPinConfigured() {
+  const envPin = String(process.env.MANUAL_SUBSCRIPTION_ADMIN_PIN ?? '').trim()
+  if (envPin.length >= 4) return true
+  const pool = requirePool()
+  const { rows } = await pool.query(`SELECT pin_hash FROM manual_subscription_admin_pin WHERE id = 1`)
+  const h = rows[0]?.pin_hash
+  return typeof h === 'string' && h.trim().length > 0
+}
+
+/** Verify grant PIN: prefer DB scrypt hash; else legacy env MANUAL_SUBSCRIPTION_ADMIN_PIN. */
+export async function verifyManualSubscriptionGrantPin(submitted) {
+  const pin = String(submitted ?? '')
+  const pool = requirePool()
+  const { rows } = await pool.query(`SELECT pin_hash FROM manual_subscription_admin_pin WHERE id = 1`)
+  const stored = rows[0]?.pin_hash
+  if (typeof stored === 'string' && stored.startsWith('scrypt$')) {
+    return verifyManualPinHashScrypt(pin, stored)
+  }
+  const envPin = process.env.MANUAL_SUBSCRIPTION_ADMIN_PIN
+  if (envPin != null && String(envPin).trim().length >= 4) {
+    const a = crypto.createHash('sha256').update(pin, 'utf8').digest()
+    const b = crypto.createHash('sha256').update(String(envPin), 'utf8').digest()
+    return a.length === b.length && crypto.timingSafeEqual(a, b)
+  }
+  return false
+}
+
+/** First-time only; refuses if already configured (env or DB). Stores scrypt hash only. */
+export async function setupManualSubscriptionPinFirstTime(plain) {
+  if (await isManualSubscriptionPinConfigured()) {
+    const err = new Error('PIN already configured')
+    err.code = 'PIN_ALREADY_CONFIGURED'
+    throw err
+  }
+  const p = String(plain ?? '')
+  if (p.length < MANUAL_SUBSCRIPTION_PIN_MIN_LENGTH) {
+    const err = new Error(`PIN must be at least ${MANUAL_SUBSCRIPTION_PIN_MIN_LENGTH} characters`)
+    err.code = 'PIN_TOO_SHORT'
+    throw err
+  }
+  const hashed = hashManualPinScrypt(p)
+  const pool = requirePool()
+  await pool.query(
+    `INSERT INTO manual_subscription_admin_pin (id, pin_hash, updated_at)
+     VALUES (1, $1, now())
+     ON CONFLICT (id) DO UPDATE SET pin_hash = EXCLUDED.pin_hash, updated_at = now()`,
+    [hashed],
+  )
 }
 
 function sanitizePresenceText(v, max = 120) {
@@ -329,8 +409,69 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput) {
 /** --- Subscriptions --- */
 
 /**
- * Expiry at end-of-window: start of calendar day after N days from now, then +18:00 (server TZ / UTC per DB).
- * Same shape as: DATE_TRUNC('day', now() + interval 'N days') + interval '18 hours'
+ * Expiry at end-of-window: DATE_TRUNC('day', anchor + N days) + 18 hours (DB NOW / TZ consistent).
+ * Anchor is subscription stacking baseline for renewals (existing expiry while active; otherwise now).
+ */
+function dbQuery(client) {
+  return client && typeof client.query === 'function'
+    ? client.query.bind(client)
+    : requirePool().query.bind(requirePool())
+}
+
+export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, durationDays, client = null) {
+  const q = dbQuery(client)
+  const d = String(deviceId ?? '').trim()
+  if (!d) throw new Error('computeDeviceSubscriptionExpiryAfterPurchase: deviceId required')
+  const days = Math.max(1, Number(durationDays) || 30)
+  const { rows } = await q(
+    `WITH cur AS (
+       SELECT expires_at FROM device_subscriptions WHERE device_id = $1 LIMIT 1
+     ),
+     anchor AS (
+       SELECT
+         (SELECT expires_at FROM cur) AS previous_expires_at,
+         CASE
+           WHEN EXISTS (SELECT 1 FROM cur WHERE expires_at > now())
+           THEN (SELECT expires_at FROM cur)
+           ELSE now()
+         END AS anchor_at
+     ),
+     raw AS (
+       SELECT
+         anchor.previous_expires_at,
+         anchor.anchor_at,
+         (
+           date_trunc('day', anchor.anchor_at + ($2::int * interval '1 day'))
+           + interval '18 hours'
+         )::timestamptz AS computed_expires_at
+       FROM anchor
+     )
+     SELECT
+       raw.previous_expires_at,
+       raw.anchor_at,
+       CASE
+         WHEN raw.previous_expires_at IS NOT NULL AND raw.previous_expires_at > now()
+         THEN GREATEST(raw.computed_expires_at, raw.previous_expires_at)
+         ELSE raw.computed_expires_at
+       END AS expires_at
+     FROM raw`,
+    [d, days],
+  )
+  const row = rows[0]
+  if (!row?.expires_at) throw new Error('computeDeviceSubscriptionExpiryAfterPurchase: no result')
+  const toIso = (v) =>
+    v == null ? null : v instanceof Date ? v.toISOString() : String(v)
+  return {
+    expiresAt: toIso(row.expires_at),
+    previousExpiresAt: toIso(row.previous_expires_at),
+    anchorAt: toIso(row.anchor_at),
+    purchasedDurationDays: days,
+  }
+}
+
+/**
+ * Expiry at end-of-window from **now** (no stacking — legacy helper).
+ * Prefer {@link computeDeviceSubscriptionExpiryAfterPurchase} for device activation.
  */
 export async function subscriptionExpiresAtEndOfDay(durationDays) {
   const pool = requirePool()
@@ -365,9 +506,9 @@ export async function upsertSubscriptionAfterPayment(phone, planId, expiresAt) {
 /** --- Device subscriptions (realtime unlock) --- */
 
 /** Idempotent: duplicate webhooks reuse same order_id → skip writes. */
-export async function deviceSubscriptionOrderAlreadyApplied(orderId) {
-  const pool = requirePool()
-  const { rows } = await pool.query(
+export async function deviceSubscriptionOrderAlreadyApplied(orderId, client = null) {
+  const q = dbQuery(client)
+  const { rows } = await q(
     `SELECT 1 FROM device_subscriptions WHERE transaction_id = $1 LIMIT 1`,
     [String(orderId).trim()],
   )
@@ -405,7 +546,7 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
        ds.updated_at,
        ds.transaction_id,
        (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
-       COALESCE(ad.is_blocked, false) AS blocked_now,
+       (COALESCE(ds.manual_admin_blocked, false) OR COALESCE(ad.is_blocked, false)) AS blocked_now,
        ad.block_reason
      FROM device_subscriptions ds
      LEFT JOIN admin_devices ad
@@ -423,7 +564,8 @@ export async function touchLivePresence({ deviceId, country = null, channelId = 
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return null
-  const safeCountry = sanitizePresenceText(country, 32)
+  const rawLab = normalizeLocationPayload({ country: country ?? '' })
+  const safeCountry = rawLab ? sanitizePresenceText(rawLab, 120) : null
   const safeChannel = sanitizePresenceText(channelId, 128)
   await pool.query(
     `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -437,21 +579,212 @@ export async function touchLivePresence({ deviceId, country = null, channelId = 
   return { deviceId: d, country: safeCountry, channelId: safeChannel }
 }
 
+const MANUAL_GRANT_DURATION_DAYS = new Set([1, 7, 30, 90])
+
+/**
+ * Admin-only manual subscription extension using same stacking math as payments.
+ * Inserts grant row (nonce for one-time gift popup), then upserts device_subscriptions.
+ */
+export async function grantManualDeviceSubscription(deviceId, durationDays, client = null) {
+  const q = dbQuery(client)
+  const d = String(deviceId ?? '').trim()
+  const days = Number(durationDays)
+  if (!d || !MANUAL_GRANT_DURATION_DAYS.has(days)) {
+    throw new Error('Invalid device_id or duration_days (allowed: 1, 7, 30, 90)')
+  }
+
+  const ins = await q(
+    `INSERT INTO manual_subscription_grants (device_id, duration_days)
+     VALUES ($1, $2)
+     RETURNING id, nonce`,
+    [d, days],
+  )
+  const grantId = Number(ins.rows[0]?.id)
+  const nonce = ins.rows[0]?.nonce
+  if (!grantId || nonce == null) throw new Error('manual grant insert failed')
+
+  const stack = await computeDeviceSubscriptionExpiryAfterPurchase(d, days, client)
+  const expiresAt = stack.expiresAt
+  const orderId = `manual_grant:${grantId}`
+
+  const { skipped } = await upsertDeviceSubscriptionActive({ deviceId: d, orderId, expiresAt }, client)
+  if (skipped) {
+    console.warn('[manual_grant] unexpected upsert skip — order_id should be unique:', orderId)
+  }
+
+  await q(
+    `UPDATE manual_subscription_grants SET expires_at_snapshot = $2::timestamptz WHERE id = $1`,
+    [grantId, expiresAt],
+  )
+
+  return {
+    grantId,
+    nonce: String(nonce),
+    expiresAt,
+    durationDays: days,
+    stackedFromExpiresAt: stack.previousExpiresAt ?? null,
+    anchorAt: stack.anchorAt ?? null,
+    skipped,
+  }
+}
+
+/** FIFO pending manual gift for verify popup (oldest unacknowledged grant first). */
+export async function getOldestPendingManualGrant(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT id, nonce, duration_days, created_at
+     FROM manual_subscription_grants
+     WHERE device_id = $1 AND acknowledged_at IS NULL AND deleted_at IS NULL
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [d],
+  )
+  return rows[0] ?? null
+}
+
+/**
+ * Acknowledge a pending manual gift by grant id (numeric string), UUID nonce, or nonce text match.
+ * Does not cast arbitrary input to UUID (avoids errors for keys like "5").
+ */
+export async function acknowledgeManualGrantFlexible(deviceId, ackKeyRaw) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  const key = String(ackKeyRaw ?? '').trim()
+  if (!d || !key) return false
+
+  const digitsOnly = /^\d+$/.test(key)
+  if (digitsOnly) {
+    const id = Number(key)
+    if (!Number.isSafeInteger(id) || id < 1 || id > 2147483647) return false
+    const byId = await pool.query(
+      `UPDATE manual_subscription_grants
+       SET acknowledged_at = now()
+       WHERE device_id = $1 AND id = $2 AND acknowledged_at IS NULL AND deleted_at IS NULL`,
+      [d, id],
+    )
+    if (Number(byId.rowCount) > 0) return true
+  }
+
+  const byNonceText = await pool.query(
+    `UPDATE manual_subscription_grants
+     SET acknowledged_at = now()
+     WHERE device_id = $1 AND acknowledged_at IS NULL AND deleted_at IS NULL
+       AND lower(trim(nonce::text)) = lower(trim($2::text))`,
+    [d, key],
+  )
+  return Number(byNonceText.rowCount) > 0
+}
+
+/** @deprecated Prefer acknowledgeManualGrantFlexible — kept for call sites */
+export async function acknowledgeManualGrantByNonce(deviceId, nonce) {
+  return acknowledgeManualGrantFlexible(deviceId, nonce)
+}
+
+/** Admin: history of manual grants (excludes soft-deleted rows). */
+export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
+  const pool = requirePool()
+  const lim = Math.min(1000, Math.max(1, Number(limit) || 500))
+  const { rows } = await pool.query(
+    `SELECT
+       g.id,
+       g.device_id,
+       g.duration_days,
+       g.created_at AS granted_at,
+       g.expires_at_snapshot,
+       COALESCE(ds.manual_admin_blocked, false) AS manual_admin_blocked,
+       COALESCE(
+         (SELECT bool_or(ad.is_blocked) FROM admin_devices ad WHERE ad.device_id = g.device_id),
+         false
+       ) AS admin_device_blocked,
+       ds.expires_at AS subscription_expires_at,
+       ds.status AS subscription_status
+     FROM manual_subscription_grants g
+     LEFT JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     WHERE g.deleted_at IS NULL
+     ORDER BY g.created_at DESC
+     LIMIT $1`,
+    [lim],
+  )
+
+  return rows.map((r) => {
+    const snap = r.expires_at_snapshot
+    const subExp = r.subscription_expires_at
+    const rawExp = snap ?? subExp
+    const expDate =
+      rawExp instanceof Date ? rawExp : rawExp != null ? new Date(rawExp) : null
+    const validTime = expDate != null && !Number.isNaN(expDate.getTime()) && expDate.getTime() > Date.now()
+    const manualBlocked = r.manual_admin_blocked === true
+    const deviceBlocked = r.admin_device_blocked === true
+    const effectiveBlocked = manualBlocked || deviceBlocked
+    const subscriptionActive =
+      String(r.subscription_status ?? '') === 'active' && validTime && !effectiveBlocked
+
+    return {
+      id: Number(r.id),
+      deviceId: String(r.device_id ?? ''),
+      durationDays: Number(r.duration_days) || 0,
+      grantedAt:
+        r.granted_at instanceof Date ? r.granted_at.toISOString() : r.granted_at != null
+          ? new Date(r.granted_at).toISOString()
+          : null,
+      expiresAt: expDate && !Number.isNaN(expDate.getTime()) ? expDate.toISOString() : null,
+      manualAdminBlocked: manualBlocked,
+      adminDeviceBlocked: deviceBlocked,
+      effectiveBlocked,
+      subscriptionActive,
+    }
+  })
+}
+
+/** Toggle manual admin block on device_subscriptions (playback follows verify / blocked_now). */
+export async function setManualAdminBlocked(deviceId, blocked) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) throw new Error('device_id required')
+  const b = Boolean(blocked)
+  const { rowCount } = await pool.query(
+    `UPDATE device_subscriptions
+     SET manual_admin_blocked = $2, updated_at = now()
+     WHERE device_id = $1`,
+    [d, b],
+  )
+  return { updated: Number(rowCount) > 0 }
+}
+
+/** Soft-delete a manual grant row from admin history (does not revoke subscription time). */
+export async function softDeleteManualGrant(grantId) {
+  const pool = requirePool()
+  const id = Number(grantId)
+  if (!Number.isFinite(id) || id < 1) throw new Error('Invalid grant id')
+  const { rows } = await pool.query(
+    `UPDATE manual_subscription_grants
+     SET deleted_at = now()
+     WHERE id = $1 AND deleted_at IS NULL
+     RETURNING id, device_id`,
+    [id],
+  )
+  const row = rows[0]
+  if (!row) return null
+  return { id: Number(row.id), deviceId: String(row.device_id ?? '') }
+}
+
 /**
  * Webhook-driven activation. Skips entirely if transaction_id (order_id) already applied.
  * Renewals overwrite the same device_id row with a newer order/expiry only when not a duplicate webhook.
  */
-export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expiresAt }) {
-  const pool = requirePool()
+export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expiresAt }, client = null) {
+  const q = dbQuery(client)
   const d = String(deviceId ?? '').trim()
   const oid = String(orderId ?? '').trim()
   if (!d || !oid) throw new Error('deviceId and orderId required')
-  if (await deviceSubscriptionOrderAlreadyApplied(oid)) {
+  if (await deviceSubscriptionOrderAlreadyApplied(oid, client)) {
     console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
     return { skipped: true }
   }
   try {
-    await pool.query(
+    await q(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at)
        VALUES ($1, 'active', $2::timestamptz, now(), $3, now())
        ON CONFLICT (device_id) DO UPDATE SET
@@ -523,7 +856,20 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
       orderId,
     }
   }
-  const expiresAt = await subscriptionExpiresAtEndOfDay(plan.duration_days)
+  const stack = await computeDeviceSubscriptionExpiryAfterPurchase(deviceId, plan.duration_days)
+  const expiresAt = stack.expiresAt
+
+  if (process.env.SUBSCRIPTION_STACK_DEBUG === '1') {
+    console.log('[subscription_stack] activate', {
+      deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+      orderId: orderId.length > 26 ? `${orderId.slice(0, 24)}…` : orderId,
+      currentExpiryBefore: stack.previousExpiresAt,
+      anchorAt: stack.anchorAt,
+      purchasedDurationDays: stack.purchasedDurationDays,
+      finalExpiresAt: expiresAt,
+    })
+  }
+
   const { skipped } = await upsertDeviceSubscriptionActive({ deviceId, orderId, expiresAt })
   return {
     activated: !skipped,
@@ -568,6 +914,58 @@ export async function getLatestCompletedTransactionForDevice(deviceId) {
     [d],
   )
   return rows[0] ?? null
+}
+
+/**
+ * Amount/currency/duration for subscription verify (Account screen).
+ * Uses latest completed txn, then resolves duration from plans via plan_id (same as activation),
+ * so duration_days does not depend on SQL JOIN quirks or nullable aggregates.
+ */
+export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+
+  const txn = await getLatestCompletedTransactionForDevice(deviceId)
+  if (!txn) return null
+
+  const planId = txn.plan_id != null ? Number(txn.plan_id) : null
+  const planRow = planId != null ? await getPlanRowByIdAny(planId) : null
+
+  let planDurationDays = null
+  if (planRow != null && planRow.duration_days != null) {
+    const n = Number(planRow.duration_days)
+    if (Number.isFinite(n) && n >= 0) planDurationDays = Math.trunc(n)
+  }
+
+  const out = {
+    amount: txn.amount != null ? Number(txn.amount) : null,
+    currency: txn.currency != null ? String(txn.currency).trim() || 'TZS' : 'TZS',
+    plan_id: planId,
+    plan_duration_days: planDurationDays,
+  }
+
+  if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
+    console.log('[subscription_duration_debug]', {
+      deviceId: d.length > 22 ? `${d.slice(0, 20)}…` : d,
+      latestTxnRow: {
+        order_id: txn.order_id,
+        plan_id: txn.plan_id,
+        amount: txn.amount,
+        currency: txn.currency,
+      },
+      joinedPlanRow: planRow
+        ? {
+            id: planRow.id,
+            duration_days: planRow.duration_days,
+            deleted_at: planRow.deleted_at ?? null,
+          }
+        : null,
+      duration_days_from_plan: planRow?.duration_days,
+      normalizedPlanDurationDays: out.plan_duration_days,
+    })
+  }
+
+  return out
 }
 
 /** Repair path: completed txn exists but device_subscriptions not yet updated. */
@@ -668,4 +1066,255 @@ export async function updateZenopayRowFull(d) {
     ],
   )
   return rows[0]
+}
+
+// --- Offer codes (admin-generated; redeem uses manual grant + popup flow) ---
+
+const OFFER_CODE_DURATIONS = MANUAL_GRANT_DURATION_DAYS
+
+export function normalizeOfferCode(raw) {
+  const s = String(raw ?? '').replace(/\D/g, '')
+  if (s.length !== 6) return null
+  return s
+}
+
+export function offerCodeAudit(action, extra = {}) {
+  console.log('[offer_code]', JSON.stringify({ action, ...extra, timestamp: new Date().toISOString() }))
+}
+
+/** Device-centric brute-force lock for redeem attempts. */
+export async function getOfferCodeDeviceLockState(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return { locked: false, remainingSeconds: 0 }
+  const { rows } = await pool.query(
+    `SELECT lock_until FROM offer_code_device_attempts WHERE device_id = $1`,
+    [d],
+  )
+  const lu = rows[0]?.lock_until
+  if (lu == null) return { locked: false, remainingSeconds: 0 }
+  const end = lu instanceof Date ? lu : new Date(lu)
+  const t = end.getTime()
+  if (!Number.isFinite(t) || t <= Date.now()) return { locked: false, remainingSeconds: 0 }
+  return { locked: true, remainingSeconds: Math.max(0, Math.ceil((t - Date.now()) / 1000)) }
+}
+
+export async function recordOfferCodeInvalidAttempt(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return
+
+  const { rows } = await pool.query(
+    `INSERT INTO offer_code_device_attempts (device_id, consecutive_failures, updated_at)
+     VALUES ($1, 1, now())
+     ON CONFLICT (device_id) DO UPDATE SET
+       consecutive_failures = offer_code_device_attempts.consecutive_failures + 1,
+       updated_at = now()
+     RETURNING consecutive_failures, lock_tier`,
+    [d],
+  )
+  const r = rows[0]
+  if (!r || Number(r.consecutive_failures) < 3) return
+
+  const tier = Number(r.lock_tier) || 0
+  const seconds = Math.min(86400 * 7, 300 * 2 ** tier)
+  await pool.query(
+    `UPDATE offer_code_device_attempts
+     SET lock_until = now() + ($2::bigint * interval '1 second'),
+         lock_tier = lock_tier + 1,
+         consecutive_failures = 0,
+         updated_at = now()
+     WHERE device_id = $1`,
+    [d, seconds],
+  )
+}
+
+export async function resetOfferCodeDeviceAttempts(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return
+  await pool.query(
+    `UPDATE offer_code_device_attempts
+     SET consecutive_failures = 0,
+         lock_tier = 0,
+         lock_until = NULL,
+         updated_at = now()
+     WHERE device_id = $1`,
+    [d],
+  )
+}
+
+export async function insertOfferCodeRow({ durationDays, createdBy = 'admin' }) {
+  const pool = requirePool()
+  const days = Number(durationDays)
+  if (!OFFER_CODE_DURATIONS.has(days)) {
+    throw new Error('Invalid duration_days (allowed: 1, 7, 30, 90)')
+  }
+  const shelfDays = Math.min(
+    3650,
+    Math.max(1, Number(process.env.OFFER_CODE_SHELF_DAYS) || 365),
+  )
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const n = 100000 + crypto.randomInt(900000)
+    const code = String(n)
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO offer_codes (code, duration_days, created_by, expires_at, failed_attempts, lock_until)
+         VALUES ($1, $2, $3, now() + ($4::int * interval '1 day'), 0, NULL)
+         RETURNING id, code, duration_days, created_at, expires_at`,
+        [code, days, String(createdBy || 'admin').slice(0, 120), shelfDays],
+      )
+      if (rows[0]) return rows[0]
+    } catch (e) {
+      if (e?.code === '23505') continue
+      throw e
+    }
+  }
+  throw new Error('Could not generate a unique offer code')
+}
+
+function offerCodeRowStatus(row, nowMs = Date.now()) {
+  if (row.deleted_at != null) return 'DELETED'
+  if (row.blocked === true) return 'BLOCKED'
+  if (row.used_at != null) return 'USED'
+  const exp = row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at)
+  if (Number.isFinite(exp.getTime()) && exp.getTime() <= nowMs) return 'EXPIRED'
+  return 'UNUSED'
+}
+
+export async function listOfferCodesHistoryAdmin({ limit = 500 } = {}) {
+  const pool = requirePool()
+  const lim = Math.min(1000, Math.max(1, Number(limit) || 500))
+  const { rows } = await pool.query(
+    `SELECT id, code, duration_days, created_by, created_at, used_by_device, used_at, expires_at,
+            blocked, deleted_at
+     FROM offer_codes
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [lim],
+  )
+  return rows.map((r) => ({
+    id: Number(r.id),
+    code: String(r.code ?? ''),
+    durationDays: Number(r.duration_days) || 0,
+    createdBy: String(r.created_by ?? ''),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+    usedByDevice: r.used_by_device ? String(r.used_by_device) : null,
+    usedAt:
+      r.used_at instanceof Date ? r.used_at.toISOString() : r.used_at != null ? String(r.used_at) : null,
+    expiresAt:
+      r.expires_at instanceof Date ? r.expires_at.toISOString() : String(r.expires_at ?? ''),
+    blocked: r.blocked === true,
+    deletedAt:
+      r.deleted_at instanceof Date ? r.deleted_at.toISOString() : r.deleted_at != null ? String(r.deleted_at) : null,
+    status: offerCodeRowStatus(r),
+  }))
+}
+
+export async function setOfferCodeBlockedByCode(rawCode, blocked) {
+  const pool = requirePool()
+  const code = normalizeOfferCode(rawCode)
+  if (!code) throw new Error('Invalid code')
+  const { rows } = await pool.query(
+    `UPDATE offer_codes SET blocked = $2 WHERE code = $1 AND deleted_at IS NULL RETURNING code`,
+    [code, Boolean(blocked)],
+  )
+  return rows[0] != null
+}
+
+export async function softDeleteOfferCodeByCode(rawCode) {
+  const pool = requirePool()
+  const code = normalizeOfferCode(rawCode)
+  if (!code) throw new Error('Invalid code')
+  const { rowCount } = await pool.query(
+    `UPDATE offer_codes SET deleted_at = now() WHERE code = $1 AND deleted_at IS NULL`,
+    [code],
+  )
+  return Number(rowCount) > 0
+}
+
+/**
+ * Redeem offer code: single-use, uses {@link grantManualDeviceSubscription} inside a transaction.
+ */
+export async function redeemOfferCodeForDevice(deviceId, rawCode) {
+  const d = String(deviceId ?? '').trim()
+  const code = normalizeOfferCode(rawCode)
+  if (!d || !code) {
+    return { ok: false, error: 'device_id and offer_code are required' }
+  }
+
+  const lock = await getOfferCodeDeviceLockState(d)
+  if (lock.locked) {
+    return { ok: false, locked: true, remainingSeconds: lock.remainingSeconds }
+  }
+
+  const pool = requirePool()
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    const sel = await client.query(
+      `SELECT *
+       FROM offer_codes
+       WHERE code = $1
+       FOR UPDATE`,
+      [code],
+    )
+    const oc = sel.rows[0]
+
+    async function rollbackAndFail(reason, auditKind) {
+      await client.query('ROLLBACK')
+      await recordOfferCodeInvalidAttempt(d)
+      offerCodeAudit(auditKind || 'invalid_attempt', { device_id: d, code })
+      return { ok: false, error: reason }
+    }
+
+    if (!oc || oc.deleted_at != null) {
+      return await rollbackAndFail('Invalid or unknown code', 'invalid_attempt')
+    }
+    if (oc.blocked === true) {
+      return await rollbackAndFail('Code is blocked', 'invalid_attempt')
+    }
+    if (oc.used_at != null) {
+      return await rollbackAndFail('Code already used', 'invalid_attempt')
+    }
+
+    const expAt = oc.expires_at instanceof Date ? oc.expires_at : new Date(oc.expires_at)
+    if (Number.isFinite(expAt.getTime()) && expAt.getTime() <= Date.now()) {
+      return await rollbackAndFail('Code has expired', 'invalid_attempt')
+    }
+
+    const durationDays = Number(oc.duration_days)
+    if (!OFFER_CODE_DURATIONS.has(durationDays)) {
+      await client.query('ROLLBACK')
+      return { ok: false, error: 'Code configuration is invalid' }
+    }
+
+    const grant = await grantManualDeviceSubscription(d, durationDays, client)
+
+    const mark = await client.query(
+      `UPDATE offer_codes
+       SET used_by_device = $2, used_at = now()
+       WHERE id = $1 AND used_at IS NULL AND deleted_at IS NULL`,
+      [oc.id, d],
+    )
+    if (Number(mark.rowCount) === 0) {
+      await client.query('ROLLBACK')
+      return { ok: false, error: 'Code could not be redeemed' }
+    }
+
+    await client.query('COMMIT')
+    await resetOfferCodeDeviceAttempts(d)
+    offerCodeAudit('redeemed', { device_id: d, code, grant_id: grant.grantId })
+    return { ok: true, grant }
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      /* ignore */
+    }
+    throw e
+  } finally {
+    client.release()
+  }
 }

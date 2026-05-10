@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import {
   BarChart3,
   Bell,
@@ -7,6 +7,7 @@ import {
   CreditCard,
   Download,
   KeyRound,
+  Gift,
   LayoutDashboard,
   Layers,
   LogOut,
@@ -14,6 +15,7 @@ import {
   MessageCircle,
   Server,
   ShieldAlert,
+  ShieldCheck,
   Tag,
   Tv,
   Users,
@@ -21,12 +23,14 @@ import {
   PanelTopOpen,
   TabletSmartphone,
 } from 'lucide-react'
+import { useAdminAuth } from '../context/AdminAuthContext.jsx'
 
 const menuItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/' },
   { id: 'channels', label: 'Channels', icon: Tv, path: '/channels' },
   { id: 'banners', label: 'Banners', icon: Layers, path: '/banners' },
   { id: 'plans', label: 'Plans', icon: Tag, path: '/plans' },
+  { id: 'manual-subscription', label: 'Toa Kifurushi', icon: Gift, path: '/manual-subscription' },
   { id: 'transactions', label: 'Transactions', icon: CreditCard, path: '/transactions' },
   { id: 'users', label: 'Users', icon: Users, path: '/users' },
   { id: 'notifications', label: 'Notifications', icon: Bell, path: '/notifications' },
@@ -52,6 +56,27 @@ const itemButtonClass = (active) =>
   ].join(' ')
 
 function Sidebar() {
+  const navigate = useNavigate()
+  const { panelAuthRequired, logout } = useAdminAuth()
+
+  const panelSecurityItem = panelAuthRequired
+    ? [
+        {
+          id: 'admin-panel-security',
+          label: 'Admin Security',
+          icon: ShieldCheck,
+          path: '/admin-security',
+        },
+      ]
+    : []
+
+  const navItems = [...menuItems, ...panelSecurityItem]
+
+  function handleLogout() {
+    logout()
+    if (panelAuthRequired) navigate('/login', { replace: true })
+  }
+
   return (
     <aside className="fixed left-0 top-0 z-30 flex h-screen w-[280px] flex-col border-r border-slate-800/70 bg-[#0F172A] px-5 pb-6 pt-7">
       <NavLink
@@ -66,7 +91,7 @@ function Sidebar() {
         className="custom-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto overflow-x-hidden py-1 pr-1"
         aria-label="Main navigation"
       >
-        {menuItems.map((item) => {
+        {navItems.map((item) => {
           const Icon = item.icon
           if (item.path) {
             return (
@@ -104,10 +129,11 @@ function Sidebar() {
         </button>
         <button
           type="button"
+          onClick={handleLogout}
           className="flex w-full items-center gap-3 rounded-2xl bg-red-500/20 px-4 py-3 text-sm font-medium text-red-200 transition-all duration-300 hover:scale-[1.01] hover:bg-red-500/30"
         >
           <LogOut className="h-5 w-5 shrink-0" />
-          <span>Logout</span>
+          <span>{panelAuthRequired ? 'Logout' : 'Clear session'}</span>
         </button>
       </div>
     </aside>

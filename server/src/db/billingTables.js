@@ -398,4 +398,133 @@ export async function ensureBillingTables(client) {
     INSERT INTO zenopay_settings (id) VALUES (1)
     ON CONFLICT (id) DO NOTHING;
   `)
+
+  /** Admin manual subscription grants (gift UX + audit trail); device unlock uses device_subscriptions */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS manual_subscription_grants (
+      id SERIAL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      duration_days INTEGER NOT NULL,
+      nonce UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+      acknowledged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS manual_subscription_grants_device_pending_idx
+    ON manual_subscription_grants (device_id, created_at ASC)
+    WHERE acknowledged_at IS NULL;
+  `)
+
+  /** Hashed Manual Subscription admin PIN (first-time setup); env MANUAL_SUBSCRIPTION_ADMIN_PIN remains legacy fallback */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS manual_subscription_admin_pin (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      pin_hash TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    INSERT INTO manual_subscription_admin_pin (id, pin_hash)
+    VALUES (1, '')
+    ON CONFLICT (id) DO NOTHING;
+  `)
+
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS expires_at_snapshot TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS manual_admin_blocked BOOLEAN NOT NULL DEFAULT false;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS offer_codes (
+      id SERIAL PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      duration_days INTEGER NOT NULL,
+      created_by TEXT NOT NULL DEFAULT 'admin',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      used_by_device TEXT,
+      used_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL,
+      blocked BOOLEAN NOT NULL DEFAULT false,
+      deleted_at TIMESTAMPTZ,
+      failed_attempts INTEGER NOT NULL DEFAULT 0,
+      lock_until TIMESTAMPTZ
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS offer_codes_created_at_idx ON offer_codes (created_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS offer_codes_used_at_idx ON offer_codes (used_at DESC)
+    WHERE used_at IS NOT NULL;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS offer_code_device_attempts (
+      device_id TEXT PRIMARY KEY,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      lock_until TIMESTAMPTZ,
+      lock_tier INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+
+  /**
+   * Osmani admin panel login (separate from subscriber admin_devices + transfer admin_otp_codes).
+   */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_panel_users (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_panel_trusted_devices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      admin_user_id UUID NOT NULL REFERENCES admin_panel_users (id) ON DELETE CASCADE,
+      device_fingerprint_hash TEXT NOT NULL,
+      device_name TEXT NOT NULL DEFAULT '',
+      browser TEXT NOT NULL DEFAULT '',
+      ip_address TEXT NOT NULL DEFAULT '',
+      trusted BOOLEAN NOT NULL DEFAULT true,
+      blocked BOOLEAN NOT NULL DEFAULT false,
+      force_otp_next BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (admin_user_id, device_fingerprint_hash)
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_trusted_devices_user_idx
+    ON admin_panel_trusted_devices (admin_user_id);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_trusted_devices_fp_idx
+    ON admin_panel_trusted_devices (device_fingerprint_hash);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_panel_login_otps (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      admin_user_id UUID NOT NULL REFERENCES admin_panel_users (id) ON DELETE CASCADE,
+      code_hash TEXT NOT NULL,
+      device_fingerprint_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_login_otps_user_created_idx
+    ON admin_panel_login_otps (admin_user_id, created_at DESC);
+  `)
 }
