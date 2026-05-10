@@ -634,18 +634,42 @@ export async function getOldestPendingManualGrant(deviceId) {
   return rows[0] ?? null
 }
 
-export async function acknowledgeManualGrantByNonce(deviceId, nonce) {
+/**
+ * Acknowledge a pending manual gift by grant id (numeric string), UUID nonce, or nonce text match.
+ * Does not cast arbitrary input to UUID (avoids errors for keys like "5").
+ */
+export async function acknowledgeManualGrantFlexible(deviceId, ackKeyRaw) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
-  const n = String(nonce ?? '').trim()
-  if (!d || !n) return false
-  const { rowCount } = await pool.query(
+  const key = String(ackKeyRaw ?? '').trim()
+  if (!d || !key) return false
+
+  const digitsOnly = /^\d+$/.test(key)
+  if (digitsOnly) {
+    const id = Number(key)
+    if (!Number.isSafeInteger(id) || id < 1 || id > 2147483647) return false
+    const byId = await pool.query(
+      `UPDATE manual_subscription_grants
+       SET acknowledged_at = now()
+       WHERE device_id = $1 AND id = $2 AND acknowledged_at IS NULL AND deleted_at IS NULL`,
+      [d, id],
+    )
+    if (Number(byId.rowCount) > 0) return true
+  }
+
+  const byNonceText = await pool.query(
     `UPDATE manual_subscription_grants
      SET acknowledged_at = now()
-     WHERE device_id = $1 AND nonce = $2::uuid AND acknowledged_at IS NULL AND deleted_at IS NULL`,
-    [d, n],
+     WHERE device_id = $1 AND acknowledged_at IS NULL AND deleted_at IS NULL
+       AND lower(trim(nonce::text)) = lower(trim($2::text))`,
+    [d, key],
   )
-  return Number(rowCount) > 0
+  return Number(byNonceText.rowCount) > 0
+}
+
+/** @deprecated Prefer acknowledgeManualGrantFlexible — kept for call sites */
+export async function acknowledgeManualGrantByNonce(deviceId, nonce) {
+  return acknowledgeManualGrantFlexible(deviceId, nonce)
 }
 
 /** Admin: history of manual grants (excludes soft-deleted rows). */

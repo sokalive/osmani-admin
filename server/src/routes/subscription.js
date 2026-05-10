@@ -217,7 +217,7 @@ async function handleAcknowledgeManualGift(req, res) {
         error: 'device_id and manual_gift_ack_key are required',
       })
     }
-    const ok = await billing.acknowledgeManualGrantByNonce(deviceId, ackKey)
+    const ok = await billing.acknowledgeManualGrantFlexible(deviceId, ackKey)
     if (process.env.MANUAL_SUBSCRIPTION_DEBUG === '1') {
       console.log('[manual_gift_ack]', { deviceId: shortRef(deviceId), ok })
     }
