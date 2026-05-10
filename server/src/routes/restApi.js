@@ -21,6 +21,7 @@ import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentPro
 import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
+import { adminAuthRouter } from './adminAuth.js'
 import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
@@ -69,6 +70,13 @@ restApi.get('/', (_req, res) => {
       '/admin/offer-codes/block',
       '/admin/offer-codes/unblock',
       '/admin/offer-codes/:code',
+      '/admin/auth/status',
+      '/admin/auth/login',
+      '/admin/auth/verify-otp',
+      '/admin/auth/resend-otp',
+      '/admin/auth/me',
+      '/admin/auth/devices',
+      '/admin/auth/emergency-pin',
       '/admin/manual-subscription/grant',
       '/admin/manual-subscription/history',
       '/admin/manual-subscription/block',
@@ -162,6 +170,7 @@ restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
 restApi.use(deviceSecurityRouter)
+restApi.use('/admin/auth', adminAuthRouter)
 restApi.use('/admin/manual-subscription', manualSubscriptionAdminRouter)
 restApi.use('/admin/offer-codes', offerCodesAdminRouter)
 restApi.use(subscriptionRouter)

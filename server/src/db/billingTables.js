@@ -473,4 +473,58 @@ export async function ensureBillingTables(client) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `)
+
+  /**
+   * Osmani admin panel login (separate from subscriber admin_devices + transfer admin_otp_codes).
+   */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_panel_users (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_panel_trusted_devices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      admin_user_id UUID NOT NULL REFERENCES admin_panel_users (id) ON DELETE CASCADE,
+      device_fingerprint_hash TEXT NOT NULL,
+      device_name TEXT NOT NULL DEFAULT '',
+      browser TEXT NOT NULL DEFAULT '',
+      ip_address TEXT NOT NULL DEFAULT '',
+      trusted BOOLEAN NOT NULL DEFAULT true,
+      blocked BOOLEAN NOT NULL DEFAULT false,
+      force_otp_next BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (admin_user_id, device_fingerprint_hash)
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_trusted_devices_user_idx
+    ON admin_panel_trusted_devices (admin_user_id);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_trusted_devices_fp_idx
+    ON admin_panel_trusted_devices (device_fingerprint_hash);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_panel_login_otps (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      admin_user_id UUID NOT NULL REFERENCES admin_panel_users (id) ON DELETE CASCADE,
+      code_hash TEXT NOT NULL,
+      device_fingerprint_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_login_otps_user_created_idx
+    ON admin_panel_login_otps (admin_user_id, created_at DESC);
+  `)
 }

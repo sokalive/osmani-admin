@@ -2,8 +2,10 @@ import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const manualSubscriptionAdminRouter = Router()
+manualSubscriptionAdminRouter.use(requireAdminPanelAccess)
 
 const ALLOWED_DURATIONS = new Set([1, 7, 30, 90])
 
@@ -11,18 +13,6 @@ const ALLOWED_DURATIONS = new Set([1, 7, 30, 90])
 const rateBucket = new Map()
 /** Setup-pin attempts per IP (separate from grant limiter) */
 const setupRateBucket = new Map()
-
-function requireAdminToken(req, res, next) {
-  const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
-  if (!expected) {
-    return res.status(503).json({ ok: false, error: 'ADMIN_API_TOKEN / APP_UPDATE_ADMIN_TOKEN is not configured' })
-  }
-  const got = String(req.headers['x-admin-token'] ?? '').trim()
-  if (got !== expected) {
-    return res.status(403).json({ ok: false, error: 'Invalid admin token' })
-  }
-  next()
-}
 
 function rateLimitGrant(req, res, next) {
   const maxPerHour = Math.min(200, Math.max(5, Number(process.env.MANUAL_GRANT_RATE_LIMIT_PER_HOUR) || 30))
@@ -61,7 +51,7 @@ function rateLimitSetup(req, res, next) {
   next()
 }
 
-manualSubscriptionAdminRouter.get('/pin-status', requireAdminToken, async (_req, res) => {
+manualSubscriptionAdminRouter.get('/pin-status', async (_req, res) => {
   try {
     const configured = await billing.isManualSubscriptionPinConfigured()
     res.json({ ok: true, configured })
@@ -71,7 +61,7 @@ manualSubscriptionAdminRouter.get('/pin-status', requireAdminToken, async (_req,
   }
 })
 
-manualSubscriptionAdminRouter.post('/setup-pin', requireAdminToken, rateLimitSetup, async (req, res) => {
+manualSubscriptionAdminRouter.post('/setup-pin', rateLimitSetup, async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const pin = String(body.pin ?? '')
@@ -117,7 +107,7 @@ function logManualSubscriptionAudit(action, deviceId) {
   )
 }
 
-manualSubscriptionAdminRouter.get('/history', requireAdminToken, async (_req, res) => {
+manualSubscriptionAdminRouter.get('/history', async (_req, res) => {
   try {
     const rows = await billing.listManualSubscriptionHistoryAdmin({ limit: 500 })
     res.json({ ok: true, rows })
@@ -127,7 +117,7 @@ manualSubscriptionAdminRouter.get('/history', requireAdminToken, async (_req, re
   }
 })
 
-manualSubscriptionAdminRouter.post('/block', requireAdminToken, async (req, res) => {
+manualSubscriptionAdminRouter.post('/block', async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
@@ -152,7 +142,7 @@ manualSubscriptionAdminRouter.post('/block', requireAdminToken, async (req, res)
   }
 })
 
-manualSubscriptionAdminRouter.post('/unblock', requireAdminToken, async (req, res) => {
+manualSubscriptionAdminRouter.post('/unblock', async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
@@ -177,7 +167,7 @@ manualSubscriptionAdminRouter.post('/unblock', requireAdminToken, async (req, re
   }
 })
 
-manualSubscriptionAdminRouter.delete('/history/:grantId', requireAdminToken, async (req, res) => {
+manualSubscriptionAdminRouter.delete('/history/:grantId', async (req, res) => {
   try {
     const grantId = Number(req.params.grantId)
     if (!Number.isFinite(grantId) || grantId < 1) {
@@ -195,7 +185,7 @@ manualSubscriptionAdminRouter.delete('/history/:grantId', requireAdminToken, asy
   }
 })
 
-manualSubscriptionAdminRouter.post('/grant', requireAdminToken, rateLimitGrant, async (req, res) => {
+manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const pin = String(body.pin ?? '').trim()

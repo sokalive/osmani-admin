@@ -1,23 +1,13 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const offerCodesAdminRouter = Router()
+offerCodesAdminRouter.use(requireAdminPanelAccess)
 
 const ALLOWED_DURATIONS = new Set([1, 7, 30, 90])
 
-function requireAdminToken(req, res, next) {
-  const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
-  if (!expected) {
-    return res.status(503).json({ ok: false, error: 'ADMIN_API_TOKEN / APP_UPDATE_ADMIN_TOKEN is not configured' })
-  }
-  const got = String(req.headers['x-admin-token'] ?? '').trim()
-  if (got !== expected) {
-    return res.status(403).json({ ok: false, error: 'Invalid admin token' })
-  }
-  next()
-}
-
-offerCodesAdminRouter.post('/generate', requireAdminToken, async (req, res) => {
+offerCodesAdminRouter.post('/generate', async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const pin = String(body.pin ?? '').trim()
@@ -53,7 +43,7 @@ offerCodesAdminRouter.post('/generate', requireAdminToken, async (req, res) => {
   }
 })
 
-offerCodesAdminRouter.get('/history', requireAdminToken, async (_req, res) => {
+offerCodesAdminRouter.get('/history', async (_req, res) => {
   try {
     const rows = await billing.listOfferCodesHistoryAdmin({ limit: 500 })
     res.json({ ok: true, rows })
@@ -63,7 +53,7 @@ offerCodesAdminRouter.get('/history', requireAdminToken, async (_req, res) => {
   }
 })
 
-offerCodesAdminRouter.post('/block', requireAdminToken, async (req, res) => {
+offerCodesAdminRouter.post('/block', async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const raw = String(body.code ?? '').trim()
@@ -82,7 +72,7 @@ offerCodesAdminRouter.post('/block', requireAdminToken, async (req, res) => {
   }
 })
 
-offerCodesAdminRouter.post('/unblock', requireAdminToken, async (req, res) => {
+offerCodesAdminRouter.post('/unblock', async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const raw = String(body.code ?? '').trim()
@@ -101,7 +91,7 @@ offerCodesAdminRouter.post('/unblock', requireAdminToken, async (req, res) => {
   }
 })
 
-offerCodesAdminRouter.delete('/:code', requireAdminToken, async (req, res) => {
+offerCodesAdminRouter.delete('/:code', async (req, res) => {
   try {
     const raw = String(req.params.code ?? '').trim()
     if (!raw) {

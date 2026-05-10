@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
 import { getPool } from './db/pool.js'
 import { normalizeLocationPayload } from './lib/analyticsLocation.js'
@@ -14,6 +15,9 @@ export async function ensureBillingStorage() {
   } finally {
     client.release()
   }
+  await ensureBootstrapAdminPanelUser().catch((err) => {
+    console.error('[admin-panel-bootstrap]', err?.message || err)
+  })
 }
 
 function requirePool() {
