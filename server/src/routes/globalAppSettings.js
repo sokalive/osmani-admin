@@ -19,6 +19,27 @@ function normalizeSettings(obj) {
   }
 }
 
+/** Snake_case flags for clients + SSE `app_modes` on subscription-stream. */
+export function modesPayloadFromNormalized(n) {
+  return {
+    free_mode: n.freeMode === true,
+    emergency_mode: n.emergencyMode === true,
+    maintenance_mode: n.maintenanceMode === true,
+  }
+}
+
+/** Used by subscription-stream SSE (poll + settings sync). */
+export async function loadGlobalAppModesPayload() {
+  const n = normalizeSettings(await readJson(GLOBAL_APP_SETTINGS_FILE, defaults))
+  const snap = liveSyncBus.snapshot()
+  return {
+    ok: true,
+    v: snap.configVersion,
+    ...modesPayloadFromNormalized(n),
+    server_time_ms: Date.now(),
+  }
+}
+
 export const globalAppSettingsRouter = Router()
 
 globalAppSettingsRouter.get('/', async (_req, res) => {
@@ -40,9 +61,11 @@ globalAppSettingsRouter.put('/', async (req, res) => {
       ...body,
     })
     await writeJsonAtomic(GLOBAL_APP_SETTINGS_FILE, next)
+    const modes = modesPayloadFromNormalized(next)
     liveSyncBus.publish('config.settings_changed', {
       topics: ['config'],
       action: 'updated',
+      modes,
     })
     res.json(next)
   } catch (e) {
