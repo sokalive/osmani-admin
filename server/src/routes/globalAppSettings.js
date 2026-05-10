@@ -16,6 +16,14 @@ const defaults = {
   },
 }
 
+export function modesPayloadFromNormalized(n) {
+  return {
+    free_mode: n.freeMode === true,
+    emergency_mode: n.emergencyMode === true,
+    maintenance_mode: n.maintenanceMode === true,
+  }
+}
+
 function normalizeSettings(obj) {
   const o = obj && typeof obj === 'object' ? obj : {}
   const beSource =
@@ -42,6 +50,18 @@ function normalizeSettings(obj) {
   }
 }
 
+/** Light JSON for polling / SSE (subscriber apps). Uses current config SSE version counter. */
+export async function loadGlobalAppModesPayload() {
+  const n = normalizeSettings(await readJson(GLOBAL_APP_SETTINGS_FILE, defaults))
+  const snap = liveSyncBus.snapshot()
+  return {
+    ok: true,
+    v: snap.configVersion,
+    ...modesPayloadFromNormalized(n),
+    server_time_ms: Date.now(),
+  }
+}
+
 export const globalAppSettingsRouter = Router()
 
 globalAppSettingsRouter.get('/', async (_req, res) => {
@@ -63,9 +83,11 @@ globalAppSettingsRouter.put('/', async (req, res) => {
       ...body,
     })
     await writeJsonAtomic(GLOBAL_APP_SETTINGS_FILE, next)
+    const modes = modesPayloadFromNormalized(next)
     liveSyncBus.publish('config.settings_changed', {
       topics: ['config'],
       action: 'updated',
+      modes,
     })
     res.json(next)
   } catch (e) {

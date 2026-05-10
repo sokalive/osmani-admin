@@ -176,6 +176,16 @@ export async function deleteTransactionsBulk(ids) {
 /** Initiate ZenoPay collection (uses server-stored credentials + env overrides). */
 export const postCreatePayment = (body) => apiPost('/payments/create-payment', body)
 
+/** GET — lightweight app mode flags for mobile/web polling (no-store). */
+export function appModePollUrl() {
+  return joinPath('/realtime/app-mode')
+}
+
+/** GET — dedicated SSE for FREE / EMERGENCY / MAINTENANCE (event: app_modes). */
+export function appModeSseUrl() {
+  return `${API_BASE}/realtime/mode-stream`
+}
+
 /** Poll payment status: { order_id, status } where status is SUCCESS | PENDING | FAILED */
 export const getPaymentStatus = (orderId) =>
   apiGet(`/payment-status/${encodeURIComponent(String(orderId ?? ''))}`)

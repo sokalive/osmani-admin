@@ -25,6 +25,7 @@ import { adminAuthRouter } from './adminAuth.js'
 import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
+import { realtimeAppModeRouter } from './realtimeAppMode.js'
 
 const FILES = {
   users: 'users.json',
@@ -65,6 +66,8 @@ restApi.get('/', (_req, res) => {
       '/subscription/acknowledge-manual-gift',
       '/subscription/redeem-offer-code',
       '/subscription-stream',
+      '/realtime/app-mode',
+      '/realtime/mode-stream',
       '/admin/offer-codes/generate',
       '/admin/offer-codes/history',
       '/admin/offer-codes/block',
@@ -174,6 +177,7 @@ restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
+restApi.use('/realtime', realtimeAppModeRouter)
 restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
 restApi.use(deviceSecurityRouter)

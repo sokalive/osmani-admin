@@ -3,8 +3,11 @@ import * as billing from '../billingStore.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 
 export const subscriptionRouter = Router()
+
+const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(1500, Number(process.env.MODE_SSE_POLL_MS) || 2500))
 
 function countryFromRequest(req) {
   const raw =
@@ -410,6 +413,26 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   }
   send()
 
+  const writeAppModesEvent = async (reason) => {
+    try {
+      const p = await loadGlobalAppModesPayload()
+      res.write(`event: app_modes\ndata: ${JSON.stringify({ ...p, reason })}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] app_modes push failed:', e)
+    }
+  }
+  void writeAppModesEvent('init')
+
+  const modeSyncHandler = (packet) => {
+    if (!packet?.payload?.modes) return
+    void writeAppModesEvent(String(packet.event || 'settings'))
+  }
+  liveSyncBus.on('sync', modeSyncHandler)
+
+  const modePoll = setInterval(() => {
+    void writeAppModesEvent('poll')
+  }, MODE_SSE_POLL_MS)
+
   const handler = async (payload) => {
     if (!payload || payload.deviceId !== deviceId) return
     try {
@@ -429,7 +452,9 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
 
   req.on('close', () => {
     clearInterval(ping)
+    clearInterval(modePoll)
     deviceSubscriptionBus.off('update', handler)
+    liveSyncBus.off('sync', modeSyncHandler)
     try {
       res.end()
     } catch (e) {
