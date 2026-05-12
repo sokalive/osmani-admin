@@ -3,7 +3,7 @@ import { Bell, MousePointerClick } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getNotifications, postNotification, putNotification } from '../lib/api'
+import { getNotifications, postNotification, putNotification, syncStreamUrl } from '../lib/api'
 
 const AUDIENCES = [
   { value: 'all', label: 'All users' },
@@ -43,6 +43,15 @@ function NotificationsPage() {
       loadNotifications()
     }, 60_000)
     return () => window.clearInterval(id)
+  }, [loadNotifications])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onChanged = () => {
+      void loadNotifications()
+    }
+    es.addEventListener('config.notifications_changed', onChanged)
+    return () => es.close()
   }, [loadNotifications])
 
   const [title, setTitle] = useState('')

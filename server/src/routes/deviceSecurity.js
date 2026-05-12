@@ -4,8 +4,15 @@ import * as billing from '../billingStore.js'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
+import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const deviceSecurityRouter = Router()
+
+deviceSecurityRouter.use('/settings/device-control', requireAdminPanelAccess)
+deviceSecurityRouter.use('/settings/security-suite', requireAdminPanelAccess)
+deviceSecurityRouter.use('/security-logs', requireAdminPanelAccess)
+deviceSecurityRouter.use('/transfer-codes', requireAdminPanelAccess)
 
 const TRANSFER_CODE_TTL_MINUTES = Math.max(5, Number(process.env.TRANSFER_CODE_TTL_MINUTES) || 30)
 const FINGERPRINT_SALT = String(process.env.FINGERPRINT_HASH_SALT || 'osmani-fp-v1')
@@ -163,6 +170,10 @@ const TRANSFER_SETTING_KEYS = {
   cooldown: 'transfer_cooldown_minutes',
 }
 
+const SECURITY_SETTING_KEYS = {
+  protectionMode: 'security_protection_mode',
+}
+
 /** Exact client copy for POST /transfer/request when daily / weekly caps are exceeded. */
 const TRANSFER_LIMIT_FORBIDDEN_MESSAGE =
   'Umefikia kiwango cha mwisho cha kuamisha kifurushi. Tafadhali wasiliana na muhudumu kama unahitaji kuamisha kifurushi tena.'
@@ -208,6 +219,38 @@ async function readTransferSettingsLive(pool) {
   }
 }
 
+async function ensureSecuritySettingsInfrastructure(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await pool.query(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('security_protection_mode', 'automatic')
+    ON CONFLICT (key) DO NOTHING;
+  `)
+}
+
+async function readSecuritySuiteSettings(pool) {
+  await ensureSecuritySettingsInfrastructure(pool)
+  const settings = await readAppSettings(pool, {
+    [SECURITY_SETTING_KEYS.protectionMode]: 'automatic',
+  })
+  return {
+    protectionMode:
+      String(settings[SECURITY_SETTING_KEYS.protectionMode] || 'automatic') === 'manual'
+        ? 'manual'
+        : 'automatic',
+  }
+}
+
+function adminActor(req, fallback = 'Admin') {
+  return text(req.adminAuth?.email ?? fallback, 120)
+}
+
 async function logSecurityEvent(pool, { actor, eventType, status, detail, metadata = {} }) {
   await pool.query(
     `INSERT INTO security_events (actor, event_type, status, detail, metadata, created_at)
@@ -218,6 +261,9 @@ async function logSecurityEvent(pool, { actor, eventType, status, detail, metada
 
 function emitSync(event, payload) {
   liveSyncBus.publish(event, { topics: ['config'], ...payload })
+  void recordSystemNotificationEvent(event, payload).catch((err) => {
+    console.error('[device-security] notification sync failed:', err)
+  })
 }
 
 async function cleanupSecurity(pool) {
@@ -230,6 +276,21 @@ async function cleanupSecurity(pool) {
     `UPDATE admin_otp_codes
      SET status = 'expired'
      WHERE status = 'active' AND expires_at <= now()`,
+  )
+  await pool.query(
+    `UPDATE device_transfers dt
+     SET status = CASE
+       WHEN tc.status = 'revoked' THEN 'revoked'
+       ELSE 'expired'
+     END,
+         reason = CASE
+       WHEN tc.status = 'revoked' THEN 'revoked_by_admin'
+       ELSE 'code_expired'
+     END
+     FROM transfer_codes tc
+     WHERE dt.code_id = tc.id
+       AND dt.status IN ('requested', 'awaiting_target_submission')
+       AND tc.status IN ('expired', 'revoked')`,
   )
 }
 
@@ -283,7 +344,7 @@ async function checkTransferLimits(pool, sourceDeviceId, cooldownMinutes, dailyL
 }
 
 /** Shared admin force transfer by device IDs. Emits SSE + subscription bus after commit. */
-async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId, targetFpHash, auditExtra }) {
+async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId, targetFpHash, actor, auditExtra }) {
   const src = text(sourceDeviceId, 128)
   const tgt = text(targetDeviceId, 128)
   if (!src || !tgt) return { ok: false, status: 400, error: 'source_device_id and target_device_id are required' }
@@ -339,7 +400,7 @@ async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId,
     )
     const extra = auditExtra ? String(auditExtra).slice(0, 500) : ''
     await logSecurityEvent(client, {
-      actor: 'Admin',
+      actor: text(actor || 'Admin', 120),
       eventType: 'Force transfer',
       status: 'completed',
       detail: `Force transferred ${src} -> ${tgt}${extra ? ` · ${extra}` : ''}`,
@@ -354,6 +415,8 @@ async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId,
       reason: 'admin_force',
     })
     emitSync('subscription_revoked', { device_id: src, reason: 'admin_force' })
+    emitSync('transfer_codes_changed', { action: 'admin_force', source_device_id: src, target_device_id: tgt })
+    emitSync('security_logs_changed', { action: 'admin_force', source_device_id: src, target_device_id: tgt })
     return { ok: true, source_device_id: src, target_device_id: tgt }
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
@@ -389,7 +452,7 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
       cooldownMinutes: live.cooldownMinutes,
       pending: pendingRows.rows
         .filter((r) =>
-          ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked'].includes(
+          ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked', 'expired'].includes(
             String(r.status),
           ),
         )
@@ -444,6 +507,18 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       [TRANSFER_SETTING_KEYS.weekly]: payload.weeklyLimit,
       [TRANSFER_SETTING_KEYS.cooldown]: payload.cooldownMinutes,
     })
+    await logSecurityEvent(client, {
+      actor: adminActor(req),
+      eventType: 'Device control updated',
+      status: 'completed',
+      detail: `transfer_mode:${payload.transferMode} daily:${payload.dailyLimit} weekly:${payload.weeklyLimit} cooldown:${payload.cooldownMinutes}`,
+      metadata: {
+        transfer_mode: payload.transferMode,
+        daily_limit: payload.dailyLimit,
+        weekly_limit: payload.weeklyLimit,
+        cooldown_minutes: payload.cooldownMinutes,
+      },
+    })
     console.log('[device-control] PUT upsert rowCount/returned', upsertResults)
     const live = await readTransferSettingsLive(client)
     const pendingRows = await client.query(
@@ -468,7 +543,7 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       cooldownMinutes: live.cooldownMinutes,
       pending: pendingRows.rows
         .filter((r) =>
-          ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked'].includes(
+          ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked', 'expired'].includes(
             String(r.status),
           ),
         )
@@ -503,6 +578,8 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     console.log('[device-control] PUT persisted rows', live.dbRows)
     console.log('[device-control] PUT commit success', { ok: true })
     console.log('[device-control] PUT settings response', responseBody)
+    emitSync('device_control_changed', payload)
+    emitSync('security_logs_changed', { section: 'device_control' })
     return res.json(responseBody)
   } catch (e) {
     if (client) await client.query('ROLLBACK').catch(() => {})
@@ -518,6 +595,7 @@ deviceSecurityRouter.get('/settings/security-suite', async (_req, res) => {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
     await ensureSecurityTables(pool)
+    const suiteSettings = await readSecuritySuiteSettings(pool)
     const blockedRows = await pool.query(
       `SELECT device_id, block_reason, updated_at
        FROM admin_devices
@@ -538,7 +616,7 @@ deviceSecurityRouter.get('/settings/security-suite', async (_req, res) => {
        LIMIT 200`,
     )
     return res.json({
-      protectionMode: 'automatic',
+      protectionMode: suiteSettings.protectionMode,
       whitelist: whitelistRows.rows.map((r) => ({ id: String(r.device_id), value: String(r.device_id) })),
       blockedUsers: blockedRows.rows.map((r) => ({
         id: String(r.device_id),
@@ -563,31 +641,34 @@ deviceSecurityRouter.get('/settings/security-suite', async (_req, res) => {
 })
 
 deviceSecurityRouter.put('/settings/security-suite', async (req, res) => {
+  const pool = getPool()
+  const client = (await pool?.connect?.()) || null
   try {
-    const pool = getPool()
-    if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    await ensureSecurityTables(pool)
+    if (!pool || !client) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(client)
+    await ensureSecuritySettingsInfrastructure(client)
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const whitelist = Array.isArray(b.whitelist) ? b.whitelist : []
     const blockedUsers = Array.isArray(b.blockedUsers) ? b.blockedUsers : []
-    await pool.query('BEGIN')
+    const protectionMode = String(b.protectionMode || 'automatic') === 'manual' ? 'manual' : 'automatic'
+    await client.query('BEGIN')
     try {
-      await pool.query(`UPDATE admin_devices SET whitelisted = false, updated_at = now() WHERE whitelisted = true`)
+      await client.query(`UPDATE admin_devices SET whitelisted = false, updated_at = now() WHERE whitelisted = true`)
       for (const w of whitelist) {
         const deviceId = text(w?.value ?? w?.id, 128)
         if (!deviceId) continue
-        await pool.query(
+        await client.query(
           `INSERT INTO admin_devices (device_id, whitelisted, updated_at)
            VALUES ($1, true, now())
            ON CONFLICT (device_id) DO UPDATE SET whitelisted = true, updated_at = now()`,
           [deviceId],
         )
       }
-      await pool.query(`UPDATE admin_devices SET is_blocked = false, block_reason = NULL, updated_at = now()`)
+      await client.query(`UPDATE admin_devices SET is_blocked = false, block_reason = NULL, updated_at = now()`)
       for (const bl of blockedUsers) {
         const deviceId = text(bl?.value ?? bl?.id, 128)
         if (!deviceId) continue
-        await pool.query(
+        await client.query(
           `INSERT INTO admin_devices (device_id, is_blocked, block_reason, updated_at)
            VALUES ($1, true, $2, now())
            ON CONFLICT (device_id) DO UPDATE SET
@@ -597,13 +678,28 @@ deviceSecurityRouter.put('/settings/security-suite', async (req, res) => {
           [deviceId, text(bl?.reason, 500)],
         )
       }
-      await pool.query('COMMIT')
+      await upsertAppSetting(client, SECURITY_SETTING_KEYS.protectionMode, protectionMode)
+      await logSecurityEvent(client, {
+        actor: adminActor(req),
+        eventType: 'Security suite updated',
+        status: 'completed',
+        detail: `protection_mode:${protectionMode} whitelist:${whitelist.length} blocked:${blockedUsers.length}`,
+        metadata: {
+          protection_mode: protectionMode,
+          whitelist_count: whitelist.length,
+          blocked_count: blockedUsers.length,
+        },
+      })
+      await client.query('COMMIT')
     } catch (e) {
-      await pool.query('ROLLBACK')
+      await client.query('ROLLBACK')
       throw e
     }
     emitSync('app_settings_changed', { section: 'security_suite' })
-    const alertRows = await pool.query(
+    emitSync('security_suite_changed', { protectionMode })
+    emitSync('security_logs_changed', { section: 'security_suite' })
+    emitSync('security_alerts_changed', { section: 'security_suite' })
+    const alertRows = await client.query(
       `SELECT id, actor, event_type, detail, status, created_at, metadata
        FROM security_events
        WHERE status IN ('failed', 'blocked', 'warning', 'pending')
@@ -611,7 +707,7 @@ deviceSecurityRouter.put('/settings/security-suite', async (req, res) => {
        LIMIT 200`,
     )
     return res.json({
-      protectionMode: String(b.protectionMode || 'automatic'),
+      protectionMode,
       whitelist,
       blockedUsers,
       alerts: alertRows.rows.map((r) => ({
@@ -628,27 +724,49 @@ deviceSecurityRouter.put('/settings/security-suite', async (req, res) => {
   } catch (e) {
     console.error('[security-suite] PUT', e)
     return res.status(500).json({ error: String(e.message || e) })
+  } finally {
+    if (client) client.release()
   }
 })
 
-deviceSecurityRouter.post('/settings/security-suite/restore-whitelist', async (_req, res) => {
+deviceSecurityRouter.post('/settings/security-suite/restore-whitelist', async (req, res) => {
+  const pool = getPool()
+  const client = (await pool?.connect?.()) || null
   try {
-    const pool = getPool()
-    if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    await ensureSecurityTables(pool)
+    if (!pool || !client) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(client)
+    await ensureSecuritySettingsInfrastructure(client)
     const defaults = ['127.0.0.1', 'localhost']
-    await pool.query(`UPDATE admin_devices SET whitelisted = false, updated_at = now() WHERE whitelisted = true`)
-    for (const d of defaults) {
-      await pool.query(
-        `INSERT INTO admin_devices (device_id, whitelisted, updated_at)
-         VALUES ($1, true, now())
-         ON CONFLICT (device_id) DO UPDATE SET whitelisted = true, updated_at = now()`,
-        [d],
-      )
+    await client.query('BEGIN')
+    try {
+      await client.query(`UPDATE admin_devices SET whitelisted = false, updated_at = now() WHERE whitelisted = true`)
+      for (const d of defaults) {
+        await client.query(
+          `INSERT INTO admin_devices (device_id, whitelisted, updated_at)
+           VALUES ($1, true, now())
+           ON CONFLICT (device_id) DO UPDATE SET whitelisted = true, updated_at = now()`,
+          [d],
+        )
+      }
+      await logSecurityEvent(client, {
+        actor: adminActor(req),
+        eventType: 'Security whitelist restored',
+        status: 'completed',
+        detail: 'Whitelist reset to default localhost entries',
+        metadata: { defaults },
+      })
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
     }
     emitSync('app_settings_changed', { section: 'security_suite_whitelist' })
+    emitSync('security_suite_changed', { section: 'whitelist_defaults' })
+    emitSync('security_logs_changed', { section: 'security_suite_whitelist' })
+    emitSync('security_alerts_changed', { section: 'security_suite_whitelist' })
+    const suiteSettings = await readSecuritySuiteSettings(client)
     return res.json({
-      protectionMode: 'automatic',
+      protectionMode: suiteSettings.protectionMode,
       whitelist: defaults.map((v) => ({ id: v, value: v })),
       blockedUsers: [],
       alerts: [],
@@ -656,6 +774,8 @@ deviceSecurityRouter.post('/settings/security-suite/restore-whitelist', async (_
   } catch (e) {
     console.error('[security-suite] restore whitelist', e)
     return res.status(500).json({ error: String(e.message || e) })
+  } finally {
+    if (client) client.release()
   }
 })
 
@@ -669,6 +789,15 @@ deviceSecurityRouter.delete('/settings/security-suite/alerts/:id', async (req, r
     const { rowCount } = await pool.query(`DELETE FROM security_events WHERE id = $1::uuid`, [id])
     console.log('[security-suite] alert delete result', { id, deleted: Number(rowCount) || 0 })
     if (!rowCount) return res.status(404).json({ error: 'Alert not found' })
+    await logSecurityEvent(pool, {
+      actor: adminActor(req),
+      eventType: 'Security alert deleted',
+      status: 'completed',
+      detail: `Deleted alert ${id}`,
+      metadata: { alert_id: id },
+    })
+    emitSync('security_alerts_changed', { action: 'delete_one', alert_id: id })
+    emitSync('security_logs_changed', { action: 'delete_one_alert', alert_id: id })
     return res.status(204).send()
   } catch (e) {
     console.error('[security-suite] alert delete', e)
@@ -692,6 +821,17 @@ deviceSecurityRouter.post('/settings/security-suite/alerts/bulk-delete', async (
       )
       const deleted = Number(out.rowCount) || 0
       console.log('[security-suite] alert bulk-delete result', { deleted, mode: 'all' })
+      if (deleted > 0) {
+        await logSecurityEvent(pool, {
+          actor: adminActor(req),
+          eventType: 'Security alerts cleared',
+          status: 'completed',
+          detail: `Deleted ${deleted} active security alerts`,
+          metadata: { deleted, mode: 'all' },
+        })
+        emitSync('security_alerts_changed', { action: 'bulk_delete', deleted, mode: 'all' })
+        emitSync('security_logs_changed', { action: 'bulk_delete_alerts', deleted, mode: 'all' })
+      }
       return res.json({ ok: true, deleted })
     }
     const ids = Array.isArray(b.ids) ? b.ids.map((x) => text(x, 64)).filter(Boolean) : []
@@ -699,6 +839,17 @@ deviceSecurityRouter.post('/settings/security-suite/alerts/bulk-delete', async (
     const out = await pool.query(`DELETE FROM security_events WHERE id = ANY($1::uuid[])`, [ids])
     const deleted = Number(out.rowCount) || 0
     console.log('[security-suite] alert bulk-delete result', { deleted, mode: 'ids' })
+    if (deleted > 0) {
+      await logSecurityEvent(pool, {
+        actor: adminActor(req),
+        eventType: 'Security alerts cleared',
+        status: 'completed',
+        detail: `Deleted ${deleted} selected security alerts`,
+        metadata: { deleted, mode: 'ids' },
+      })
+      emitSync('security_alerts_changed', { action: 'bulk_delete', deleted, mode: 'ids' })
+      emitSync('security_logs_changed', { action: 'bulk_delete_alerts', deleted, mode: 'ids' })
+    }
     return res.json({ ok: true, deleted })
   } catch (e) {
     console.error('[security-suite] alert bulk-delete', e)
@@ -743,6 +894,8 @@ deviceSecurityRouter.delete('/security-logs/:id', async (req, res) => {
     const { rowCount } = await pool.query(`DELETE FROM security_events WHERE id = $1::uuid`, [id])
     console.log('[security-logs] delete result', { id, deleted: Number(rowCount) || 0 })
     if (!rowCount) return res.status(404).json({ error: 'Security log not found' })
+    emitSync('security_logs_changed', { action: 'delete_one', log_id: id })
+    emitSync('security_alerts_changed', { action: 'delete_one_log', log_id: id })
     return res.status(204).send()
   } catch (e) {
     console.error('[security-logs] DELETE', e)
@@ -765,6 +918,8 @@ deviceSecurityRouter.post('/security-logs/bulk-delete', async (req, res) => {
       const out = await pool.query(`DELETE FROM security_events`)
       const deleted = Number(out.rowCount) || 0
       console.log('[security-logs] bulk-delete result', { deleted, mode: 'all' })
+      emitSync('security_logs_changed', { action: 'bulk_delete', deleted, mode: 'all' })
+      emitSync('security_alerts_changed', { action: 'bulk_delete_logs', deleted, mode: 'all' })
       return res.json({ ok: true, deleted })
     }
     const ids = Array.isArray(b.ids) ? b.ids.map((x) => text(x, 64)).filter(Boolean) : []
@@ -772,6 +927,8 @@ deviceSecurityRouter.post('/security-logs/bulk-delete', async (req, res) => {
     const out = await pool.query(`DELETE FROM security_events WHERE id = ANY($1::uuid[])`, [ids])
     const deleted = Number(out.rowCount) || 0
     console.log('[security-logs] bulk-delete result', { deleted, mode: 'ids' })
+    emitSync('security_logs_changed', { action: 'bulk_delete', deleted, mode: 'ids' })
+    emitSync('security_alerts_changed', { action: 'bulk_delete_logs', deleted, mode: 'ids' })
     return res.json({ ok: true, deleted })
   } catch (e) {
     console.error('[security-logs] bulk-delete', e)
@@ -792,6 +949,10 @@ deviceSecurityRouter.post('/security-logs', async (req, res) => {
       detail: b.detail,
       metadata: b.metadata || {},
     })
+    emitSync('security_logs_changed', { action: 'create' })
+    if (['failed', 'blocked', 'warning', 'pending'].includes(String(b.status || ''))) {
+      emitSync('security_alerts_changed', { action: 'create' })
+    }
     return res.json({ ok: true })
   } catch (e) {
     console.error('[security-logs] POST', e)
@@ -850,12 +1011,14 @@ deviceSecurityRouter.post('/transfer-codes', async (req, res) => {
       status: 'active',
     })
     await logSecurityEvent(pool, {
-      actor: 'Admin',
+      actor: adminActor(req),
       eventType: 'Code transfer',
       status: 'completed',
       detail: `Issued transfer code ${row.code}`,
       metadata: { source_device_id: sourceDeviceId },
     })
+    emitSync('transfer_codes_changed', { action: 'create', code: String(row.code) })
+    emitSync('security_logs_changed', { action: 'transfer_code_create', code: String(row.code) })
     return res.status(201).json({
       id: String(row.id),
       code: String(row.code),
@@ -891,7 +1054,31 @@ deviceSecurityRouter.put('/transfer-codes/:id', async (req, res) => {
       [id, status],
     )
     if (!rows[0]) return res.status(404).json({ error: 'Transfer code not found' })
-    if (status === 'revoked') emitSync('transfer_rejected', { code: String(rows[0].code), reason: 'revoked_by_admin' })
+    if (status === 'revoked' || status === 'expired') {
+      await pool.query(
+        `UPDATE device_transfers
+         SET status = $2,
+             reason = CASE
+               WHEN $2 = 'revoked' THEN 'revoked_by_admin'
+               ELSE 'code_expired'
+             END
+         WHERE code_id = $1::uuid
+           AND status IN ('requested', 'awaiting_target_submission')`,
+        [id, status],
+      )
+    }
+    if (status === 'revoked') {
+      await logSecurityEvent(pool, {
+        actor: adminActor(req),
+        eventType: 'Code transfer',
+        status: 'completed',
+        detail: `Revoked transfer code ${rows[0].code}`,
+        metadata: { code: String(rows[0].code), transfer_code_id: id },
+      })
+      emitSync('transfer_rejected', { code: String(rows[0].code), reason: 'revoked_by_admin' })
+      emitSync('security_logs_changed', { action: 'transfer_code_revoke', code: String(rows[0].code) })
+    }
+    emitSync('transfer_codes_changed', { action: 'update', code: String(rows[0].code), status })
     return res.json({
       id: String(rows[0].id),
       code: String(rows[0].code),
@@ -918,6 +1105,7 @@ deviceSecurityRouter.delete('/transfer-codes/:id', async (req, res) => {
     const out = await pool.query(`DELETE FROM transfer_codes WHERE id = $1::uuid`, [id])
     console.log('[transfer-codes] delete result', { id, deleted: Number(out.rowCount) || 0 })
     if (!out.rowCount) return res.status(404).json({ error: 'Transfer code not found' })
+    emitSync('transfer_codes_changed', { action: 'delete_one', transfer_code_id: id })
     return res.status(204).send()
   } catch (e) {
     console.error('[transfer-codes] DELETE', e)
@@ -942,12 +1130,14 @@ deviceSecurityRouter.post('/transfer-codes/bulk-delete', async (req, res) => {
       const out = await pool.query(`DELETE FROM transfer_codes WHERE status = 'expired' OR expires_at <= now()`)
       const deleted = Number(out.rowCount) || 0
       console.log('[transfer-codes] bulk-delete result', { deleted, mode: 'expired' })
+      emitSync('transfer_codes_changed', { action: 'bulk_delete', deleted, mode: 'expired' })
       return res.json({ ok: true, deleted })
     }
     if (all) {
       const out = await pool.query(`DELETE FROM transfer_codes`)
       const deleted = Number(out.rowCount) || 0
       console.log('[transfer-codes] bulk-delete result', { deleted, mode: 'all' })
+      emitSync('transfer_codes_changed', { action: 'bulk_delete', deleted, mode: 'all' })
       return res.json({ ok: true, deleted })
     }
     const ids = Array.isArray(b.ids) ? b.ids.map((x) => text(x, 64)).filter(Boolean) : []
@@ -955,6 +1145,7 @@ deviceSecurityRouter.post('/transfer-codes/bulk-delete', async (req, res) => {
     const out = await pool.query(`DELETE FROM transfer_codes WHERE id = ANY($1::uuid[])`, [ids])
     const deleted = Number(out.rowCount) || 0
     console.log('[transfer-codes] bulk-delete result', { deleted, mode: 'ids' })
+    emitSync('transfer_codes_changed', { action: 'bulk_delete', deleted, mode: 'ids' })
     return res.json({ ok: true, deleted })
   } catch (e) {
     console.error('[transfer-codes] bulk-delete', e)
@@ -1021,6 +1212,8 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
         detail: limits.reason,
         metadata: { source_device_id: sourceDeviceId, reason: reasonCode },
       })
+      emitSync('security_logs_changed', { action: 'transfer_request_failed', source_device_id: sourceDeviceId })
+      emitSync('security_alerts_changed', { action: 'transfer_request_failed', source_device_id: sourceDeviceId })
       if (isCooldown) {
         console.warn('[transfer/request] rejected: cooldown active', {
           sourceDeviceId,
@@ -1111,6 +1304,8 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
       status: 'active',
       transfer_mode: livePolicy.transferMode,
     })
+    emitSync('transfer_codes_changed', { action: 'request', code: responseBody.code, source_device_id: sourceDeviceId })
+    emitSync('security_logs_changed', { action: 'transfer_request', source_device_id: sourceDeviceId })
     console.log('[transfer/request] response body', responseBody)
     return res.json(responseBody)
   } catch (e) {
@@ -1290,6 +1485,12 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
       device_id: sourceDeviceId,
       reason: 'transfer_confirmed',
     })
+    emitSync('transfer_codes_changed', { action: 'confirm', code, source_device_id: sourceDeviceId, target_device_id: targetDeviceId })
+    emitSync('security_logs_changed', {
+      action: 'transfer_confirm',
+      source_device_id: sourceDeviceId,
+      target_device_id: targetDeviceId,
+    })
     return res.json({
       ok: true,
       source_device_id: sourceDeviceId,
@@ -1308,7 +1509,7 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
   }
 })
 
-deviceSecurityRouter.post('/transfer/admin-force', async (req, res) => {
+deviceSecurityRouter.post('/transfer/admin-force', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -1321,6 +1522,7 @@ deviceSecurityRouter.post('/transfer/admin-force', async (req, res) => {
       sourceDeviceId,
       targetDeviceId,
       targetFpHash,
+      actor: adminActor(req),
       auditExtra: '',
     })
     if (!result.ok) return res.status(result.status).json({ error: result.error })
@@ -1331,7 +1533,7 @@ deviceSecurityRouter.post('/transfer/admin-force', async (req, res) => {
   }
 })
 
-deviceSecurityRouter.post('/transfer/admin-force-phone', async (req, res) => {
+deviceSecurityRouter.post('/transfer/admin-force-phone', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -1353,6 +1555,7 @@ deviceSecurityRouter.post('/transfer/admin-force-phone', async (req, res) => {
       sourceDeviceId,
       targetDeviceId,
       targetFpHash,
+      actor: adminActor(req),
       auditExtra,
     })
     if (!result.ok) return res.status(result.status).json({ error: result.error })
@@ -1369,27 +1572,36 @@ deviceSecurityRouter.post('/transfer/admin-force-phone', async (req, res) => {
 })
 
 deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
+  const pool = getPool()
+  const client = (await pool?.connect?.()) || null
   try {
-    const pool = getPool()
-    if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    await ensureSecurityTables(pool)
+    if (!pool || !client) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(client)
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const deviceId = text(b.device_id, 128)
     const fpHash = fingerprintHash(b.fingerprint)
     if (!deviceId || !fpHash) return res.status(400).json({ error: 'device_id and fingerprint are required' })
-    const { rows } = await pool.query(
+    await client.query('BEGIN')
+    const { rows } = await client.query(
       `SELECT device_id, expires_at, status
        FROM device_subscriptions
        WHERE fingerprint_hash = $1
        ORDER BY updated_at DESC
-       LIMIT 1`,
+       LIMIT 1
+       FOR UPDATE`,
       [fpHash],
     )
     const row = rows[0]
-    if (!row) return res.status(404).json({ ok: false, error: 'No recoverable subscription' })
-    const validity = await pool.query(`SELECT ($1::timestamptz > now()) AS valid`, [row.expires_at])
-    if (!validity.rows[0]?.valid) return res.status(400).json({ ok: false, error: 'Recovered subscription expired' })
-    await pool.query(
+    if (!row) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ ok: false, error: 'No recoverable subscription' })
+    }
+    const validity = await client.query(`SELECT ($1::timestamptz > now()) AS valid`, [row.expires_at])
+    if (!validity.rows[0]?.valid) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ ok: false, error: 'Recovered subscription expired' })
+    }
+    await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
        VALUES ($1, 'active', $2, now(), $3, now(), $4)
        ON CONFLICT (device_id) DO UPDATE SET
@@ -1400,12 +1612,42 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
          fingerprint_hash = EXCLUDED.fingerprint_hash`,
       [deviceId, row.expires_at, `recovery:${row.device_id}`, fpHash],
     )
+    const recoveredFrom = String(row.device_id || '').trim()
+    if (recoveredFrom && recoveredFrom !== deviceId) {
+      await client.query(
+        `UPDATE device_subscriptions
+         SET status = 'pending', updated_at = now()
+         WHERE device_id = $1`,
+        [recoveredFrom],
+      )
+    }
+    await logSecurityEvent(client, {
+      actor: deviceId,
+      eventType: 'Subscription recovery',
+      status: 'completed',
+      detail: `Recovered subscription from ${recoveredFrom || 'unknown'}`,
+      metadata: {
+        recovered_from: recoveredFrom || null,
+        recovered_to: deviceId,
+      },
+    })
+    await client.query('COMMIT')
+    if (recoveredFrom && recoveredFrom !== deviceId) {
+      deviceSubscriptionBus.emit('update', { deviceId: recoveredFrom })
+    }
     emitSync('transfer_completed', { source_device_id: row.device_id, target_device_id: deviceId, reason: 'recovery' })
     deviceSubscriptionBus.emit('update', { deviceId })
+    if (recoveredFrom && recoveredFrom !== deviceId) {
+      emitSync('subscription_revoked', { device_id: recoveredFrom, reason: 'recovery' })
+    }
+    emitSync('security_logs_changed', { action: 'recovery', recovered_from: recoveredFrom || null, recovered_to: deviceId })
     return res.json({ ok: true, recovered_from: row.device_id })
   } catch (e) {
+    if (client) await client.query('ROLLBACK').catch(() => {})
     console.error('[subscription/recover]', e)
     return res.status(500).json({ error: String(e.message || e) })
+  } finally {
+    if (client) client.release()
   }
 })
 
@@ -1417,12 +1659,14 @@ deviceSecurityRouter.post('/subscription/revoke', async (req, res) => {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const deviceId = text(b.device_id, 128)
     if (!deviceId) return res.status(400).json({ error: 'device_id is required' })
-    await pool.query(
+    const out = await pool.query(
       `UPDATE device_subscriptions
        SET status = 'pending', updated_at = now()
-       WHERE device_id = $1`,
+       WHERE device_id = $1
+       RETURNING device_id`,
       [deviceId],
     )
+    if (!out.rows[0]) return res.status(404).json({ error: 'Subscription not found' })
     await logSecurityEvent(pool, {
       actor: 'Admin',
       eventType: 'Subscription revoked',
@@ -1432,6 +1676,7 @@ deviceSecurityRouter.post('/subscription/revoke', async (req, res) => {
     })
     deviceSubscriptionBus.emit('update', { deviceId })
     emitSync('subscription_revoked', { device_id: deviceId })
+    emitSync('security_logs_changed', { action: 'revoke', device_id: deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[subscription/revoke]', e)

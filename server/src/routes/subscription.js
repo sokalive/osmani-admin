@@ -3,6 +3,7 @@ import * as billing from '../billingStore.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 
 export const subscriptionRouter = Router()
@@ -342,6 +343,13 @@ subscriptionRouter.post('/subscription/redeem-offer-code', async (req, res) => {
       topics: ['analytics'],
       deviceId,
       orderId: `offer_code:${grant?.grantId ?? ''}`,
+    })
+    void recordSystemNotificationEvent('subscription_offer_code_redeemed', {
+      device_id: deviceId,
+      grant_id: grant?.grantId ?? null,
+      offer_code: offerCode,
+    }).catch((err) => {
+      console.error('[redeem-offer-code] notification sync failed:', err)
     })
 
     res.json({

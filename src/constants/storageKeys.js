@@ -1,7 +1,6 @@
 export const LS_PLANS = 'osmani_plans_v1'
 export const LS_TRANSACTIONS = 'osmani_transactions_v2'
 export const LS_USERS = 'osmani_users_v1'
-export const LS_NOTIFICATIONS = 'osmani_notifications_v1'
 export const LS_ZENOPAY = 'osmani_zenopay_v1'
 export const LS_WHATSAPP = 'osmani_whatsapp_v1'
 export const LS_APP_UPDATE = 'osmani_appupdate_v1'

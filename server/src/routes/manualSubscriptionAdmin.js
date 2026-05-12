@@ -2,6 +2,7 @@ import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { adminSecurityPinFromBody, verifyAdminSecurityPin } from '../lib/adminSecurityPin.js'
 
@@ -330,6 +331,13 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
       topics: ['analytics'],
       deviceId,
       orderId: `manual_grant:${result.grantId}`,
+    })
+    void recordSystemNotificationEvent('subscription_manual_grant', {
+      device_id: deviceId,
+      grant_id: result.grantId,
+      duration_days: durationDays,
+    }).catch((err) => {
+      console.error('[manual_grant] notification sync failed:', err)
     })
 
     logManualSubscriptionAudit('grant', deviceId)

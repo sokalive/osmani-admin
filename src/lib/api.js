@@ -585,9 +585,12 @@ export function syncStreamUrl(topics = ['analytics']) {
 }
 
 /** --- Notifications --- */
-export const getNotifications = () => apiGet('/notifications')
-export const postNotification = (body) => apiPost('/notifications', body)
-export const putNotification = (id, body) => apiPut(`/notifications/${encodeURIComponent(id)}`, body)
+export const getNotifications = () => adminApiGet('/notifications')
+export const getRuntimeNotifications = (audience = 'all') =>
+  apiGet(`/notifications/runtime?audience=${encodeURIComponent(String(audience || 'all'))}`)
+export const postNotification = (body) => adminApiPost('/notifications', body)
+export const putNotification = (id, body) => adminApiPut(`/notifications/${encodeURIComponent(id)}`, body)
+export const deleteNotification = (id) => adminApiDelete(`/notifications/${encodeURIComponent(id)}`)
 
 /** --- Transfer codes --- */
 export const getTransferCodes = () => adminApiGet('/transfer-codes')

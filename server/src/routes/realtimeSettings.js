@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { readChannels } from '../store.js'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const realtimeSettingsRouter = Router()
@@ -213,6 +214,9 @@ async function savePopupSettings(pool, body) {
     [APP_SETTING_KEYS.popupDisclaimer]: payload.disclaimer,
   })
   publishWithLog('popup_settings_changed', payload)
+  void recordSystemNotificationEvent('popup_settings_changed', payload).catch((err) => {
+    console.error('[popup-settings] notification sync failed:', err)
+  })
   return { ok: true, payload }
 }
 

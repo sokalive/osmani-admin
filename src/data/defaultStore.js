@@ -1,4 +1,4 @@
-import { LS_NOTIFICATIONS, LS_PLANS, LS_TRANSACTIONS, LS_USERS } from '../constants/storageKeys'
+import { LS_PLANS, LS_TRANSACTIONS, LS_USERS } from '../constants/storageKeys'
 import { generateDemoTransactions } from './demoTransactions'
 
 /** Stable primary keys so seed stays consistent across LS keys */
@@ -80,24 +80,6 @@ export function defaultTransactionsList() {
   return generateDemoTransactions(26)
 }
 
-export function defaultNotificationsList() {
-  return [
-    {
-      id: 'seed-notif-1',
-      title: 'Welcome offer',
-      message: 'Get 20% off your first month — limited time.',
-      image: '',
-      targetAudience: 'all',
-      targetType: 'osmani://plans/promo',
-      scheduleAt: null,
-      status: 'sent',
-      sentAt: new Date(Date.now() - 3600e3).toISOString(),
-      clicks: 124,
-      createdAt: new Date(Date.now() - 864e5 * 2).toISOString(),
-    },
-  ]
-}
-
 export function getDefaultForKey(key) {
   switch (key) {
     case LS_PLANS:
@@ -106,8 +88,6 @@ export function getDefaultForKey(key) {
       return defaultUsersList()
     case LS_TRANSACTIONS:
       return defaultTransactionsList()
-    case LS_NOTIFICATIONS:
-      return defaultNotificationsList()
     default:
       return []
   }

@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const appUpdateRouter = Router()
@@ -273,6 +274,12 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       topics: ['config'],
       action: 'updated',
       updateDecision: decisionData.decision,
+    })
+    void recordSystemNotificationEvent('config.app_update_changed', {
+      updateDecision: decisionData.decision,
+      source: decisionData.source,
+    }).catch((err) => {
+      console.error('[app-update] notification sync failed:', err)
     })
     console.info(
       '[app-update] emitted SSE event:',

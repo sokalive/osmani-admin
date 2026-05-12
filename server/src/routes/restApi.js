@@ -24,11 +24,11 @@ import { deviceSecurityRouter } from './deviceSecurity.js'
 import { adminAuthRouter } from './adminAuth.js'
 import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { offerCodesAdminRouter } from './offerCodesAdmin.js'
+import { notificationsRouter } from './notifications.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 
 const FILES = {
   users: 'users.json',
-  notifications: 'notifications.json',
   transferCodes: 'transfer-codes.json',
   whatsapp: 'whatsapp.json',
   appUpdate: 'app-update.json',
@@ -102,6 +102,8 @@ restApi.get('/', (_req, res) => {
       '/analytics/presence/start',
       '/analytics/presence/heartbeat',
       '/analytics/presence/stop',
+      '/notifications',
+      '/notifications/runtime',
       '/update-check',
       '/verify-apk-hash',
       '/whatsapp-settings',
@@ -176,6 +178,7 @@ restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
+restApi.use(notificationsRouter)
 restApi.use(deviceSecurityRouter)
 restApi.use('/admin/auth', adminAuthRouter)
 restApi.use('/admin/manual-subscription', manualSubscriptionAdminRouter)
@@ -207,7 +210,6 @@ export async function ensureAllApiDataFiles() {
   await ensurePaymentProvidersFile()
   await ensureBillingStorage()
   await ensureJsonFile(FILES.users, '[]\n')
-  await ensureJsonFile(FILES.notifications, '[]\n')
   await ensureJsonFile(FILES.transferCodes, '[]\n')
   await ensureJsonFile(FILES.securityLogs, '[]\n')
   await ensureJsonFile(FILES.dashboard, '{}\n')

@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const GLOBAL_APP_SETTINGS_FILE = 'global-app-settings.json'
@@ -67,6 +68,9 @@ globalAppSettingsRouter.put('/', requireAdminPanelAccess, async (req, res) => {
       topics: ['config'],
       action: 'updated',
       modes,
+    })
+    void recordSystemNotificationEvent('config.settings_changed', { modes }).catch((err) => {
+      console.error('[settings] notification sync failed:', err)
     })
     res.json(next)
   } catch (e) {

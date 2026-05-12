@@ -136,6 +136,48 @@ export async function ensureBillingTables(client) {
   `)
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      kind TEXT NOT NULL DEFAULT 'admin',
+      title TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      image TEXT NOT NULL DEFAULT '',
+      target_audience TEXT NOT NULL DEFAULT 'all',
+      target_type TEXT NOT NULL DEFAULT 'osmani://home',
+      status TEXT NOT NULL DEFAULT 'draft',
+      delivery_state TEXT NOT NULL DEFAULT 'pending',
+      severity TEXT NOT NULL DEFAULT 'info',
+      source_event TEXT NOT NULL DEFAULT '',
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      clicks INTEGER NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      schedule_at TIMESTAMPTZ,
+      sent_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      created_by TEXT NOT NULL DEFAULT 'system',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT notifications_kind_check CHECK (kind IN ('admin', 'system')),
+      CONSTRAINT notifications_status_check CHECK (status IN ('draft', 'scheduled', 'sent', 'cancelled', 'archived')),
+      CONSTRAINT notifications_delivery_state_check CHECK (delivery_state IN ('pending', 'sent', 'partial', 'failed')),
+      CONSTRAINT notifications_severity_check CHECK (severity IN ('info', 'success', 'warning', 'critical'))
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS notifications_created_at_idx ON notifications (created_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS notifications_status_idx ON notifications (status, schedule_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS notifications_runtime_idx
+    ON notifications (is_active, status, target_audience, created_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS notifications_source_event_idx ON notifications (source_event, created_at DESC);
+  `)
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS plans (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL DEFAULT '',
