@@ -181,12 +181,31 @@ export const getPaymentStatus = (orderId) =>
   apiGet(`/payment-status/${encodeURIComponent(String(orderId ?? ''))}`)
 
 /** Device subscription unlock (polling fallback). Prefer SSE `subscription-stream` for realtime. */
-export const getSubscriptionStatus = (deviceId) =>
-  apiGet(`/subscription-status?device_id=${encodeURIComponent(String(deviceId ?? '').trim())}`)
+export function getSubscriptionStatus(input) {
+  const opts =
+    input && typeof input === 'object' ? input : { deviceId: input }
+  const q = new URLSearchParams()
+  q.set('device_id', String(opts.deviceId ?? '').trim())
+  if (opts.orderId != null && String(opts.orderId).trim()) {
+    q.set('order_id', String(opts.orderId).trim())
+  }
+  if (opts.fingerprint != null && String(opts.fingerprint).trim()) {
+    q.set('fingerprint', String(opts.fingerprint).trim())
+  }
+  return apiGet(`/subscription-status?${q.toString()}`)
+}
 
-export function subscriptionStreamUrl(deviceId) {
-  const d = encodeURIComponent(String(deviceId ?? '').trim())
-  return `${API_BASE}/subscription-stream?device_id=${d}`
+export const postSubscriptionVerify = (body) => apiPost('/subscription/verify', body)
+export const postSubscriptionRecover = (body) => apiPost('/subscription/recover', body)
+export const postSubscriptionRevoke = (body) => apiPost('/subscription/revoke', body)
+
+export function subscriptionStreamUrl(deviceId, opts = {}) {
+  const q = new URLSearchParams()
+  q.set('device_id', String(deviceId ?? '').trim())
+  if (opts.fingerprint != null && String(opts.fingerprint).trim()) {
+    q.set('fingerprint', String(opts.fingerprint).trim())
+  }
+  return `${API_BASE}/subscription-stream?${q.toString()}`
 }
 
 /** Mobile: dismiss one-time manual gift popup after user taps ASANTE */

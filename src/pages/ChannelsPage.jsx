@@ -18,7 +18,8 @@ import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '.
 
 function ChannelsPage() {
   const { showToast } = useToast()
-  const { isSubscribed, expiresAt } = useDeviceSubscription()
+  const { isSubscribed, expiresAt, subscriptionStatus, blocked, blockReason, playbackAllowed } =
+    useDeviceSubscription()
   const [isFreeMode, setIsFreeMode] = useState(false)
   const [isEmergencyMode, setIsEmergencyMode] = useState(false)
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false)
@@ -181,8 +182,13 @@ function ChannelsPage() {
           </h1>
           {isSubscribed ? (
             <p className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
-              Device subscription active{expiresAt ? ` · until ${expiresAt}` : ''} (consumer app mirrors this
-              from global store)
+              Device subscription active{expiresAt ? ` · until ${expiresAt}` : ''} · playback{' '}
+              {playbackAllowed ? 'allowed' : 'checking'}.
+            </p>
+          ) : blocked ? (
+            <p className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+              Device subscription {subscriptionStatus || 'blocked'}
+              {blockReason ? ` · ${blockReason}` : ''}.
             </p>
           ) : null}
         </header>

@@ -7,7 +7,6 @@ import { useDeviceSubscription } from '../context/DeviceSubscriptionContext.jsx'
 import {
   API_ORIGIN,
   getPlans,
-  getSubscriptionStatus,
   getZenopaySettings,
   postCreatePayment,
   postZenopayTest,
@@ -45,7 +44,14 @@ function labelClass() {
 
 function ZenoPayPage() {
   const { showToast } = useToast()
-  const { applySubscriptionStatusPayload, clearSubscription } = useDeviceSubscription()
+  const {
+    subscriptionState,
+    appModes,
+    applyAppModesPayload,
+    clearSubscription,
+    refreshSubscriptionState,
+    trackSubscriptionDevice,
+  } = useDeviceSubscription()
   const [cfg, setCfg] = useState(() => defaultSettings())
   const [draft, setDraft] = useState(() => ({ ...defaultSettings() }))
   const [saving, setSaving] = useState(false)
@@ -113,30 +119,51 @@ function ZenoPayPage() {
     if (!paymentWaitOpen || !payDeviceId.trim()) return undefined
     let cancelled = false
     const sid = payDeviceId.trim()
+    let didAnnounceUnlock = false
+    let lastBlockedNotice = ''
 
-    function handleStatusPayload(payload) {
-      if (cancelled || !payload) return
-      applySubscriptionStatusPayload(payload)
-      const active = payload.active === true || payload.isActive === true
-      if (active) {
-        setPaymentWaitOpen(false)
-        showToast('success', 'Device subscription active — channels unlocked.')
+    async function refreshRuntimeState(trigger) {
+      if (cancelled) return
+      try {
+        const payload = await refreshSubscriptionState({
+          deviceId: sid,
+          orderId: checkoutOrderId,
+        })
+        if (cancelled || !payload) return
+        const active = payload.active === true || payload.isActive === true
+        if (payload.blocked === true) {
+          const msg = payload.blockReason || 'Device blocked'
+          if (msg !== lastBlockedNotice) {
+            lastBlockedNotice = msg
+            showToast('error', `Playback blocked: ${msg}`)
+          }
+        }
+        if (active && !didAnnounceUnlock) {
+          didAnnounceUnlock = true
+          setPaymentWaitOpen(false)
+          showToast('success', 'Device subscription active — channels unlocked.')
+        }
+      } catch {
+        if (trigger === 'poll') {
+          /* keep polling */
+        }
       }
     }
+
+    trackSubscriptionDevice(sid, checkoutOrderId)
 
     let es = null
     try {
       es = new EventSource(subscriptionStreamUrl(sid))
-      es.addEventListener('snapshot', (ev) => {
-        try {
-          handleStatusPayload(JSON.parse(ev.data))
-        } catch {
-          /* ignore */
-        }
+      es.addEventListener('snapshot', () => {
+        void refreshRuntimeState('snapshot')
       })
-      es.addEventListener('device_subscription', (ev) => {
+      es.addEventListener('device_subscription', () => {
+        void refreshRuntimeState('device_subscription')
+      })
+      es.addEventListener('app_modes', (ev) => {
         try {
-          handleStatusPayload(JSON.parse(ev.data))
+          applyAppModesPayload(JSON.parse(ev.data))
         } catch {
           /* ignore */
         }
@@ -146,23 +173,25 @@ function ZenoPayPage() {
     }
 
     const pollMs = 3000
-    const poll = async () => {
-      try {
-        const r = await getSubscriptionStatus(sid)
-        handleStatusPayload(r)
-      } catch {
-        /* keep polling */
-      }
-    }
-    void poll()
-    const id = window.setInterval(poll, pollMs)
+    void refreshRuntimeState('init')
+    const id = window.setInterval(() => {
+      void refreshRuntimeState('poll')
+    }, pollMs)
 
     return () => {
       cancelled = true
       window.clearInterval(id)
       es?.close()
     }
-  }, [paymentWaitOpen, payDeviceId, applySubscriptionStatusPayload, showToast])
+  }, [
+    applyAppModesPayload,
+    checkoutOrderId,
+    payDeviceId,
+    paymentWaitOpen,
+    refreshSubscriptionState,
+    showToast,
+    trackSubscriptionDevice,
+  ])
 
   const dirty = useMemo(
     () =>
@@ -271,6 +300,13 @@ function ZenoPayPage() {
 
   const connected = cfg.lastTestOk === true
   const failed = cfg.lastTestOk === false
+  const runtimeStateLabel =
+    subscriptionState.status != null ? subscriptionState.status : subscriptionState.isActive ? 'active' : 'unknown'
+  const modeLabels = [
+    appModes.free_mode ? 'FREE' : null,
+    appModes.emergency_mode ? 'EMERGENCY' : null,
+    appModes.maintenance_mode ? 'MAINTENANCE' : null,
+  ].filter(Boolean)
 
   return (
     <>
@@ -445,15 +481,19 @@ function ZenoPayPage() {
               </h2>
               <p className="mt-1 text-xs text-slate-500">
                 Requires <code className="font-mono text-slate-400">deviceId</code>. After ZenoPay webhook,
-                unlock uses{' '}
+                runtime parity uses canonical{' '}
+                <code className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-300">
+                  /api/subscription/verify
+                </code>{' '}
+                for state snapshots, with{' '}
                 <code className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-300">
                   /api/subscription-stream
                 </code>{' '}
-                (SSE) and{' '}
+                as the realtime trigger and{' '}
                 <code className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-300">
                   /api/subscription-status?device_id=
                 </code>{' '}
-                every 3s.
+                as fallback compatibility polling every 3s.
               </p>
             </div>
           </div>
@@ -539,8 +579,44 @@ function ZenoPayPage() {
               <p className="mt-2 font-mono text-xs text-slate-500">{checkoutOrderId}</p>
               <p className="mt-4 flex items-center gap-2 text-sm text-amber-200">
                 <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                Realtime SSE + polling <code className="text-[11px]">/subscription-status</code>…
+                Canonical verify refresh + realtime SSE + fallback polling…
               </p>
+              <div className="mt-4 space-y-2 rounded-xl border border-slate-700/70 bg-slate-900/60 px-4 py-3 text-xs text-slate-300">
+                <p>
+                  Status: <span className="font-semibold text-white">{runtimeStateLabel}</span>
+                </p>
+                <p>
+                  Playback allowed:{' '}
+                  <span className="font-semibold text-white">
+                    {subscriptionState.playbackAllowed ? 'yes' : 'no'}
+                  </span>
+                </p>
+                <p>
+                  Expires:{' '}
+                  <span className="font-semibold text-white">{subscriptionState.expiresAt || '—'}</span>
+                </p>
+                <p>
+                  Modes:{' '}
+                  <span className="font-semibold text-white">
+                    {modeLabels.length > 0 ? modeLabels.join(', ') : 'NORMAL'}
+                  </span>
+                </p>
+                {subscriptionState.blocked ? (
+                  <p className="text-red-300">
+                    Block reason: {subscriptionState.blockReason || 'Device blocked'}
+                  </p>
+                ) : null}
+                {subscriptionState.manualGift?.showPopup ? (
+                  <p className="text-emerald-300">
+                    Manual gift pending: {subscriptionState.manualGift.title || 'Gift available'}
+                  </p>
+                ) : null}
+                {!subscriptionState.isActive && subscriptionState.plans.length > 0 ? (
+                  <p className="text-slate-400">
+                    Plans returned by verify: {subscriptionState.plans.length}
+                  </p>
+                ) : null}
+              </div>
               <button
                 type="button"
                 className="mt-6 w-full rounded-xl border border-slate-600 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-800"
@@ -549,7 +625,8 @@ function ZenoPayPage() {
                 ENDELEA — close only
               </button>
               <p className="mt-3 text-center text-[11px] text-slate-500">
-                Unlock state is driven by webhook → DB → stream; closing does not refetch.
+                Unlock state is driven by webhook → DB → verify snapshot. Stream events trigger backend refresh;
+                fallback polling keeps reconnect behavior stable.
               </p>
             </div>
           </div>
