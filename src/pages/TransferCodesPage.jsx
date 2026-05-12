@@ -15,6 +15,7 @@ import {
   getTransferCodes,
   postTransferCode,
   postTransferCodesBulkDelete,
+  syncStreamUrl,
   putTransferCode,
 } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
@@ -74,6 +75,17 @@ function TransferCodesPage() {
 
   useEffect(() => {
     loadCodes()
+  }, [loadCodes])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onRefresh = () => {
+      void loadCodes()
+    }
+    es.addEventListener('transfer_requested', onRefresh)
+    es.addEventListener('transfer_completed', onRefresh)
+    es.addEventListener('transfer_rejected', onRefresh)
+    return () => es.close()
   }, [loadCodes])
 
   useEffect(() => {

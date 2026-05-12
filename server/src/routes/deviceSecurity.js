@@ -446,6 +446,19 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     })
     console.log('[device-control] PUT upsert rowCount/returned', upsertResults)
     const live = await readTransferSettingsLive(client)
+    const pendingRows = await client.query(
+      `SELECT id, source_device_id, target_device_id, created_at, status
+       FROM device_transfers
+       ORDER BY created_at DESC
+       LIMIT 100`,
+    )
+    const logsRows = await client.query(
+      `SELECT id, created_at, detail
+       FROM security_events
+       WHERE event_type ILIKE '%transfer%'
+       ORDER BY created_at DESC
+       LIMIT 200`,
+    )
     await client.query('COMMIT')
     emitSync('app_settings_changed', payload)
     const responseBody = {
@@ -453,8 +466,24 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       dailyLimit: live.dailyLimit,
       weeklyLimit: live.weeklyLimit,
       cooldownMinutes: live.cooldownMinutes,
-      pending: Array.isArray(b.pending) ? b.pending : [],
-      logs: Array.isArray(b.logs) ? b.logs : [],
+      pending: pendingRows.rows
+        .filter((r) =>
+          ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked'].includes(
+            String(r.status),
+          ),
+        )
+        .map((r) => ({
+          id: String(r.id),
+          sourceDeviceId: String(r.source_device_id ?? ''),
+          deviceLabel: `${r.source_device_id} -> ${r.target_device_id || 'pending'}`,
+          requestedAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+          status: String(r.status),
+        })),
+      logs: logsRows.rows.map((r) => ({
+        id: String(r.id),
+        at: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+        message: String(r.detail || ''),
+      })),
     }
     console.log('[device-control] PUT save payload', payload)
     console.log('[device-control] PUT old->new', {
@@ -1076,6 +1105,12 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
       transfer_mode: livePolicy.transferMode,
       source_device_id: sourceDeviceId,
     }
+    emitSync('transfer_requested', {
+      code: responseBody.code,
+      source_device_id: sourceDeviceId,
+      status: 'active',
+      transfer_mode: livePolicy.transferMode,
+    })
     console.log('[transfer/request] response body', responseBody)
     return res.json(responseBody)
   } catch (e) {
@@ -1246,6 +1281,15 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
     await client.query('COMMIT')
     deviceSubscriptionBus.emit('update', { deviceId: sourceDeviceId })
     deviceSubscriptionBus.emit('update', { deviceId: targetDeviceId })
+    emitSync('transfer_completed', {
+      source_device_id: sourceDeviceId,
+      target_device_id: targetDeviceId,
+      reason: 'confirmed_by_code',
+    })
+    emitSync('subscription_revoked', {
+      device_id: sourceDeviceId,
+      reason: 'transfer_confirmed',
+    })
     return res.json({
       ok: true,
       source_device_id: sourceDeviceId,

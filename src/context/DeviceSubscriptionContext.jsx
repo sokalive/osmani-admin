@@ -1,5 +1,10 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
-import { getAppGlobalSettings, getSubscriptionStatus, postSubscriptionVerify } from '../lib/api'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import {
+  getAppGlobalSettings,
+  getSubscriptionStatus,
+  postSubscriptionVerify,
+  subscriptionStreamUrl,
+} from '../lib/api'
 
 const DeviceSubscriptionContext = createContext(null)
 
@@ -83,6 +88,7 @@ export function DeviceSubscriptionProvider({ children }) {
   const [appModes, setAppModes] = useState(() => emptyAppModesState())
   const [appModesReady, setAppModesReady] = useState(false)
   const [trackedDeviceId, setTrackedDeviceId] = useState('')
+  const [trackedFingerprint, setTrackedFingerprint] = useState('')
   const [lastOrderId, setLastOrderId] = useState('')
 
   const applySubscriptionStatusPayload = useCallback((body) => {
@@ -121,6 +127,7 @@ export function DeviceSubscriptionProvider({ children }) {
     async ({ deviceId, orderId = '', fingerprint = '' } = {}) => {
       const resolvedDeviceId = String(deviceId ?? trackedDeviceId ?? '').trim()
       const resolvedOrderId = String(orderId ?? lastOrderId ?? '').trim()
+      const resolvedFingerprint = String(fingerprint ?? trackedFingerprint ?? '').trim()
       if (!resolvedDeviceId) {
         const cleared = emptySubscriptionState()
         setSubscriptionState(cleared)
@@ -129,36 +136,96 @@ export function DeviceSubscriptionProvider({ children }) {
 
       setTrackedDeviceId(resolvedDeviceId)
       setLastOrderId(resolvedOrderId)
+      setTrackedFingerprint(resolvedFingerprint)
 
       try {
         const body = await postSubscriptionVerify({
           device_id: resolvedDeviceId,
           ...(resolvedOrderId ? { order_id: resolvedOrderId } : {}),
-          ...(fingerprint ? { fingerprint: String(fingerprint).trim() } : {}),
+          ...(resolvedFingerprint ? { fingerprint: resolvedFingerprint } : {}),
         })
         return applySubscriptionStatusPayload(body)
       } catch {
         const body = await getSubscriptionStatus({
           deviceId: resolvedDeviceId,
           orderId: resolvedOrderId,
-          fingerprint,
+          fingerprint: resolvedFingerprint,
         })
         return applySubscriptionStatusPayload(body)
       }
     },
-    [applySubscriptionStatusPayload, lastOrderId, trackedDeviceId],
+    [applySubscriptionStatusPayload, lastOrderId, trackedDeviceId, trackedFingerprint],
   )
 
-  const trackSubscriptionDevice = useCallback((deviceId, orderId = '') => {
-    setTrackedDeviceId(String(deviceId ?? '').trim())
+  const trackSubscriptionDevice = useCallback((input, orderId = '', fingerprint = '') => {
+    if (input && typeof input === 'object') {
+      setTrackedDeviceId(String(input.deviceId ?? '').trim())
+      setLastOrderId(String(input.orderId ?? '').trim())
+      setTrackedFingerprint(String(input.fingerprint ?? '').trim())
+      return
+    }
+    setTrackedDeviceId(String(input ?? '').trim())
     setLastOrderId(String(orderId ?? '').trim())
+    setTrackedFingerprint(String(fingerprint ?? '').trim())
   }, [])
 
   const clearSubscription = useCallback(() => {
     setSubscriptionState(emptySubscriptionState())
     setTrackedDeviceId('')
     setLastOrderId('')
+    setTrackedFingerprint('')
   }, [])
+
+  useEffect(() => {
+    if (!trackedDeviceId) return undefined
+    let cancelled = false
+    let es = null
+
+    async function refreshRuntimeState(trigger) {
+      if (cancelled) return
+      try {
+        await refreshSubscriptionState({
+          deviceId: trackedDeviceId,
+          orderId: lastOrderId,
+          fingerprint: trackedFingerprint,
+        })
+      } catch {
+        if (trigger === 'poll') {
+          /* keep fallback polling */
+        }
+      }
+    }
+
+    try {
+      es = new EventSource(subscriptionStreamUrl(trackedDeviceId, { fingerprint: trackedFingerprint }))
+      es.addEventListener('snapshot', () => {
+        void refreshRuntimeState('snapshot')
+      })
+      es.addEventListener('device_subscription', () => {
+        void refreshRuntimeState('device_subscription')
+      })
+      es.addEventListener('app_modes', (ev) => {
+        try {
+          applyAppModesPayload(JSON.parse(ev.data))
+        } catch {
+          /* ignore malformed app_modes */
+        }
+      })
+    } catch {
+      /* EventSource unsupported */
+    }
+
+    void refreshRuntimeState('init')
+    const pollId = window.setInterval(() => {
+      void refreshRuntimeState('poll')
+    }, 3000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(pollId)
+      es?.close()
+    }
+  }, [applyAppModesPayload, lastOrderId, refreshSubscriptionState, trackedDeviceId, trackedFingerprint])
 
   const value = useMemo(
     () => ({
@@ -166,6 +233,7 @@ export function DeviceSubscriptionProvider({ children }) {
       appModes,
       appModesReady,
       trackedDeviceId,
+      trackedFingerprint,
       lastOrderId,
       isSubscribed: subscriptionState.isActive === true,
       expiresAt: subscriptionState.expiresAt,
@@ -194,6 +262,7 @@ export function DeviceSubscriptionProvider({ children }) {
       refreshSubscriptionState,
       subscriptionState,
       trackedDeviceId,
+      trackedFingerprint,
       trackSubscriptionDevice,
     ],
   )

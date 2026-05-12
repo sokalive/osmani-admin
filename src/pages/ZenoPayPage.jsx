@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Loader2, Smartphone, Wifi, XCircle } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
@@ -11,7 +11,6 @@ import {
   postCreatePayment,
   postZenopayTest,
   putZenopaySettings,
-  subscriptionStreamUrl,
 } from '../lib/api'
 
 function defaultSettings() {
@@ -47,9 +46,7 @@ function ZenoPayPage() {
   const {
     subscriptionState,
     appModes,
-    applyAppModesPayload,
     clearSubscription,
-    refreshSubscriptionState,
     trackSubscriptionDevice,
   } = useDeviceSubscription()
   const [cfg, setCfg] = useState(() => defaultSettings())
@@ -65,6 +62,8 @@ function ZenoPayPage() {
   const [checkoutOrderId, setCheckoutOrderId] = useState(null)
   const [paymentWaitOpen, setPaymentWaitOpen] = useState(false)
   const [checkoutBusy, setCheckoutBusy] = useState(false)
+  const unlockHandledRef = useRef(false)
+  const blockedNoticeRef = useRef('')
 
   const defaultWebhook = `${String(API_ORIGIN).replace(/\/$/, '')}/api/zeno-webhook`
 
@@ -116,82 +115,34 @@ function ZenoPayPage() {
   }, [])
 
   useEffect(() => {
-    if (!paymentWaitOpen || !payDeviceId.trim()) return undefined
-    let cancelled = false
-    const sid = payDeviceId.trim()
-    let didAnnounceUnlock = false
-    let lastBlockedNotice = ''
+    unlockHandledRef.current = false
+    blockedNoticeRef.current = ''
+  }, [checkoutOrderId, payDeviceId])
 
-    async function refreshRuntimeState(trigger) {
-      if (cancelled) return
-      try {
-        const payload = await refreshSubscriptionState({
-          deviceId: sid,
-          orderId: checkoutOrderId,
-        })
-        if (cancelled || !payload) return
-        const active = payload.active === true || payload.isActive === true
-        if (payload.blocked === true) {
-          const msg = payload.blockReason || 'Device blocked'
-          if (msg !== lastBlockedNotice) {
-            lastBlockedNotice = msg
-            showToast('error', `Playback blocked: ${msg}`)
-          }
-        }
-        if (active && !didAnnounceUnlock) {
-          didAnnounceUnlock = true
-          setPaymentWaitOpen(false)
-          showToast('success', 'Device subscription active — channels unlocked.')
-        }
-      } catch {
-        if (trigger === 'poll') {
-          /* keep polling */
-        }
+  useEffect(() => {
+    if (!checkoutOrderId || !payDeviceId.trim()) return
+    trackSubscriptionDevice({
+      deviceId: payDeviceId.trim(),
+      orderId: checkoutOrderId,
+    })
+  }, [checkoutOrderId, payDeviceId, trackSubscriptionDevice])
+
+  useEffect(() => {
+    if (!paymentWaitOpen) return
+    if (subscriptionState.blocked === true) {
+      const msg = subscriptionState.blockReason || 'Device blocked'
+      if (msg !== blockedNoticeRef.current) {
+        blockedNoticeRef.current = msg
+        showToast('error', `Playback blocked: ${msg}`)
       }
     }
-
-    trackSubscriptionDevice(sid, checkoutOrderId)
-
-    let es = null
-    try {
-      es = new EventSource(subscriptionStreamUrl(sid))
-      es.addEventListener('snapshot', () => {
-        void refreshRuntimeState('snapshot')
-      })
-      es.addEventListener('device_subscription', () => {
-        void refreshRuntimeState('device_subscription')
-      })
-      es.addEventListener('app_modes', (ev) => {
-        try {
-          applyAppModesPayload(JSON.parse(ev.data))
-        } catch {
-          /* ignore */
-        }
-      })
-    } catch {
-      /* EventSource unsupported */
+    const active = subscriptionState.active === true || subscriptionState.isActive === true
+    if (active && !unlockHandledRef.current) {
+      unlockHandledRef.current = true
+      setPaymentWaitOpen(false)
+      showToast('success', 'Device subscription active — channels unlocked.')
     }
-
-    const pollMs = 3000
-    void refreshRuntimeState('init')
-    const id = window.setInterval(() => {
-      void refreshRuntimeState('poll')
-    }, pollMs)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-      es?.close()
-    }
-  }, [
-    applyAppModesPayload,
-    checkoutOrderId,
-    payDeviceId,
-    paymentWaitOpen,
-    refreshSubscriptionState,
-    showToast,
-    trackSubscriptionDevice,
-  ])
+  }, [paymentWaitOpen, showToast, subscriptionState])
 
   const dirty = useMemo(
     () =>

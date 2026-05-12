@@ -198,6 +198,9 @@ export function getSubscriptionStatus(input) {
 export const postSubscriptionVerify = (body) => apiPost('/subscription/verify', body)
 export const postSubscriptionRecover = (body) => apiPost('/subscription/recover', body)
 export const postSubscriptionRevoke = (body) => apiPost('/subscription/revoke', body)
+export const postTransferRequest = (body) => apiPost('/transfer/request', body)
+export const postTransferConfirm = (body) => apiPost('/transfer/confirm', body)
+export const postAdminForceTransfer = (body) => apiPost('/transfer/admin-force', body)
 
 export function subscriptionStreamUrl(deviceId, opts = {}) {
   const q = new URLSearchParams()
