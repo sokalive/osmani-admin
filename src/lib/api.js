@@ -558,6 +558,7 @@ export const putWhatsappSettings = (body) => apiPut('/whatsapp-settings', body)
 
 export const getAppUpdateSettings = () => apiGet('/settings/app-update')
 export const putAppUpdateSettings = (body) => apiPut('/settings/app-update', body)
+export const getUpdateCheck = () => apiGet('/update-check')
 
 export const getPopupSettings = () => apiGet('/popup-settings')
 export const putPopupSettings = (body) => apiPut('/popup-settings', body)
