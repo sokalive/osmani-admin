@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const GLOBAL_APP_SETTINGS_FILE = 'global-app-settings.json'
 
@@ -42,7 +43,7 @@ export async function loadGlobalAppModesPayload() {
 
 export const globalAppSettingsRouter = Router()
 
-globalAppSettingsRouter.get('/', async (_req, res) => {
+globalAppSettingsRouter.get('/', requireAdminPanelAccess, async (_req, res) => {
   try {
     const data = await readJson(GLOBAL_APP_SETTINGS_FILE, defaults)
     res.json(normalizeSettings(data))
@@ -52,7 +53,7 @@ globalAppSettingsRouter.get('/', async (_req, res) => {
   }
 })
 
-globalAppSettingsRouter.put('/', async (req, res) => {
+globalAppSettingsRouter.put('/', requireAdminPanelAccess, async (req, res) => {
   try {
     const current = normalizeSettings(await readJson(GLOBAL_APP_SETTINGS_FILE, defaults))
     const body = req.body && typeof req.body === 'object' ? req.body : {}

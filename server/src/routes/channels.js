@@ -18,11 +18,13 @@ import {
   updateChannel,
 } from '../store.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import {
   logChannelStreamDiagGet,
   logChannelStreamDiagList,
   logChannelStreamDiagWrite,
 } from '../lib/channelStreamDiagnostics.js'
+import { triggerServerHealthBroadcast } from './realtimeSettings.js'
 
 export const channelsRouter = Router()
 
@@ -71,7 +73,7 @@ channelsRouter.get('/', async (req, res) => {
   }
 })
 
-channelsRouter.post('/', maybeUpload, async (req, res) => {
+channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) => {
   try {
     const parsed = parseChannelInput(req.body, req.file, null)
     if (!parsed.name || !parsed.url) {
@@ -89,6 +91,9 @@ channelsRouter.post('/', maybeUpload, async (req, res) => {
       action: 'created',
       channelId: created.id,
     })
+    void triggerServerHealthBroadcast().catch((err) => {
+      console.error('[channels] health refresh after create failed:', err)
+    })
     const createdBody = channelToResponse(created, req)
     logChannelStreamDiagWrite(createdBody, { scope: 'channels.POST_response' })
     res.status(201).json(createdBody)
@@ -98,7 +103,7 @@ channelsRouter.post('/', maybeUpload, async (req, res) => {
   }
 })
 
-channelsRouter.put('/:id', maybeUpload, async (req, res) => {
+channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res) => {
   try {
     const id = Number.parseInt(req.params.id, 10)
     if (Number.isNaN(id)) {
@@ -131,6 +136,9 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
       action: 'updated',
       channelId: updated.id,
     })
+    void triggerServerHealthBroadcast().catch((err) => {
+      console.error('[channels] health refresh after update failed:', err)
+    })
     const updatedBody = channelToResponse(updated, req)
     logChannelStreamDiagWrite(updatedBody, { scope: 'channels.PUT_response' })
     res.json(updatedBody)
@@ -140,7 +148,7 @@ channelsRouter.put('/:id', maybeUpload, async (req, res) => {
   }
 })
 
-channelsRouter.delete('/:id', async (req, res) => {
+channelsRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
   try {
     const id = Number.parseInt(req.params.id, 10)
     if (Number.isNaN(id)) {
@@ -160,6 +168,9 @@ channelsRouter.delete('/:id', async (req, res) => {
       topics: ['config'],
       action: 'deleted',
       channelId: id,
+    })
+    void triggerServerHealthBroadcast().catch((err) => {
+      console.error('[channels] health refresh after delete failed:', err)
     })
     res.status(204).send()
   } catch (e) {

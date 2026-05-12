@@ -4,7 +4,7 @@ import { GripVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 import BannerFormModal from '../components/BannerFormModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { deleteBanner, getBannersManage, postBanner, putBanner } from '../lib/api'
+import { deleteBanner, getBannersManage, postBanner, putBanner, syncStreamUrl } from '../lib/api'
 import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
@@ -97,6 +97,15 @@ function BannersPage() {
     const id = window.setInterval(() => setTick((n) => n + 1), 60_000)
     return () => window.clearInterval(id)
   }, [])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onChanged = () => {
+      void loadBanners()
+    }
+    es.addEventListener('config.banners_changed', onChanged)
+    return () => es.close()
+  }, [loadBanners])
 
   const sortedBanners = useMemo(() => {
     return [...banners].sort((a, b) => {

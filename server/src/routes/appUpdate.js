@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const appUpdateRouter = Router()
 
@@ -203,7 +204,7 @@ function validateHttpsUrl(value) {
   }
 }
 
-appUpdateRouter.get('/settings/app-update', async (_req, res) => {
+appUpdateRouter.get('/settings/app-update', requireAdminPanelAccess, async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -223,7 +224,7 @@ appUpdateRouter.get('/settings/app-update', async (_req, res) => {
   }
 })
 
-appUpdateRouter.put('/settings/app-update', async (req, res) => {
+appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })

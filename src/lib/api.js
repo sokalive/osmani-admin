@@ -98,16 +98,17 @@ export async function getChannels() {
 }
 
 export function addChannel(data) {
-  return apiPost('/channels', data)
+  return adminApiPost('/channels', data)
 }
 
 export function updateChannel(id, data) {
-  return apiPut(`/channels/${encodeURIComponent(id)}`, data)
+  return adminApiPut(`/channels/${encodeURIComponent(id)}`, data)
 }
 
 export function addChannelFormData(formData) {
   return fetch(joinPath('/channels'), {
     method: 'POST',
+    headers: adminPanelFormDataHeaders(),
     body: formData,
   }).then(parseJsonSafeResponse)
 }
@@ -115,26 +116,27 @@ export function addChannelFormData(formData) {
 export function updateChannelFormData(id, formData) {
   return fetch(joinPath(`/channels/${encodeURIComponent(id)}`), {
     method: 'PUT',
+    headers: adminPanelFormDataHeaders(),
     body: formData,
   }).then(parseJsonSafeResponse)
 }
 
 export function deleteChannel(id) {
-  return apiDelete(`/channels/${encodeURIComponent(id)}`)
+  return adminApiDelete(`/channels/${encodeURIComponent(id)}`)
 }
 
 /** Global app modes (Free / Emergency / Maintenance) — GET/PUT /api/settings */
-export const getAppGlobalSettings = () => apiGet('/settings')
-export const putAppGlobalSettings = (body) => apiPut('/settings', body)
+export const getAppGlobalSettings = () => adminApiGet('/settings')
+export const putAppGlobalSettings = (body) => adminApiPut('/settings', body)
 
 /** --- Banners --- */
 /** Public list (active + enabled + schedule). */
 export const getBanners = () => apiGet('/banners')
 /** Full list for admin CMS. */
-export const getBannersManage = () => apiGet('/banners/manage')
-export const postBanner = (body) => apiPost('/banners', body)
-export const putBanner = (id, body) => apiPut(`/banners/${encodeURIComponent(id)}`, body)
-export const deleteBanner = (id) => apiDelete(`/banners/${encodeURIComponent(id)}`)
+export const getBannersManage = () => adminApiGet('/banners/manage')
+export const postBanner = (body) => adminApiPost('/banners', body)
+export const putBanner = (id, body) => adminApiPut(`/banners/${encodeURIComponent(id)}`, body)
+export const deleteBanner = (id) => adminApiDelete(`/banners/${encodeURIComponent(id)}`)
 
 /** --- Plans --- */
 export const getPlans = () => apiGet('/plans')
@@ -160,17 +162,13 @@ export function getTransactions(params = {}) {
   if (params.from) q.set('from', params.from)
   if (params.to) q.set('to', params.to)
   const s = q.toString()
-  return apiGet(s ? `/transactions?${s}` : '/transactions')
+  return adminApiGet(s ? `/transactions?${s}` : '/transactions')
 }
 export async function deleteTransactionsBulk(ids) {
-  const res = await fetch(joinPath('/transactions/bulk'), {
+  return adminApiRequest('/transactions/bulk', {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids: Array.isArray(ids) ? ids : [] }),
+    body: { ids: Array.isArray(ids) ? ids : [] },
   })
-  const body = await parseJsonSafe(res)
-  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
-  return body
 }
 
 /** Initiate ZenoPay collection (uses server-stored credentials + env overrides). */
@@ -200,7 +198,7 @@ export const postSubscriptionRecover = (body) => apiPost('/subscription/recover'
 export const postSubscriptionRevoke = (body) => apiPost('/subscription/revoke', body)
 export const postTransferRequest = (body) => apiPost('/transfer/request', body)
 export const postTransferConfirm = (body) => apiPost('/transfer/confirm', body)
-export const postAdminForceTransfer = (body) => apiPost('/transfer/admin-force', body)
+export const postAdminForceTransfer = (body) => adminApiPost('/transfer/admin-force', body)
 
 export function subscriptionStreamUrl(deviceId, opts = {}) {
   const q = new URLSearchParams()
@@ -228,6 +226,41 @@ export function adminPanelApiHeaders() {
     if (jwt) h.Authorization = `Bearer ${jwt}`
   }
   return h
+}
+
+async function adminApiRequest(path, { method = 'GET', body, allowNoContent = false } = {}) {
+  const res = await fetch(joinPath(path), {
+    method,
+    headers: adminPanelApiHeaders(),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+  const parsed = res.status === 204 && allowNoContent ? null : await parseJsonSafe(res)
+  if (!res.ok && !(allowNoContent && res.status === 204)) {
+    throw new ApiError(msgFromBody(parsed, res.status), res.status, parsed)
+  }
+  return parsed
+}
+
+function adminApiGet(path) {
+  return adminApiRequest(path)
+}
+
+function adminApiPost(path, body = {}) {
+  return adminApiRequest(path, { method: 'POST', body })
+}
+
+function adminApiPut(path, body = {}) {
+  return adminApiRequest(path, { method: 'PUT', body })
+}
+
+function adminApiDelete(path) {
+  return adminApiRequest(path, { method: 'DELETE', allowNoContent: true })
+}
+
+function adminPanelFormDataHeaders() {
+  const headers = { ...adminPanelApiHeaders() }
+  delete headers['Content-Type']
+  return headers
 }
 
 /**
@@ -264,6 +297,14 @@ export function postAdminResendOtp(body) {
 
 export function postAdminEmergencyPin(body) {
   return apiPost('/admin/auth/emergency-pin', body)
+}
+
+export function getAdminAuthMe() {
+  return adminApiGet('/admin/auth/me')
+}
+
+export function postAdminLogout() {
+  return adminApiPost('/admin/auth/logout', {})
 }
 
 export async function getAdminAuthDevices() {
@@ -549,60 +590,62 @@ export const postNotification = (body) => apiPost('/notifications', body)
 export const putNotification = (id, body) => apiPut(`/notifications/${encodeURIComponent(id)}`, body)
 
 /** --- Transfer codes --- */
-export const getTransferCodes = () => apiGet('/transfer-codes')
-export const postTransferCode = (body) => apiPost('/transfer-codes', body)
-export const postAdminForceTransferPhone = (body) => apiPost('/transfer/admin-force-phone', body)
-export const putTransferCode = (id, body) => apiPut(`/transfer-codes/${encodeURIComponent(id)}`, body)
-export const deleteTransferCode = (id) => apiDelete(`/transfer-codes/${encodeURIComponent(id)}`)
-export const postTransferCodesBulkDelete = (body) => apiPost('/transfer-codes/bulk-delete', body)
+export const getTransferCodes = () => adminApiGet('/transfer-codes')
+export const postTransferCode = (body) => adminApiPost('/transfer-codes', body)
+export const postAdminForceTransferPhone = (body) => adminApiPost('/transfer/admin-force-phone', body)
+export const putTransferCode = (id, body) => adminApiPut(`/transfer-codes/${encodeURIComponent(id)}`, body)
+export const deleteTransferCode = (id) => adminApiDelete(`/transfer-codes/${encodeURIComponent(id)}`)
+export const postTransferCodesBulkDelete = (body) => adminApiPost('/transfer-codes/bulk-delete', body)
 
 /** --- Settings docs --- */
-export const getZenopaySettings = () => apiGet('/settings/zenopay')
-export const putZenopaySettings = (body) => apiPut('/settings/zenopay', body)
-export const postZenopayTest = (body) => apiPost('/settings/zenopay/test', body)
-export const getPaymentProvidersSettings = () => apiGet('/settings/payment-providers')
+export const getZenopaySettings = () => adminApiGet('/settings/zenopay')
+export const putZenopaySettings = (body) => adminApiPut('/settings/zenopay', body)
+export const postZenopayTest = (body) => adminApiPost('/settings/zenopay/test', body)
+export const getPaymentProvidersSettings = () => adminApiGet('/settings/payment-providers')
 export const getPaymentProviders = () => apiGet('/payment-providers')
 export const postPaymentProviderFormData = (formData) =>
   fetch(joinPath('/settings/payment-providers'), {
     method: 'POST',
+    headers: adminPanelFormDataHeaders(),
     body: formData,
   }).then(parseJsonSafeResponse)
 export const putPaymentProviderFormData = (id, formData) =>
   fetch(joinPath(`/settings/payment-providers/${encodeURIComponent(id)}`), {
     method: 'PUT',
+    headers: adminPanelFormDataHeaders(),
     body: formData,
   }).then(parseJsonSafeResponse)
 export const deletePaymentProvider = (id) =>
-  apiDelete(`/settings/payment-providers/${encodeURIComponent(id)}`)
+  adminApiDelete(`/settings/payment-providers/${encodeURIComponent(id)}`)
 
-export const getWhatsappSettings = () => apiGet('/whatsapp-settings')
-export const putWhatsappSettings = (body) => apiPut('/whatsapp-settings', body)
+export const getWhatsappSettings = () => adminApiGet('/whatsapp-settings')
+export const putWhatsappSettings = (body) => adminApiPut('/whatsapp-settings', body)
 
-export const getAppUpdateSettings = () => apiGet('/settings/app-update')
-export const putAppUpdateSettings = (body) => apiPut('/settings/app-update', body)
+export const getAppUpdateSettings = () => adminApiGet('/settings/app-update')
+export const putAppUpdateSettings = (body) => adminApiPut('/settings/app-update', body)
 export const getUpdateCheck = () => apiGet('/update-check')
 
-export const getPopupSettings = () => apiGet('/popup-settings')
-export const putPopupSettings = (body) => apiPut('/popup-settings', body)
+export const getPopupSettings = () => adminApiGet('/popup-settings')
+export const putPopupSettings = (body) => adminApiPut('/popup-settings', body)
 export const getRuntimePopupSettings = () => apiGet('/settings/popup')
-export const putRuntimePopupSettings = (body) => apiPut('/settings/popup', body)
+export const putRuntimePopupSettings = (body) => adminApiPut('/settings/popup', body)
 
-export const getDeviceControlSettings = () => apiGet('/settings/device-control')
-export const putDeviceControlSettings = (body) => apiPut('/settings/device-control', body)
+export const getDeviceControlSettings = () => adminApiGet('/settings/device-control')
+export const putDeviceControlSettings = (body) => adminApiPut('/settings/device-control', body)
 
-export const getSecuritySuite = () => apiGet('/settings/security-suite')
-export const putSecuritySuite = (body) => apiPut('/settings/security-suite', body)
+export const getSecuritySuite = () => adminApiGet('/settings/security-suite')
+export const putSecuritySuite = (body) => adminApiPut('/settings/security-suite', body)
 export const postSecuritySuiteRestoreWhitelist = () =>
-  apiPost('/settings/security-suite/restore-whitelist', {})
+  adminApiPost('/settings/security-suite/restore-whitelist', {})
 export const deleteSecurityAlert = (id) =>
-  apiDelete(`/settings/security-suite/alerts/${encodeURIComponent(id)}`)
+  adminApiDelete(`/settings/security-suite/alerts/${encodeURIComponent(id)}`)
 export const postSecurityAlertsBulkDelete = (body) =>
-  apiPost('/settings/security-suite/alerts/bulk-delete', body)
+  adminApiPost('/settings/security-suite/alerts/bulk-delete', body)
 
-export const getSecurityLogs = () => apiGet('/security-logs')
-export const postSecurityLog = (entry) => apiPost('/security-logs', entry)
-export const deleteSecurityLog = (id) => apiDelete(`/security-logs/${encodeURIComponent(id)}`)
-export const postSecurityLogsBulkDelete = (body) => apiPost('/security-logs/bulk-delete', body)
+export const getSecurityLogs = () => adminApiGet('/security-logs')
+export const postSecurityLog = (entry) => adminApiPost('/security-logs', entry)
+export const deleteSecurityLog = (id) => adminApiDelete(`/security-logs/${encodeURIComponent(id)}`)
+export const postSecurityLogsBulkDelete = (body) => adminApiPost('/security-logs/bulk-delete', body)
 
 export const getDashboard = () => apiGet('/dashboard')
 export const putDashboardSettings = (body) => apiPut('/settings/dashboard', body)
@@ -611,5 +654,5 @@ export const getAnalyticsOverview = () => apiGet('/analytics/overview')
 export const getAnalyticsChannels = () => apiGet('/analytics/channels')
 export const getAnalyticsLocations = () => apiGet('/analytics/locations')
 export const getAnalyticsTrend = () => apiGet('/analytics/trend')
-export const getServerHealth = () => apiGet('/server-health')
+export const getServerHealth = () => adminApiGet('/server-health')
 export const getApiHealth = () => apiGet('/health')

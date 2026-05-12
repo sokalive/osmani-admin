@@ -83,6 +83,21 @@ function str(v, d = '') {
   return String(v).trim()
 }
 
+function normalizeStoredUploadPath(value) {
+  const raw = str(value)
+  if (!raw) return ''
+  if (raw.startsWith('/uploads/')) return raw
+  try {
+    const parsed = new URL(raw)
+    if (parsed.pathname.startsWith('/uploads/')) {
+      return parsed.pathname
+    }
+  } catch {
+    // Keep non-URL values unchanged.
+  }
+  return raw
+}
+
 /**
  * Build canonical channel fields from multipart or JSON body + optional uploaded file.
  * @param {Record<string, string>} body - req.body
@@ -102,7 +117,7 @@ export function parseChannelInput(body, file, existing = null) {
       str(b.existingThumbnailUrl) ||
       str(b.thumbnailUrl) ||
       (typeof b.thumbnail === 'string' && !b.thumbnail.startsWith('blob:') ? str(b.thumbnail) : '')
-    if (keep) thumbnail = keep
+    if (keep) thumbnail = normalizeStoredUploadPath(keep)
     else if (ex?.thumbnail) thumbnail = ex.thumbnail
   }
 

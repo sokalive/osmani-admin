@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { readChannels } from '../store.js'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const realtimeSettingsRouter = Router()
 
@@ -466,7 +467,13 @@ function publishWithLog(eventName, payload) {
   liveSyncBus.publish(eventName, { topics: ['config'], ...payload })
 }
 
-realtimeSettingsRouter.get('/whatsapp-settings', async (_req, res) => {
+export async function triggerServerHealthBroadcast(force = true) {
+  const payload = await getServerHealthCached(force)
+  publishWithLog('server_health_changed', payload)
+  return payload
+}
+
+realtimeSettingsRouter.get('/whatsapp-settings', requireAdminPanelAccess, async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -478,7 +485,7 @@ realtimeSettingsRouter.get('/whatsapp-settings', async (_req, res) => {
   }
 })
 
-realtimeSettingsRouter.put('/whatsapp-settings', async (req, res) => {
+realtimeSettingsRouter.put('/whatsapp-settings', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -510,7 +517,7 @@ realtimeSettingsRouter.get('/settings/whatsapp', async (req, res) => {
   }
 })
 
-realtimeSettingsRouter.put('/settings/whatsapp', async (req, res) => {
+realtimeSettingsRouter.put('/settings/whatsapp', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -532,7 +539,7 @@ realtimeSettingsRouter.put('/settings/whatsapp', async (req, res) => {
   }
 })
 
-realtimeSettingsRouter.get('/popup-settings', async (_req, res) => {
+realtimeSettingsRouter.get('/popup-settings', requireAdminPanelAccess, async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -544,7 +551,7 @@ realtimeSettingsRouter.get('/popup-settings', async (_req, res) => {
   }
 })
 
-realtimeSettingsRouter.put('/popup-settings', async (req, res) => {
+realtimeSettingsRouter.put('/popup-settings', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -582,7 +589,7 @@ realtimeSettingsRouter.get('/settings/popup', async (req, res) => {
   }
 })
 
-realtimeSettingsRouter.put('/settings/popup', async (req, res) => {
+realtimeSettingsRouter.put('/settings/popup', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -613,7 +620,7 @@ realtimeSettingsRouter.put('/settings/popup', async (req, res) => {
   }
 })
 
-realtimeSettingsRouter.get('/server-health', async (_req, res) => {
+realtimeSettingsRouter.get('/server-health', requireAdminPanelAccess, async (_req, res) => {
   try {
     const payload = await getServerHealthCached()
     return res.json(payload)
@@ -630,10 +637,7 @@ realtimeSettingsRouter.get('/server-health', async (_req, res) => {
 })
 
 setInterval(() => {
-  void getServerHealthCached(true)
-    .then((payload) => {
-      publishWithLog('server_health_changed', payload)
-    })
+  void triggerServerHealthBroadcast(true)
     .catch((e) => {
       console.error('[SERVER_HEALTH] background refresh failed:', e)
     })

@@ -29,26 +29,39 @@ const SELECT_BASE = `
 /** Public list: spec fields only (no join). */
 const SELECT_PUBLIC = `
   SELECT b.id, b.title, b.description, b.image,
-         b.active, b.badge, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
+         b.active, b.enabled, b.badge, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
          b.enable_countdown, b.event_start, b.event_end,
-         b.redirect_channel_id, b.sort_order, b.created_at, b.updated_at
+         b.redirect_channel_id, b.sort_order, b.event_timer, b.daily_start, b.daily_end,
+         b.created_at, b.updated_at
   FROM banners b
 `
 
 /**
- * Visibility: active AND (no event bounds OR within [event_start, event_end) style window).
- * Matches: (event_start IS NULL AND event_end IS NULL)
- *       OR (event_start <= NOW() AND (event_end IS NULL OR NOW() < event_end))
+ * Visibility: active + enabled + event window, plus optional daily timer.
+ * The daily timer uses the database server clock so runtime clients can treat
+ * `/api/banners` as canonical visibility truth.
  */
 const PUBLIC_VISIBILITY_WHERE = `
   b.active = true
+  AND b.enabled = true
   AND (
     (b.event_start IS NULL AND b.event_end IS NULL)
     OR (b.event_start <= NOW() AND (b.event_end IS NULL OR NOW() < b.event_end))
   )
+  AND (
+    b.event_timer = false
+    OR (
+      b.daily_start IS NOT NULL
+      AND b.daily_end IS NOT NULL
+      AND (
+        (b.daily_start < b.daily_end AND LOCALTIME >= b.daily_start AND LOCALTIME < b.daily_end)
+        OR (b.daily_start > b.daily_end AND (LOCALTIME >= b.daily_start OR LOCALTIME < b.daily_end))
+      )
+    )
+  )
 `
 
-/** Public GET /api/banners — production spec only (no enabled / daily timer filter). */
+/** Public GET /api/banners — canonical runtime-visible banners only. */
 export async function listBannersPublic() {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required.')

@@ -20,8 +20,8 @@ function fullImageUrl(row, req) {
 }
 
 /**
- * GET /api/banners — production public shape only (no legacy timer / enabled fields).
- * Includes snake_case + camelCase aliases where applicable.
+ * GET /api/banners — runtime shape for public clients.
+ * Includes enabled + schedule fields so website/APK can mirror backend-driven visibility state.
  */
 export function bannerToPublicResponse(row, req) {
   if (!row) return null
@@ -32,6 +32,8 @@ export function bannerToPublicResponse(row, req) {
   const sortOrder = Number(row.sort_order) || 0
   const createdAt = formatTsForApi(row.created_at)
   const updatedAt = formatTsForApi(row.updated_at) ?? createdAt
+  const startTime = formatTimeForApi(row.daily_start)
+  const endTime = formatTimeForApi(row.daily_end)
 
   return {
     id: Number(row.id),
@@ -41,6 +43,8 @@ export function bannerToPublicResponse(row, req) {
     imageUrl: imageUrl,
     is_active: Boolean(row.active),
     isActive: Boolean(row.active),
+    enabled: Boolean(row.enabled),
+    isEnabled: Boolean(row.enabled),
     badge: row.badge ?? '',
     badge_enabled: Boolean(row.badge_enabled),
     badgeEnabled: Boolean(row.badge_enabled),
@@ -60,6 +64,15 @@ export function bannerToPublicResponse(row, req) {
     redirectChannelId: rid,
     sort_order: sortOrder,
     sortOrder,
+    event_timer: Boolean(row.event_timer),
+    eventTimer: Boolean(row.event_timer),
+    useTimer: Boolean(row.event_timer),
+    daily_start: startTime,
+    dailyStart: startTime,
+    startTime,
+    daily_end: endTime,
+    dailyEnd: endTime,
+    endTime,
     created_at: createdAt,
     createdAt,
     updated_at: updatedAt,

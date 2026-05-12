@@ -35,6 +35,7 @@ function ServerHealthPage() {
       void load()
     }
     es.addEventListener('server_health_changed', onChanged)
+    es.addEventListener('config.channels_changed', onChanged)
     return () => es.close()
   }, [load])
 
@@ -114,7 +115,10 @@ function ServerHealthPage() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} className="border-b border-slate-800/80 hover:bg-slate-900/50">
+                  <tr
+                    key={`${r.name}:${r.status}:${r.response_ms ?? 0}:${r.error ?? ''}`}
+                    className="border-b border-slate-800/80 hover:bg-slate-900/50"
+                  >
                     <td className="px-4 py-3 font-medium text-slate-200">{r.name}</td>
                     <td className="px-4 py-3">
                       <span

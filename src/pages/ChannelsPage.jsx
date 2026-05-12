@@ -84,9 +84,13 @@ function ChannelsPage() {
         /* older API without /settings */
       })
     }
+    const onChannelsChanged = () => {
+      void loadChannels()
+    }
     es.addEventListener('config.settings_changed', onChanged)
+    es.addEventListener('config.channels_changed', onChannelsChanged)
     return () => es.close()
-  }, [applyAppModesPayload, refreshAppModes])
+  }, [applyAppModesPayload, loadChannels, refreshAppModes])
 
   async function persistAppModes(partial) {
     const next = {

@@ -7,6 +7,7 @@ import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const bannersRouter = Router()
 
@@ -150,7 +151,18 @@ async function resolveImagePath({ body, file, existingImage }) {
     await fs.writeFile(path.join(UPLOADS_DIR, fname), Buffer.from(m[2], 'base64'))
     return `/uploads/${fname}`
   }
-  if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/uploads')) return s
+  if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/uploads')) {
+    if (s.startsWith('/uploads/')) return s
+    try {
+      const parsed = new URL(s)
+      if (parsed.pathname.startsWith('/uploads/')) {
+        return parsed.pathname
+      }
+    } catch {
+      // Keep external URLs unchanged.
+    }
+    return s
+  }
   return existingImage ?? null
 }
 
@@ -178,7 +190,7 @@ bannersRouter.get('/', async (req, res) => {
 })
 
 /** CMS: all banners (admin UI) */
-bannersRouter.get('/manage', async (req, res) => {
+bannersRouter.get('/manage', requireAdminPanelAccess, async (req, res) => {
   try {
     const rows = await bannerStore.listBannersManage()
     res.json(rows.map((r) => bannerToResponse(r, req)))
@@ -188,7 +200,7 @@ bannersRouter.get('/manage', async (req, res) => {
   }
 })
 
-bannersRouter.post('/', maybeUploadBanner, async (req, res) => {
+bannersRouter.post('/', requireAdminPanelAccess, maybeUploadBanner, async (req, res) => {
   try {
     const fields = parseBannerFields(req)
     const vErrs = validateBannerFields(fields)
@@ -235,7 +247,7 @@ bannersRouter.post('/', maybeUploadBanner, async (req, res) => {
   }
 })
 
-bannersRouter.put('/:id', maybeUploadBanner, async (req, res) => {
+bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req, res) => {
   try {
     const id = Number.parseInt(req.params.id, 10)
     if (Number.isNaN(id)) {
@@ -306,7 +318,7 @@ bannersRouter.put('/:id', maybeUploadBanner, async (req, res) => {
   }
 })
 
-bannersRouter.delete('/:id', async (req, res) => {
+bannersRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
   try {
     const id = Number.parseInt(req.params.id, 10)
     if (Number.isNaN(id)) {
