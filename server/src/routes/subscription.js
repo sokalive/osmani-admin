@@ -127,6 +127,44 @@ export function normalizeVerifyResponse(pub, txnSummary) {
   }
 }
 
+function appModesForVerify(modesPayload) {
+  const body = modesPayload && typeof modesPayload === 'object' ? modesPayload : {}
+  const appModes = {
+    ok: body.ok !== false,
+    v: body.v != null ? Number(body.v) || 0 : 0,
+    free_mode: body.free_mode === true,
+    emergency_mode: body.emergency_mode === true,
+    maintenance_mode: body.maintenance_mode === true,
+    server_time_ms: body.server_time_ms != null ? Number(body.server_time_ms) || null : null,
+  }
+  return {
+    app_modes: appModes,
+    free_mode: appModes.free_mode,
+    emergency_mode: appModes.emergency_mode,
+    maintenance_mode: appModes.maintenance_mode,
+  }
+}
+
+function derivePlaybackGate(pub, modesPayload) {
+  const modes = appModesForVerify(modesPayload).app_modes
+  if (modes.emergency_mode) {
+    return { playbackAllowed: false, playbackGateReason: 'emergency_mode' }
+  }
+  if (modes.maintenance_mode) {
+    return { playbackAllowed: false, playbackGateReason: 'maintenance_mode' }
+  }
+  if (pub.blocked === true) {
+    return { playbackAllowed: false, playbackGateReason: 'blocked_device' }
+  }
+  if (pub.active === true) {
+    return { playbackAllowed: true, playbackGateReason: 'subscription_active' }
+  }
+  if (modes.free_mode) {
+    return { playbackAllowed: true, playbackGateReason: 'free_mode' }
+  }
+  return { playbackAllowed: false, playbackGateReason: 'subscription_inactive' }
+}
+
 /**
  * Shared path for GET /subscription-status and POST /subscription/verify:
  * presence touch, reconcile + activate, then access state + plans.
@@ -148,6 +186,16 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const pub = rowToPublicStatus(row)
   const txnSummary = await billing.getLatestCompletedSubscriptionTxnSummary(d)
   const normalized = normalizeVerifyResponse(pub, txnSummary)
+  const modesPayload = await loadGlobalAppModesPayload().catch(() => ({
+    ok: false,
+    v: liveSyncBus.snapshot().configVersion,
+    free_mode: false,
+    emergency_mode: false,
+    maintenance_mode: false,
+    server_time_ms: Date.now(),
+  }))
+  const runtimeModes = appModesForVerify(modesPayload)
+  const playbackGate = derivePlaybackGate(pub, modesPayload)
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
     console.log('[subscription_verify_debug]', {
@@ -164,6 +212,8 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         plan_duration_days: normalized.plan_duration_days,
         planDurationDays: normalized.planDurationDays,
       },
+      appModes: runtimeModes.app_modes,
+      playbackGate,
     })
   }
 
@@ -182,13 +232,18 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         }
       : null
 
-  const withGift = { ...normalized, manualGift }
+  const withGift = {
+    ...normalized,
+    ...runtimeModes,
+    manualGift,
+    playbackAllowed: playbackGate.playbackAllowed,
+    playbackGateReason: playbackGate.playbackGateReason,
+  }
 
   if (!pub.active) {
     const plans = await billing.listPlansWithSubscriberCounts().catch(() => [])
     return {
       ...withGift,
-      playbackAllowed: false,
       plans: Array.isArray(plans)
         ? plans.map((p) => ({
             id: Number(p.id),
@@ -199,7 +254,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         : [],
     }
   }
-  return { ...withGift, playbackAllowed: true }
+  return withGift
 }
 
 /**
@@ -324,6 +379,7 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
       active: bodyOut.active === true,
       isActive: bodyOut.isActive === true,
       playbackAllowed: bodyOut.playbackAllowed === true,
+      playbackGateReason: bodyOut.playbackGateReason ?? null,
       status: bodyOut.status,
       expiresAt: bodyOut.expiresAt ? shortRef(bodyOut.expiresAt, 28) : null,
     })
@@ -366,6 +422,7 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
       active: bodyOut.active === true,
       isActive: bodyOut.isActive === true,
       playbackAllowed: bodyOut.playbackAllowed === true,
+      playbackGateReason: bodyOut.playbackGateReason ?? null,
       status: bodyOut.status,
       expiresAt: bodyOut.expiresAt ? shortRef(bodyOut.expiresAt, 28) : null,
     })

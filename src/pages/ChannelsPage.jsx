@@ -8,9 +8,9 @@ import { useToast } from '../context/ToastContext.jsx'
 import {
   addChannelFormData,
   deleteChannel,
-  getAppGlobalSettings,
   getChannels,
   putAppGlobalSettings,
+  syncStreamUrl,
   updateChannel,
   updateChannelFormData,
 } from '../lib/api'
@@ -18,17 +18,30 @@ import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '.
 
 function ChannelsPage() {
   const { showToast } = useToast()
-  const { isSubscribed, expiresAt, subscriptionStatus, blocked, blockReason, playbackAllowed } =
-    useDeviceSubscription()
-  const [isFreeMode, setIsFreeMode] = useState(false)
-  const [isEmergencyMode, setIsEmergencyMode] = useState(false)
-  const [isMaintenanceMode, setIsMaintenanceMode] = useState(false)
+  const {
+    isSubscribed,
+    expiresAt,
+    subscriptionStatus,
+    blocked,
+    blockReason,
+    playbackAllowed,
+    playbackGateReason,
+    appModes,
+    appModesReady,
+    applyAppModesPayload,
+    refreshAppModes,
+  } = useDeviceSubscription()
   const [searchQuery, setSearchQuery] = useState('')
 
   const [channels, setChannels] = useState([])
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [editingChannel, setEditingChannel] = useState(null)
   const [addModalOpen, setAddModalOpen] = useState(false)
+  const [modesSaving, setModesSaving] = useState(false)
+
+  const isFreeMode = appModes.free_mode === true
+  const isEmergencyMode = appModes.emergency_mode === true
+  const isMaintenanceMode = appModes.maintenance_mode === true
 
   const loadChannels = useCallback(async () => {
     try {
@@ -49,22 +62,31 @@ function ChannelsPage() {
   }, [loadChannels])
 
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const s = await getAppGlobalSettings()
-        if (cancelled) return
-        setIsFreeMode(Boolean(s.freeMode))
-        setIsEmergencyMode(Boolean(s.emergencyMode))
-        setIsMaintenanceMode(Boolean(s.maintenanceMode))
-      } catch {
+    const timer = window.setTimeout(() => {
+      void refreshAppModes().catch(() => {
         /* older API without /settings */
+      })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [refreshAppModes])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    es.addEventListener('app_modes', (ev) => {
+      try {
+        applyAppModesPayload(JSON.parse(ev.data))
+      } catch {
+        /* ignore malformed app_modes */
       }
-    })()
-    return () => {
-      cancelled = true
+    })
+    const onChanged = () => {
+      void refreshAppModes().catch(() => {
+        /* older API without /settings */
+      })
     }
-  }, [])
+    es.addEventListener('config.settings_changed', onChanged)
+    return () => es.close()
+  }, [applyAppModesPayload, refreshAppModes])
 
   async function persistAppModes(partial) {
     const next = {
@@ -74,9 +96,16 @@ function ChannelsPage() {
         partial.maintenanceMode !== undefined ? partial.maintenanceMode : isMaintenanceMode,
     }
     try {
-      await putAppGlobalSettings(next)
+      setModesSaving(true)
+      const saved = await putAppGlobalSettings(next)
+      applyAppModesPayload(saved)
     } catch (e) {
       showToast('error', e?.message || 'Could not save app modes')
+      void refreshAppModes().catch(() => {
+        /* ignore rollback refresh failure */
+      })
+    } finally {
+      setModesSaving(false)
     }
   }
 
@@ -180,10 +209,26 @@ function ChannelsPage() {
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-white sm:text-3xl">
             Channels
           </h1>
+          {isEmergencyMode ? (
+            <p className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+              Emergency mode active. Runtime clients should stop playback immediately and keep channels hidden
+              until the backend mode clears.
+            </p>
+          ) : isMaintenanceMode ? (
+            <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+              Maintenance mode active. Playback remains soft-disabled by backend runtime gating while the shell
+              stays online.
+            </p>
+          ) : isFreeMode ? (
+            <p className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+              Free mode active. Runtime clients can bypass the paywall while the backend remains the source of
+              truth for mode changes.
+            </p>
+          ) : null}
           {isSubscribed ? (
             <p className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
               Device subscription active{expiresAt ? ` · until ${expiresAt}` : ''} · playback{' '}
-              {playbackAllowed ? 'allowed' : 'checking'}.
+              {`${playbackAllowed ? 'allowed' : playbackGateReason ? `disabled (${playbackGateReason})` : 'checking'}.`}
             </p>
           ) : blocked ? (
             <p className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
@@ -197,17 +242,15 @@ function ChannelsPage() {
           isFreeMode={isFreeMode}
           isEmergencyMode={isEmergencyMode}
           isMaintenanceMode={isMaintenanceMode}
+          modesDisabled={!appModesReady || modesSaving}
           onFreeModeChange={(v) => {
-            setIsFreeMode(v)
-            persistAppModes({ freeMode: v })
+            void persistAppModes({ freeMode: v })
           }}
           onEmergencyModeChange={(v) => {
-            setIsEmergencyMode(v)
-            persistAppModes({ emergencyMode: v })
+            void persistAppModes({ emergencyMode: v })
           }}
           onMaintenanceModeChange={(v) => {
-            setIsMaintenanceMode(v)
-            persistAppModes({ maintenanceMode: v })
+            void persistAppModes({ maintenanceMode: v })
           }}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -216,6 +259,11 @@ function ChannelsPage() {
             setAddModalOpen(true)
           }}
         />
+        {playbackGateReason === 'emergency_mode' || playbackGateReason === 'maintenance_mode' ? (
+          <p className="text-xs text-slate-400">
+            Current runtime gate reason: <span className="font-semibold text-slate-200">{playbackGateReason}</span>
+          </p>
+        ) : null}
 
         <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-950/45">
           <div className="overflow-auto">

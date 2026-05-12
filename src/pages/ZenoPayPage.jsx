@@ -591,6 +591,12 @@ function ZenoPayPage() {
                     {subscriptionState.playbackAllowed ? 'yes' : 'no'}
                   </span>
                 </p>
+                {subscriptionState.playbackGateReason ? (
+                  <p>
+                    Gate reason:{' '}
+                    <span className="font-semibold text-white">{subscriptionState.playbackGateReason}</span>
+                  </p>
+                ) : null}
                 <p>
                   Expires:{' '}
                   <span className="font-semibold text-white">{subscriptionState.expiresAt || '—'}</span>

@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 
 export const liveSyncRouter = Router()
 
@@ -31,9 +32,30 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
     ...liveSyncBus.snapshot(),
   })
 
+  if (topics.includes('config')) {
+    void (async () => {
+      try {
+        const payload = await loadGlobalAppModesPayload()
+        send('app_modes', { ...payload, reason: 'init' })
+      } catch (e) {
+        console.error('[sync/stream] app_modes init failed:', e)
+      }
+    })()
+  }
+
   const handler = (packet) => {
     const hasTopic = topics.some((topic) => packet?.payload?.topics?.includes(topic))
     if (!hasTopic) return
+    if (topics.includes('config') && packet?.payload?.modes) {
+      void (async () => {
+        try {
+          const payload = await loadGlobalAppModesPayload()
+          send('app_modes', { ...payload, reason: String(packet.event || 'sync') })
+        } catch (e) {
+          console.error('[sync/stream] app_modes sync failed:', e)
+        }
+      })()
+    }
     send(packet.event || 'sync', packet)
   }
 

@@ -6,6 +6,7 @@ function ChannelsToolbar({
   isFreeMode,
   isEmergencyMode,
   isMaintenanceMode,
+  modesDisabled = false,
   onFreeModeChange,
   onEmergencyModeChange,
   onMaintenanceModeChange,
@@ -20,18 +21,21 @@ function ChannelsToolbar({
           <ModeControlButton
             variant="free"
             active={isFreeMode}
+            disabled={modesDisabled}
             onToggle={onFreeModeChange}
             ariaLabel="Free Mode"
           />
           <ModeControlButton
             variant="emergency"
             active={isEmergencyMode}
+            disabled={modesDisabled}
             onToggle={onEmergencyModeChange}
             ariaLabel="Emergency Mode"
           />
           <ModeControlButton
             variant="maintenance"
             active={isMaintenanceMode}
+            disabled={modesDisabled}
             onToggle={onMaintenanceModeChange}
             ariaLabel="Maintenance Mode"
           />

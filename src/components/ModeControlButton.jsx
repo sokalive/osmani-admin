@@ -55,7 +55,7 @@ const variants = {
 /**
  * Streaming dashboard mode control — OFF: slate pill + muted icon; ON: solid gradient pill + glow.
  */
-function ModeControlButton({ variant, active, onToggle, ariaLabel }) {
+function ModeControlButton({ variant, active, onToggle, ariaLabel, disabled = false }) {
   const v = variants[variant]
 
   return (
@@ -64,8 +64,9 @@ function ModeControlButton({ variant, active, onToggle, ariaLabel }) {
       role="switch"
       aria-checked={active}
       aria-label={ariaLabel}
+      disabled={disabled}
       onClick={() => onToggle(!active)}
-      className={`${basePill} ${active ? v.onGradient : offBase}`}
+      className={`${basePill} ${active ? v.onGradient : offBase} ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
     >
       {active ? (
         <span className="inline-flex items-center gap-2">{v.onLabel}</span>

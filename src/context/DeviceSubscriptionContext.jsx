@@ -1,14 +1,14 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'
-import { getSubscriptionStatus, postSubscriptionVerify } from '../lib/api'
+import { getAppGlobalSettings, getSubscriptionStatus, postSubscriptionVerify } from '../lib/api'
 
 const DeviceSubscriptionContext = createContext(null)
 
 function normalizeAppModesPayload(body) {
   const payload = body && typeof body === 'object' ? body : {}
   return {
-    free_mode: payload.free_mode === true,
-    emergency_mode: payload.emergency_mode === true,
-    maintenance_mode: payload.maintenance_mode === true,
+    free_mode: payload.free_mode === true || payload.freeMode === true,
+    emergency_mode: payload.emergency_mode === true || payload.emergencyMode === true,
+    maintenance_mode: payload.maintenance_mode === true || payload.maintenanceMode === true,
     v: payload.v != null ? Number(payload.v) || 0 : 0,
     server_time_ms: payload.server_time_ms != null ? Number(payload.server_time_ms) || null : null,
     reason: payload.reason != null ? String(payload.reason) : null,
@@ -64,6 +64,7 @@ function normalizeSubscriptionPayload(body) {
           : null,
     manualGift,
     playbackAllowed: payload.playbackAllowed === true,
+    playbackGateReason: payload.playbackGateReason != null ? String(payload.playbackGateReason) : null,
     plans,
   }
 }
@@ -80,20 +81,41 @@ function emptyAppModesState() {
 export function DeviceSubscriptionProvider({ children }) {
   const [subscriptionState, setSubscriptionState] = useState(() => emptySubscriptionState())
   const [appModes, setAppModes] = useState(() => emptyAppModesState())
+  const [appModesReady, setAppModesReady] = useState(false)
   const [trackedDeviceId, setTrackedDeviceId] = useState('')
   const [lastOrderId, setLastOrderId] = useState('')
 
   const applySubscriptionStatusPayload = useCallback((body) => {
     const normalized = normalizeSubscriptionPayload(body)
     setSubscriptionState(normalized)
+    const runtimeModes = body?.app_modes ?? body
+    if (
+      runtimeModes &&
+      typeof runtimeModes === 'object' &&
+      ('free_mode' in runtimeModes ||
+        'emergency_mode' in runtimeModes ||
+        'maintenance_mode' in runtimeModes ||
+        'freeMode' in runtimeModes ||
+        'emergencyMode' in runtimeModes ||
+        'maintenanceMode' in runtimeModes)
+    ) {
+      setAppModes(normalizeAppModesPayload(runtimeModes))
+      setAppModesReady(true)
+    }
     return normalized
   }, [])
 
   const applyAppModesPayload = useCallback((body) => {
     const normalized = normalizeAppModesPayload(body)
     setAppModes(normalized)
+    setAppModesReady(true)
     return normalized
   }, [])
+
+  const refreshAppModes = useCallback(async () => {
+    const body = await getAppGlobalSettings()
+    return applyAppModesPayload(body)
+  }, [applyAppModesPayload])
 
   const refreshSubscriptionState = useCallback(
     async ({ deviceId, orderId = '', fingerprint = '' } = {}) => {
@@ -142,6 +164,7 @@ export function DeviceSubscriptionProvider({ children }) {
     () => ({
       subscriptionState,
       appModes,
+      appModesReady,
       trackedDeviceId,
       lastOrderId,
       isSubscribed: subscriptionState.isActive === true,
@@ -150,10 +173,12 @@ export function DeviceSubscriptionProvider({ children }) {
       blocked: subscriptionState.blocked === true,
       blockReason: subscriptionState.blockReason,
       playbackAllowed: subscriptionState.playbackAllowed === true,
+      playbackGateReason: subscriptionState.playbackGateReason,
       manualGift: subscriptionState.manualGift,
       plans: subscriptionState.plans,
       applySubscriptionStatusPayload,
       applyAppModesPayload,
+      refreshAppModes,
       refreshSubscriptionState,
       trackSubscriptionDevice,
       clearSubscription,
@@ -162,8 +187,10 @@ export function DeviceSubscriptionProvider({ children }) {
       applyAppModesPayload,
       applySubscriptionStatusPayload,
       appModes,
+      appModesReady,
       clearSubscription,
       lastOrderId,
+      refreshAppModes,
       refreshSubscriptionState,
       subscriptionState,
       trackedDeviceId,
