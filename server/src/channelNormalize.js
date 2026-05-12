@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { buildPublicStreamProxyUrl, PROXY_MOUNT_STREAM } from './routes/streamProxy.js'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
 
@@ -202,11 +203,30 @@ export function channelToResponse(c, req) {
 
   const isActive = Boolean(m.isActive)
   const showInApp = Boolean(m.showInApp)
+  const proxyPrimary = buildPublicStreamProxyUrl(req, m.url, {
+    referer: m.referer,
+    origin: m.origin,
+    userAgent: m.userAgent,
+  })
+  const proxyBackup1 = buildPublicStreamProxyUrl(req, m.backupStream1, {
+    referer: m.referer,
+    origin: m.origin,
+    userAgent: m.userAgent,
+  })
+  const proxyBackup2 = buildPublicStreamProxyUrl(req, m.backupStream2, {
+    referer: m.referer,
+    origin: m.origin,
+    userAgent: m.userAgent,
+  })
+  const playbackUrl = proxyPrimary || m.url
+  const backupPlayback1 = proxyBackup1 || (m.backupStream1 ?? '')
+  const backupPlayback2 = proxyBackup2 || (m.backupStream2 ?? '')
 
   return {
     id: m.id,
     name: m.name,
     url: m.url,
+    playbackUrl,
     thumbnail: thumbFull,
     isLive: Boolean(m.isLive),
     isHD: Boolean(m.isHD),
@@ -219,10 +239,23 @@ export function channelToResponse(c, req) {
     bottomTab: (m.bottomTab || m.category || 'General').trim() || 'General',
     backupStream1: m.backupStream1 ?? '',
     backupStream2: m.backupStream2 ?? '',
+    backupPlayback1,
+    backupPlayback2,
     origin: m.origin ?? '',
     referer: m.referer ?? '',
     userAgent: m.userAgent ?? '',
     playerType: normalizePlayerType(m.playerType),
+    deliveryPath: `/${PROXY_MOUNT_STREAM}`,
+    streamProxy: {
+      route: `/${PROXY_MOUNT_STREAM}`,
+      primaryUrl: proxyPrimary,
+      backupUrls: [proxyBackup1, proxyBackup2].filter(Boolean),
+      headers: {
+        origin: m.origin ?? '',
+        referer: m.referer ?? '',
+        userAgent: m.userAgent ?? '',
+      },
+    },
     bottomTabsDisplay: m.bottomTab || m.category || 'General',
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,

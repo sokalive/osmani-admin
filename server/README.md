@@ -29,7 +29,7 @@ Wrong root → wrong `package.json` → routes like `/stream-proxy-test` will 40
 | Path | Description |
 |------|-------------|
 | `GET /api/health` | API health |
-| `GET /api/channels` | Channel list (requires `DATABASE_URL`) |
+| `GET /api/channels` | Channel list (requires `DATABASE_URL`; includes raw URLs plus proxy-ready playback fields) |
 | `GET /stream-proxy` | IPTV/HLS proxy + manifest rewrite |
 | `GET /stream-proxy-test` | Same as above (public smoke test; e.g. Mux sample m3u8) |
 

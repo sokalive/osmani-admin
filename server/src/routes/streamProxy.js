@@ -8,7 +8,7 @@ const DEFAULT_UA =
   'Mozilla/5.0 (Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36'
 
 /** Public path suffix (no leading slash): "stream-proxy" | "stream-proxy-test" */
-const PROXY_MOUNT_STREAM = 'stream-proxy'
+export const PROXY_MOUNT_STREAM = 'stream-proxy'
 const PROXY_MOUNT_TEST = 'stream-proxy-test'
 
 const SEGMENT_EXT_RE = /\.(ts|m4s|aac|mp4|m3u8)(\?.*)?$/i
@@ -39,6 +39,23 @@ function buildProxyUrl(req, absoluteTarget, hdr, mountPath) {
   if (hdr.origin) q.set('origin', hdr.origin)
   if (hdr.userAgent) q.set('userAgent', hdr.userAgent)
   return `${base}/${path}?${q.toString()}`
+}
+
+export function buildPublicStreamProxyUrl(req, absoluteTarget, hdr = {}) {
+  const sourceUrl = String(absoluteTarget || '').trim()
+  if (!sourceUrl) return ''
+  const parsed = parseMaybeUrl(sourceUrl)
+  if (!parsed || !['http:', 'https:'].includes(parsed.protocol)) return ''
+  return buildProxyUrl(
+    req,
+    parsed.toString(),
+    {
+      referer: String(hdr.referer || '').trim(),
+      origin: String(hdr.origin || '').trim(),
+      userAgent: String(hdr.userAgent || '').trim(),
+    },
+    PROXY_MOUNT_STREAM,
+  )
 }
 
 function extractUpstreamHeaders(req) {
