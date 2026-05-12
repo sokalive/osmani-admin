@@ -3,25 +3,23 @@ import { Eye, X } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getPopupSettings, putPopupSettings, syncStreamUrl } from '../lib/api'
+import { getRuntimePopupSettings, putRuntimePopupSettings, syncStreamUrl } from '../lib/api'
 
-function defaultPopup() {
+function normalizeRuntimePopup(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {}
+  const mode = String(body.mode ?? '').trim().toLowerCase()
+  const bulletsSource = Array.isArray(body.bullets)
+    ? body.bullets
+    : Array.isArray(body.bullet_points)
+      ? body.bullet_points
+      : []
   return {
-    mode: 'show_once',
-    title: 'Welcome to Osmani TV',
-    greeting: 'Hello!',
-    introduction: 'Discover live sports, movies, and family channels in one place.',
-    bullet_points: ['HD streams where available', 'Manage subscriptions anytime', 'Support via WhatsApp'],
-    disclaimer: 'Content availability may vary by region.',
+    mode: ['once', 'always', 'disabled'].includes(mode) ? mode : 'once',
+    title: String(body.title ?? ''),
+    greeting: String(body.greeting ?? ''),
+    bullets: bulletsSource.map((item) => String(item ?? '').trim()).filter(Boolean),
+    disclaimer: String(body.disclaimer ?? ''),
   }
-}
-
-function mergePopup(p) {
-  const d = { ...defaultPopup(), ...p }
-  if (!Array.isArray(d.bullet_points) || d.bullet_points.length === 0) {
-    d.bullet_points = defaultPopup().bullet_points
-  }
-  return d
 }
 
 function inputClass() {
@@ -30,24 +28,31 @@ function inputClass() {
 
 function PopupSettingsPage() {
   const { showToast } = useToast()
-  const [saved, setSaved] = useState(() => mergePopup(defaultPopup()))
-  const [draft, setDraft] = useState(() => mergePopup(defaultPopup()))
+  const [saved, setSaved] = useState(null)
+  const [draft, setDraft] = useState(null)
+  const [loading, setLoading] = useState(true)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [flash, setFlash] = useState(null)
 
   const load = useCallback(async () => {
+    setLoading(true)
     try {
-      const s = await getPopupSettings()
-      const merged = mergePopup({ ...defaultPopup(), ...s })
-      setSaved(merged)
-      setDraft(merged)
+      const payload = await getRuntimePopupSettings()
+      const normalized = normalizeRuntimePopup(payload)
+      setSaved(normalized)
+      setDraft(normalized)
     } catch (e) {
       showToast('error', e?.message || 'Could not load popup settings')
+    } finally {
+      setLoading(false)
     }
   }, [showToast])
 
   useEffect(() => {
-    load()
+    const timer = window.setTimeout(() => {
+      void load()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [load])
 
   useEffect(() => {
@@ -59,7 +64,10 @@ function PopupSettingsPage() {
     return () => es.close()
   }, [load])
 
-  const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved])
+  const dirty = useMemo(() => {
+    if (!draft || !saved) return false
+    return JSON.stringify(draft) !== JSON.stringify(saved)
+  }, [draft, saved])
 
   function showFlash(type, message) {
     setFlash({ type, message })
@@ -68,23 +76,27 @@ function PopupSettingsPage() {
 
   async function handleSave(e) {
     e.preventDefault()
+    if (!draft) return
     if (!draft.title.trim()) {
       showFlash('error', 'Title is required.')
       return
     }
     try {
-      const next = mergePopup(draft)
-      const stored = await putPopupSettings(next)
-      const merged = mergePopup({ ...stored, introduction: draft.introduction })
-      setSaved(merged)
-      setDraft(merged)
+      await putRuntimePopupSettings({
+        mode: draft.mode,
+        title: draft.title,
+        greeting: draft.greeting,
+        bullets: draft.bullets,
+        disclaimer: draft.disclaimer,
+      })
+      await load()
       showFlash('success', 'Popup settings saved.')
     } catch (err) {
       showToast('error', err?.message || 'Save failed')
     }
   }
 
-  const bulletsText = Array.isArray(draft.bullet_points) ? draft.bullet_points.join('\n') : ''
+  const bulletsText = Array.isArray(draft?.bullets) ? draft.bullets.join('\n') : ''
 
   return (
     <>
@@ -103,6 +115,7 @@ function PopupSettingsPage() {
             <button
               type="button"
               onClick={() => setPreviewOpen(true)}
+              disabled={!draft}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-5 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-800"
             >
               <Eye className="h-4 w-4" />
@@ -124,16 +137,17 @@ function PopupSettingsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Display mode</p>
             <div className="mt-4 flex flex-wrap gap-3">
               {[
-                { id: 'show_once', label: 'Show once' },
-                { id: 'always_show', label: 'Always show' },
+                { id: 'once', label: 'Show once' },
+                { id: 'always', label: 'Always show' },
                 { id: 'disabled', label: 'Disabled' },
               ].map((opt) => (
                 <button
                   key={opt.id}
                   type="button"
-                  onClick={() => setDraft((d) => ({ ...d, mode: opt.id }))}
+                  onClick={() => setDraft((d) => (d ? { ...d, mode: opt.id } : d))}
+                  disabled={!draft}
                   className={`rounded-xl border px-5 py-3 text-sm font-semibold transition-colors ${
-                    draft.mode === opt.id
+                    draft?.mode === opt.id
                       ? 'border-amber-500/60 bg-amber-500/15 text-amber-100'
                       : 'border-slate-600 bg-slate-900/50 text-slate-400 hover:border-slate-500'
                   }`}
@@ -148,9 +162,10 @@ function PopupSettingsPage() {
             <div className="md:col-span-2">
               <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">Title</label>
               <input
-                value={draft.title}
-                onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+                value={draft?.title ?? ''}
+                onChange={(e) => setDraft((d) => (d ? { ...d, title: e.target.value } : d))}
                 className={inputClass()}
+                disabled={!draft}
               />
             </div>
             <div>
@@ -158,20 +173,10 @@ function PopupSettingsPage() {
                 Greeting
               </label>
               <input
-                value={draft.greeting}
-                onChange={(e) => setDraft((d) => ({ ...d, greeting: e.target.value }))}
+                value={draft?.greeting ?? ''}
+                onChange={(e) => setDraft((d) => (d ? { ...d, greeting: e.target.value } : d))}
                 className={inputClass()}
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
-                Introduction
-              </label>
-              <textarea
-                value={draft.introduction}
-                onChange={(e) => setDraft((d) => ({ ...d, introduction: e.target.value }))}
-                rows={3}
-                className={`${inputClass()} min-h-[88px] resize-y`}
+                disabled={!draft}
               />
             </div>
             <div className="md:col-span-2">
@@ -181,16 +186,21 @@ function PopupSettingsPage() {
               <textarea
                 value={bulletsText}
                 onChange={(e) =>
-                  setDraft((d) => ({
-                    ...d,
-                    bullet_points: e.target.value
-                      .split('\n')
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  }))
+                  setDraft((d) =>
+                    d
+                      ? {
+                          ...d,
+                          bullets: e.target.value
+                            .split('\n')
+                            .map((s) => s.trim())
+                            .filter(Boolean),
+                        }
+                      : d,
+                  )
                 }
                 rows={5}
                 className={`${inputClass()} min-h-[120px] resize-y font-mono text-xs`}
+                disabled={!draft}
               />
             </div>
             <div className="md:col-span-2">
@@ -198,16 +208,23 @@ function PopupSettingsPage() {
                 Disclaimer
               </label>
               <textarea
-                value={draft.disclaimer}
-                onChange={(e) => setDraft((d) => ({ ...d, disclaimer: e.target.value }))}
+                value={draft?.disclaimer ?? ''}
+                onChange={(e) => setDraft((d) => (d ? { ...d, disclaimer: e.target.value } : d))}
                 rows={2}
                 className={`${inputClass()} resize-y`}
+                disabled={!draft}
               />
             </div>
           </section>
         </form>
 
-        {previewOpen ? (
+        {loading ? (
+          <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
+            <p className="text-sm text-slate-400">Loading popup state from backend…</p>
+          </section>
+        ) : null}
+
+        {previewOpen && draft ? (
           <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
             <button
               type="button"
@@ -228,9 +245,8 @@ function PopupSettingsPage() {
               </p>
               <h2 className="mt-2 text-2xl font-bold text-white">{draft.title || 'Untitled'}</h2>
               <p className="mt-3 text-lg font-medium text-amber-200/95">{draft.greeting}</p>
-              <p className="mt-3 text-sm leading-relaxed text-slate-300">{draft.introduction}</p>
               <ul className="mt-4 list-inside list-disc space-y-2 text-sm text-slate-400">
-                {(draft.bullet_points || []).map((b) => (
+                {(draft.bullets || []).map((b) => (
                   <li key={b}>{b}</li>
                 ))}
               </ul>

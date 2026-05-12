@@ -562,6 +562,8 @@ export const getUpdateCheck = () => apiGet('/update-check')
 
 export const getPopupSettings = () => apiGet('/popup-settings')
 export const putPopupSettings = (body) => apiPut('/popup-settings', body)
+export const getRuntimePopupSettings = () => apiGet('/settings/popup')
+export const putRuntimePopupSettings = (body) => apiPut('/settings/popup', body)
 
 export const getDeviceControlSettings = () => apiGet('/settings/device-control')
 export const putDeviceControlSettings = (body) => apiPut('/settings/device-control', body)
