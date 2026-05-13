@@ -8,7 +8,8 @@ import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 
 export const subscriptionRouter = Router()
 
-const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(1500, Number(process.env.MODE_SSE_POLL_MS) || 2500))
+/** Cross-instance fallback: modes are in Postgres; keep interval Android-friendly (was 2500ms). */
+const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(750, Number(process.env.MODE_SSE_POLL_MS) || 1200))
 
 function countryFromRequest(req) {
   const raw =
@@ -481,7 +482,10 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   const writeAppModesEvent = async (reason) => {
     try {
       const p = await loadGlobalAppModesPayload()
-      res.write(`event: app_modes\ndata: ${JSON.stringify({ ...p, reason })}\n\n`)
+      const body = JSON.stringify({ ...p, reason })
+      res.write(`event: app_modes\ndata: ${body}\n\n`)
+      // Legacy APK EventSource listeners (same payload as app_modes).
+      res.write(`event: app_settings_changed\ndata: ${body}\n\n`)
     } catch (e) {
       console.error('[subscription-stream] app_modes push failed:', e)
     }
@@ -489,8 +493,24 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   void writeAppModesEvent('init')
 
   const modeSyncHandler = (packet) => {
-    if (!packet?.payload?.modes) return
-    void writeAppModesEvent(String(packet.event || 'settings'))
+    const modes = packet?.payload?.modes
+    if (!modes || typeof modes !== 'object') return
+    const immediate = {
+      ok: true,
+      v: packet.configVersion,
+      free_mode: modes.free_mode === true,
+      emergency_mode: modes.emergency_mode === true,
+      maintenance_mode: modes.maintenance_mode === true,
+      server_time_ms: Date.now(),
+      reason: String(packet.event || 'settings'),
+    }
+    const body = JSON.stringify(immediate)
+    try {
+      res.write(`event: app_modes\ndata: ${body}\n\n`)
+      res.write(`event: app_settings_changed\ndata: ${body}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] immediate modes push failed:', e)
+    }
   }
   liveSyncBus.on('sync', modeSyncHandler)
 

@@ -88,6 +88,7 @@ globalAppSettingsRouter.put('/', requireAdminPanelAccess, async (req, res) => {
     }
     await writeJsonAtomic(GLOBAL_APP_SETTINGS_FILE, next)
     const modes = modesPayloadFromNormalized(next)
+    // SSE paths mirror `app_modes` + legacy `app_settings_changed` for Android (see liveSync + subscription-stream).
     liveSyncBus.publish('config.settings_changed', {
       topics: ['config'],
       action: 'updated',

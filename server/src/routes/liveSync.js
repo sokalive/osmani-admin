@@ -32,11 +32,18 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
     ...liveSyncBus.snapshot(),
   })
 
+  /** Legacy APK + admin Device Control listen for `app_settings_changed`; modes live in `app_modes` too. */
+  function sendRuntimeModesPair(payload, reason) {
+    const body = { ...payload, reason }
+    send('app_modes', body)
+    send('app_settings_changed', body)
+  }
+
   if (topics.includes('config')) {
     void (async () => {
       try {
         const payload = await loadGlobalAppModesPayload()
-        send('app_modes', { ...payload, reason: 'init' })
+        sendRuntimeModesPair(payload, 'init')
       } catch (e) {
         console.error('[sync/stream] app_modes init failed:', e)
       }
@@ -46,15 +53,18 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
   const handler = (packet) => {
     const hasTopic = topics.some((topic) => packet?.payload?.topics?.includes(topic))
     if (!hasTopic) return
-    if (topics.includes('config') && packet?.payload?.modes) {
-      void (async () => {
-        try {
-          const payload = await loadGlobalAppModesPayload()
-          send('app_modes', { ...payload, reason: String(packet.event || 'sync') })
-        } catch (e) {
-          console.error('[sync/stream] app_modes sync failed:', e)
-        }
-      })()
+    const modes = packet?.payload?.modes
+    if (topics.includes('config') && modes && typeof modes === 'object') {
+      // Same-node instant push (no await): avoids race where DB read lags the in-memory publish.
+      const immediate = {
+        ok: true,
+        v: packet.configVersion,
+        free_mode: modes.free_mode === true,
+        emergency_mode: modes.emergency_mode === true,
+        maintenance_mode: modes.maintenance_mode === true,
+        server_time_ms: Date.now(),
+      }
+      sendRuntimeModesPair(immediate, String(packet.event || 'sync'))
     }
     send(packet.event || 'sync', packet)
   }
