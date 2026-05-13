@@ -238,6 +238,7 @@ bannersRouter.post('/', requireAdminPanelAccess, maybeUploadBanner, async (req, 
       topics: ['config'],
       action: 'created',
       bannerId: inserted.id,
+      synced_at: new Date().toISOString(),
     })
     res.status(201).json(bannerToResponse(full, req))
   } catch (e) {
@@ -309,6 +310,7 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
       topics: ['config'],
       action: 'updated',
       bannerId: id,
+      synced_at: new Date().toISOString(),
     })
     res.json(bannerToResponse(full, req))
   } catch (e) {
@@ -334,6 +336,7 @@ bannersRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
       topics: ['config'],
       action: 'deleted',
       bannerId: id,
+      synced_at: new Date().toISOString(),
     })
     res.status(204).send()
   } catch (e) {

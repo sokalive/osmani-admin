@@ -13,8 +13,8 @@ const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(1500, Number(process.env.MODE
 function countryFromRequest(req) {
   const raw =
     req.headers['cf-ipcountry'] ||
-    req.headers['x-vercel-ip-country'] ||
     req.headers['x-country-code'] ||
+    req.headers['x-vercel-ip-country'] ||
     ''
   const c = String(raw ?? '').trim().toUpperCase()
   if (!c || c.length < 2) return null

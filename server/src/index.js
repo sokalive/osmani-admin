@@ -13,12 +13,12 @@ const app = express()
 const PORT = Number(process.env.PORT) || 4000
 
 // --- ALLOWED ORIGINS ---
+// Primary: Android app + native HTTP clients (often no `Origin` — allowed below).
+// Secondary: admin panel + optional browser/WebView runtimes (explicit origins only).
 const allowedOrigins = [
   'https://osmani-admin.vercel.app',
   'https://osmani-admin-mpya.onrender.com',
-  // Canonical production website/WebView runtime.
   'https://osmani-tv-web-vite.vercel.app',
-  // Keep legacy website origin during migration/compat window.
   'https://osmani-tv-web.onrender.com',
   'http://localhost:5173',
   'http://localhost:3000',
@@ -30,7 +30,7 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests without Origin (Postman, curl, many mobile clients/APKs)
+    // No Origin: production Android app, curl, server-to-server — default happy path.
     if (!origin) return callback(null, true)
 
     if (allowedOrigins.includes(origin)) {

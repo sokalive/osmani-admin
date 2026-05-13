@@ -28,6 +28,15 @@ import { triggerServerHealthBroadcast } from './realtimeSettings.js'
 
 export const channelsRouter = Router()
 
+function channelCatalogSyncPayload(action, channelId) {
+  return {
+    topics: ['config'],
+    action,
+    channelId,
+    synced_at: new Date().toISOString(),
+  }
+}
+
 const upload = uploadThumbnail.single('thumbnail')
 
 function runUpload(req, res, next) {
@@ -86,11 +95,7 @@ channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) 
     const now = new Date().toISOString()
     const created = mergeChannelRecord(null, parsed, nextId, now)
     await insertChannel(created)
-    liveSyncBus.publish('config.channels_changed', {
-      topics: ['config'],
-      action: 'created',
-      channelId: created.id,
-    })
+    liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('created', created.id))
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after create failed:', err)
     })
@@ -131,11 +136,7 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
 
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
     await updateChannel(updated)
-    liveSyncBus.publish('config.channels_changed', {
-      topics: ['config'],
-      action: 'updated',
-      channelId: updated.id,
-    })
+    liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('updated', updated.id))
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after update failed:', err)
     })
@@ -164,11 +165,7 @@ channelsRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
       if (f) await fs.unlink(path.join(UPLOADS_DIR, f)).catch(() => {})
     }
     await deleteChannelById(id)
-    liveSyncBus.publish('config.channels_changed', {
-      topics: ['config'],
-      action: 'deleted',
-      channelId: id,
-    })
+    liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('deleted', id))
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after delete failed:', err)
     })

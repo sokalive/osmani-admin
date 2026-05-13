@@ -2,8 +2,8 @@ import { Router } from 'express'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 
 /**
- * Public, read-only runtime flags (no secrets). Lets web runtimes poll across Render instances
- * without admin auth; PUT /settings remains protected.
+ * Public, read-only runtime flags (no secrets). Lets Android (and optional web) clients poll
+ * across instances without admin auth; PUT /settings remains protected.
  */
 export const runtimePublicRouter = Router()
 

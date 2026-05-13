@@ -92,6 +92,7 @@ globalAppSettingsRouter.put('/', requireAdminPanelAccess, async (req, res) => {
       topics: ['config'],
       action: 'updated',
       modes,
+      synced_at: new Date().toISOString(),
     })
     void recordSystemNotificationEvent('config.settings_changed', { modes }).catch((err) => {
       console.error('[settings] notification sync failed:', err)

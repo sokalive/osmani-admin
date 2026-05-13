@@ -130,6 +130,10 @@ restApi.get('/', (_req, res) => {
       '/webhooks/zenopay',
       '/dashboard',
     ],
+    runtime: {
+      primary_client: 'android_app',
+      secondary_clients: ['web_player', 'admin_panel'],
+    },
   })
 })
 
