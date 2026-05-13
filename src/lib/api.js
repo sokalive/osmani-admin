@@ -16,6 +16,9 @@ function normalizeApiBase(raw) {
 export const API_BASE = normalizeApiBase(API_BASE_ENV)
 export const API_ORIGIN = API_BASE.replace(/\/api$/i, '')
 
+/** Admin UI fetches: bypass HTTP disk/memory cache so reads after writes match PostgreSQL. */
+const ADMIN_FETCH_DEFAULTS = { cache: 'no-store' }
+
 async function parseJsonSafe(res) {
   const text = await res.text()
   if (!text) return null
@@ -48,7 +51,7 @@ function joinPath(path) {
 }
 
 export async function apiGet(path) {
-  const res = await fetch(joinPath(path))
+  const res = await fetch(joinPath(path), { cache: 'no-store' })
   const body = await parseJsonSafe(res)
   if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
   return body
@@ -107,6 +110,7 @@ export function updateChannel(id, data) {
 
 export function addChannelFormData(formData) {
   return fetch(joinPath('/channels'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelFormDataHeaders(),
     body: formData,
@@ -115,6 +119,7 @@ export function addChannelFormData(formData) {
 
 export function updateChannelFormData(id, formData) {
   return fetch(joinPath(`/channels/${encodeURIComponent(id)}`), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'PUT',
     headers: adminPanelFormDataHeaders(),
     body: formData,
@@ -233,6 +238,7 @@ export function adminPanelApiHeaders() {
 
 async function adminApiRequest(path, { method = 'GET', body, allowNoContent = false } = {}) {
   const res = await fetch(joinPath(path), {
+    ...ADMIN_FETCH_DEFAULTS,
     method,
     headers: adminPanelApiHeaders(),
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -272,7 +278,7 @@ function adminPanelFormDataHeaders() {
  */
 export async function getAdminAuthStatus() {
   try {
-    const res = await fetch(joinPath('/admin/auth/status'))
+    const res = await fetch(joinPath('/admin/auth/status'), { ...ADMIN_FETCH_DEFAULTS })
     const body = await parseJsonSafe(res)
     if (!res.ok) {
       return { panelAuthRequired: false }
@@ -312,6 +318,7 @@ export function postAdminLogout() {
 
 export async function getAdminAuthDevices() {
   const res = await fetch(joinPath('/admin/auth/devices'), {
+    ...ADMIN_FETCH_DEFAULTS,
     headers: adminPanelApiHeaders(),
   })
   const body = await parseJsonSafe(res)
@@ -321,6 +328,7 @@ export async function getAdminAuthDevices() {
 
 export async function postVerifyAdminSecurityPin(securityPin) {
   const res = await fetch(joinPath('/admin/auth/verify-security-pin'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({ security_pin: String(securityPin ?? '').trim() }),
@@ -339,6 +347,7 @@ function adminTrustedDeviceMutationBody(opts = {}) {
 
 export async function postAdminDeviceBlock(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/block`), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
@@ -350,6 +359,7 @@ export async function postAdminDeviceBlock(id, opts = {}) {
 
 export async function postAdminDeviceUnblock(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/unblock`), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
@@ -361,6 +371,7 @@ export async function postAdminDeviceUnblock(id, opts = {}) {
 
 export async function deleteAdminTrustedDevice(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}`), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'DELETE',
     headers: adminPanelApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
@@ -372,6 +383,7 @@ export async function deleteAdminTrustedDevice(id, opts = {}) {
 
 export async function postAdminDeviceForceOtp(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/force-otp`), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
@@ -384,6 +396,7 @@ export async function postAdminDeviceForceOtp(id, opts = {}) {
 /** Admin: grant stacked subscription days (PIN validated only on server). */
 export async function postManualSubscriptionGrant({ deviceId, durationDays, pin }) {
   const res = await fetch(joinPath('/admin/manual-subscription/grant'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
@@ -400,8 +413,8 @@ export async function postManualSubscriptionGrant({ deviceId, durationDays, pin 
 export async function getManualSubscriptionHistory() {
   const bust = `_cb=${Date.now()}`
   const res = await fetch(joinPath(`/admin/manual-subscription/history?${bust}`), {
+    ...ADMIN_FETCH_DEFAULTS,
     headers: adminPanelApiHeaders(),
-    cache: 'no-store',
   })
   const body = await parseJsonSafe(res)
   if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
@@ -410,6 +423,7 @@ export async function getManualSubscriptionHistory() {
 
 export async function postManualSubscriptionBlock(deviceId) {
   const res = await fetch(joinPath('/admin/manual-subscription/block'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({ device_id: String(deviceId ?? '').trim() }),
@@ -421,6 +435,7 @@ export async function postManualSubscriptionBlock(deviceId) {
 
 export async function postManualSubscriptionUnblock(deviceId) {
   const res = await fetch(joinPath('/admin/manual-subscription/unblock'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({ device_id: String(deviceId ?? '').trim() }),
@@ -433,6 +448,7 @@ export async function postManualSubscriptionUnblock(deviceId) {
 export async function deleteManualSubscriptionGrant(grantId) {
   const id = Number(grantId)
   const res = await fetch(joinPath(`/admin/manual-subscription/history/${encodeURIComponent(String(id))}`), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'DELETE',
     headers: adminPanelApiHeaders(),
   })
@@ -443,6 +459,7 @@ export async function deleteManualSubscriptionGrant(grantId) {
 
 export async function postOfferCodeGenerate({ durationDays, pin }) {
   const res = await fetch(joinPath('/admin/offer-codes/generate'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
@@ -457,6 +474,7 @@ export async function postOfferCodeGenerate({ durationDays, pin }) {
 
 export async function getOfferCodesHistory() {
   const res = await fetch(joinPath('/admin/offer-codes/history'), {
+    ...ADMIN_FETCH_DEFAULTS,
     headers: adminPanelApiHeaders(),
   })
   const body = await parseJsonSafe(res)
@@ -466,6 +484,7 @@ export async function getOfferCodesHistory() {
 
 export async function postOfferCodeBlock(code) {
   const res = await fetch(joinPath('/admin/offer-codes/block'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({ code: String(code ?? '').trim() }),
@@ -477,6 +496,7 @@ export async function postOfferCodeBlock(code) {
 
 export async function postOfferCodeUnblock(code) {
   const res = await fetch(joinPath('/admin/offer-codes/unblock'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({ code: String(code ?? '').trim() }),
@@ -489,6 +509,7 @@ export async function postOfferCodeUnblock(code) {
 export async function deleteOfferCode(code) {
   const c = String(code ?? '').trim()
   const res = await fetch(joinPath(`/admin/offer-codes/${encodeURIComponent(c)}`), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'DELETE',
     headers: adminPanelApiHeaders(),
   })
@@ -499,6 +520,7 @@ export async function deleteOfferCode(code) {
 
 export async function postManualSubscriptionBulkBlock({ deviceIds, securityPin }) {
   const res = await fetch(joinPath('/admin/manual-subscription/bulk-block'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
@@ -513,6 +535,7 @@ export async function postManualSubscriptionBulkBlock({ deviceIds, securityPin }
 
 export async function postManualSubscriptionBulkUnblock({ deviceIds, securityPin }) {
   const res = await fetch(joinPath('/admin/manual-subscription/bulk-unblock'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
@@ -527,6 +550,7 @@ export async function postManualSubscriptionBulkUnblock({ deviceIds, securityPin
 
 export async function postManualSubscriptionHistoryBulkDelete({ grantIds, securityPin }) {
   const res = await fetch(joinPath('/admin/manual-subscription/history/bulk-delete'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
@@ -541,6 +565,7 @@ export async function postManualSubscriptionHistoryBulkDelete({ grantIds, securi
 
 export async function postOfferCodesBulkBlock({ codes, securityPin }) {
   const res = await fetch(joinPath('/admin/offer-codes/bulk-block'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
@@ -555,6 +580,7 @@ export async function postOfferCodesBulkBlock({ codes, securityPin }) {
 
 export async function postOfferCodesBulkUnblock({ codes, securityPin }) {
   const res = await fetch(joinPath('/admin/offer-codes/bulk-unblock'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
@@ -569,6 +595,7 @@ export async function postOfferCodesBulkUnblock({ codes, securityPin }) {
 
 export async function postOfferCodesBulkDelete({ codes, securityPin }) {
   const res = await fetch(joinPath('/admin/offer-codes/bulk-delete'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
@@ -613,12 +640,14 @@ export const getPaymentProvidersSettings = () => adminApiGet('/settings/payment-
 export const getPaymentProviders = () => apiGet('/payment-providers')
 export const postPaymentProviderFormData = (formData) =>
   fetch(joinPath('/settings/payment-providers'), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelFormDataHeaders(),
     body: formData,
   }).then(parseJsonSafeResponse)
 export const putPaymentProviderFormData = (id, formData) =>
   fetch(joinPath(`/settings/payment-providers/${encodeURIComponent(id)}`), {
+    ...ADMIN_FETCH_DEFAULTS,
     method: 'PUT',
     headers: adminPanelFormDataHeaders(),
     body: formData,

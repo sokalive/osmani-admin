@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { applySensitiveJsonGetNoStore } from '../middleware/sensitiveApiCacheControl.js'
 import { bannersRouter } from './banners.js'
 import { channelsRouter } from './channels.js'
 import { analyticsRouter } from './analytics.js'
@@ -41,6 +42,9 @@ const FILES = {
 }
 
 export const restApi = Router()
+
+/** Admin + mutable JSON reads must not be served from browser HTTP cache after writes. */
+restApi.use(applySensitiveJsonGetNoStore)
 
 restApi.get('/', (_req, res) => {
   res.json({
