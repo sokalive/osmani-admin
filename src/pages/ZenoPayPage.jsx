@@ -6,10 +6,12 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useDeviceSubscription } from '../context/DeviceSubscriptionContext.jsx'
 import {
   API_ORIGIN,
+  getPaymentStatus,
   getPlans,
   getZenopaySettings,
   postCreatePayment,
   postZenopayTest,
+  syncStreamUrl,
   putZenopaySettings,
 } from '../lib/api'
 
@@ -25,6 +27,8 @@ function defaultSettings() {
     lastTestAt: null,
     lastTestOk: null,
     lastTestMessage: '',
+    envOverrideAny: false,
+    envOverrideActive: null,
   }
 }
 
@@ -60,6 +64,7 @@ function ZenoPayPage() {
   const [payDeviceId, setPayDeviceId] = useState('')
   const [payPlanId, setPayPlanId] = useState('')
   const [checkoutOrderId, setCheckoutOrderId] = useState(null)
+  const [checkoutStatus, setCheckoutStatus] = useState('IDLE')
   const [paymentWaitOpen, setPaymentWaitOpen] = useState(false)
   const [checkoutBusy, setCheckoutBusy] = useState(false)
   const unlockHandledRef = useRef(false)
@@ -79,6 +84,8 @@ function ZenoPayPage() {
         webhookUrl: s?.webhookUrl ?? s?.webhook_url ?? defaultWebhook,
         hasApiKey: Boolean(s?.hasApiKey),
         apiKeyMasked: String(s?.apiKeyMasked || '******'),
+        envOverrideAny: Boolean(s?.envOverrideAny),
+        envOverrideActive: s?.envOverrideActive ?? null,
       }
       setCfg(merged)
       setDraft({ ...merged, apiKey: '' })
@@ -115,9 +122,67 @@ function ZenoPayPage() {
   }, [])
 
   useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['analytics', 'config']))
+    const onConfigRefresh = () => {
+      void loadSettings()
+    }
+    const onTransactionUpdate = (event) => {
+      if (!checkoutOrderId) return
+      try {
+        const packet = JSON.parse(event.data)
+        const orderId = String(packet?.payload?.orderId ?? packet?.payload?.order_id ?? '').trim()
+        if (orderId && orderId === String(checkoutOrderId)) {
+          void (async () => {
+            try {
+              const out = await getPaymentStatus(checkoutOrderId)
+              const next = String(out?.status || 'PENDING').toUpperCase()
+              setCheckoutStatus(next)
+            } catch {
+              // ignore event-driven refresh failures; interval fallback covers this
+            }
+          })()
+        }
+      } catch {
+        // ignore malformed event payloads
+      }
+    }
+    es.addEventListener('config.zenopay_settings_changed', onConfigRefresh)
+    es.addEventListener('analytics.transaction_updated', onTransactionUpdate)
+    return () => es.close()
+  }, [checkoutOrderId, loadSettings])
+
+  useEffect(() => {
     unlockHandledRef.current = false
     blockedNoticeRef.current = ''
+    setCheckoutStatus(checkoutOrderId ? 'PENDING' : 'IDLE')
   }, [checkoutOrderId, payDeviceId])
+
+  useEffect(() => {
+    if (!paymentWaitOpen || !checkoutOrderId) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const out = await getPaymentStatus(checkoutOrderId)
+        if (cancelled) return
+        const next = String(out?.status || 'PENDING').toUpperCase()
+        setCheckoutStatus(next)
+        if (next === 'FAILED') {
+          setPaymentWaitOpen(false)
+          showToast('error', 'Payment failed or was not completed.')
+        }
+      } catch {
+        // Keep modal alive; subscription verify + next poll can still recover.
+      }
+    }
+    void poll()
+    const id = window.setInterval(() => {
+      void poll()
+    }, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [paymentWaitOpen, checkoutOrderId, showToast])
 
   useEffect(() => {
     if (!checkoutOrderId || !payDeviceId.trim()) return
@@ -207,6 +272,7 @@ function ZenoPayPage() {
         return
       }
       setCheckoutOrderId(String(oid))
+      setCheckoutStatus('PENDING')
       setPaymentWaitOpen(true)
       showToast('success', 'Complete payment on phone — unlocking via realtime stream + poll.')
     } catch (err) {
@@ -218,6 +284,7 @@ function ZenoPayPage() {
 
   function clearCheckout() {
     setCheckoutOrderId(null)
+    setCheckoutStatus('IDLE')
     setPaymentWaitOpen(false)
     clearSubscription()
   }
@@ -265,6 +332,20 @@ function ZenoPayPage() {
       <main className="mt-6 flex min-h-0 flex-1 flex-col gap-6">
         {flash ? (
           <FlashMessage type={flash.type} message={flash.message} onDismiss={() => setFlash(null)} />
+        ) : null}
+
+        {cfg.envOverrideAny ? (
+          <div
+            className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+            role="status"
+          >
+            <p className="font-semibold text-amber-200">Mazingira ya Render (ZENO_*) yanatumika</p>
+            <p className="mt-1 text-amber-100/90">
+              Fomu inaonyesha maadili yaliyohifadhiwa kwenye PostgreSQL. Ombi la malipo la kweli linaweza kutumia
+              api endpoint / account / key kutoka .env ikiwa imewekwa — ndiyo maana huwezi kuona mabadiliko ya fomu
+              kama yanavyotumika kwenye simu.
+            </p>
+          </div>
         ) : null}
 
         <header>
@@ -508,6 +589,7 @@ function ZenoPayPage() {
             <div className="mt-4 rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3 text-sm text-slate-300">
               <p className="font-mono text-xs text-slate-400">order_id: {checkoutOrderId}</p>
               <p className="mt-1 font-mono text-xs text-slate-400">device_id: {payDeviceId}</p>
+              <p className="mt-1 font-mono text-xs text-slate-400">payment_status: {checkoutStatus}</p>
               <p className="mt-2 text-xs text-slate-500">
                 Open the modal after pay — realtime + 3s poll until active. ENDELEA only closes the modal (no
                 API).
@@ -533,6 +615,9 @@ function ZenoPayPage() {
                 Canonical verify refresh + realtime SSE + fallback polling…
               </p>
               <div className="mt-4 space-y-2 rounded-xl border border-slate-700/70 bg-slate-900/60 px-4 py-3 text-xs text-slate-300">
+                <p>
+                  Payment status: <span className="font-semibold text-white">{checkoutStatus}</span>
+                </p>
                 <p>
                   Status: <span className="font-semibold text-white">{runtimeStateLabel}</span>
                 </p>

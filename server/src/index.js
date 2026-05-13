@@ -80,10 +80,7 @@ app.get('/', (req, res) => {
   res.type('text').send('Server yako inafanya kazi 🚀')
 })
 
-// --- HEALTH CHECK ---
-app.get('/api/health', (req, res) => {
-  res.json({ ok: true, service: 'osmani-admin-api' })
-})
+// --- HEALTH CHECK (JSON body lives on restApi GET /health → /api/health) ---
 
 app.get('/api/health/media', async (req, res) => {
   const snap = await getMediaHealthSnapshot()

@@ -12,6 +12,7 @@ export function applySensitiveJsonGetNoStore(req, res, next) {
   const p = full.startsWith('/api') ? full.slice(4) || '/' : full
 
   const noStore =
+    p === '/health' ||
     p.startsWith('/admin/') ||
     p === '/settings' ||
     p.startsWith('/settings/') ||

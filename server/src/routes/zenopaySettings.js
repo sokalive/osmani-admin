@@ -30,17 +30,30 @@ function normalizeEnvironment(v) {
 function rowToApiResponse(row, req) {
   const r = row && typeof row === 'object' ? row : {}
   const cred = resolveZenopayCredentials(r)
-  const hasKey = Boolean(cred.apiKey)
+  /** Stored row values (what PUT wrote). Do not use `cred.*` for these — env overrides hide DB in the admin UI. */
+  const apiEndpoint = String(r.api_endpoint ?? '').trim()
+  const accountId = String(r.account_id ?? '').trim()
+  const webhookUrl = String(r.webhook_url ?? '').trim() || defaultWebhookUrl(req)
+  const hasKey = Boolean(String(process.env.ZENO_API_KEY || r.api_key || '').trim())
+  const apiKeyMasked = hasKey ? maskSecret(String(process.env.ZENO_API_KEY || r.api_key || '').trim()) : ''
   const la = r.last_test_at
   const env = normalizeEnvironment(r.environment)
-  const apiEndpoint = cred.apiEndpoint
-  const accountId = cred.accountId
-  const webhookUrl = String(r.webhook_url || '').trim() || defaultWebhookUrl(req)
-  const apiKeyMasked = hasKey ? maskSecret(cred.apiKey) : ''
+  const envOverrideActive = {
+    apiEndpoint: Boolean(String(process.env.ZENO_ENDPOINT || '').trim()),
+    accountId: Boolean(String(process.env.ZENO_ACCOUNT_ID || '').trim()),
+    apiKey: Boolean(String(process.env.ZENO_API_KEY || '').trim()),
+    webhookUrl: Boolean(String(process.env.ZENO_WEBHOOK_URL || '').trim()),
+  }
+  const envOverrideAny = Object.values(envOverrideActive).some(Boolean)
   return {
     environment: env,
     apiEndpoint,
     api_endpoint: apiEndpoint,
+    /** Effective values used for live API calls (env wins over DB). */
+    effectiveApiEndpoint: cred.apiEndpoint,
+    effectiveAccountId: cred.accountId,
+    envOverrideActive,
+    envOverrideAny,
     hasApiKey: hasKey,
     apiKeyMasked: apiKeyMasked || '******',
     accountId,

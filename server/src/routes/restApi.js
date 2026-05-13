@@ -28,6 +28,9 @@ import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { notificationsRouter } from './notifications.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { runtimePublicRouter } from './runtimePublic.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+import { getPool } from '../db/pool.js'
+import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
 
 const FILES = {
   users: 'users.json',
@@ -96,6 +99,7 @@ restApi.get('/', (_req, res) => {
       '/admin/manual-subscription/history/:grantId',
       '/admin/manual-subscription/pin-status',
       '/admin/manual-subscription/setup-pin',
+      '/admin/panel-diagnostics',
       '/analytics/overview',
       '/analytics/channels',
       '/analytics/locations',
@@ -142,11 +146,44 @@ restApi.get('/', (_req, res) => {
 })
 
 restApi.get('/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
   res.json({
     ok: true,
     service: 'osmani-admin-api',
     time: new Date().toISOString(),
+    commit: getServerGitCommit(),
   })
+})
+
+/** Admin-only: DB fingerprint + sample rows to verify read/write same Postgres as UI. */
+restApi.get('/admin/panel-diagnostics', requireAdminPanelAccess, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
+    const out = {
+      ok: true,
+      server_commit: getServerGitCommit(),
+      server_time: new Date().toISOString(),
+      database: getDatabaseUrlFingerprint(),
+    }
+    const pool = getPool()
+    if (pool) {
+      const z = await pool.query(
+        `SELECT id, environment, account_id,
+                left(nullif(trim(api_endpoint), ''), 120) AS api_endpoint_prefix,
+                updated_at
+         FROM zenopay_settings WHERE id = 1`,
+      )
+      out.zenopay_row = z.rows[0] ?? null
+      const g = await pool.query(
+        `SELECT count(*)::int AS n FROM manual_subscription_grants WHERE deleted_at IS NULL`,
+      )
+      out.manual_grants_visible_count = g.rows[0]?.n ?? null
+    }
+    res.json(out)
+  } catch (e) {
+    console.error('[admin/panel-diagnostics]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
 })
 
 restApi.use('/runtime', runtimePublicRouter)
