@@ -116,10 +116,13 @@ export async function listPlansWithSubscriberCounts() {
            COALESCE(s.cnt, 0)::int AS active_subscriber_count
     FROM plans p
     LEFT JOIN (
-      SELECT plan_id, COUNT(*)::int AS cnt
-      FROM subscriptions
-      WHERE expires_at > now()
-      GROUP BY plan_id
+      SELECT t.plan_id, COUNT(*)::int AS cnt
+      FROM device_subscriptions ds
+      INNER JOIN transactions t ON t.order_id = ds.transaction_id
+      WHERE ds.status = 'active'
+        AND ds.expires_at > now()
+        AND t.plan_id IS NOT NULL
+      GROUP BY t.plan_id
     ) s ON s.plan_id = p.id
     WHERE p.deleted_at IS NULL
     ORDER BY p.id ASC
@@ -750,7 +753,20 @@ export async function setManualAdminBlocked(deviceId, blocked) {
      WHERE device_id = $1`,
     [d, b],
   )
-  return { updated: Number(rowCount) > 0 }
+  if (Number(rowCount) > 0) {
+    return { updated: true }
+  }
+  // Grant history can exist without a subscription row (legacy / edge). Upsert so bulk block/unblock applies to every device.
+  const txnId = `admin_manual:${crypto.randomUUID()}`.replace(/-/g, '').slice(0, 120)
+  await pool.query(
+    `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, manual_admin_blocked, updated_at)
+     VALUES ($1::text, 'pending', now() - interval '1 day', now(), $2::text, $3::boolean, now())
+     ON CONFLICT (device_id) DO UPDATE SET
+       manual_admin_blocked = EXCLUDED.manual_admin_blocked,
+       updated_at = now()`,
+    [d, txnId, b],
+  )
+  return { updated: true }
 }
 
 /** Soft-delete a manual grant row from admin history (does not revoke subscription time). */

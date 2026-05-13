@@ -47,6 +47,36 @@ function tabBtn(active) {
   }`
 }
 
+/** Match server `normalizeOfferCode` (6 digits) for bulk payloads. */
+function digitsOfferCode(raw) {
+  const s = String(raw ?? '').replace(/\D/g, '')
+  return s.length === 6 ? s : null
+}
+
+function bulkResultToast(body) {
+  if (!body || typeof body !== 'object') return { tone: 'success', msg: 'Imefanikiwa' }
+  const nf = Number(body.not_found ?? body.notFound ?? 0) || 0
+  if (typeof body.blocked === 'number') {
+    const ok = body.blocked
+    if (ok === 0 && nf > 0) return { tone: 'error', msg: `BLOCK: hakuna kilichofanikiwa (${nf} hakuna rekodi)` }
+    if (nf > 0) return { tone: 'success', msg: `BLOCK: ${ok} vifaa. Angalizo: ${nf} hakuna rekodi ya subscription` }
+    return { tone: 'success', msg: `BLOCK: vifaa ${ok}` }
+  }
+  if (typeof body.unblocked === 'number') {
+    const ok = body.unblocked
+    if (ok === 0 && nf > 0) return { tone: 'error', msg: `UNBLOCK: hakuna kilichofanikiwa (${nf})` }
+    if (nf > 0) return { tone: 'success', msg: `UNBLOCK: ${ok} vifaa. Angalizo: ${nf} hakuna rekodi` }
+    return { tone: 'success', msg: `UNBLOCK: vifaa ${ok}` }
+  }
+  if (typeof body.deleted === 'number') {
+    const ok = body.deleted
+    if (ok === 0 && nf > 0) return { tone: 'error', msg: `FUTA: hakuna kilichofanikiwa (${nf})` }
+    if (nf > 0) return { tone: 'success', msg: `FUTA: ${ok} rekodi. Angalizo: ${nf} hazijapatikana` }
+    return { tone: 'success', msg: `FUTA: rekodi ${ok}` }
+  }
+  return { tone: 'success', msg: 'Imefanikiwa' }
+}
+
 function ManualSubscriptionPage() {
   const { showToast } = useToast()
   const [tab, setTab] = useState('grant')
@@ -298,12 +328,17 @@ function ManualSubscriptionPage() {
   }
 
   const allHistChecked = useMemo(
-    () => historyRows.length > 0 && historyRows.every((r) => histSelected.has(r.id)),
+    () => historyRows.length > 0 && historyRows.every((r) => histSelected.has(Number(r.id))),
     [historyRows, histSelected],
   )
 
   const allOfferChecked = useMemo(
-    () => offerRows.length > 0 && offerRows.every((r) => offerSelected.has(r.code)),
+    () =>
+      offerRows.length > 0 &&
+      offerRows.every((r) => {
+        const k = digitsOfferCode(r.code)
+        return k != null && offerSelected.has(k)
+      }),
     [offerRows, offerSelected],
   )
 
@@ -312,11 +347,12 @@ function ManualSubscriptionPage() {
     setBulkPinBusy(true)
     setBulkPinError('')
     try {
-      await bulkPinExec(pin)
+      const summary = await bulkPinExec(pin)
       setBulkPinExec(null)
-      showToast('success', 'Imefanikiwa')
       await loadHistory()
       await loadOfferHistory()
+      const { tone, msg } = bulkResultToast(summary)
+      showToast(tone, msg)
     } catch (err) {
       const msg = err?.message || 'Imeshindikana'
       setBulkPinError(msg)
@@ -464,7 +500,9 @@ function ManualSubscriptionPage() {
                   onClick={() => {
                     const deviceIds = [
                       ...new Set(
-                        historyRows.filter((r) => histSelected.has(r.id)).map((r) => r.deviceId),
+                        historyRows
+                          .filter((r) => histSelected.has(Number(r.id)))
+                          .map((r) => String(r.deviceId ?? '').trim()),
                       ),
                     ].filter(Boolean)
                     if (deviceIds.length === 0) {
@@ -473,8 +511,9 @@ function ManualSubscriptionPage() {
                     }
                     setBulkPinError('')
                     setBulkPinExec(() => async (securityPin) => {
-                      await postManualSubscriptionBulkBlock({ deviceIds, securityPin })
+                      const out = await postManualSubscriptionBulkBlock({ deviceIds, securityPin })
                       setHistSelected(new Set())
+                      return out
                     })
                   }}
                   className="rounded-md bg-rose-600/90 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-40"
@@ -487,7 +526,9 @@ function ManualSubscriptionPage() {
                   onClick={() => {
                     const deviceIds = [
                       ...new Set(
-                        historyRows.filter((r) => histSelected.has(r.id)).map((r) => r.deviceId),
+                        historyRows
+                          .filter((r) => histSelected.has(Number(r.id)))
+                          .map((r) => String(r.deviceId ?? '').trim()),
                       ),
                     ].filter(Boolean)
                     if (deviceIds.length === 0) {
@@ -496,8 +537,9 @@ function ManualSubscriptionPage() {
                     }
                     setBulkPinError('')
                     setBulkPinExec(() => async (securityPin) => {
-                      await postManualSubscriptionBulkUnblock({ deviceIds, securityPin })
+                      const out = await postManualSubscriptionBulkUnblock({ deviceIds, securityPin })
                       setHistSelected(new Set())
+                      return out
                     })
                   }}
                   className="rounded-md bg-emerald-700/90 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-600 disabled:opacity-40"
@@ -508,7 +550,9 @@ function ManualSubscriptionPage() {
                   type="button"
                   disabled={bulkPinBusy}
                   onClick={() => {
-                    const grantIds = [...histSelected].map((x) => Number(x)).filter((n) => n > 0)
+                    const grantIds = Array.from(histSelected, (x) => Number(x)).filter(
+                      (n) => Number.isFinite(n) && n >= 1,
+                    )
                     if (grantIds.length === 0) return
                     if (
                       !window.confirm(
@@ -519,8 +563,9 @@ function ManualSubscriptionPage() {
                     }
                     setBulkPinError('')
                     setBulkPinExec(() => async (securityPin) => {
-                      await postManualSubscriptionHistoryBulkDelete({ grantIds, securityPin })
+                      const out = await postManualSubscriptionHistoryBulkDelete({ grantIds, securityPin })
                       setHistSelected(new Set())
+                      return out
                     })
                   }}
                   className="rounded-md border border-slate-600 bg-slate-800/90 px-2.5 py-1.5 text-[11px] font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
@@ -543,11 +588,11 @@ function ManualSubscriptionPage() {
                           setHistSelected((prev) => {
                             if (
                               historyRows.length > 0 &&
-                              historyRows.every((r) => prev.has(r.id))
+                              historyRows.every((r) => prev.has(Number(r.id)))
                             ) {
                               return new Set()
                             }
-                            return new Set(historyRows.map((r) => r.id))
+                            return new Set(historyRows.map((r) => Number(r.id)))
                           })
                         }
                         title="Chagua zote"
@@ -589,12 +634,13 @@ function ManualSubscriptionPage() {
                             <input
                               type="checkbox"
                               className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500"
-                              checked={histSelected.has(row.id)}
+                              checked={histSelected.has(Number(row.id))}
                               onChange={() =>
                                 setHistSelected((prev) => {
                                   const n = new Set(prev)
-                                  if (n.has(row.id)) n.delete(row.id)
-                                  else n.add(row.id)
+                                  const id = Number(row.id)
+                                  if (n.has(id)) n.delete(id)
+                                  else n.add(id)
                                   return n
                                 })
                               }
@@ -754,11 +800,20 @@ function ManualSubscriptionPage() {
                     type="button"
                     disabled={bulkPinBusy}
                     onClick={() => {
-                      const codes = [...offerSelected]
+                      const codes = [
+                        ...new Set(
+                          [...offerSelected].map((c) => digitsOfferCode(c)).filter(Boolean),
+                        ),
+                      ]
+                      if (codes.length === 0) {
+                        showToast('error', 'Hakuna codes sahihi (tarakimu 6)')
+                        return
+                      }
                       setBulkPinError('')
                       setBulkPinExec(() => async (securityPin) => {
-                        await postOfferCodesBulkBlock({ codes, securityPin })
+                        const out = await postOfferCodesBulkBlock({ codes, securityPin })
                         setOfferSelected(new Set())
+                        return out
                       })
                     }}
                     className="rounded-md bg-rose-600/90 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-40"
@@ -769,11 +824,20 @@ function ManualSubscriptionPage() {
                     type="button"
                     disabled={bulkPinBusy}
                     onClick={() => {
-                      const codes = [...offerSelected]
+                      const codes = [
+                        ...new Set(
+                          [...offerSelected].map((c) => digitsOfferCode(c)).filter(Boolean),
+                        ),
+                      ]
+                      if (codes.length === 0) {
+                        showToast('error', 'Hakuna codes sahihi (tarakimu 6)')
+                        return
+                      }
                       setBulkPinError('')
                       setBulkPinExec(() => async (securityPin) => {
-                        await postOfferCodesBulkUnblock({ codes, securityPin })
+                        const out = await postOfferCodesBulkUnblock({ codes, securityPin })
                         setOfferSelected(new Set())
+                        return out
                       })
                     }}
                     className="rounded-md bg-emerald-700/90 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-600 disabled:opacity-40"
@@ -784,7 +848,15 @@ function ManualSubscriptionPage() {
                     type="button"
                     disabled={bulkPinBusy}
                     onClick={() => {
-                      const codes = [...offerSelected]
+                      const codes = [
+                        ...new Set(
+                          [...offerSelected].map((c) => digitsOfferCode(c)).filter(Boolean),
+                        ),
+                      ]
+                      if (codes.length === 0) {
+                        showToast('error', 'Hakuna codes sahihi (tarakimu 6)')
+                        return
+                      }
                       if (
                         !window.confirm(
                           `Futa au futa rekodi kwa codes ${codes.length}? (Server atarudisha kosa kwa code zisizoweza.)`,
@@ -794,8 +866,9 @@ function ManualSubscriptionPage() {
                       }
                       setBulkPinError('')
                       setBulkPinExec(() => async (securityPin) => {
-                        await postOfferCodesBulkDelete({ codes, securityPin })
+                        const out = await postOfferCodesBulkDelete({ codes, securityPin })
                         setOfferSelected(new Set())
+                        return out
                       })
                     }}
                     className="rounded-md border border-slate-600 bg-slate-800/90 px-2.5 py-1.5 text-[11px] font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
@@ -818,11 +891,16 @@ function ManualSubscriptionPage() {
                             setOfferSelected((prev) => {
                               if (
                                 offerRows.length > 0 &&
-                                offerRows.every((r) => prev.has(r.code))
+                                offerRows.every((r) => {
+                                  const k = digitsOfferCode(r.code)
+                                  return k && prev.has(k)
+                                })
                               ) {
                                 return new Set()
                               }
-                              return new Set(offerRows.map((r) => r.code))
+                              return new Set(
+                                offerRows.map((r) => digitsOfferCode(r.code)).filter(Boolean),
+                              )
                             })
                           }
                           title="Chagua zote"
@@ -855,6 +933,7 @@ function ManualSubscriptionPage() {
                     ) : (
                       offerRows.map((row) => {
                         const st = String(row.status ?? '').toUpperCase()
+                        const codeKey = digitsOfferCode(row.code)
                         const bb = offerBusyCode === `b:${row.code}`
                         const ub = offerBusyCode === `u:${row.code}`
                         const db = offerBusyCode === `d:${row.code}`
@@ -868,12 +947,14 @@ function ManualSubscriptionPage() {
                               <input
                                 type="checkbox"
                                 className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500"
-                                checked={offerSelected.has(row.code)}
+                                disabled={!codeKey}
+                                checked={Boolean(codeKey && offerSelected.has(codeKey))}
                                 onChange={() =>
                                   setOfferSelected((prev) => {
                                     const n = new Set(prev)
-                                    if (n.has(row.code)) n.delete(row.code)
-                                    else n.add(row.code)
+                                    if (!codeKey) return n
+                                    if (n.has(codeKey)) n.delete(codeKey)
+                                    else n.add(codeKey)
                                     return n
                                   })
                                 }
