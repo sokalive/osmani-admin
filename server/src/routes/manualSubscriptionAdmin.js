@@ -109,9 +109,38 @@ function logManualSubscriptionAudit(action, deviceId) {
   )
 }
 
+/** Safe DB routing fingerprint for logs (no credentials). */
+function manualAdminDbTargetTag() {
+  const u = String(process.env.DATABASE_URL || '').trim()
+  if (!u) return { DATABASE_URL: 'unset' }
+  try {
+    const url = new URL(u)
+    const dbName = String(url.pathname || '')
+      .replace(/^\//, '')
+      .split('/')[0]
+      .split('?')[0]
+    return { dbHost: url.hostname, dbPort: url.port || null, dbName: dbName || null }
+  } catch {
+    return { DATABASE_URL: 'unparseable' }
+  }
+}
+
 manualSubscriptionAdminRouter.get('/history', async (_req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
+    res.setHeader('Pragma', 'no-cache')
     const rows = await billing.listManualSubscriptionHistoryAdmin({ limit: 500 })
+    if (billing.manualSubscriptionAdminDebugEnabled()) {
+      console.info(
+        '[manual_subscription_history_http]',
+        JSON.stringify({
+          at: new Date().toISOString(),
+          dbTarget: manualAdminDbTargetTag(),
+          responseRowCount: rows.length,
+          idSample: rows.slice(0, 12).map((r) => r.id),
+        }),
+      )
+    }
     res.json({ ok: true, rows })
   } catch (e) {
     console.error('[manual_subscription history]', e)
@@ -258,11 +287,13 @@ manualSubscriptionAdminRouter.post('/history/bulk-delete', async (req, res) => {
     }
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const raw = body.grant_ids ?? body.grantIds
-    const dbg = String(process.env.MANUAL_SUBSCRIPTION_BULK_DELETE_DEBUG ?? '').trim() === '1'
+    const dbg = billing.manualSubscriptionAdminDebugEnabled()
     if (dbg) {
       console.info(
         '[manual_bulk_delete_payload]',
         JSON.stringify({
+          at: new Date().toISOString(),
+          dbTarget: manualAdminDbTargetTag(),
           rawIsArray: Array.isArray(raw),
           rawLen: Array.isArray(raw) ? raw.length : 0,
           rawSample: Array.isArray(raw) ? raw.slice(0, 12) : raw,
@@ -279,24 +310,28 @@ manualSubscriptionAdminRouter.post('/history/bulk-delete', async (req, res) => {
     if (dbg) {
       console.info(
         '[manual_bulk_delete_normalized]',
-        JSON.stringify({ count: slice.length, sample: slice.slice(0, 12) }),
+        JSON.stringify({ at: new Date().toISOString(), count: slice.length, sample: slice.slice(0, 12) }),
       )
     }
     const { deleted, notFound, rows } = await billing.bulkSoftDeleteManualGrants(slice)
+    for (const r of rows) {
+      logManualSubscriptionAudit('bulk_delete_grant', r.deviceId)
+    }
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
+    res.setHeader('Pragma', 'no-cache')
+    const payload = { ok: true, deleted, not_found: notFound }
     if (dbg) {
       console.info(
-        '[manual_bulk_delete_result]',
+        '[manual_bulk_delete_response]',
         JSON.stringify({
-          deleted,
-          not_found: notFound,
+          at: new Date().toISOString(),
+          dbTarget: manualAdminDbTargetTag(),
+          ...payload,
           returnedIdsSample: rows.slice(0, 12).map((r) => r.id),
         }),
       )
     }
-    for (const r of rows) {
-      logManualSubscriptionAudit('bulk_delete_grant', r.deviceId)
-    }
-    res.json({ ok: true, deleted, not_found: notFound })
+    res.json(payload)
   } catch (e) {
     console.error('[manual_subscription bulk-delete]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })

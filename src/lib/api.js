@@ -398,8 +398,10 @@ export async function postManualSubscriptionGrant({ deviceId, durationDays, pin 
 }
 
 export async function getManualSubscriptionHistory() {
-  const res = await fetch(joinPath('/admin/manual-subscription/history'), {
+  const bust = `_cb=${Date.now()}`
+  const res = await fetch(joinPath(`/admin/manual-subscription/history?${bust}`), {
     headers: adminPanelApiHeaders(),
+    cache: 'no-store',
   })
   const body = await parseJsonSafe(res)
   if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)

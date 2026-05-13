@@ -685,6 +685,13 @@ export async function acknowledgeManualGrantByNonce(deviceId, nonce) {
   return acknowledgeManualGrantFlexible(deviceId, nonce)
 }
 
+export function manualSubscriptionAdminDebugEnabled() {
+  return (
+    String(process.env.MANUAL_SUBSCRIPTION_ADMIN_DEBUG ?? '').trim() === '1' ||
+    String(process.env.MANUAL_SUBSCRIPTION_BULK_DELETE_DEBUG ?? '').trim() === '1'
+  )
+}
+
 /** Admin: history of manual grants (excludes soft-deleted rows). */
 export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
   const pool = requirePool()
@@ -710,6 +717,18 @@ export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
      LIMIT $1`,
     [lim],
   )
+
+  if (manualSubscriptionAdminDebugEnabled()) {
+    console.info(
+      '[manual_subscription_history_rows]',
+      JSON.stringify({
+        at: new Date().toISOString(),
+        rowCount: rows.length,
+        idSample: rows.slice(0, 12).map((r) => r.id),
+        deletedAtColumnCheck: rows[0] != null ? 'row_present' : 'empty',
+      }),
+    )
+  }
 
   return rows.map((r) => {
     const snap = r.expires_at_snapshot
@@ -811,32 +830,70 @@ export async function bulkSoftDeleteManualGrants(grantIds) {
   if (ids.length === 0) {
     return { deleted: 0, notFound: 0, rows: [] }
   }
-  const dbg = String(process.env.MANUAL_SUBSCRIPTION_BULK_DELETE_DEBUG ?? '').trim() === '1'
+  const dbg = manualSubscriptionAdminDebugEnabled()
   if (dbg) {
+    let idCol = null
+    try {
+      const col = await pool.query(
+        `SELECT data_type, udt_name
+         FROM information_schema.columns
+         WHERE table_schema = current_schema()
+           AND table_name = 'manual_subscription_grants'
+           AND column_name = 'id'`,
+      )
+      idCol = col.rows[0] ?? null
+    } catch (e) {
+      idCol = { error: String(e?.message ?? e) }
+    }
     const probe = await pool.query(
-      `SELECT id, (deleted_at IS NOT NULL) AS is_deleted
+      `SELECT id, deleted_at
        FROM manual_subscription_grants
        WHERE id = ANY($1::bigint[])`,
       [ids],
     )
     console.info(
-      '[manual_bulk_delete_debug]',
+      '[manual_bulk_delete_pre]',
       JSON.stringify({
+        at: new Date().toISOString(),
         requested: ids.length,
         requestedSample: ids.slice(0, 12),
+        idColumn: idCol,
         probeRows: probe.rows,
       }),
     )
   }
-  const { rows } = await pool.query(
-    `UPDATE manual_subscription_grants
+  // unnest + join avoids rare driver/array binding issues with ANY($1::bigint[])
+  const result = await pool.query(
+    `UPDATE manual_subscription_grants AS g
      SET deleted_at = now()
-     WHERE id = ANY($1::bigint[]) AND deleted_at IS NULL
-     RETURNING id, device_id`,
+     FROM unnest($1::bigint[]) AS u(id)
+     WHERE g.id = u.id AND g.deleted_at IS NULL
+     RETURNING g.id, g.device_id`,
     [ids],
   )
+  const rows = result.rows
   const deleted = rows.length
   const notFound = ids.length - deleted
+  if (dbg) {
+    const verify = await pool.query(
+      `SELECT id, deleted_at
+       FROM manual_subscription_grants
+       WHERE id = ANY($1::bigint[])`,
+      [ids],
+    )
+    console.info(
+      '[manual_bulk_delete_post]',
+      JSON.stringify({
+        at: new Date().toISOString(),
+        updateRowCount: Number(result.rowCount),
+        returningCount: rows.length,
+        deleted,
+        notFound,
+        returnedIdsSample: rows.slice(0, 12).map((r) => r.id),
+        verifyRows: verify.rows,
+      }),
+    )
+  }
   return {
     deleted,
     notFound,
