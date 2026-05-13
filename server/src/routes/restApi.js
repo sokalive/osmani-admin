@@ -26,6 +26,7 @@ import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { notificationsRouter } from './notifications.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
+import { runtimePublicRouter } from './runtimePublic.js'
 
 const FILES = {
   users: 'users.json',
@@ -104,6 +105,7 @@ restApi.get('/', (_req, res) => {
       '/analytics/presence/stop',
       '/notifications',
       '/notifications/runtime',
+      '/runtime/app-modes',
       '/update-check',
       '/verify-apk-hash',
       '/whatsapp-settings',
@@ -138,6 +140,8 @@ restApi.get('/health', (_req, res) => {
     time: new Date().toISOString(),
   })
 })
+
+restApi.use('/runtime', runtimePublicRouter)
 
 restApi.post('/zeno-webhook', handleZenoPayWebhook)
 

@@ -1,5 +1,10 @@
 import { Router } from 'express'
+import { getPool } from '../db/pool.js'
 import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
+import {
+  readGlobalModesFromDatabase,
+  writeGlobalModesToDatabase,
+} from '../lib/globalAppModesPersistence.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
@@ -21,6 +26,22 @@ function normalizeSettings(obj) {
   }
 }
 
+/**
+ * Shared source of truth: PostgreSQL `app_settings.global_app_modes` when DATABASE_URL is set,
+ * otherwise JSON file only. Migrates file → DB once when DB row is missing.
+ */
+export async function loadMergedNormalizedSettings() {
+  const fromDb = await readGlobalModesFromDatabase(normalizeSettings)
+  if (fromDb) return fromDb
+  const fromFile = normalizeSettings(await readJson(GLOBAL_APP_SETTINGS_FILE, defaults))
+  if (getPool()) {
+    await writeGlobalModesToDatabase(fromFile).catch((e) => {
+      console.warn('[settings] migrate global modes to DB skipped:', e?.message || e)
+    })
+  }
+  return fromFile
+}
+
 /** Snake_case flags for clients + SSE `app_modes` on subscription-stream. */
 export function modesPayloadFromNormalized(n) {
   return {
@@ -32,7 +53,7 @@ export function modesPayloadFromNormalized(n) {
 
 /** Used by subscription-stream SSE (poll + settings sync). */
 export async function loadGlobalAppModesPayload() {
-  const n = normalizeSettings(await readJson(GLOBAL_APP_SETTINGS_FILE, defaults))
+  const n = await loadMergedNormalizedSettings()
   const snap = liveSyncBus.snapshot()
   return {
     ok: true,
@@ -46,8 +67,8 @@ export const globalAppSettingsRouter = Router()
 
 globalAppSettingsRouter.get('/', requireAdminPanelAccess, async (_req, res) => {
   try {
-    const data = await readJson(GLOBAL_APP_SETTINGS_FILE, defaults)
-    res.json(normalizeSettings(data))
+    const data = await loadMergedNormalizedSettings()
+    res.json(data)
   } catch (e) {
     console.error('[settings] GET / failed:', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -56,12 +77,15 @@ globalAppSettingsRouter.get('/', requireAdminPanelAccess, async (_req, res) => {
 
 globalAppSettingsRouter.put('/', requireAdminPanelAccess, async (req, res) => {
   try {
-    const current = normalizeSettings(await readJson(GLOBAL_APP_SETTINGS_FILE, defaults))
+    const current = await loadMergedNormalizedSettings()
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const next = normalizeSettings({
       ...current,
       ...body,
     })
+    if (getPool()) {
+      await writeGlobalModesToDatabase(next)
+    }
     await writeJsonAtomic(GLOBAL_APP_SETTINGS_FILE, next)
     const modes = modesPayloadFromNormalized(next)
     liveSyncBus.publish('config.settings_changed', {

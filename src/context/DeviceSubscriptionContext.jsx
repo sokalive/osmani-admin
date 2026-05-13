@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import {
   getAppGlobalSettings,
+  getPublicRuntimeAppModes,
   getSubscriptionStatus,
   postSubscriptionVerify,
   subscriptionStreamUrl,
@@ -117,6 +118,15 @@ export function DeviceSubscriptionProvider({ children }) {
     setAppModesReady(true)
     return normalized
   }, [])
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void getPublicRuntimeAppModes()
+        .then((body) => applyAppModesPayload(body))
+        .catch(() => {})
+    }, 10_000)
+    return () => window.clearInterval(id)
+  }, [applyAppModesPayload])
 
   const refreshAppModes = useCallback(async () => {
     const body = await getAppGlobalSettings()
