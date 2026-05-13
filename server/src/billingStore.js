@@ -769,6 +769,20 @@ export async function setManualAdminBlocked(deviceId, blocked) {
   return { updated: true }
 }
 
+/** Normalize admin-supplied grant id list (dedupe, int bounds, max 500). */
+export function normalizeManualGrantIdList(raw) {
+  const arr = Array.isArray(raw) ? raw : []
+  return [
+    ...new Set(
+      arr
+        .map((x) =>
+          typeof x === 'number' && Number.isFinite(x) ? Math.trunc(x) : parseInt(String(x ?? '').trim(), 10),
+        )
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= Number.MAX_SAFE_INTEGER),
+    ),
+  ].slice(0, 500)
+}
+
 /** Soft-delete a manual grant row from admin history (does not revoke subscription time). */
 export async function softDeleteManualGrant(grantId) {
   const pool = requirePool()
@@ -777,13 +791,57 @@ export async function softDeleteManualGrant(grantId) {
   const { rows } = await pool.query(
     `UPDATE manual_subscription_grants
      SET deleted_at = now()
-     WHERE id = $1 AND deleted_at IS NULL
+     WHERE id = $1::bigint AND deleted_at IS NULL
      RETURNING id, device_id`,
     [id],
   )
   const row = rows[0]
   if (!row) return null
   return { id: Number(row.id), deviceId: String(row.device_id ?? '') }
+}
+
+/**
+ * Bulk soft-delete grant history rows (admin PIN path). Single statement so all IDs match consistently.
+ * @param {unknown[]} grantIds
+ * @returns {Promise<{ deleted: number, notFound: number, rows: { id: number, deviceId: string }[] }>}
+ */
+export async function bulkSoftDeleteManualGrants(grantIds) {
+  const pool = requirePool()
+  const ids = normalizeManualGrantIdList(grantIds)
+  if (ids.length === 0) {
+    return { deleted: 0, notFound: 0, rows: [] }
+  }
+  const dbg = String(process.env.MANUAL_SUBSCRIPTION_BULK_DELETE_DEBUG ?? '').trim() === '1'
+  if (dbg) {
+    const probe = await pool.query(
+      `SELECT id, (deleted_at IS NOT NULL) AS is_deleted
+       FROM manual_subscription_grants
+       WHERE id = ANY($1::bigint[])`,
+      [ids],
+    )
+    console.info(
+      '[manual_bulk_delete_debug]',
+      JSON.stringify({
+        requested: ids.length,
+        requestedSample: ids.slice(0, 12),
+        probeRows: probe.rows,
+      }),
+    )
+  }
+  const { rows } = await pool.query(
+    `UPDATE manual_subscription_grants
+     SET deleted_at = now()
+     WHERE id = ANY($1::bigint[]) AND deleted_at IS NULL
+     RETURNING id, device_id`,
+    [ids],
+  )
+  const deleted = rows.length
+  const notFound = ids.length - deleted
+  return {
+    deleted,
+    notFound,
+    rows: rows.map((r) => ({ id: Number(r.id), deviceId: String(r.device_id ?? '') })),
+  }
 }
 
 /**

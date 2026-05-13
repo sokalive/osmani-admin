@@ -550,9 +550,13 @@ function ManualSubscriptionPage() {
                   type="button"
                   disabled={bulkPinBusy}
                   onClick={() => {
-                    const grantIds = Array.from(histSelected, (x) => Number(x)).filter(
-                      (n) => Number.isFinite(n) && n >= 1,
-                    )
+                    const grantIds = [
+                      ...new Set(
+                        historyRows
+                          .filter((r) => histSelected.has(Number(r.id)))
+                          .map((r) => Number(r.id)),
+                      ),
+                    ].filter((n) => Number.isFinite(n) && n >= 1)
                     if (grantIds.length === 0) return
                     if (
                       !window.confirm(
@@ -563,6 +567,13 @@ function ManualSubscriptionPage() {
                     }
                     setBulkPinError('')
                     setBulkPinExec(() => async (securityPin) => {
+                      if (import.meta.env.DEV) {
+                        console.info('[manual_history_bulk_delete_client]', {
+                          grantIds,
+                          selectedCount: histSelected.size,
+                          matchedRows: grantIds.length,
+                        })
+                      }
                       const out = await postManualSubscriptionHistoryBulkDelete({ grantIds, securityPin })
                       setHistSelected(new Set())
                       return out

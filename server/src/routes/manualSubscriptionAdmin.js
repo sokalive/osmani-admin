@@ -258,23 +258,43 @@ manualSubscriptionAdminRouter.post('/history/bulk-delete', async (req, res) => {
     }
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const raw = body.grant_ids ?? body.grantIds
-    const nums = Array.isArray(raw)
-      ? [...new Set(raw.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n >= 1))]
-      : []
-    const slice = nums.slice(0, 500)
+    const dbg = String(process.env.MANUAL_SUBSCRIPTION_BULK_DELETE_DEBUG ?? '').trim() === '1'
+    if (dbg) {
+      console.info(
+        '[manual_bulk_delete_payload]',
+        JSON.stringify({
+          rawIsArray: Array.isArray(raw),
+          rawLen: Array.isArray(raw) ? raw.length : 0,
+          rawSample: Array.isArray(raw) ? raw.slice(0, 12) : raw,
+          rawTypesSample: Array.isArray(raw)
+            ? raw.slice(0, 5).map((x) => (x === null || x === undefined ? String(x) : typeof x))
+            : [],
+        }),
+      )
+    }
+    const slice = billing.normalizeManualGrantIdList(raw)
     if (slice.length === 0) {
       return res.status(400).json({ ok: false, error: 'grant_ids required' })
     }
-    let deleted = 0
-    let notFound = 0
-    for (const grantId of slice) {
-      const del = await billing.softDeleteManualGrant(grantId)
-      if (del) {
-        deleted += 1
-        logManualSubscriptionAudit('bulk_delete_grant', del.deviceId)
-      } else {
-        notFound += 1
-      }
+    if (dbg) {
+      console.info(
+        '[manual_bulk_delete_normalized]',
+        JSON.stringify({ count: slice.length, sample: slice.slice(0, 12) }),
+      )
+    }
+    const { deleted, notFound, rows } = await billing.bulkSoftDeleteManualGrants(slice)
+    if (dbg) {
+      console.info(
+        '[manual_bulk_delete_result]',
+        JSON.stringify({
+          deleted,
+          not_found: notFound,
+          returnedIdsSample: rows.slice(0, 12).map((r) => r.id),
+        }),
+      )
+    }
+    for (const r of rows) {
+      logManualSubscriptionAudit('bulk_delete_grant', r.deviceId)
     }
     res.json({ ok: true, deleted, not_found: notFound })
   } catch (e) {
