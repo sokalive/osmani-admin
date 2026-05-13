@@ -141,21 +141,21 @@ export const postBanner = (body) => adminApiPost('/banners', body)
 export const putBanner = (id, body) => adminApiPut(`/banners/${encodeURIComponent(id)}`, body)
 export const deleteBanner = (id) => adminApiDelete(`/banners/${encodeURIComponent(id)}`)
 
-/** --- Plans --- */
+/** --- Plans --- (GET public for Android checkout; mutations require admin session/token) */
 export const getPlans = () => apiGet('/plans')
-export const postPlan = (body) => apiPost('/plans', body)
-export const putPlan = (id, body) => apiPut(`/plans/${encodeURIComponent(id)}`, body)
-export const deletePlan = (id) => apiDelete(`/plans/${encodeURIComponent(id)}`)
+export const postPlan = (body) => adminApiPost('/plans', body)
+export const putPlan = (id, body) => adminApiPut(`/plans/${encodeURIComponent(id)}`, body)
+export const deletePlan = (id) => adminApiDelete(`/plans/${encodeURIComponent(id)}`)
 
-/** --- Users --- */
-export const getUsers = () => apiGet('/users')
-export const postUser = (body) => apiPost('/users', body)
-export const putUser = (id, body) => apiPut(`/users/${encodeURIComponent(id)}`, body)
+/** --- Users --- (admin-only; drives subscription rows — Android notified via SSE + subscription-stream) */
+export const getUsers = () => adminApiGet('/users')
+export const postUser = (body) => adminApiPost('/users', body)
+export const putUser = (id, body) => adminApiPut(`/users/${encodeURIComponent(id)}`, body)
 export const deleteUser = (id, { force = false } = {}) => {
   const path = force
     ? `/users/${encodeURIComponent(id)}?force=true`
     : `/users/${encodeURIComponent(id)}`
-  return apiDelete(path)
+  return adminApiDelete(path)
 }
 
 /** --- Transactions --- (optional server-side filters) */
@@ -244,7 +244,7 @@ async function adminApiRequest(path, { method = 'GET', body, allowNoContent = fa
   return parsed
 }
 
-function adminApiGet(path) {
+export function adminApiGet(path) {
   return adminApiRequest(path)
 }
 

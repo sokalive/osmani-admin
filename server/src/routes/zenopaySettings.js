@@ -1,9 +1,13 @@
 import { Router } from 'express'
 import { maskSecret } from '../billingNormalize.js'
 import * as billing from '../billingStore.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { resolveZenopayCredentials, testZenopayConnection } from '../zenopayClient.js'
 
 export const zenopaySettingsRouter = Router()
+
+zenopaySettingsRouter.use(requireAdminPanelAccess)
 
 const DEFAULT_PUBLIC_API = 'https://osmani-admin-api.onrender.com'
 
@@ -85,6 +89,11 @@ zenopaySettingsRouter.put('/', async (req, res) => {
       last_test_ok: b.lastTestOk ?? b.last_test_ok ?? current.last_test_ok,
       last_test_message: b.lastTestMessage ?? b.last_test_message ?? current.last_test_message,
     })
+    liveSyncBus.publish('config.zenopay_settings_changed', {
+      topics: ['config'],
+      action: 'updated',
+      synced_at: new Date().toISOString(),
+    })
     res.json(rowToApiResponse(row, req))
   } catch (e) {
     console.error('[settings/zenopay] PUT failed:', e)
@@ -108,6 +117,12 @@ zenopaySettingsRouter.post('/test', async (req, res) => {
       last_test_at: now,
       last_test_ok: result.ok,
       last_test_message: result.message,
+    })
+    liveSyncBus.publish('config.zenopay_settings_changed', {
+      topics: ['config'],
+      action: 'tested',
+      success: result.ok,
+      synced_at: new Date().toISOString(),
     })
     res.json({
       success: result.ok,

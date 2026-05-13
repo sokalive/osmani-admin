@@ -1,7 +1,11 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const transactionsRouter = Router()
+
+transactionsRouter.use(requireAdminPanelAccess)
 
 /** ?status=all|completed|pending|failed&from=ISO&to=ISO */
 transactionsRouter.get('/', async (req, res) => {
@@ -34,6 +38,14 @@ transactionsRouter.delete('/bulk', async (req, res) => {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const ids = Array.isArray(b.ids) ? b.ids : []
     const out = await billing.deleteTransactionsBulkByOrderIds(ids)
+    if (out.deleted > 0) {
+      liveSyncBus.publish('analytics.transaction_updated', {
+        topics: ['analytics'],
+        action: 'deleted',
+        deleted: out.deleted,
+        synced_at: new Date().toISOString(),
+      })
+    }
     res.json({ ok: true, deleted: out.deleted })
   } catch (e) {
     console.error('[transactions] DELETE /bulk failed:', e)

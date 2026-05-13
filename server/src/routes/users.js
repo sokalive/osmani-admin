@@ -1,9 +1,23 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
+import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const usersRouter = Router()
 
-usersRouter.get('/', async (_req, res) => {
+function notifyDeviceSubscription(deviceId, orderId) {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return
+  deviceSubscriptionBus.emit('update', { deviceId: d })
+  liveSyncBus.publish('analytics.subscription_updated', {
+    topics: ['analytics'],
+    deviceId: d,
+    orderId: String(orderId ?? 'admin_users_sync'),
+  })
+}
+
+usersRouter.get('/', requireAdminPanelAccess, async (_req, res) => {
   try {
     const rows = await billing.listDeviceUsers()
     const now = Date.now()
@@ -38,7 +52,7 @@ usersRouter.get('/', async (_req, res) => {
   }
 })
 
-usersRouter.put('/:device_id', async (req, res) => {
+usersRouter.put('/:device_id', requireAdminPanelAccess, async (req, res) => {
   try {
     const deviceId = String(req.params.device_id ?? '').trim()
     if (!deviceId) return res.status(400).json({ error: 'device_id is required' })
@@ -56,6 +70,7 @@ usersRouter.put('/:device_id', async (req, res) => {
     const exp = row.expires_at instanceof Date ? row.expires_at : new Date(String(row.expires_at))
     const outExp = exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toISOString() : null
     const st = row.status === 'active' && outExp && new Date(outExp).getTime() > Date.now() ? 'active' : 'expired'
+    notifyDeviceSubscription(deviceId, 'admin_users_put')
     res.json({
       device_id: String(row.device_id ?? ''),
       status: st,
@@ -69,7 +84,7 @@ usersRouter.put('/:device_id', async (req, res) => {
   }
 })
 
-usersRouter.delete('/:device_id', async (req, res) => {
+usersRouter.delete('/:device_id', requireAdminPanelAccess, async (req, res) => {
   try {
     const deviceId = String(req.params.device_id ?? '').trim()
     if (!deviceId) {
@@ -99,6 +114,7 @@ usersRouter.delete('/:device_id', async (req, res) => {
       })
     }
     const out = await billing.deleteDeviceUserCascade(deviceId)
+    notifyDeviceSubscription(deviceId, 'admin_users_delete')
     res.json({ ok: true, ...out })
   } catch (e) {
     console.error('[users] DELETE /:device_id failed:', e)

@@ -99,6 +99,7 @@ function publishNotificationsChanged(meta = {}) {
   liveSyncBus.publish('config.notifications_changed', {
     topics: ['config'],
     action: text(meta.action, 32) || 'updated',
+    synced_at: new Date().toISOString(),
     ...(meta.notificationId ? { notificationId: String(meta.notificationId) } : {}),
     ...(meta.sourceEvent ? { sourceEvent: text(meta.sourceEvent, 128) } : {}),
   })

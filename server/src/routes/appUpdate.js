@@ -274,6 +274,7 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       topics: ['config'],
       action: 'updated',
       updateDecision: decisionData.decision,
+      synced_at: new Date().toISOString(),
     })
     void recordSystemNotificationEvent('config.app_update_changed', {
       updateDecision: decisionData.decision,

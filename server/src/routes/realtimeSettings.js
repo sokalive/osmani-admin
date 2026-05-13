@@ -468,7 +468,11 @@ async function getServerHealthCached(force = false) {
 
 function publishWithLog(eventName, payload) {
   console.info('[SSE_BROADCAST]', JSON.stringify({ event: eventName, payload }))
-  liveSyncBus.publish(eventName, { topics: ['config'], ...payload })
+  liveSyncBus.publish(eventName, {
+    topics: ['config'],
+    ...payload,
+    synced_at: new Date().toISOString(),
+  })
 }
 
 export async function triggerServerHealthBroadcast(force = true) {

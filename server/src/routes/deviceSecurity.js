@@ -260,7 +260,11 @@ async function logSecurityEvent(pool, { actor, eventType, status, detail, metada
 }
 
 function emitSync(event, payload) {
-  liveSyncBus.publish(event, { topics: ['config'], ...payload })
+  liveSyncBus.publish(event, {
+    topics: ['config'],
+    ...payload,
+    synced_at: new Date().toISOString(),
+  })
   void recordSystemNotificationEvent(event, payload).catch((err) => {
     console.error('[device-security] notification sync failed:', err)
   })

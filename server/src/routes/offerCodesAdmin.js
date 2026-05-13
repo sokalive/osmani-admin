@@ -2,9 +2,19 @@ import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { adminSecurityPinFromBody, verifyAdminSecurityPin } from '../lib/adminSecurityPin.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 
 export const offerCodesAdminRouter = Router()
 offerCodesAdminRouter.use(requireAdminPanelAccess)
+
+function publishOfferCodesSync(action, extra = {}) {
+  liveSyncBus.publish('config.offer_codes_changed', {
+    topics: ['config'],
+    action,
+    synced_at: new Date().toISOString(),
+    ...extra,
+  })
+}
 
 const ALLOWED_DURATIONS = new Set([1, 7, 30, 90])
 
@@ -31,6 +41,7 @@ offerCodesAdminRouter.post('/generate', async (req, res) => {
       duration_days: row.duration_days,
     })
     const exp = row.expires_at
+    publishOfferCodesSync('generated', { code: String(row.code) })
     res.json({
       ok: true,
       code: String(row.code),
@@ -79,6 +90,7 @@ offerCodesAdminRouter.post('/bulk-block', async (req, res) => {
         notFound += 1
       }
     }
+    publishOfferCodesSync('bulk_blocked', { blocked, not_found: notFound })
     res.json({ ok: true, blocked, not_found: notFound })
   } catch (e) {
     console.error('[offer-codes bulk-block]', e)
@@ -111,6 +123,7 @@ offerCodesAdminRouter.post('/bulk-unblock', async (req, res) => {
         notFound += 1
       }
     }
+    publishOfferCodesSync('bulk_unblocked', { unblocked, not_found: notFound })
     res.json({ ok: true, unblocked, not_found: notFound })
   } catch (e) {
     console.error('[offer-codes bulk-unblock]', e)
@@ -143,6 +156,7 @@ offerCodesAdminRouter.post('/bulk-delete', async (req, res) => {
         notFound += 1
       }
     }
+    publishOfferCodesSync('bulk_deleted', { deleted, not_found: notFound })
     res.json({ ok: true, deleted, not_found: notFound })
   } catch (e) {
     console.error('[offer-codes bulk-delete]', e)
@@ -162,6 +176,7 @@ offerCodesAdminRouter.post('/block', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Code not found or deleted' })
     }
     billing.offerCodeAudit('blocked', { code: billing.normalizeOfferCode(raw) })
+    publishOfferCodesSync('blocked', { code: billing.normalizeOfferCode(raw) })
     res.json({ ok: true })
   } catch (e) {
     console.error('[offer-codes block]', e)
@@ -181,6 +196,7 @@ offerCodesAdminRouter.post('/unblock', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Code not found or deleted' })
     }
     billing.offerCodeAudit('unblocked', { code: billing.normalizeOfferCode(raw) })
+    publishOfferCodesSync('unblocked', { code: billing.normalizeOfferCode(raw) })
     res.json({ ok: true })
   } catch (e) {
     console.error('[offer-codes unblock]', e)
@@ -199,6 +215,7 @@ offerCodesAdminRouter.delete('/:code', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Code not found or already deleted' })
     }
     billing.offerCodeAudit('deleted', { code: billing.normalizeOfferCode(raw) })
+    publishOfferCodesSync('deleted', { code: billing.normalizeOfferCode(raw) })
     res.json({ ok: true })
   } catch (e) {
     console.error('[offer-codes delete]', e)
