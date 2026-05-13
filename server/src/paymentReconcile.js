@@ -6,6 +6,7 @@ import * as billing from './billingStore.js'
 import { webhookExplicitFailure, webhookSuccess } from './handlers/zenoPayWebhook.js'
 import { deviceSubscriptionBus } from './lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from './lib/liveSyncBus.js'
+import { resolveSonicpesaCredentials, sonicpesaGetOrderStatus } from './sonicpesaClient.js'
 import { resolveZenopayCredentials, zenopayGetOrderStatus } from './zenopayClient.js'
 
 const TRACE = String(process.env.ACTIVATION_TRACE || '').trim() === '1'
@@ -84,6 +85,65 @@ export async function reconcileOrderWithZenoPay(orderId) {
   if (txn.status !== 'pending') {
     out.phase = 'unexpected_status'
     out.txnStatusAfter = String(txn.status ?? '')
+    return out
+  }
+
+  const rawPayload = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+  if (rawPayload.payment_provider === 'sonicpesa') {
+    const srow = await billing.getSonicpesaRow()
+    const scred = resolveSonicpesaCredentials(srow || {})
+    const z = await sonicpesaGetOrderStatus(scred, oid)
+    out.providerHttpOk = z.ok === true
+    log('sonicpesa order-status', { orderId: shortId(oid), httpOk: z.ok, status: z.status })
+
+    if (!z.ok || z.body == null) {
+      out.phase = 'provider_request_failed'
+      console.warn('[activation-sync] SonicPesa order-status failed', {
+        orderId: shortId(oid),
+        httpStatus: z.status,
+        body: typeof z.body === 'object' ? z.body : String(z.body).slice(0, 200),
+      })
+      return out
+    }
+
+    const body = z.body
+    const ok = webhookSuccess(body)
+    const fail = webhookExplicitFailure(body)
+    const nextStatus = ok ? 'completed' : fail ? 'failed' : txn.status
+
+    if (nextStatus === txn.status) {
+      out.phase = 'still_pending_or_unknown'
+      return out
+    }
+
+    const prevPayload = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+    await billing.updateTransactionByOrderId(oid, {
+      status: nextStatus,
+      external_id: body.transaction_id != null ? String(body.transaction_id) : txn.external_id,
+      raw_payload: {
+        ...prevPayload,
+        order_status_poll: body,
+        orderStatusPolledAt: new Date().toISOString(),
+      },
+    })
+    out.transitionedToCompleted = nextStatus === 'completed'
+    out.txnStatusAfter = nextStatus
+    out.phase = nextStatus === 'completed' ? 'transitioned_completed' : 'transitioned_failed'
+
+    liveSyncBus.publish('analytics.transaction_updated', {
+      topics: ['analytics'],
+      orderId: oid,
+      status: nextStatus,
+    })
+
+    if (nextStatus !== 'completed') {
+      return out
+    }
+
+    txn = await billing.getTransactionByOrderId(oid)
+    const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn(txn)
+    out.activation = act
+    emitIfActivated(act, oid)
     return out
   }
 

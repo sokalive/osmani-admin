@@ -33,6 +33,7 @@ export function applySensitiveJsonGetNoStore(req, res, next) {
     p.startsWith('/server-health/') ||
     p.startsWith('/payment-status/') ||
     p === '/payment-status' ||
+    p === '/payments/checkout-providers' ||
     p === '/update-check' ||
     p.startsWith('/update-check/')
 

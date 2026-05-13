@@ -182,6 +182,12 @@ export async function deleteTransactionsBulk(ids) {
 /** Initiate ZenoPay collection (uses server-stored credentials + env overrides). */
 export const postCreatePayment = (body) => apiPost('/payments/create-payment', body)
 
+/** Public: which checkout providers are available (ZenoPay always if configured; SonicPesa only if enabled + configured). */
+export const getCheckoutPaymentProviders = () => apiGet('/payments/checkout-providers')
+
+/** Initiate SonicPesa payment (separate from ZenoPay; tags transaction as sonicpesa). */
+export const postSonicpesaCreateOrder = (body) => apiPost('/payments/sonicpesa/create-order', body)
+
 /** Poll payment status: { order_id, status } where status is SUCCESS | PENDING | FAILED */
 export const getPaymentStatus = (orderId) =>
   apiGet(`/payment-status/${encodeURIComponent(String(orderId ?? ''))}`)
@@ -636,6 +642,10 @@ export const postTransferCodesBulkDelete = (body) => adminApiPost('/transfer-cod
 export const getZenopaySettings = () => adminApiGet('/settings/zenopay')
 export const putZenopaySettings = (body) => adminApiPut('/settings/zenopay', body)
 export const postZenopayTest = (body) => adminApiPost('/settings/zenopay/test', body)
+
+export const getSonicpesaSettings = () => adminApiGet('/settings/sonicpesa')
+export const putSonicpesaSettings = (body) => adminApiPut('/settings/sonicpesa', body)
+export const postSonicpesaTest = (body = {}) => adminApiPost('/settings/sonicpesa/test', body)
 export const getPaymentProvidersSettings = () => adminApiGet('/settings/payment-providers')
 export const getPaymentProviders = () => apiGet('/payment-providers')
 export const postPaymentProviderFormData = (formData) =>

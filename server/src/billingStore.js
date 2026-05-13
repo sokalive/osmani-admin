@@ -1199,6 +1199,50 @@ export async function updateZenopayRowFull(d) {
   return rows[0]
 }
 
+/** --- SonicPesa settings (row id = 1) — separate provider from ZenoPay --- */
+
+export async function getSonicpesaRow() {
+  const pool = requirePool()
+  const { rows } = await pool.query(`SELECT * FROM sonicpesa_settings WHERE id = 1`)
+  return rows[0] ?? null
+}
+
+/**
+ * @param {object} d
+ * @param {boolean} d.keep_api_key — when true, keep existing api_key
+ */
+export async function updateSonicpesaRowFull(d) {
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `UPDATE sonicpesa_settings SET
+       enabled = $1,
+       environment = $2,
+       api_endpoint = $3,
+       account_id = $4,
+       webhook_url = $5,
+       api_key = CASE WHEN $6::boolean THEN api_key ELSE $7 END,
+       last_test_at = $8::timestamptz,
+       last_test_ok = $9,
+       last_test_message = $10,
+       updated_at = now()
+     WHERE id = 1
+     RETURNING *`,
+    [
+      Boolean(d.enabled),
+      d.environment,
+      d.api_endpoint,
+      d.account_id,
+      d.webhook_url,
+      Boolean(d.keep_api_key),
+      d.api_key ?? '',
+      d.last_test_at ?? null,
+      d.last_test_ok ?? null,
+      d.last_test_message ?? null,
+    ],
+  )
+  return rows[0]
+}
+
 // --- Offer codes (admin-generated; redeem uses manual grant + popup flow) ---
 
 const OFFER_CODE_DURATIONS = MANUAL_GRANT_DURATION_DAYS

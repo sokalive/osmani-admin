@@ -441,6 +441,27 @@ export async function ensureBillingTables(client) {
     ON CONFLICT (id) DO NOTHING;
   `)
 
+  /** SonicPesa (separate from ZenoPay) — admin + checkout; optional env overrides in sonicpesaClient */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS sonicpesa_settings (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      environment TEXT NOT NULL DEFAULT 'sandbox',
+      api_endpoint TEXT NOT NULL DEFAULT '',
+      api_key TEXT NOT NULL DEFAULT '',
+      account_id TEXT NOT NULL DEFAULT '',
+      webhook_url TEXT NOT NULL DEFAULT '',
+      last_test_at TIMESTAMPTZ,
+      last_test_ok BOOLEAN,
+      last_test_message TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    INSERT INTO sonicpesa_settings (id) VALUES (1)
+    ON CONFLICT (id) DO NOTHING;
+  `)
+
   /** Admin manual subscription grants (gift UX + audit trail); device unlock uses device_subscriptions */
   await client.query(`
     CREATE TABLE IF NOT EXISTS manual_subscription_grants (

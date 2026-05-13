@@ -17,6 +17,7 @@ import { transactionsRouter } from './transactions.js'
 import { webhooksRouter } from './webhooks.js'
 import { subscriptionRouter } from './subscription.js'
 import { zenopaySettingsRouter } from './zenopaySettings.js'
+import { sonicpesaSettingsRouter } from './sonicpesaSettings.js'
 import { liveSyncRouter } from './liveSync.js'
 import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentProviders.js'
 import { appUpdateRouter } from './appUpdate.js'
@@ -60,11 +61,16 @@ restApi.get('/', (_req, res) => {
       '/banners',
       '/settings',
       '/settings/zenopay',
+      '/settings/sonicpesa',
       '/settings/payment-providers',
       '/payment-providers',
       '/plans',
       '/transactions',
       '/payments/create-payment',
+      '/payments/checkout-providers',
+      '/payments/sonicpesa/create-order',
+      '/payments/sonicpesa/webhook',
+      '/payments/sonicpesa/status/',
       '/payments/zeno-webhook',
       '/zeno-webhook',
       '/payment-status/:order_id',
@@ -223,6 +229,7 @@ restApi.use('/users', usersRouter)
 restApi.use('/channels', channelsRouter)
 restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
+restApi.use('/settings/sonicpesa', sonicpesaSettingsRouter)
 restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 restApi.use(appUpdateRouter)

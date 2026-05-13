@@ -6,10 +6,12 @@ import { useToast } from '../context/ToastContext.jsx'
 import { useDeviceSubscription } from '../context/DeviceSubscriptionContext.jsx'
 import {
   API_ORIGIN,
+  getCheckoutPaymentProviders,
   getPaymentStatus,
   getPlans,
   getZenopaySettings,
   postCreatePayment,
+  postSonicpesaCreateOrder,
   postZenopayTest,
   syncStreamUrl,
   putZenopaySettings,
@@ -60,6 +62,8 @@ function ZenoPayPage() {
   const [flash, setFlash] = useState(null)
 
   const [checkoutPlans, setCheckoutPlans] = useState([])
+  const [checkoutAvail, setCheckoutAvail] = useState({ zenopay: false, sonicpesa: false })
+  const [payProvider, setPayProvider] = useState('zenopay')
   const [payPhone, setPayPhone] = useState('')
   const [payDeviceId, setPayDeviceId] = useState('')
   const [payPlanId, setPayPlanId] = useState('')
@@ -94,6 +98,18 @@ function ZenoPayPage() {
     }
   }, [defaultWebhook, showToast])
 
+  const loadCheckoutProviders = useCallback(async () => {
+    try {
+      const r = await getCheckoutPaymentProviders()
+      setCheckoutAvail({
+        zenopay: r?.zenopay === true,
+        sonicpesa: r?.sonicpesa === true,
+      })
+    } catch {
+      setCheckoutAvail({ zenopay: false, sonicpesa: false })
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     const raf = requestAnimationFrame(() => {
@@ -104,6 +120,17 @@ function ZenoPayPage() {
       cancelAnimationFrame(raf)
     }
   }, [loadSettings])
+
+  useEffect(() => {
+    let cancelled = false
+    const raf = requestAnimationFrame(() => {
+      if (!cancelled) void loadCheckoutProviders()
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+    }
+  }, [loadCheckoutProviders])
 
   useEffect(() => {
     let cancelled = false
@@ -122,9 +149,19 @@ function ZenoPayPage() {
   }, [])
 
   useEffect(() => {
+    if (payProvider === 'sonicpesa' && !checkoutAvail.sonicpesa) {
+      setPayProvider('zenopay')
+    }
+    if (payProvider === 'zenopay' && !checkoutAvail.zenopay && checkoutAvail.sonicpesa) {
+      setPayProvider('sonicpesa')
+    }
+  }, [checkoutAvail.zenopay, checkoutAvail.sonicpesa, payProvider])
+
+  useEffect(() => {
     const es = new EventSource(syncStreamUrl(['analytics', 'config']))
     const onConfigRefresh = () => {
       void loadSettings()
+      void loadCheckoutProviders()
     }
     const onTransactionUpdate = (event) => {
       if (!checkoutOrderId) return
@@ -147,9 +184,10 @@ function ZenoPayPage() {
       }
     }
     es.addEventListener('config.zenopay_settings_changed', onConfigRefresh)
+    es.addEventListener('config.sonicpesa_settings_changed', onConfigRefresh)
     es.addEventListener('analytics.transaction_updated', onTransactionUpdate)
     return () => es.close()
-  }, [checkoutOrderId, loadSettings])
+  }, [checkoutOrderId, loadSettings, loadCheckoutProviders])
 
   useEffect(() => {
     unlockHandledRef.current = false
@@ -259,13 +297,32 @@ function ZenoPayPage() {
       showToast('error', 'Enter device ID (matches client device_subscriptions)')
       return
     }
+    if (!checkoutAvail.zenopay && !checkoutAvail.sonicpesa) {
+      showToast('error', 'No payment providers are configured')
+      return
+    }
+    if (payProvider === 'zenopay' && !checkoutAvail.zenopay) {
+      showToast('error', 'ZenoPay is not available')
+      return
+    }
+    if (payProvider === 'sonicpesa' && !checkoutAvail.sonicpesa) {
+      showToast('error', 'SonicPesa is disabled or not configured')
+      return
+    }
     setCheckoutBusy(true)
     try {
-      const data = await postCreatePayment({
-        phone: payPhone.trim(),
-        planId: pid,
-        deviceId: dev,
-      })
+      const data =
+        payProvider === 'sonicpesa'
+          ? await postSonicpesaCreateOrder({
+              phone: payPhone.trim(),
+              planId: pid,
+              deviceId: dev,
+            })
+          : await postCreatePayment({
+              phone: payPhone.trim(),
+              planId: pid,
+              deviceId: dev,
+            })
       const oid = data?.orderId ?? data?.order_id
       if (!oid) {
         showToast('error', 'No order id returned from server')
@@ -512,7 +569,8 @@ function ZenoPayPage() {
                 Test checkout · device subscription (realtime + poll)
               </h2>
               <p className="mt-1 text-xs text-slate-500">
-                Requires <code className="font-mono text-slate-400">deviceId</code>. After ZenoPay webhook,
+                Requires <code className="font-mono text-slate-400">deviceId</code>. Choose ZenoPay or SonicPesa
+                (when enabled). After the provider webhook,
                 runtime parity uses canonical{' '}
                 <code className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-300">
                   /api/subscription/verify
@@ -530,6 +588,33 @@ function ZenoPayPage() {
             </div>
           </div>
           <form onSubmit={handleCheckoutPay} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {checkoutAvail.zenopay && checkoutAvail.sonicpesa ? (
+              <div className="sm:col-span-2 lg:col-span-4">
+                <p className={labelClass()}>Select payment method</p>
+                <div className="mt-2 flex flex-wrap gap-6">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+                    <input
+                      type="radio"
+                      name="checkoutPayProvider"
+                      className="h-4 w-4 border-slate-500 text-amber-500 focus:ring-amber-500/40"
+                      checked={payProvider === 'zenopay'}
+                      onChange={() => setPayProvider('zenopay')}
+                    />
+                    ZenoPay
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+                    <input
+                      type="radio"
+                      name="checkoutPayProvider"
+                      className="h-4 w-4 border-slate-500 text-amber-500 focus:ring-amber-500/40"
+                      checked={payProvider === 'sonicpesa'}
+                      onChange={() => setPayProvider('sonicpesa')}
+                    />
+                    SonicPesa
+                  </label>
+                </div>
+              </div>
+            ) : null}
             <div className="sm:col-span-1">
               <label className={labelClass()} htmlFor="zp-pay-device">
                 Device ID
@@ -577,11 +662,16 @@ function ZenoPayPage() {
             <div className="flex flex-col justify-end gap-2 sm:col-span-2 lg:col-span-1">
               <button
                 type="submit"
-                disabled={checkoutBusy}
+                disabled={
+                  checkoutBusy ||
+                  (!checkoutAvail.zenopay && !checkoutAvail.sonicpesa) ||
+                  (payProvider === 'zenopay' && !checkoutAvail.zenopay) ||
+                  (payProvider === 'sonicpesa' && !checkoutAvail.sonicpesa)
+                }
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
               >
                 {checkoutBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Pay with ZenoPay
+                Pay with {payProvider === 'sonicpesa' ? 'SonicPesa' : 'ZenoPay'}
               </button>
             </div>
           </form>

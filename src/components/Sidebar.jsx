@@ -20,6 +20,7 @@ import {
   Tv,
   Users,
   WalletCards,
+  Landmark,
   PanelTopOpen,
   TabletSmartphone,
 } from 'lucide-react'
@@ -37,6 +38,7 @@ const menuItems = [
   { id: 'payment-providers', label: 'Payment Providers', icon: Building2, path: '/payment-providers' },
   { id: 'analytics', label: 'Analytics', icon: BarChart3, path: '/analytics' },
   { id: 'zenopay', label: 'ZenoPay Settings', icon: WalletCards, path: '/zenopay' },
+  { id: 'sonicpesa', label: 'SonicPesa Settings', icon: Landmark, path: '/sonicpesa' },
   { id: 'whatsapp', label: 'WhatsApp Support', icon: MessageCircle, path: '/whatsapp' },
   { id: 'app-update', label: 'App Update', icon: Download, path: '/app-update' },
   { id: 'server-health', label: 'Server Health', icon: Server, path: '/server-health' },

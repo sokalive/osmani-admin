@@ -2,13 +2,34 @@ import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { handleZenoPayWebhook } from '../handlers/zenoPayWebhook.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 import {
   formatPhone,
   resolveZenopayCredentials,
   zenopayCreateCollection,
 } from '../zenopayClient.js'
+import { resolveSonicpesaCredentials } from '../sonicpesaClient.js'
+import { sonicpesaPaymentsRouter } from './sonicpesaPayments.js'
 
 export const paymentsRouter = Router()
+
+paymentsRouter.get('/checkout-providers', async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
+    const zrow = await billing.getZenopayRow()
+    const zcred = resolveZenopayCredentials(zrow || {})
+    const zenopay = Boolean(zcred.apiEndpoint && zcred.apiKey)
+    const srow = await billing.getSonicpesaRow()
+    const scred = resolveSonicpesaCredentials(srow || {})
+    const sonicpesa =
+      Boolean(srow?.enabled === true) && Boolean(scred.apiEndpoint && scred.apiKey)
+    res.json({ ok: true, zenopay, sonicpesa })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+paymentsRouter.use('/sonicpesa', sonicpesaPaymentsRouter)
 
 paymentsRouter.post('/zeno-webhook', handleZenoPayWebhook)
 
@@ -59,6 +80,12 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       device_id: deviceId,
       raw_payload: { step: 'created', phoneNorm: phone, device_id: deviceId },
     })
+    liveSyncBus.publish('analytics.transaction_updated', {
+      topics: ['analytics'],
+      orderId,
+      status: 'pending',
+      deviceId,
+    })
     const z = await zenopayCreateCollection(cred, {
       phone,
       amount,
@@ -71,6 +98,14 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       external_id: z.body?.id != null ? String(z.body.id) : null,
       raw_payload: { ...prevPayload, zeno: z.body, httpStatus: z.status },
     })
+    if (!z.ok) {
+      liveSyncBus.publish('analytics.transaction_updated', {
+        topics: ['analytics'],
+        orderId,
+        status: 'failed',
+        deviceId,
+      })
+    }
     if (!z.ok) {
       return res.status(502).json({
         error: 'ZenoPay collection request failed',
