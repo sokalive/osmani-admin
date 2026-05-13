@@ -18,7 +18,6 @@ import {
   putDeviceControlSettings,
   syncStreamUrl,
 } from '../lib/api'
-import { appendSecurityLog } from '../lib/securityActivityLog'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
 
 function newId() {
@@ -95,7 +94,6 @@ function DeviceControlPage() {
   const [tab, setTab] = useState('settings')
   const [flash, setFlash] = useState(null)
   const [forcePaymentPhone, setForcePaymentPhone] = useState('')
-  const [forceNewDeviceId, setForceNewDeviceId] = useState('')
   const [forceSourceDeviceId, setForceSourceDeviceId] = useState('')
   const [forceTargetDeviceId, setForceTargetDeviceId] = useState('')
   const [runtimeDeviceId, setRuntimeDeviceId] = useState('')
@@ -127,7 +125,7 @@ function DeviceControlPage() {
   )
 
   async function submitPendingBulkPin(pin) {
-    if (!pendingBulkPin) return
+    if (typeof pendingBulkPin !== 'function') return
     setPendingPinBusy(true)
     setPendingPinErr('')
     try {
@@ -175,6 +173,8 @@ function DeviceControlPage() {
     es.addEventListener('transfer_rejected', onRefresh)
     es.addEventListener('subscription_revoked', onRefresh)
     es.addEventListener('app_settings_changed', onRefresh)
+    es.addEventListener('device_control_changed', onRefresh)
+    es.addEventListener('security_logs_changed', onRefresh)
     return () => es.close()
   }, [loadCfg])
 
@@ -253,12 +253,6 @@ function DeviceControlPage() {
         weeklyLimit: hydrated.weeklyLimit,
         cooldownMinutes: hydrated.cooldownMinutes,
       })
-      await appendSecurityLog({
-        actor: 'policy-engine',
-        eventType: 'Policy enforcement',
-        status: 'completed',
-        detail: `limits · mode:${draft.transferMode} · daily ${daily} · weekly ${weekly} · cool ${cool}m`,
-      })
       showFlash('success', 'Settings saved.')
     } catch (err) {
       showToast('error', err?.message || 'Save failed')
@@ -269,7 +263,7 @@ function DeviceControlPage() {
     async (e) => {
       e.preventDefault()
       const phone = forcePaymentPhone.trim()
-      const deviceId = forceNewDeviceId.trim()
+      const deviceId = forceTargetDeviceId.trim()
       if (!phone || !deviceId) {
         showToast('error', 'Enter payment phone and new device ID.')
         return
@@ -286,14 +280,8 @@ function DeviceControlPage() {
             `Force transfer completed · ${phone.replace(/\s+/g, '')} → ${deviceId.slice(0, 32)}${deviceId.length > 32 ? '…' : ''}`,
           )(c),
         )
-        await appendSecurityLog({
-          actor: 'Admin',
-          eventType: 'Force transfer',
-          status: 'completed',
-          detail: `Admin force transfer by payment phone → ${deviceId.slice(0, 48)}`,
-        })
         setForcePaymentPhone('')
-        setForceNewDeviceId('')
+        setForceTargetDeviceId('')
         await loadCfg()
         showFlash('success', 'Force transfer completed.')
       } catch (err) {
@@ -302,7 +290,7 @@ function DeviceControlPage() {
         setRuntimeBusy('')
       }
     },
-    [appendLog, forceNewDeviceId, forcePaymentPhone, loadCfg, showToast, trackRuntimeDevice],
+    [appendLog, forcePaymentPhone, forceTargetDeviceId, loadCfg, showToast, trackRuntimeDevice],
   )
 
   const handleForceTransferByIdSubmit = useCallback(
@@ -604,7 +592,7 @@ function DeviceControlPage() {
                       return
                     }
                     setPendingPinErr('')
-                    setPendingBulkPin(async (securityPin) => {
+                    setPendingBulkPin(() => async (securityPin) => {
                       await postManualSubscriptionBulkBlock({ deviceIds, securityPin })
                     })
                   }}
@@ -629,7 +617,7 @@ function DeviceControlPage() {
                       return
                     }
                     setPendingPinErr('')
-                    setPendingBulkPin(async (securityPin) => {
+                    setPendingBulkPin(() => async (securityPin) => {
                       await postManualSubscriptionBulkUnblock({ deviceIds, securityPin })
                     })
                   }}

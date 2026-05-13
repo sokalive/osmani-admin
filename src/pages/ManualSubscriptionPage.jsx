@@ -308,7 +308,7 @@ function ManualSubscriptionPage() {
   )
 
   async function handleBulkPinSubmit(pin) {
-    if (!bulkPinExec) return
+    if (typeof bulkPinExec !== 'function') return
     setBulkPinBusy(true)
     setBulkPinError('')
     try {
@@ -472,7 +472,7 @@ function ManualSubscriptionPage() {
                       return
                     }
                     setBulkPinError('')
-                    setBulkPinExec(async (securityPin) => {
+                    setBulkPinExec(() => async (securityPin) => {
                       await postManualSubscriptionBulkBlock({ deviceIds, securityPin })
                       setHistSelected(new Set())
                     })
@@ -495,7 +495,7 @@ function ManualSubscriptionPage() {
                       return
                     }
                     setBulkPinError('')
-                    setBulkPinExec(async (securityPin) => {
+                    setBulkPinExec(() => async (securityPin) => {
                       await postManualSubscriptionBulkUnblock({ deviceIds, securityPin })
                       setHistSelected(new Set())
                     })
@@ -518,7 +518,7 @@ function ManualSubscriptionPage() {
                       return
                     }
                     setBulkPinError('')
-                    setBulkPinExec(async (securityPin) => {
+                    setBulkPinExec(() => async (securityPin) => {
                       await postManualSubscriptionHistoryBulkDelete({ grantIds, securityPin })
                       setHistSelected(new Set())
                     })
@@ -756,7 +756,7 @@ function ManualSubscriptionPage() {
                     onClick={() => {
                       const codes = [...offerSelected]
                       setBulkPinError('')
-                      setBulkPinExec(async (securityPin) => {
+                      setBulkPinExec(() => async (securityPin) => {
                         await postOfferCodesBulkBlock({ codes, securityPin })
                         setOfferSelected(new Set())
                       })
@@ -771,7 +771,7 @@ function ManualSubscriptionPage() {
                     onClick={() => {
                       const codes = [...offerSelected]
                       setBulkPinError('')
-                      setBulkPinExec(async (securityPin) => {
+                      setBulkPinExec(() => async (securityPin) => {
                         await postOfferCodesBulkUnblock({ codes, securityPin })
                         setOfferSelected(new Set())
                       })
@@ -793,7 +793,7 @@ function ManualSubscriptionPage() {
                         return
                       }
                       setBulkPinError('')
-                      setBulkPinExec(async (securityPin) => {
+                      setBulkPinExec(() => async (securityPin) => {
                         await postOfferCodesBulkDelete({ codes, securityPin })
                         setOfferSelected(new Set())
                       })
