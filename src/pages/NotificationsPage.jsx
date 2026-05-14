@@ -3,7 +3,7 @@ import { Bell, MousePointerClick } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getNotifications, postNotification, putNotification, syncStreamUrl } from '../lib/api'
+import { getNotifications, postNotification, putNotification, deleteAllNotifications, syncStreamUrl } from '../lib/api'
 
 const AUDIENCES = [
   { value: 'all', label: 'All users' },
@@ -65,6 +65,7 @@ function NotificationsPage() {
   const [instant, setInstant] = useState(true)
   const [touched, setTouched] = useState(false)
   const [sending, setSending] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
   const [flash, setFlash] = useState(null)
 
   const showFlash = useCallback((type, msg) => {
@@ -130,7 +131,7 @@ function NotificationsPage() {
     setSending(true)
     try {
       const iso = instant ? null : `${scheduleDate}T${scheduleTime}:00`
-      await postNotification({
+      const created = await postNotification({
         title: title.trim(),
         message: message.trim(),
         image: imageData || '',
@@ -142,7 +143,18 @@ function NotificationsPage() {
         clicks: 0,
       })
       await loadNotifications()
-      showFlash('success', instant ? 'Notification saved.' : 'Notification scheduled.')
+      if (instant) {
+        const r = created?.onesignalRecipients
+        const id = created?.onesignalId
+        showFlash(
+          'success',
+          typeof r === 'number'
+            ? `Push sent via OneSignal (${r} recipients${id ? `, id ${id.slice(0, 8)}…` : ''}).`
+            : 'Push sent via OneSignal.',
+        )
+      } else {
+        showFlash('success', 'Notification scheduled; OneSignal will send at the chosen time.')
+      }
       setTitle('')
       setMessage('')
       setImageData('')
@@ -157,6 +169,30 @@ function NotificationsPage() {
       showToast('error', err?.message || 'Send failed')
     }
     setSending(false)
+  }
+
+  async function handleDeleteAllHistory() {
+    if (
+      !window.confirm(
+        'Delete all admin campaign notifications from history? System alerts stay; this cannot be undone.',
+      )
+    ) {
+      return
+    }
+    setDeletingAll(true)
+    try {
+      const out = await deleteAllNotifications()
+      const n = Number(out?.deleted ?? 0)
+      showFlash(
+        'success',
+        n > 0 ? `Deleted ${n} notification(s).` : 'No admin campaigns to remove (system entries may still be listed).',
+      )
+      await loadNotifications()
+    } catch (e) {
+      showToast('error', e?.message || 'Delete failed')
+    } finally {
+      setDeletingAll(false)
+    }
   }
 
   async function incrementClicks(id) {
@@ -191,7 +227,13 @@ function NotificationsPage() {
             Notifications
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Compose campaigns, schedule sends, and review performance
+            Compose campaigns, schedule sends, and review performance. Instant sends use OneSignal (
+            <code className="text-slate-500">ONESIGNAL_APP_ID</code>,{' '}
+            <code className="text-slate-500">ONESIGNAL_REST_API_KEY</code> on the server). Segmented
+            audiences use the tag <code className="text-slate-500">osmani_audience</code> (override with{' '}
+            <code className="text-slate-500">ONESIGNAL_AUDIENCE_TAG_KEY</code>) — values{' '}
+            <code className="text-slate-500">premium</code>, <code className="text-slate-500">trial</code>,{' '}
+            <code className="text-slate-500">inactive</code> must match tags set on devices.
           </p>
         </header>
 
@@ -347,7 +389,17 @@ function NotificationsPage() {
         </section>
 
         <section>
-          <h2 className="mb-4 text-lg font-semibold text-white">History</h2>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-lg font-semibold text-white">History</h2>
+            <button
+              type="button"
+              disabled={deletingAll || notifications.length === 0}
+              onClick={handleDeleteAllHistory}
+              className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {deletingAll ? 'Deleting…' : 'Delete all'}
+            </button>
+          </div>
           <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[900px] border-collapse text-left text-sm">
@@ -359,6 +411,7 @@ function NotificationsPage() {
                     <th className="px-4 py-3 font-semibold">Link</th>
                     <th className="px-4 py-3 font-semibold">Clicks</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
+                    <th className="px-4 py-3 font-semibold">Push</th>
                     <th className="px-4 py-3 font-semibold">Date</th>
                     <th className="px-4 py-3 font-semibold text-right">Action</th>
                   </tr>
@@ -383,11 +436,30 @@ function NotificationsPage() {
                           className={`inline-flex rounded-lg px-2 py-0.5 text-[11px] font-bold uppercase ring-1 ${
                             n.status === 'sent'
                               ? 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/40'
-                              : 'bg-amber-500/20 text-amber-200 ring-amber-400/40'
+                              : n.deliveryState === 'failed'
+                                ? 'bg-red-500/20 text-red-200 ring-red-400/40'
+                                : 'bg-amber-500/20 text-amber-200 ring-amber-400/40'
                           }`}
                         >
-                          {n.status}
+                          {n.deliveryState === 'failed' ? 'failed' : n.status}
                         </span>
+                        {n.deliveryError ? (
+                          <p className="mt-1 max-w-[180px] truncate text-[10px] text-red-400/90" title={n.deliveryError}>
+                            {n.deliveryError}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[11px] text-slate-400">
+                        {n.onesignalId ? (
+                          <span title={n.onesignalId}>
+                            {n.onesignalId.slice(0, 12)}…
+                            {n.onesignalRecipients != null ? (
+                              <span className="mt-0.5 block text-slate-500">{n.onesignalRecipients} rcpt</span>
+                            ) : null}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-slate-400">
                         {n.sentAt
@@ -419,7 +491,8 @@ function NotificationsPage() {
             ) : null}
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            “+1 click” records attributed opens when reconciling analytics with your push backend.
+            “+1 click” updates stored click counts for reconciliation. Delivery uses OneSignal; scheduled rows send
+            when due if the server can reach OneSignal.
           </p>
         </section>
       </main>

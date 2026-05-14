@@ -1,5 +1,53 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from './liveSyncBus.js'
+import { UPLOADS_DIR, ensureUploadsDir } from '../multerUpload.js'
+import { isOneSignalConfigured, sendOneSignalNotification } from './oneSignalPush.js'
+
+const DEFAULT_PUBLIC_BASE = 'https://osmani-admin-api.onrender.com'
+
+function resolvePublicBaseUrl() {
+  return String(process.env.BASE_URL ?? '').trim().replace(/\/$/, '') || DEFAULT_PUBLIC_BASE
+}
+
+/** Public HTTPS URL for a stored `/uploads/...` path (OneSignal requires HTTPS for images). */
+export function absoluteUrlForStoredPath(relativePath) {
+  const rel = String(relativePath ?? '').trim()
+  if (!rel) return ''
+  if (rel.startsWith('http://') || rel.startsWith('https://')) return rel
+  const base = resolvePublicBaseUrl()
+  if (rel.startsWith('/')) return `${base}${rel}`
+  return `${base}/${rel.replace(/^\/+/, '')}`
+}
+
+/**
+ * Writes data-URL images to disk; returns `/uploads/...` or original if already a URL/path.
+ */
+export async function persistNotificationDataUrlImageIfNeeded(imageField) {
+  const raw = String(imageField ?? '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('/uploads/')) return raw
+  const compact = raw.replace(/\s/g, '')
+  const m = /^data:image\/(png|jpeg|jpg|gif|webp);base64,(.+)$/i.exec(compact)
+  if (!m) return raw.startsWith('data:') ? '' : raw
+  const ext = m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase()
+  let buf
+  try {
+    buf = Buffer.from(m[2], 'base64')
+  } catch {
+    return ''
+  }
+  if (!buf.length || buf.length > 5 * 1024 * 1024) {
+    throw new Error('Notification image is invalid or exceeds 5 MB')
+  }
+  ensureUploadsDir()
+  const name = `notif-${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`
+  const full = path.join(UPLOADS_DIR, name)
+  await fs.writeFile(full, buf)
+  return `/uploads/${name}`
+}
 
 const ADMIN_NOTIFICATION_STATUSES = new Set(['draft', 'scheduled', 'sent', 'cancelled', 'archived'])
 const DELIVERY_STATES = new Set(['pending', 'sent', 'partial', 'failed'])
@@ -71,6 +119,7 @@ function shouldBeActive(status, explicit) {
 
 function toApiNotification(row) {
   if (!row) return null
+  const p = sanitizePayload(row.payload)
   return {
     id: String(row.id),
     kind: text(row.kind, 32) || 'admin',
@@ -91,7 +140,10 @@ function toApiNotification(row) {
     createdBy: text(row.created_by, 120) || 'system',
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
-    payload: sanitizePayload(row.payload),
+    payload: p,
+    onesignalId: p.onesignal_id != null ? String(p.onesignal_id) : null,
+    onesignalRecipients: Number(p.onesignal_recipients) || null,
+    deliveryError: p.onesignal_error != null ? String(p.onesignal_error).slice(0, 500) : null,
   }
 }
 
@@ -108,20 +160,73 @@ function publishNotificationsChanged(meta = {}) {
 export async function flushDueNotifications() {
   const pool = requirePool()
   const { rows } = await pool.query(
-    `UPDATE notifications
-     SET status = 'sent',
-         delivery_state = CASE
-           WHEN delivery_state = 'failed' THEN 'failed'
-           ELSE 'sent'
-         END,
-         sent_at = COALESCE(sent_at, now()),
-         updated_at = now()
-     WHERE status = 'scheduled'
+    `SELECT * FROM notifications
+     WHERE kind = 'admin'
+       AND status = 'scheduled'
        AND is_active = true
        AND schedule_at IS NOT NULL
        AND schedule_at <= now()
-     RETURNING id`
+     ORDER BY schedule_at ASC
+     LIMIT 25`,
   )
+  for (const row of rows) {
+    const id = String(row.id)
+    let imagePath = String(row.image ?? '').trim()
+    try {
+      if (!isOneSignalConfigured()) {
+        const failPayload = {
+          ...sanitizePayload(row.payload),
+          onesignal_error: 'OneSignal not configured at send time',
+        }
+        await pool.query(
+          `UPDATE notifications
+           SET delivery_state = 'failed', updated_at = now(), payload = $2::jsonb
+           WHERE id = $1`,
+          [id, JSON.stringify(failPayload)],
+        )
+        continue
+      }
+      if (imagePath.startsWith('data:image')) {
+        imagePath = await persistNotificationDataUrlImageIfNeeded(imagePath)
+        await pool.query(`UPDATE notifications SET image = $2 WHERE id = $1`, [id, imagePath])
+      }
+      const pushImageUrl =
+        imagePath && (imagePath.startsWith('http') ? imagePath : imagePath.startsWith('/uploads/') ? absoluteUrlForStoredPath(imagePath) : '')
+      const result = await sendOneSignalNotification({
+        title: row.title,
+        message: row.message,
+        url: row.target_type,
+        imageUrl: pushImageUrl || '',
+        audience: row.target_audience,
+      })
+      const newPayload = {
+        ...sanitizePayload(row.payload),
+        onesignal_id: result.id,
+        onesignal_recipients: result.recipients,
+      }
+      await pool.query(
+        `UPDATE notifications
+         SET status = 'sent',
+             delivery_state = 'sent',
+             sent_at = COALESCE(sent_at, now()),
+             updated_at = now(),
+             payload = $2::jsonb
+         WHERE id = $1`,
+        [id, JSON.stringify(newPayload)],
+      )
+    } catch (e) {
+      const failPayload = {
+        ...sanitizePayload(row.payload),
+        onesignal_error: String(e.message || e).slice(0, 2000),
+      }
+      await pool.query(
+        `UPDATE notifications
+         SET delivery_state = 'failed', updated_at = now(), payload = $2::jsonb
+         WHERE id = $1`,
+        [id, JSON.stringify(failPayload)],
+      )
+    }
+  }
   if (rows.length > 0) {
     publishNotificationsChanged({ action: 'released' })
   }
@@ -197,6 +302,39 @@ export async function createAdminNotification(body, actor = 'Admin') {
   if (!next.title) throw new Error('title is required')
   if (!next.message) throw new Error('message is required')
   const pool = requirePool()
+
+  let imageForDb = next.image
+  let mergedPayload = { ...next.payload }
+  let deliveryState = next.deliveryState
+
+  if (next.kind === 'admin' && next.image && String(next.image).startsWith('data:image')) {
+    imageForDb = await persistNotificationDataUrlImageIfNeeded(next.image)
+  }
+
+  if (next.kind === 'admin' && next.status === 'sent') {
+    if (!isOneSignalConfigured()) {
+      throw new Error(
+        'OneSignal is not configured. Set ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY on the server, then retry.',
+      )
+    }
+    const img = String(imageForDb ?? '').trim()
+    const pushImageUrl =
+      img && (img.startsWith('http') ? img : img.startsWith('/uploads/') ? absoluteUrlForStoredPath(img) : '')
+    const result = await sendOneSignalNotification({
+      title: next.title,
+      message: next.message,
+      url: next.targetType,
+      imageUrl: pushImageUrl || '',
+      audience: next.targetAudience,
+    })
+    mergedPayload = {
+      ...mergedPayload,
+      onesignal_id: result.id,
+      onesignal_recipients: result.recipients,
+    }
+    deliveryState = 'sent'
+  }
+
   const { rows } = await pool.query(
     `INSERT INTO notifications (
        kind, title, message, image, target_audience, target_type, status, delivery_state,
@@ -212,14 +350,14 @@ export async function createAdminNotification(body, actor = 'Admin') {
       next.kind,
       next.title,
       next.message,
-      next.image,
+      imageForDb,
       next.targetAudience,
       next.targetType,
       next.status,
-      next.deliveryState,
+      deliveryState,
       next.severity,
       next.sourceEvent,
-      next.payload,
+      mergedPayload,
       next.clicks,
       next.isActive,
       next.scheduleAt,
@@ -295,6 +433,17 @@ export async function deleteNotificationById(id) {
     return true
   }
   return false
+}
+
+/** Deletes all admin campaign rows (system-generated rows are kept). */
+export async function deleteAllNotificationsAdmin() {
+  const pool = requirePool()
+  const { rowCount } = await pool.query(`DELETE FROM notifications WHERE kind = 'admin'`)
+  const n = Number(rowCount) || 0
+  if (n > 0) {
+    publishNotificationsChanged({ action: 'bulk_deleted' })
+  }
+  return n
 }
 
 function buildSystemNotificationFromEvent(event, payload = {}) {

@@ -242,7 +242,7 @@ export function adminPanelApiHeaders() {
   return h
 }
 
-async function adminApiRequest(path, { method = 'GET', body, allowNoContent = false } = {}) {
+export async function adminApiRequest(path, { method = 'GET', body, allowNoContent = false } = {}) {
   const res = await fetch(joinPath(path), {
     ...ADMIN_FETCH_DEFAULTS,
     method,
@@ -629,6 +629,7 @@ export const getRuntimeNotifications = (audience = 'all') =>
 export const postNotification = (body) => adminApiPost('/notifications', body)
 export const putNotification = (id, body) => adminApiPut(`/notifications/${encodeURIComponent(id)}`, body)
 export const deleteNotification = (id) => adminApiDelete(`/notifications/${encodeURIComponent(id)}`)
+export const deleteAllNotifications = () => adminApiRequest('/notifications/all', { method: 'DELETE' })
 
 /** --- Transfer codes --- */
 export const getTransferCodes = () => adminApiGet('/transfer-codes')

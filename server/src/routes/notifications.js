@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import {
   createAdminNotification,
+  deleteAllNotificationsAdmin,
   deleteNotificationById,
   flushDueNotifications,
   listNotificationsAdmin,
@@ -48,7 +49,11 @@ notificationsRouter.post('/notifications', requireAdminPanelAccess, async (req, 
     res.status(201).json(created)
   } catch (e) {
     const message = String(e.message || e)
-    const status = /required/i.test(message) ? 400 : 500
+    const status = /required/i.test(message)
+      ? 400
+      : /OneSignal is not configured|OneSignal API error/i.test(message)
+        ? 503
+        : 500
     console.error('[notifications] POST failed:', e)
     res.status(status).json({ error: message })
   }
@@ -70,6 +75,16 @@ notificationsRouter.put('/notifications/:id', requireAdminPanelAccess, async (re
     const status = /required/i.test(message) ? 400 : 500
     console.error('[notifications] PUT failed:', e)
     res.status(status).json({ error: message })
+  }
+})
+
+notificationsRouter.delete('/notifications/all', requireAdminPanelAccess, async (_req, res) => {
+  try {
+    const deleted = await deleteAllNotificationsAdmin()
+    res.json({ ok: true, deleted })
+  } catch (e) {
+    console.error('[notifications] DELETE /notifications/all failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 

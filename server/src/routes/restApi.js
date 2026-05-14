@@ -118,6 +118,7 @@ restApi.get('/', (_req, res) => {
       '/analytics/presence/heartbeat',
       '/analytics/presence/stop',
       '/notifications',
+      '/notifications/all',
       '/notifications/runtime',
       '/runtime/app-modes',
       '/update-check',
