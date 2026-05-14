@@ -18,6 +18,13 @@ function ChannelFormFields({
   const sc = formSelectClass()
   const lc = formLabelClass()
 
+  function setDisplaySection(next) {
+    updateField('displaySection', next)
+    if (next === 'Home') updateField('tabHome', true)
+    if (next === 'Sports') updateField('tabSports', true)
+    if (next === 'Tamthilia') updateField('tabTamthilia', true)
+  }
+
   return (
     <div className="space-y-5">
       <div>
@@ -37,12 +44,12 @@ function ChannelFormFields({
 
       <div>
         <label htmlFor={`${formId}-section`} className={lc}>
-          Display Section
+          Content line (Sports / Tamthilia tab filter)
         </label>
         <select
           id={`${formId}-section`}
           value={form.displaySection}
-          onChange={(e) => updateField('displaySection', e.target.value)}
+          onChange={(e) => setDisplaySection(e.target.value)}
           className={sc}
         >
           {SECTION_OPTIONS.map((opt) => (
@@ -51,7 +58,48 @@ function ChannelFormFields({
             </option>
           ))}
         </select>
+        <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+          Sports tab lists channels with this line set to <strong className="text-slate-400">Sports</strong> and
+          Sports checked below. Tamthilia tab uses <strong className="text-slate-400">Tamthilia</strong>. Home mixes
+          anything marked for the Home tab.
+        </p>
       </div>
+
+      <fieldset className="rounded-xl border border-slate-600/50 bg-slate-900/30 p-4">
+        <legend className={lc}>Show on bottom tabs</legend>
+        <p className="mb-3 text-xs text-slate-500">
+          A channel can appear on multiple tabs (e.g. Home + Sports). The content line above is always included.
+        </p>
+        <div className="flex flex-col gap-3">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+            <input
+              type="checkbox"
+              checked={form.tabHome}
+              onChange={(e) => updateField('tabHome', e.target.checked)}
+              className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500 focus:ring-amber-500"
+            />
+            Home
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+            <input
+              type="checkbox"
+              checked={form.tabSports}
+              onChange={(e) => updateField('tabSports', e.target.checked)}
+              className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500 focus:ring-amber-500"
+            />
+            Sports
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+            <input
+              type="checkbox"
+              checked={form.tabTamthilia}
+              onChange={(e) => updateField('tabTamthilia', e.target.checked)}
+              className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500 focus:ring-amber-500"
+            />
+            Tamthilia
+          </label>
+        </div>
+      </fieldset>
 
       <div>
         <label htmlFor={`${formId}-primary`} className={lc}>
@@ -198,24 +246,6 @@ function ChannelFormFields({
             Premium
           </span>
         </div>
-      </div>
-
-      <div>
-        <label htmlFor={`${formId}-bottom`} className={lc}>
-          Display Section (Bottom Tabs)
-        </label>
-        <select
-          id={`${formId}-bottom`}
-          value={form.bottomTabsDisplay}
-          onChange={(e) => updateField('bottomTabsDisplay', e.target.value)}
-          className={sc}
-        >
-          {SECTION_OPTIONS.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
       </div>
 
       <fieldset className="rounded-xl border border-slate-600/50 bg-slate-900/30 p-4">

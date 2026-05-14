@@ -1,4 +1,9 @@
 import path from 'node:path'
+import {
+  migrateContentCategory,
+  parseVisibleTabsFromBottomTabField,
+  serializeVisibleTabs,
+} from './lib/channelTabs.js'
 import { buildPublicStreamProxyUrl, PROXY_MOUNT_STREAM } from './routes/streamProxy.js'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
@@ -38,7 +43,8 @@ export function migrateStoredChannel(c) {
       : c.thumbnailUrl != null && String(c.thumbnailUrl).trim() !== ''
         ? String(c.thumbnailUrl).trim()
         : null
-  const category = (c.category || 'General').trim() || 'General'
+  const categoryRaw = (c.category || 'General').trim() || 'General'
+  const category = migrateContentCategory(categoryRaw)
   const bottomTabRaw =
     c.bottomTab != null && String(c.bottomTab).trim() !== ''
       ? String(c.bottomTab).trim()
@@ -46,7 +52,9 @@ export function migrateStoredChannel(c) {
         ? String(c.bottomTabsDisplay).trim()
         : c.bottom_tab != null && String(c.bottom_tab).trim() !== ''
           ? String(c.bottom_tab).trim()
-          : category
+          : categoryRaw
+  const visibleTabs = parseVisibleTabsFromBottomTabField(bottomTabRaw, category)
+  const bottomTab = serializeVisibleTabs(visibleTabs)
 
   return {
     ...c,
@@ -62,7 +70,7 @@ export function migrateStoredChannel(c) {
     accessType,
     thumbnail,
     category,
-    bottomTab: bottomTabRaw || 'General',
+    bottomTab,
     playerType: normalizePlayerType(c.playerType),
     url: (c.url || '').trim(),
     name: (c.name || '').trim(),
@@ -131,17 +139,18 @@ export function parseChannelInput(body, file, existing = null) {
     accessType = ex.accessType === 'premium' ? 'premium' : 'free'
   }
 
-  const category = str(b.category || b.displaySection, 'General') || 'General'
-  const bottomTab =
+  const category = migrateContentCategory(str(b.category || b.displaySection, '') || 'Home')
+  const bottomTabField =
     str(b.bottomTab || b.bottomTabsDisplay || b.bottom_tabs_display, '') ||
-    (ex != null ? ex.bottomTab : '') ||
-    category
+    (ex != null ? str(ex.bottomTab, '') : '')
+  const tabs = parseVisibleTabsFromBottomTabField(bottomTabField || category, category)
+  const bottomTab = serializeVisibleTabs(tabs)
 
   return {
     name: str(b.name),
     url: str(b.url || b.streamUrlPrimary),
     category,
-    bottomTab: bottomTab || category,
+    bottomTab,
     thumbnail: thumbnail || null,
     isLive: parseBool(b.isLive ?? b.live, ex != null ? Boolean(ex.isLive) : true),
     isHD: parseBool(b.isHD ?? b.hd, ex != null ? Boolean(ex.isHD) : true),
@@ -213,6 +222,9 @@ export function resolveThumbnailForApi(thumbnail, req) {
 /** Public API shape (+ legacy aliases for older clients) */
 export function channelToResponse(c, req) {
   const m = migrateStoredChannel({ ...c })
+  const category = migrateContentCategory(m.category)
+  const visibleTabs = parseVisibleTabsFromBottomTabField(m.bottomTab, category)
+  const bottomTabCsv = serializeVisibleTabs(visibleTabs)
   const rel = m.thumbnail || null
   const thumbFull = resolveThumbnailForApi(rel, req)
 
@@ -250,8 +262,8 @@ export function channelToResponse(c, req) {
     is_active: isActive,
     show_in_app: showInApp,
     accessType: m.accessType === 'premium' ? 'premium' : 'free',
-    category: m.category || 'General',
-    bottomTab: (m.bottomTab || m.category || 'General').trim() || 'General',
+    category,
+    bottomTab: bottomTabCsv,
     backupStream1: m.backupStream1 ?? '',
     backupStream2: m.backupStream2 ?? '',
     backupPlayback1,
@@ -271,7 +283,8 @@ export function channelToResponse(c, req) {
         userAgent: m.userAgent ?? '',
       },
     },
-    bottomTabsDisplay: m.bottomTab || m.category || 'General',
+    bottomTabsDisplay: bottomTabCsv,
+    visibleTabs,
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,
     live: Boolean(m.isLive),

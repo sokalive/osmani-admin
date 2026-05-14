@@ -53,12 +53,20 @@ function ChannelRow({
             </p>
             <p className="mt-1 truncate text-xs font-medium text-slate-500 lg:hidden">
               {channel.category}
+              {channel.tabsLabel ? (
+                <span className="block truncate text-[11px] text-slate-600">Tabs: {channel.tabsLabel}</span>
+              ) : null}
             </p>
           </div>
         </div>
       </td>
       <td className="hidden px-5 py-5 align-middle lg:table-cell">
-        <span className="text-sm text-slate-500">{channel.category}</span>
+        <span className="text-sm text-slate-500">
+          {channel.category}
+          {channel.tabsLabel ? (
+            <span className="mt-0.5 block text-[11px] text-slate-600">Tabs: {channel.tabsLabel}</span>
+          ) : null}
+        </span>
       </td>
       <td className="px-5 py-5 align-middle">
         <div className="flex flex-wrap items-center gap-3">

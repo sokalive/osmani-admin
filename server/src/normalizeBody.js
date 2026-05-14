@@ -2,7 +2,7 @@
 export function bodyToInsert(body) {
   const url = (body.url ?? body.streamUrlPrimary ?? '').trim()
   const name = (body.name ?? '').trim()
-  const category = (body.category ?? body.displaySection ?? 'General').trim() || 'General'
+  const category = (body.category ?? body.displaySection ?? 'Home').trim() || 'Home'
   return {
     name,
     category,

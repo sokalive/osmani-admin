@@ -1,12 +1,12 @@
-export const SECTION_OPTIONS = [
-  'Sports',
-  'Movies',
-  'Kids',
-  'News',
-  'Music',
-  'Docs',
-  'General',
-]
+import {
+  APP_TAB_ORDER,
+  DEFAULT_CONTENT_CATEGORY,
+  checkboxStateFromTabs,
+  migrateContentCategory,
+  parseVisibleTabsFromBottomTabField,
+} from '../../server/src/lib/channelTabs.js'
+
+export const SECTION_OPTIONS = [...APP_TAB_ORDER]
 
 export const PLAYER_TYPES = ['Exo', 'WebView', 'VLC', 'Native', 'IJK']
 
@@ -26,7 +26,10 @@ export function emptyFormState() {
   return {
     id: '',
     name: '',
-    displaySection: 'General',
+    displaySection: DEFAULT_CONTENT_CATEGORY,
+    tabHome: true,
+    tabSports: false,
+    tabTamthilia: false,
     streamUrlPrimary: '',
     backupStream1: '',
     backupStream2: '',
@@ -35,7 +38,6 @@ export function emptyFormState() {
     userAgent: '',
     playerType: 'Exo',
     accessPremium: false,
-    bottomTabsDisplay: 'General',
     live: true,
     hd: true,
     active: true,
@@ -45,10 +47,19 @@ export function emptyFormState() {
 
 export function channelToForm(channel) {
   if (!channel) return emptyFormState()
+  const category = migrateContentCategory(channel.displaySection ?? channel.category)
+  const bottomStr = String(
+    channel.bottomTabsDisplay ?? channel.bottomTab ?? channel.bottom_tab ?? '',
+  ).trim()
+  const visibleTabs = parseVisibleTabsFromBottomTabField(bottomStr, category)
+  const checks = checkboxStateFromTabs(visibleTabs, category)
   return {
     id: channel.id,
     name: channel.name ?? '',
-    displaySection: channel.displaySection ?? channel.category ?? 'General',
+    displaySection: category,
+    tabHome: checks.tabHome,
+    tabSports: checks.tabSports,
+    tabTamthilia: checks.tabTamthilia,
     streamUrlPrimary: channel.streamUrlPrimary ?? '',
     backupStream1: channel.backupStream1 ?? '',
     backupStream2: channel.backupStream2 ?? '',
@@ -57,7 +68,6 @@ export function channelToForm(channel) {
     userAgent: channel.userAgent ?? '',
     playerType: channel.playerType ?? 'Exo',
     accessPremium: Boolean(channel.accessPremium),
-    bottomTabsDisplay: channel.bottomTabsDisplay ?? channel.category ?? 'General',
     live: Boolean(channel.live),
     hd: channel.hd !== false,
     active: channel.active !== false,
