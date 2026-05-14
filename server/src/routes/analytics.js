@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { mergeLocationBucketsByNormalizedLabel, normalizeLocationPayload } from '../lib/analyticsLocation.js'
 
 export const analyticsRouter = Router()
 
@@ -51,8 +52,8 @@ function parseChannelIdFromBody(body) {
   )
 }
 
-function parseCountryFromBody(body) {
-  return parseText(body?.country ?? body?.country_code ?? body?.countryCode)
+function parseCountryFromBody(body, req) {
+  return normalizeLocationPayload(body, req)
 }
 
 function parseInstallInstanceId(v) {
@@ -230,12 +231,7 @@ analyticsRouter.get('/locations', async (_req, res) => {
        ORDER BY users DESC`,
       [SESSION_TTL_INTERVAL],
     )
-    res.json(
-      rows.map((r) => ({
-        country: String(r.country),
-        users: Number(r.users) || 0,
-      })),
-    )
+    res.json(mergeLocationBucketsByNormalizedLabel(rows))
   } catch (e) {
     console.error('[analytics/locations]', e)
     res.status(200).json([])
@@ -314,7 +310,7 @@ analyticsRouter.post('/session/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelId = parseChannelIdFromBody(req.body)
-    const country = parseCountryFromBody(req.body)
+    const country = parseCountryFromBody(req.body, req)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -344,7 +340,7 @@ analyticsRouter.post('/session/heartbeat', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelId = parseChannelIdFromBody(req.body)
-    const country = parseCountryFromBody(req.body)
+    const country = parseCountryFromBody(req.body, req)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -394,7 +390,7 @@ analyticsRouter.post('/presence/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelId = parseChannelIdFromBody(req.body)
-    const country = parseCountryFromBody(req.body)
+    const country = parseCountryFromBody(req.body, req)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
@@ -424,7 +420,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelId = parseChannelIdFromBody(req.body)
-    const country = parseCountryFromBody(req.body)
+    const country = parseCountryFromBody(req.body, req)
     await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)

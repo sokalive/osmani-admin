@@ -15,6 +15,84 @@ const COUNTRY_NAME = Object.freeze({
   GB: 'United Kingdom',
 })
 
+/** Reverse lookup: "tanzania" → TZ (for clients that send country name without ISO). */
+function countryNameToIsoCode(name) {
+  const n = tidy(name).toLowerCase()
+  if (!n) return ''
+  for (const [code, label] of Object.entries(COUNTRY_NAME)) {
+    if (label.toLowerCase() === n) return code
+  }
+  return ''
+}
+
+/**
+ * Fill missing ISO / place from reverse-proxy geo headers (no external API).
+ * Node lowercases header names; values are untrusted — run through same tidy/ISP filters as body.
+ */
+export function enrichLocationBodyFromRequest(body, req) {
+  const b = body && typeof body === 'object' ? { ...body } : {}
+  if (!req?.headers || typeof req.headers !== 'object') return b
+  const h = req.headers
+
+  const hdr = (name) => tidy(h[name] ?? '')
+
+  const hdrCc = hdr('cf-ipcountry') || hdr('x-vercel-ip-country') || hdr('x-country-code')
+  const hdrCity =
+    hdr('cf-ipcity') ||
+    hdr('x-vercel-ip-city') ||
+    hdr('fastly-client-geo-city') ||
+    hdr('x-geo-city') ||
+    hdr('x-app-geo-city')
+  const hdrRegion =
+    hdr('cf-region') ||
+    hdr('x-vercel-ip-country-region') ||
+    hdr('fastly-client-geo-region') ||
+    hdr('x-geo-region') ||
+    hdr('x-app-geo-region')
+
+  const hasCc = () => {
+    const raw = tidy(b.country_code ?? b.countryCode ?? b.country_iso ?? '')
+    return /^[a-z]{2}$/iu.test(raw.slice(0, 2))
+  }
+  const hasPlace = () => {
+    const sources = [
+      b.city,
+      b.region,
+      b.locality,
+      b.cityName,
+      b.adminArea,
+      b.geo_city,
+      b.geoCity,
+      b.place,
+      b.placeName,
+      b.regionName,
+      b.region_name,
+      b.admin_area,
+      b.adminAreaLevel1,
+      b.admin_area_level_1,
+      b.state,
+      b.province,
+      b.division,
+      b.subdivision,
+      b.localityName,
+      b.locality_name,
+    ].map(tidy)
+    return Boolean(sources.find((p) => p && !ispOrProviderLike(p)))
+  }
+
+  if (!hasCc() && /^[a-z]{2}$/iu.test(hdrCc.slice(0, 2))) {
+    b.country_code = hdrCc.slice(0, 2).toUpperCase()
+  }
+  if (!hasPlace()) {
+    if (hdrCity && !ispOrProviderLike(hdrCity)) {
+      b.city = hdrCity
+    } else if (hdrRegion && !ispOrProviderLike(hdrRegion)) {
+      b.region = hdrRegion
+    }
+  }
+  return b
+}
+
 function tidy(s) {
   return String(s ?? '')
     .replace(/[_/+]+/g, ' ')
@@ -83,9 +161,10 @@ export function coerceCompositeLabel(legacyRaw) {
 }
 
 /** Build normalized label from heartbeat / presence body fields. */
-export function normalizeLocationPayload(body = {}) {
-  const b = body && typeof body === 'object' ? body : {}
-  const ccRaw = tidy(b.country_code ?? b.countryCode ?? b.country_iso ?? '')
+export function normalizeLocationPayload(body = {}, req = null) {
+  const merged = enrichLocationBodyFromRequest(body && typeof body === 'object' ? body : {}, req)
+  const b = merged
+  let ccRaw = tidy(b.country_code ?? b.countryCode ?? b.country_iso ?? '')
   let cc =
     /^[a-z]{2}$/iu.test(ccRaw.slice(0, 2))
       ? ccRaw.slice(0, 2).toUpperCase()
@@ -101,6 +180,17 @@ export function normalizeLocationPayload(body = {}) {
     b.geoCity,
     b.place,
     b.placeName,
+    b.regionName,
+    b.region_name,
+    b.admin_area,
+    b.adminAreaLevel1,
+    b.admin_area_level_1,
+    b.state,
+    b.province,
+    b.division,
+    b.subdivision,
+    b.localityName,
+    b.locality_name,
   ].map(tidy)
   let place = placeSources.find((p) => p && !ispOrProviderLike(p)) || ''
 
@@ -109,6 +199,11 @@ export function normalizeLocationPayload(body = {}) {
   const composite = coerceCompositeLabel(legacyCountry)
 
   let out = ''
+
+  if (!cc && legacyCountry && !composite) {
+    const fromName = countryNameToIsoCode(legacyCountry)
+    if (fromName) cc = fromName
+  }
 
   if (cc && /^[A-Z]{2}$/.test(cc)) {
     if (place && !ispOrProviderLike(place)) {
@@ -124,7 +219,11 @@ export function normalizeLocationPayload(body = {}) {
     if (ispOrProviderLike(legacyCountry)) out = UNKNOWN_LOCATION
     else {
       /** free-text city/country fallback */
-      const c2 = coerceCompositeLabel(legacyCountry)
+      let c2 = coerceCompositeLabel(legacyCountry)
+      if (!c2 || c2 === UNKNOWN_LOCATION) {
+        const isoGuess = countryNameToIsoCode(legacyCountry)
+        if (isoGuess) c2 = countryFallbackLabel(isoGuess) || UNKNOWN_LOCATION
+      }
       out = c2 || UNKNOWN_LOCATION
     }
   } else if (place && !ispOrProviderLike(place)) {
