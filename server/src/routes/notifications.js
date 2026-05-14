@@ -9,6 +9,7 @@ import {
   updateNotificationById,
 } from '../lib/runtimeNotifications.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { isOneSignalConfigured, sendOneSignalTestTargetedPush } from '../lib/oneSignalPush.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const notificationsRouter = Router()
@@ -55,6 +56,62 @@ notificationsRouter.post('/notifications', requireAdminPanelAccess, async (req, 
         ? 503
         : 500
     console.error('[notifications] POST failed:', e)
+    res.status(status).json({ error: message })
+  }
+})
+
+/**
+ * Temporary admin verification: send one notification to explicit OneSignal subscription/player IDs
+ * (no segments/filters). Does not touch app SDK, FCM, or registration flow.
+ *
+ * Body (JSON): { subscriptionId?: string, playerId?: string, title?, message?, url? }
+ * Or set env ONESIGNAL_DEBUG_SUBSCRIPTION_ID / ONESIGNAL_DEBUG_PLAYER_ID when body ids omitted.
+ */
+notificationsRouter.post('/notifications/onesignal-test-push', requireAdminPanelAccess, async (req, res) => {
+  try {
+    if (!isOneSignalConfigured()) {
+      return res.status(503).json({
+        error:
+          'OneSignal is not configured. Set ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY on the server.',
+      })
+    }
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const envSub = String(process.env.ONESIGNAL_DEBUG_SUBSCRIPTION_ID ?? '').trim()
+    const envPlayer = String(process.env.ONESIGNAL_DEBUG_PLAYER_ID ?? '').trim()
+    let subscriptionId = String(b.subscriptionId ?? b.subscription_id ?? '').trim()
+    let playerId = String(b.playerId ?? b.player_id ?? '').trim()
+    if (!subscriptionId && !playerId) {
+      subscriptionId = envSub
+      playerId = envPlayer
+    }
+    if (!subscriptionId && !playerId) {
+      return res.status(400).json({
+        error:
+          'Pass subscriptionId or playerId in JSON, or set ONESIGNAL_DEBUG_SUBSCRIPTION_ID / ONESIGNAL_DEBUG_PLAYER_ID in server env.',
+      })
+    }
+    const title = String(b.title ?? 'Osmani admin test').trim()
+    const message = String(b.message ?? 'Backend OneSignal delivery test').trim()
+    const url = String(b.url ?? 'osmani://home').trim()
+    const result = await sendOneSignalTestTargetedPush({
+      subscriptionIds: subscriptionId ? [subscriptionId] : [],
+      playerIds: subscriptionId ? [] : [playerId],
+      title,
+      message,
+      url,
+    })
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({
+      ok: true,
+      onesignalId: result.id,
+      recipients: result.recipients,
+      targeting: subscriptionId ? 'include_subscription_ids' : 'include_player_ids',
+      raw: result.raw,
+    })
+  } catch (e) {
+    const message = String(e.message || e)
+    const status = /OneSignal is not configured|OneSignal API error/i.test(message) ? 503 : 400
+    console.error('[notifications] onesignal-test-push failed:', e)
     res.status(status).json({ error: message })
   }
 })

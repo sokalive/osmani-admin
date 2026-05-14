@@ -3,7 +3,14 @@ import { Bell, MousePointerClick } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getNotifications, postNotification, putNotification, deleteAllNotifications, syncStreamUrl } from '../lib/api'
+import {
+  deleteAllNotifications,
+  getNotifications,
+  postNotification,
+  postOnesignalTestPush,
+  putNotification,
+  syncStreamUrl,
+} from '../lib/api'
 
 const AUDIENCES = [
   { value: 'all', label: 'All users' },
@@ -66,6 +73,9 @@ function NotificationsPage() {
   const [touched, setTouched] = useState(false)
   const [sending, setSending] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
+  const [testSubId, setTestSubId] = useState('')
+  const [testPlayerId, setTestPlayerId] = useState('')
+  const [testBusy, setTestBusy] = useState(false)
   const [flash, setFlash] = useState(null)
 
   const showFlash = useCallback((type, msg) => {
@@ -192,6 +202,26 @@ function NotificationsPage() {
       showToast('error', e?.message || 'Delete failed')
     } finally {
       setDeletingAll(false)
+    }
+  }
+
+  async function handleOnesignalTestPush() {
+    setTestBusy(true)
+    try {
+      const out = await postOnesignalTestPush({
+        subscriptionId: testSubId.trim() || undefined,
+        playerId: testPlayerId.trim() || undefined,
+      })
+      const r = out?.recipients
+      const id = out?.onesignalId
+      showFlash(
+        'success',
+        `Test push OK (${out?.targeting || 'target'}): ${typeof r === 'number' ? r : '?'} recipients${id ? `, OneSignal id ${String(id).slice(0, 12)}…` : ''}.`,
+      )
+    } catch (e) {
+      showToast('error', e?.message || 'Test push failed')
+    } finally {
+      setTestBusy(false)
     }
   }
 
@@ -387,6 +417,56 @@ function NotificationsPage() {
             </div>
           </form>
         </section>
+
+        <details className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-4 ring-1 ring-white/[0.04]">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-300">
+            Backend OneSignal ID test (temporary verification)
+          </summary>
+          <p className="mt-2 text-xs leading-relaxed text-slate-500">
+            Sends one notification using <code className="text-slate-400">include_subscription_ids</code> (preferred)
+            or <code className="text-slate-400">include_player_ids</code> — no segments or tag filters. Leave both
+            blank to use server env <code className="text-slate-400">ONESIGNAL_DEBUG_SUBSCRIPTION_ID</code> /{' '}
+            <code className="text-slate-400">ONESIGNAL_DEBUG_PLAYER_ID</code>.
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className={labelClass()} htmlFor="os-test-sub">
+                Subscription ID
+              </label>
+              <input
+                id="os-test-sub"
+                value={testSubId}
+                onChange={(e) => setTestSubId(e.target.value)}
+                className={inputClass()}
+                placeholder="From OneSignal → Audience → Users"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className={labelClass()} htmlFor="os-test-player">
+                Player ID (legacy)
+              </label>
+              <input
+                id="os-test-player"
+                value={testPlayerId}
+                onChange={(e) => setTestPlayerId(e.target.value)}
+                className={inputClass()}
+                placeholder="Only if subscription ID not used"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <div className="mt-4">
+            <button
+              type="button"
+              disabled={testBusy}
+              onClick={() => void handleOnesignalTestPush()}
+              className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
+            >
+              {testBusy ? 'Sending test…' : 'Send test push to ID(s)'}
+            </button>
+          </div>
+        </details>
 
         <section>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
