@@ -2,9 +2,13 @@ import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
-import { formatPhone } from '../zenopayClient.js'
 import { handleSonicPesaWebhook } from '../handlers/sonicPesaWebhook.js'
-import { resolveSonicpesaCredentials, sonicpesaInitiatePayment } from '../sonicpesaClient.js'
+import {
+  createOrder,
+  resolveSonicpesaCredentials,
+  verifyPayment,
+} from '../lib/payments/providers/sonicpesa.js'
+import { formatPhone } from '../zenopayClient.js'
 
 export const sonicpesaPaymentsRouter = Router()
 
@@ -16,7 +20,7 @@ function normalizeTzPhone(raw) {
   return s
 }
 
-/** POST /payments/sonicpesa/create-order — parallel to ZenoPay create-payment; tags raw_payload.payment_provider */
+/** POST /payments/sonicpesa/create-order — parallel to ZenoPay create-payment */
 sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
   try {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -43,7 +47,7 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       return res.status(503).json({ error: 'SonicPesa is disabled or not configured in admin' })
     }
     const cred = resolveSonicpesaCredentials(row)
-    if (!cred.apiEndpoint || !cred.apiKey) {
+    if (!cred.apiKey) {
       return res.status(503).json({ error: 'SonicPesa credentials incomplete (admin or env)' })
     }
     const orderId = `osm_sp_${Date.now()}_${randomBytes(5).toString('hex')}`
@@ -69,17 +73,21 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       status: 'pending',
       deviceId,
     })
-    const sp = await sonicpesaInitiatePayment(cred, {
-      phone,
-      amount,
-      orderId,
-    })
+    const sp = await createOrder(cred, { phone, amount, orderId, currency: 'TZS' })
+    const providerOrderId =
+      sp.normalized?.providerOrderId ??
+      (sp.body?.data?.order_id != null ? String(sp.body.data.order_id) : null)
     const prevPayload =
       tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}
     await billing.updateTransactionByOrderId(orderId, {
       status: sp.ok ? 'pending' : 'failed',
-      external_id: sp.body?.id != null ? String(sp.body.id) : null,
-      raw_payload: { ...prevPayload, sonicpesa: sp.body, httpStatus: sp.status },
+      external_id: providerOrderId,
+      raw_payload: {
+        ...prevPayload,
+        sonicpesa: sp.body,
+        provider_order_id: providerOrderId,
+        httpStatus: sp.status,
+      },
     })
     if (!sp.ok) {
       liveSyncBus.publish('analytics.transaction_updated', {
@@ -99,6 +107,7 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       ok: true,
       provider: 'sonicpesa',
       orderId,
+      provider_order_id: providerOrderId,
       deviceId,
       transactionId: tx.id,
       amount,
@@ -135,7 +144,34 @@ sonicpesaPaymentsRouter.get('/status/:orderId', async (req, res) => {
     res.json({
       ok: true,
       order_id: txn.order_id,
+      provider_order_id: raw.provider_order_id ?? txn.external_id ?? null,
       status: st,
+      transaction_status: txn.status,
+    })
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+/** GET /payments/sonicpesa/verify/:orderId — poll provider then return normalized status */
+sonicpesaPaymentsRouter.get('/verify/:orderId', async (req, res) => {
+  try {
+    const orderId = String(req.params.orderId ?? '').trim()
+    const txn = await billing.getTransactionByOrderId(orderId)
+    if (!txn) return res.status(404).json({ error: 'Unknown order' })
+    const row = await billing.getSonicpesaRow()
+    const cred = resolveSonicpesaCredentials(row || {})
+    const verifyId = String(
+      txn.raw_payload?.provider_order_id ?? txn.external_id ?? orderId,
+    ).trim()
+    const sp = await verifyPayment(cred, verifyId)
+    res.setHeader('Cache-Control', 'no-store, private')
+    res.json({
+      ok: true,
+      order_id: orderId,
+      provider_order_id: verifyId,
+      http_ok: sp.ok,
+      normalized: sp.normalized,
       transaction_status: txn.status,
     })
   } catch (e) {

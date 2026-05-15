@@ -92,9 +92,15 @@ export async function reconcileOrderWithZenoPay(orderId) {
   if (rawPayload.payment_provider === 'sonicpesa') {
     const srow = await billing.getSonicpesaRow()
     const scred = resolveSonicpesaCredentials(srow || {})
-    const z = await sonicpesaGetOrderStatus(scred, oid)
+    const verifyId = String(rawPayload.provider_order_id ?? txn.external_id ?? oid).trim()
+    const z = await sonicpesaGetOrderStatus(scred, verifyId)
     out.providerHttpOk = z.ok === true
-    log('sonicpesa order-status', { orderId: shortId(oid), httpOk: z.ok, status: z.status })
+    log('sonicpesa order-status', {
+      orderId: shortId(oid),
+      verifyId: shortId(verifyId),
+      httpOk: z.ok,
+      status: z.status,
+    })
 
     if (!z.ok || z.body == null) {
       out.phase = 'provider_request_failed'
@@ -107,8 +113,8 @@ export async function reconcileOrderWithZenoPay(orderId) {
     }
 
     const body = z.body
-    const ok = webhookSuccess(body)
-    const fail = webhookExplicitFailure(body)
+    const ok = z.normalized?.succeeded === true || webhookSuccess(body)
+    const fail = z.normalized?.failed === true || webhookExplicitFailure(body)
     const nextStatus = ok ? 'completed' : fail ? 'failed' : txn.status
 
     if (nextStatus === txn.status) {

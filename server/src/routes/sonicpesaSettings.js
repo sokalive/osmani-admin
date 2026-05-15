@@ -3,7 +3,10 @@ import { maskSecret } from '../billingNormalize.js'
 import * as billing from '../billingStore.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
-import { resolveSonicpesaCredentials, testSonicpesaConnection } from '../sonicpesaClient.js'
+import {
+  resolveSonicpesaCredentials,
+  testConnection as testSonicpesaConnection,
+} from '../lib/payments/providers/sonicpesa.js'
 
 export const sonicpesaSettingsRouter = Router()
 
@@ -27,10 +30,12 @@ function normalizeEnvironment(v) {
   return 'sandbox'
 }
 
-function rowToApiResponse(row, req) {
+async function rowToApiResponse(row, req) {
   const r = row && typeof row === 'object' ? row : {}
   const cred = resolveSonicpesaCredentials(r)
-  const apiEndpoint = String(r.api_endpoint ?? '').trim()
+  const checkout = await billing.getCheckoutPaymentSettings()
+  const isActiveCheckoutProvider = checkout.payment_provider === 'sonicpesa'
+  const apiEndpoint = String(r.api_endpoint ?? '').trim() || 'https://api.sonicpesa.com/api/v1'
   const accountId = String(r.account_id ?? '').trim()
   const webhookUrl = String(r.webhook_url ?? '').trim() || defaultWebhookUrl(req)
   const hasKey = Boolean(String(process.env.SONICPESA_API_KEY || r.api_key || '').trim())
@@ -44,8 +49,11 @@ function rowToApiResponse(row, req) {
     webhookUrl: Boolean(String(process.env.SONICPESA_WEBHOOK_URL || '').trim()),
   }
   const envOverrideAny = Object.values(envOverrideActive).some(Boolean)
+  const lastWebhookAt = r.last_webhook_at
   return {
     enabled: r.enabled === true,
+    isActiveCheckoutProvider,
+    payment_provider: checkout.payment_provider,
     environment: env,
     apiEndpoint,
     api_endpoint: apiEndpoint,
@@ -65,6 +73,12 @@ function rowToApiResponse(row, req) {
     last_test_ok: r.last_test_ok,
     lastTestMessage: r.last_test_message || '',
     last_test_message: r.last_test_message || '',
+    lastWebhookAt: lastWebhookAt instanceof Date ? lastWebhookAt.toISOString() : lastWebhookAt || null,
+    last_webhook_at: lastWebhookAt instanceof Date ? lastWebhookAt.toISOString() : lastWebhookAt || null,
+    lastWebhookEvent: String(r.last_webhook_event ?? ''),
+    last_webhook_event: String(r.last_webhook_event ?? ''),
+    lastWebhookOrderId: String(r.last_webhook_order_id ?? ''),
+    last_webhook_order_id: String(r.last_webhook_order_id ?? ''),
   }
 }
 
@@ -72,7 +86,7 @@ sonicpesaSettingsRouter.get('/', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
     const row = await billing.getSonicpesaRow()
-    res.json(rowToApiResponse(row, req))
+    res.json(await rowToApiResponse(row, req))
   } catch (e) {
     console.error('[settings/sonicpesa] GET failed:', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -89,10 +103,15 @@ sonicpesaSettingsRouter.put('/', async (req, res) => {
       nextKey === '••••••••' ||
       (nextKey.length > 0 && /^[•\u2022\s]+$/.test(nextKey))
 
+    const apiEndpointIn = String(b.apiEndpoint ?? b.api_endpoint ?? current.api_endpoint ?? '').trim()
+    if (!apiEndpointIn && !keepKey && Boolean(b.enabled)) {
+      return res.status(400).json({ error: 'API endpoint is required when SonicPesa is enabled' })
+    }
+
     const row = await billing.updateSonicpesaRowFull({
       enabled: Boolean(b.enabled ?? current.enabled ?? false),
       environment: normalizeEnvironment(b.environment ?? current.environment ?? 'sandbox'),
-      api_endpoint: String(b.apiEndpoint ?? b.api_endpoint ?? current.api_endpoint ?? ''),
+      api_endpoint: apiEndpointIn || 'https://api.sonicpesa.com/api/v1',
       account_id: String(b.accountId ?? b.account_id ?? current.account_id ?? ''),
       webhook_url: String(
         b.webhookUrl ?? b.webhook_url ?? current.webhook_url ?? defaultWebhookUrl(req),
@@ -103,13 +122,21 @@ sonicpesaSettingsRouter.put('/', async (req, res) => {
       last_test_ok: b.lastTestOk ?? b.last_test_ok ?? current.last_test_ok,
       last_test_message: b.lastTestMessage ?? b.last_test_message ?? current.last_test_message,
     })
+
+    const wantProvider = String(b.payment_provider ?? '').trim().toLowerCase()
+    if (wantProvider === 'sonicpesa' || b.setAsActiveCheckoutProvider === true) {
+      await billing.updateCheckoutPaymentProvider('sonicpesa')
+    } else if (wantProvider === 'zenopay') {
+      await billing.updateCheckoutPaymentProvider('zenopay')
+    }
+
     liveSyncBus.publish('config.sonicpesa_settings_changed', {
       topics: ['config'],
       action: 'updated',
       synced_at: new Date().toISOString(),
     })
     res.setHeader('Cache-Control', 'no-store, private')
-    res.json(rowToApiResponse(row, req))
+    res.json(await rowToApiResponse(row, req))
   } catch (e) {
     console.error('[settings/sonicpesa] PUT failed:', e)
     res.status(500).json({ error: String(e.message || e) })

@@ -8,7 +8,7 @@ import {
   resolveZenopayCredentials,
   zenopayCreateCollection,
 } from '../zenopayClient.js'
-import { resolveSonicpesaCredentials } from '../sonicpesaClient.js'
+import { resolveSonicpesaCredentials } from '../lib/payments/providers/sonicpesa.js'
 import { sonicpesaPaymentsRouter } from './sonicpesaPayments.js'
 
 export const paymentsRouter = Router()
@@ -22,8 +22,17 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
     const srow = await billing.getSonicpesaRow()
     const scred = resolveSonicpesaCredentials(srow || {})
     const sonicpesa =
-      Boolean(srow?.enabled === true) && Boolean(scred.apiEndpoint && scred.apiKey)
-    res.json({ ok: true, zenopay, sonicpesa })
+      Boolean(srow?.enabled === true) && Boolean(scred.apiKey)
+    const checkout = await billing.getCheckoutPaymentSettings()
+    let payment_provider = checkout.payment_provider
+    if (payment_provider === 'sonicpesa' && !sonicpesa) payment_provider = 'zenopay'
+    if (payment_provider === 'zenopay' && !zenopay && sonicpesa) payment_provider = 'sonicpesa'
+    res.json({
+      ok: true,
+      payment_provider,
+      zenopay,
+      sonicpesa,
+    })
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }

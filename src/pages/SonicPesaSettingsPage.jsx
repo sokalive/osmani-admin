@@ -27,6 +27,12 @@ function defaultSettings() {
     lastTestMessage: '',
     envOverrideAny: false,
     envOverrideActive: null,
+    isActiveCheckoutProvider: false,
+    payment_provider: 'zenopay',
+    lastWebhookAt: null,
+    lastWebhookEvent: '',
+    lastWebhookOrderId: '',
+    setAsActiveCheckoutProvider: false,
   }
 }
 
@@ -68,6 +74,12 @@ function SonicPesaSettingsPage() {
         apiKeyMasked: String(s?.apiKeyMasked || '******'),
         envOverrideAny: Boolean(s?.envOverrideAny),
         envOverrideActive: s?.envOverrideActive ?? null,
+        isActiveCheckoutProvider: Boolean(s?.isActiveCheckoutProvider),
+        payment_provider: String(s?.payment_provider || 'zenopay'),
+        lastWebhookAt: s?.lastWebhookAt ?? s?.last_webhook_at ?? null,
+        lastWebhookEvent: String(s?.lastWebhookEvent ?? s?.last_webhook_event ?? ''),
+        lastWebhookOrderId: String(s?.lastWebhookOrderId ?? s?.last_webhook_order_id ?? ''),
+        setAsActiveCheckoutProvider: Boolean(s?.isActiveCheckoutProvider),
       }
       setCfg(merged)
       setDraft({ ...merged, apiKey: '' })
@@ -103,7 +115,8 @@ function SonicPesaSettingsPage() {
       draft.apiEndpoint !== cfg.apiEndpoint ||
       draft.accountId !== cfg.accountId ||
       draft.webhookUrl !== cfg.webhookUrl ||
-      draft.apiKey.trim() !== '',
+      draft.apiKey.trim() !== '' ||
+      draft.setAsActiveCheckoutProvider !== cfg.setAsActiveCheckoutProvider,
     [draft, cfg],
   )
 
@@ -116,12 +129,19 @@ function SonicPesaSettingsPage() {
     e.preventDefault()
     setSaving(true)
     try {
+      if (draft.enabled && !draft.apiEndpoint.trim() && !cfg.hasApiKey) {
+        showToast('error', 'API endpoint is required when SonicPesa is enabled')
+        setSaving(false)
+        return
+      }
       const payload = {
         enabled: draft.enabled,
         environment: draft.environment,
-        apiEndpoint: draft.apiEndpoint.trim(),
+        apiEndpoint: draft.apiEndpoint.trim() || 'https://api.sonicpesa.com/api/v1',
         accountId: draft.accountId.trim(),
         webhookUrl: draft.webhookUrl.trim() || defaultWebhook,
+        setAsActiveCheckoutProvider: draft.setAsActiveCheckoutProvider,
+        payment_provider: draft.setAsActiveCheckoutProvider ? 'sonicpesa' : undefined,
       }
       if (draft.apiKey.trim()) payload.apiKey = draft.apiKey.trim()
       const saved = await putSonicpesaSettings(payload)
@@ -185,7 +205,18 @@ function SonicPesaSettingsPage() {
         ) : null}
 
         <header>
-          <h1 className="text-2xl font-bold text-white sm:text-3xl">SonicPesa Settings</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-bold text-white sm:text-3xl">SonicPesa Settings</h1>
+            {cfg.isActiveCheckoutProvider ? (
+              <span className="rounded-lg bg-emerald-500/20 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-emerald-200 ring-1 ring-emerald-400/40">
+                Active checkout provider
+              </span>
+            ) : (
+              <span className="rounded-lg bg-slate-700/60 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-slate-400 ring-1 ring-slate-600/50">
+                Not active provider
+              </span>
+            )}
+          </div>
           <p className="mt-1 text-sm text-slate-400">
             Separate gateway configuration (does not replace{' '}
             <Link className="text-amber-400 underline hover:text-amber-300" to="/zenopay">
@@ -209,6 +240,23 @@ function SonicPesaSettingsPage() {
               <div>
                 <p className="text-sm font-semibold text-slate-200">Enable SonicPesa at checkout</p>
                 <p className="text-xs text-slate-500">When off, SonicPesa is hidden from the payment method list.</p>
+              </div>
+            </label>
+
+            <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+              <input
+                type="checkbox"
+                checked={draft.setAsActiveCheckoutProvider}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, setAsActiveCheckoutProvider: e.target.checked }))
+                }
+                className="h-4 w-4 rounded border-slate-500 text-amber-500 focus:ring-amber-500/40"
+              />
+              <div>
+                <p className="text-sm font-semibold text-slate-200">Use SonicPesa as active app checkout provider</p>
+                <p className="text-xs text-slate-500">
+                  Mobile app routes payments here when enabled (ZenoPay remains available when selected in admin).
+                </p>
               </div>
             </label>
 
@@ -337,6 +385,31 @@ function SonicPesaSettingsPage() {
                 POST target for payment events. Optional HMAC: set <code className="text-slate-400">SONICPESA_WEBHOOK_SECRET</code>{' '}
                 on the server and send <code className="text-slate-400">x-sonicpesa-signature</code> (hex SHA-256 of raw JSON body).
               </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-600/50 bg-slate-900/50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">Webhook status</p>
+              {cfg.lastWebhookAt ? (
+                <>
+                  <p className="mt-1 text-sm text-slate-200">
+                    Last event:{' '}
+                    <span className="font-medium text-emerald-300">
+                      {cfg.lastWebhookEvent || 'received'}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {new Date(cfg.lastWebhookAt).toLocaleString()}
+                    {cfg.lastWebhookOrderId ? (
+                      <>
+                        {' '}
+                        · order <span className="font-mono text-slate-400">{cfg.lastWebhookOrderId}</span>
+                      </>
+                    ) : null}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-1 text-sm text-slate-400">No webhook received yet</p>
+              )}
             </div>
           </div>
 

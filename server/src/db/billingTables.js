@@ -461,6 +461,29 @@ export async function ensureBillingTables(client) {
     INSERT INTO sonicpesa_settings (id) VALUES (1)
     ON CONFLICT (id) DO NOTHING;
   `)
+  await client.query(`
+    ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_webhook_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_webhook_event TEXT NOT NULL DEFAULT '';
+  `)
+  await client.query(`
+    ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_webhook_order_id TEXT NOT NULL DEFAULT '';
+  `)
+
+  /** Active checkout gateway for mobile app (zenopay | sonicpesa). */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS checkout_payment_settings (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      payment_provider TEXT NOT NULL DEFAULT 'zenopay',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT checkout_payment_provider_check CHECK (payment_provider IN ('zenopay', 'sonicpesa'))
+    );
+  `)
+  await client.query(`
+    INSERT INTO checkout_payment_settings (id, payment_provider) VALUES (1, 'zenopay')
+    ON CONFLICT (id) DO NOTHING;
+  `)
 
   /** Admin manual subscription grants (gift UX + audit trail); device unlock uses device_subscriptions */
   await client.query(`

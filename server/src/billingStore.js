@@ -1243,6 +1243,54 @@ export async function updateSonicpesaRowFull(d) {
   return rows[0]
 }
 
+/** Record SonicPesa webhook receipt for admin diagnostics. */
+export async function recordSonicpesaWebhookReceived(body) {
+  const pool = requirePool()
+  const o = body && typeof body === 'object' ? body : {}
+  const event = String(o.event ?? o.type ?? '').trim().slice(0, 128)
+  const orderId = String(o.order_id ?? o.orderId ?? o.merchant_order_id ?? '').trim().slice(0, 128)
+  await pool.query(
+    `UPDATE sonicpesa_settings SET
+       last_webhook_at = now(),
+       last_webhook_event = $1,
+       last_webhook_order_id = $2,
+       updated_at = now()
+     WHERE id = 1`,
+    [event, orderId],
+  )
+}
+
+/** Checkout gateway selection (row id = 1). */
+export async function getCheckoutPaymentSettings() {
+  const pool = requirePool()
+  const { rows } = await pool.query(`SELECT * FROM checkout_payment_settings WHERE id = 1`)
+  const row = rows[0]
+  const provider = String(row?.payment_provider ?? 'zenopay').trim().toLowerCase()
+  return {
+    payment_provider: provider === 'sonicpesa' ? 'sonicpesa' : 'zenopay',
+    updated_at: row?.updated_at ?? null,
+  }
+}
+
+export async function updateCheckoutPaymentProvider(paymentProvider) {
+  const pool = requirePool()
+  const p = String(paymentProvider ?? '').trim().toLowerCase()
+  if (p !== 'zenopay' && p !== 'sonicpesa') {
+    throw new Error('payment_provider must be zenopay or sonicpesa')
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO checkout_payment_settings (id, payment_provider, updated_at)
+     VALUES (1, $1, now())
+     ON CONFLICT (id) DO UPDATE SET payment_provider = EXCLUDED.payment_provider, updated_at = now()
+     RETURNING *`,
+    [p],
+  )
+  return {
+    payment_provider: rows[0]?.payment_provider === 'sonicpesa' ? 'sonicpesa' : 'zenopay',
+    updated_at: rows[0]?.updated_at ?? null,
+  }
+}
+
 // --- Offer codes (admin-generated; redeem uses manual grant + popup flow) ---
 
 const OFFER_CODE_DURATIONS = MANUAL_GRANT_DURATION_DAYS
