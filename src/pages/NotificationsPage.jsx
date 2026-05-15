@@ -74,6 +74,7 @@ function NotificationsPage() {
   const [sending, setSending] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
   const [testSubId, setTestSubId] = useState('')
+  const [testOnesignalUserId, setTestOnesignalUserId] = useState('')
   const [testPlayerId, setTestPlayerId] = useState('')
   const [testBusy, setTestBusy] = useState(false)
   const [flash, setFlash] = useState(null)
@@ -208,8 +209,12 @@ function NotificationsPage() {
   async function handleOnesignalTestPush() {
     setTestBusy(true)
     try {
+      console.info(
+        '[NotificationsPage] Send test push to ID(s) → admin POST /notifications/onesignal-test-push (not /notifications)',
+      )
       const out = await postOnesignalTestPush({
         subscriptionId: testSubId.trim() || undefined,
+        onesignalUserId: testOnesignalUserId.trim() || undefined,
         playerId: testPlayerId.trim() || undefined,
       })
       const r = out?.recipients
@@ -423,22 +428,40 @@ function NotificationsPage() {
             Backend OneSignal ID test (temporary verification)
           </summary>
           <p className="mt-2 text-xs leading-relaxed text-slate-500">
-            Sends one notification using <code className="text-slate-400">include_subscription_ids</code> (preferred)
-            or <code className="text-slate-400">include_player_ids</code> — no segments or tag filters. Leave both
-            blank to use server env <code className="text-slate-400">ONESIGNAL_DEBUG_SUBSCRIPTION_ID</code> /{' '}
+            One targeting field only (priority: push subscription → OneSignal user → legacy player). No segments or tag
+            filters.             The dashboard <span className="font-semibold text-slate-400">User ID</span> is{' '}
+            <code className="text-slate-400">onesignal_id</code> — use the middle field,{' '}
+            <span className="font-semibold text-slate-400">not</span> as{' '}
+            <code className="text-slate-400">include_subscription_ids</code>{' '}
+            (that yields “All included players are not subscribed”). Leave all blank for env:{' '}
+            <code className="text-slate-400">ONESIGNAL_DEBUG_SUBSCRIPTION_ID</code>,{' '}
+            <code className="text-slate-400">ONESIGNAL_DEBUG_ONESIGNAL_USER_ID</code>,{' '}
             <code className="text-slate-400">ONESIGNAL_DEBUG_PLAYER_ID</code>.
           </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <div>
               <label className={labelClass()} htmlFor="os-test-sub">
-                Subscription ID
+                Push subscription ID
               </label>
               <input
                 id="os-test-sub"
                 value={testSubId}
                 onChange={(e) => setTestSubId(e.target.value)}
                 className={inputClass()}
-                placeholder="From OneSignal → Audience → Users"
+                placeholder="User → Subscriptions → Push row → Subscription ID"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className={labelClass()} htmlFor="os-test-osuser">
+                OneSignal user ID (onesignal_id)
+              </label>
+              <input
+                id="os-test-osuser"
+                value={testOnesignalUserId}
+                onChange={(e) => setTestOnesignalUserId(e.target.value)}
+                className={inputClass()}
+                placeholder="User profile / list “User ID” — include_aliases + push"
                 autoComplete="off"
               />
             </div>
@@ -451,7 +474,7 @@ function NotificationsPage() {
                 value={testPlayerId}
                 onChange={(e) => setTestPlayerId(e.target.value)}
                 className={inputClass()}
-                placeholder="Only if subscription ID not used"
+                placeholder="Only if the two UUID fields above are empty"
                 autoComplete="off"
               />
             </div>

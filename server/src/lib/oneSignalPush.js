@@ -6,12 +6,48 @@
  *   OneSignal.User.addTag("osmani_audience", "premium")
  * Tag key overridable via ONESIGNAL_AUDIENCE_TAG_KEY (default: osmani_audience).
  * Tag values: premium | trial | inactive (must match admin dropdown).
+ * Push channel: sets `target_channel: 'push'` (same as successful admin test with aliases).
  *
  * Debug / verification (admin only, separate route): {@link sendOneSignalTestTargetedPush}
- * uses include_subscription_ids or include_player_ids — no segments/filters.
+ * uses include_subscription_ids, include_aliases.onesignal_id (+ target_channel push), or
+ * include_player_ids — no segments/filters. Only one targeting mode per request.
  */
 
 const ONESIGNAL_API = 'https://onesignal.com/api/v1/notifications'
+
+/** Classify targeting from the exact object POSTed to OneSignal (after app_id merge). */
+export function classifyOneSignalTargetingWire(body) {
+  const b = body && typeof body === 'object' ? body : {}
+  if (Array.isArray(b.include_subscription_ids) && b.include_subscription_ids.length > 0) {
+    return { branch: 'include_subscription_ids', detail: `${b.include_subscription_ids.length} id(s)` }
+  }
+  const aliasOs = b.include_aliases?.onesignal_id
+  if (Array.isArray(aliasOs) && aliasOs.length > 0) {
+    return { branch: 'include_aliases.onesignal_id', detail: `${aliasOs.length} id(s)` }
+  }
+  if (Array.isArray(b.include_player_ids) && b.include_player_ids.length > 0) {
+    return { branch: 'include_player_ids', detail: `${b.include_player_ids.length} id(s)` }
+  }
+  if (Array.isArray(b.included_segments) && b.included_segments.length > 0) {
+    return { branch: 'included_segments', detail: b.included_segments.join(', ') }
+  }
+  if (Array.isArray(b.filters) && b.filters.length > 0) {
+    return { branch: 'filters', detail: `${b.filters.length} rule(s)` }
+  }
+  return { branch: 'none', detail: '' }
+}
+
+const ONESIGNAL_LOG_MAX = 24_000
+
+function logOneSignalDiag(phase, payload) {
+  try {
+    let line = JSON.stringify({ oneSignalDiag: true, phase, ...payload })
+    if (line.length > ONESIGNAL_LOG_MAX) line = `${line.slice(0, ONESIGNAL_LOG_MAX)}…[truncated]`
+    console.log(line)
+  } catch (e) {
+    console.log('[OneSignal] diag log failed:', String(e?.message || e))
+  }
+}
 
 function getConfig() {
   const appId = String(process.env.ONESIGNAL_APP_ID ?? '').trim()
@@ -25,7 +61,14 @@ export function isOneSignalConfigured() {
   return Boolean(appId && restKey)
 }
 
-async function postOneSignalCreate(body) {
+/**
+ * @param {object} body - Notification body (app_id merged from env if omitted).
+ * @param {object} [meta]
+ * @param {string} [meta.source] - e.g. notifications.createAdminNotification, notifications.flushDue, onesignal-test-push
+ * @param {string} [meta.targetingBranchSelected] - optional: branch chosen before POST (test helper)
+ * @param {object} [meta.idCounts] - optional: { subscriptions, onesignalUsers, players }
+ */
+async function postOneSignalCreate(body, meta = {}) {
   const { appId, restKey } = getConfig()
   if (!appId || !restKey) {
     throw new Error(
@@ -33,6 +76,22 @@ async function postOneSignalCreate(body) {
     )
   }
   const full = { ...body, app_id: body.app_id ?? appId }
+  const wire = classifyOneSignalTargetingWire(full)
+  const targetingBranchSelected =
+    meta.targetingBranchSelected != null && meta.targetingBranchSelected !== ''
+      ? String(meta.targetingBranchSelected)
+      : null
+
+  // TEMP: exact wire verification (production + test). Remove after diagnosing OneSignal targeting.
+  logOneSignalDiag('before_post', {
+    source: meta.source || 'unknown',
+    url: ONESIGNAL_API,
+    targetingWire: wire.branch,
+    targetingWireDetail: wire.detail,
+    targetingBranchSelected,
+    requestPayload: full,
+  })
+
   const res = await fetch(ONESIGNAL_API, {
     method: 'POST',
     headers: {
@@ -42,6 +101,18 @@ async function postOneSignalCreate(body) {
     body: JSON.stringify(full),
   })
   const raw = await res.json().catch(() => ({}))
+
+  logOneSignalDiag('after_post', {
+    source: meta.source || 'unknown',
+    url: ONESIGNAL_API,
+    httpStatus: res.status,
+    ok: res.ok,
+    targetingWire: wire.branch,
+    targetingWireDetail: wire.detail,
+    targetingBranchSelected,
+    requestPayload: full,
+    rawOneSignalResponse: raw,
+  })
   if (!res.ok) {
     let errMsg = raw?.error ? String(raw.error) : ''
     if (Array.isArray(raw?.errors)) errMsg = raw.errors.map(String).join('; ')
@@ -67,9 +138,10 @@ async function postOneSignalCreate(body) {
  * @param {string} [opts.url] - deep link e.g. osmani://home
  * @param {string} [opts.imageUrl] - HTTPS public URL for rich image (Android big_picture / iOS attachment)
  * @param {'all'|'premium'|'trial'|'inactive'} opts.audience
+ * @param {object} [logMeta] - forwarded to postOneSignalCreate (source, notificationId, …)
  * @returns {Promise<{ id: string, recipients: number, raw: object }>}
  */
-export async function sendOneSignalNotification(opts) {
+export async function sendOneSignalNotification(opts, logMeta = {}) {
   const { audienceTagKey } = getConfig()
 
   const title = String(opts.title ?? '').trim()
@@ -100,19 +172,32 @@ export async function sendOneSignalNotification(opts) {
   if (audience === 'all') {
     body.included_segments = ['Subscribed Users']
   } else {
-    const value = audience
-    body.filters = [{ field: 'tag', key: audienceTagKey, relation: '=', value }]
+    body.filters = [{ field: 'tag', key: audienceTagKey, relation: '=', value: audience }]
   }
+  body.target_channel = 'push'
 
-  return postOneSignalCreate(body)
+  const targetingBranchSelected =
+    audience === 'all'
+      ? 'included_segments[Subscribed Users] + target_channel:push'
+      : `filters[tag:${audienceTagKey}=${audience}] + target_channel:push`
+
+  return postOneSignalCreate(body, {
+    ...logMeta,
+    source: logMeta.source ?? 'notifications.sendOneSignalNotification',
+    audience,
+    targetingBranchSelected,
+  })
 }
 
 /**
- * Admin verification only: target explicit subscription/player IDs (no segments, no filters).
- * Prefer subscription IDs (Audience → Users in OneSignal dashboard).
+ * Admin verification only: target explicit IDs (no segments, no filters).
+ * - Push **subscription** UUID → `include_subscription_ids` (per-device/channel row in dashboard).
+ * - OneSignal **user** UUID (`onesignal_id`) → `include_aliases` + `target_channel: push` (User ID on profile).
+ * - Legacy player id → `include_player_ids`.
  */
 export async function sendOneSignalTestTargetedPush({
   subscriptionIds = [],
+  oneSignalUserIds = [],
   playerIds = [],
   title = 'Osmani admin test',
   message = 'Backend OneSignal delivery test',
@@ -121,11 +206,16 @@ export async function sendOneSignalTestTargetedPush({
   const subs = (Array.isArray(subscriptionIds) ? subscriptionIds : [])
     .map((x) => String(x ?? '').trim())
     .filter(Boolean)
+  const osUsers = (Array.isArray(oneSignalUserIds) ? oneSignalUserIds : [])
+    .map((x) => String(x ?? '').trim())
+    .filter(Boolean)
   const players = (Array.isArray(playerIds) ? playerIds : [])
     .map((x) => String(x ?? '').trim())
     .filter(Boolean)
-  if (subs.length === 0 && players.length === 0) {
-    throw new Error('OneSignal test: provide at least one subscriptionId or playerId')
+  if (subs.length === 0 && osUsers.length === 0 && players.length === 0) {
+    throw new Error(
+      'OneSignal test: provide at least one push subscription id, onesignal user id, or legacy player id',
+    )
   }
 
   const body = {
@@ -138,11 +228,21 @@ export async function sendOneSignalTestTargetedPush({
     body.data = { deep_link: u }
   }
 
+  const targetingBranchSelected =
+    subs.length > 0 ? 'include_subscription_ids' : osUsers.length > 0 ? 'include_aliases.onesignal_id' : 'include_player_ids'
+
   if (subs.length > 0) {
     body.include_subscription_ids = subs.slice(0, 2000)
+  } else if (osUsers.length > 0) {
+    body.include_aliases = { onesignal_id: osUsers.slice(0, 20000) }
+    body.target_channel = 'push'
   } else {
     body.include_player_ids = players.slice(0, 2000)
   }
 
-  return postOneSignalCreate(body)
+  return postOneSignalCreate(body, {
+    source: 'onesignal-test-push',
+    targetingBranchSelected,
+    idCounts: { subscriptions: subs.length, onesignalUsers: osUsers.length, players: players.length },
+  })
 }

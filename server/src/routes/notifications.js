@@ -61,11 +61,15 @@ notificationsRouter.post('/notifications', requireAdminPanelAccess, async (req, 
 })
 
 /**
- * Temporary admin verification: send one notification to explicit OneSignal subscription/player IDs
+ * Temporary admin verification: send one notification to explicit OneSignal IDs
  * (no segments/filters). Does not touch app SDK, FCM, or registration flow.
  *
- * Body (JSON): { subscriptionId?: string, playerId?: string, title?, message?, url? }
- * Or set env ONESIGNAL_DEBUG_SUBSCRIPTION_ID / ONESIGNAL_DEBUG_PLAYER_ID when body ids omitted.
+ * Body (JSON): { subscriptionId?, onesignalUserId?, playerId?, title?, message?, url? }
+ * Aliases: subscription_id, onesignal_id, player_id.
+ * Priority: subscriptionId → onesignalUserId (User ID) → playerId.
+ * Env when body empty: fills ONESIGNAL_DEBUG_SUBSCRIPTION_ID, ONESIGNAL_DEBUG_ONESIGNAL_USER_ID,
+ * and ONESIGNAL_DEBUG_PLAYER_ID into the same fields; sendOneSignalTestTargetedPush prefers
+ * subscription → onesignal user → player.
  */
 notificationsRouter.post('/notifications/onesignal-test-push', requireAdminPanelAccess, async (req, res) => {
   try {
@@ -77,35 +81,69 @@ notificationsRouter.post('/notifications/onesignal-test-push', requireAdminPanel
     }
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const envSub = String(process.env.ONESIGNAL_DEBUG_SUBSCRIPTION_ID ?? '').trim()
+    const envOsUser = String(process.env.ONESIGNAL_DEBUG_ONESIGNAL_USER_ID ?? '').trim()
     const envPlayer = String(process.env.ONESIGNAL_DEBUG_PLAYER_ID ?? '').trim()
     let subscriptionId = String(b.subscriptionId ?? b.subscription_id ?? '').trim()
+    let onesignalUserId = String(
+      b.onesignalUserId ?? b.onesignal_id ?? b.oneSignalUserId ?? b.onesignalUserID ?? '',
+    ).trim()
     let playerId = String(b.playerId ?? b.player_id ?? '').trim()
-    if (!subscriptionId && !playerId) {
+    if (!subscriptionId && !onesignalUserId && !playerId) {
       subscriptionId = envSub
+      onesignalUserId = envOsUser
       playerId = envPlayer
     }
-    if (!subscriptionId && !playerId) {
+    if (!subscriptionId && !onesignalUserId && !playerId) {
       return res.status(400).json({
         error:
-          'Pass subscriptionId or playerId in JSON, or set ONESIGNAL_DEBUG_SUBSCRIPTION_ID / ONESIGNAL_DEBUG_PLAYER_ID in server env.',
+          'Pass subscriptionId (push subscription UUID), onesignalUserId (User ID / onesignal_id), or playerId in JSON; or set ONESIGNAL_DEBUG_SUBSCRIPTION_ID, ONESIGNAL_DEBUG_ONESIGNAL_USER_ID, or ONESIGNAL_DEBUG_PLAYER_ID in server env.',
       })
     }
+    const fromBodySub = String(b.subscriptionId ?? b.subscription_id ?? '').trim()
+    const fromBodyOs = String(b.onesignalUserId ?? b.onesignal_id ?? b.oneSignalUserId ?? b.onesignalUserID ?? '').trim()
+    const fromBodyPlayer = String(b.playerId ?? b.player_id ?? '').trim()
     const title = String(b.title ?? 'Osmani admin test').trim()
     const message = String(b.message ?? 'Backend OneSignal delivery test').trim()
     const url = String(b.url ?? 'osmani://home').trim()
+    console.log(
+      JSON.stringify({
+        oneSignalDiag: true,
+        phase: 'route_inputs',
+        source: 'notifications/onesignal-test-push',
+        subscriptionId: subscriptionId || null,
+        onesignalUserId: onesignalUserId || null,
+        playerId: playerId || null,
+        matchedEnv: {
+          subscriptionId: subscriptionId && envSub && subscriptionId === envSub,
+          onesignalUserId: onesignalUserId && envOsUser && onesignalUserId === envOsUser,
+          playerId: playerId && envPlayer && playerId === envPlayer,
+        },
+        bodyHad: {
+          subscriptionId: Boolean(fromBodySub),
+          onesignalUserId: Boolean(fromBodyOs),
+          playerId: Boolean(fromBodyPlayer),
+        },
+      }),
+    )
     const result = await sendOneSignalTestTargetedPush({
       subscriptionIds: subscriptionId ? [subscriptionId] : [],
-      playerIds: subscriptionId ? [] : [playerId],
+      oneSignalUserIds: subscriptionId ? [] : onesignalUserId ? [onesignalUserId] : [],
+      playerIds: subscriptionId || onesignalUserId ? [] : playerId ? [playerId] : [],
       title,
       message,
       url,
     })
+    const targeting = subscriptionId
+      ? 'include_subscription_ids'
+      : onesignalUserId
+        ? 'include_aliases.onesignal_id + target_channel:push'
+        : 'include_player_ids'
     res.setHeader('Cache-Control', 'no-store')
     res.json({
       ok: true,
       onesignalId: result.id,
       recipients: result.recipients,
-      targeting: subscriptionId ? 'include_subscription_ids' : 'include_player_ids',
+      targeting,
       raw: result.raw,
     })
   } catch (e) {

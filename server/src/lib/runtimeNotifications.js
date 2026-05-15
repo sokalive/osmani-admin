@@ -192,13 +192,16 @@ export async function flushDueNotifications() {
       }
       const pushImageUrl =
         imagePath && (imagePath.startsWith('http') ? imagePath : imagePath.startsWith('/uploads/') ? absoluteUrlForStoredPath(imagePath) : '')
-      const result = await sendOneSignalNotification({
-        title: row.title,
-        message: row.message,
-        url: row.target_type,
-        imageUrl: pushImageUrl || '',
-        audience: row.target_audience,
-      })
+      const result = await sendOneSignalNotification(
+        {
+          title: row.title,
+          message: row.message,
+          url: row.target_type,
+          imageUrl: pushImageUrl || '',
+          audience: row.target_audience,
+        },
+        { source: 'notifications.flushDueNotifications', notificationId: id },
+      )
       const newPayload = {
         ...sanitizePayload(row.payload),
         onesignal_id: result.id,
@@ -320,13 +323,16 @@ export async function createAdminNotification(body, actor = 'Admin') {
     const img = String(imageForDb ?? '').trim()
     const pushImageUrl =
       img && (img.startsWith('http') ? img : img.startsWith('/uploads/') ? absoluteUrlForStoredPath(img) : '')
-    const result = await sendOneSignalNotification({
-      title: next.title,
-      message: next.message,
-      url: next.targetType,
-      imageUrl: pushImageUrl || '',
-      audience: next.targetAudience,
-    })
+    const result = await sendOneSignalNotification(
+      {
+        title: next.title,
+        message: next.message,
+        url: next.targetType,
+        imageUrl: pushImageUrl || '',
+        audience: next.targetAudience,
+      },
+      { source: 'notifications.createAdminNotification' },
+    )
     mergedPayload = {
       ...mergedPayload,
       onesignal_id: result.id,
