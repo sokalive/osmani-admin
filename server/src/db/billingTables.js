@@ -129,6 +129,33 @@ export async function ensureBillingTables(client) {
   `)
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS analytics_reset_challenges (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      challenge_token_hash TEXT NOT NULL UNIQUE,
+      admin_user_id TEXT NOT NULL DEFAULT '',
+      admin_email TEXT NOT NULL DEFAULT '',
+      ip_address TEXT NOT NULL DEFAULT '',
+      user_agent TEXT NOT NULL DEFAULT '',
+      device_label TEXT NOT NULL DEFAULT '',
+      password_verified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      otp_hash TEXT,
+      otp_expires_at TIMESTAMPTZ,
+      otp_used BOOLEAN NOT NULL DEFAULT false,
+      otp_verify_attempts INT NOT NULL DEFAULT 0,
+      otp_sent_count INT NOT NULL DEFAULT 0,
+      last_otp_sent_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      last_otp_verify_ok BOOLEAN,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS analytics_reset_challenges_completed_idx
+    ON analytics_reset_challenges (completed_at DESC)
+    WHERE completed_at IS NOT NULL;
+  `)
+
+  await client.query(`
     ALTER TABLE live_sessions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT now();
   `)
   await client.query(`

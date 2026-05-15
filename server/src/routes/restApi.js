@@ -3,6 +3,7 @@ import { applySensitiveJsonGetNoStore } from '../middleware/sensitiveApiCacheCon
 import { bannersRouter } from './banners.js'
 import { channelsRouter } from './channels.js'
 import { analyticsRouter } from './analytics.js'
+import { analyticsAdminRouter } from './analyticsAdmin.js'
 import { ensureGlobalAppSettingsFile, globalAppSettingsRouter } from './globalAppSettings.js'
 import { ensureJsonFile } from '../lib/jsonFile.js'
 import { usersRouter } from './users.js'
@@ -112,6 +113,11 @@ restApi.get('/', (_req, res) => {
       '/analytics/locations',
       '/analytics/trend',
       '/analytics/install',
+      '/admin/analytics/reset-installs/status',
+      '/admin/analytics/reset-installs/verify-password',
+      '/admin/analytics/reset-installs/send-otp',
+      '/admin/analytics/reset-installs/resend-otp',
+      '/admin/analytics/reset-installs/execute',
       '/analytics/session/start',
       '/analytics/session/heartbeat',
       '/analytics/session/end',
@@ -246,6 +252,7 @@ restApi.use('/admin/offer-codes', offerCodesAdminRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)
+restApi.use('/admin/analytics', analyticsAdminRouter)
 restApi.use('/plans', plansRouter)
 restApi.use('/transactions', transactionsRouter)
 restApi.use('/payments', paymentsRouter)

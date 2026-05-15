@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import InstallsGrowthChart from '../components/InstallsGrowthChart'
+import ResetInstallAnalyticsPanel from '../components/ResetInstallAnalyticsPanel'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   getAnalyticsChannels,
@@ -328,6 +329,8 @@ function AnalyticsPage() {
             </ul>
           </section>
         </div>
+
+        <ResetInstallAnalyticsPanel onResetComplete={load} />
       </main>
     </>
   )

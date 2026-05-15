@@ -726,6 +726,17 @@ export const getAnalyticsOverview = () => apiGet('/analytics/overview')
 export const getAnalyticsChannels = () => apiGet('/analytics/channels')
 export const getAnalyticsLocations = () => apiGet('/analytics/locations')
 export const getAnalyticsTrend = () => apiGet('/analytics/trend')
+
+export const getAnalyticsResetInstallsStatus = () =>
+  adminApiGet('/admin/analytics/reset-installs/status')
+export const postAnalyticsResetVerifyPassword = (body) =>
+  adminApiPost('/admin/analytics/reset-installs/verify-password', body)
+export const postAnalyticsResetSendOtp = (body) =>
+  adminApiPost('/admin/analytics/reset-installs/send-otp', body)
+export const postAnalyticsResetResendOtp = (body) =>
+  adminApiPost('/admin/analytics/reset-installs/resend-otp', body)
+export const postAnalyticsResetExecute = (body) =>
+  adminApiPost('/admin/analytics/reset-installs/execute', body)
 export const getServerHealth = () => adminApiGet('/server-health')
 export const getApiHealth = () => apiGet('/health')
 export const getAdminPanelDiagnostics = () => adminApiGet('/admin/panel-diagnostics')

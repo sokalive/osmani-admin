@@ -23,6 +23,7 @@ export function applySensitiveJsonGetNoStore(req, res, next) {
     p === '/dashboard' ||
     p.startsWith('/dashboard/') ||
     p.startsWith('/analytics/') ||
+    p.startsWith('/admin/analytics/') ||
     p === '/notifications' ||
     p.startsWith('/notifications/') ||
     p === '/security-logs' ||

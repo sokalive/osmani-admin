@@ -58,3 +58,43 @@ export async function sendAdminOtpEmail({ to, otp }) {
   }
   return { ok: true }
 }
+
+/** OTP for destructive analytics reset — sent to ADMIN_ALERT_EMAIL only. */
+export async function sendAnalyticsResetOtpEmail({ to, otp }) {
+  const key = String(process.env.RESEND_API_KEY ?? '').trim()
+  const from = String(process.env.RESEND_FROM_EMAIL ?? '').trim()
+  if (!key || !from) {
+    console.warn('[resend] RESEND_API_KEY or RESEND_FROM_EMAIL missing — analytics reset OTP skipped')
+    return { ok: false, skipped: true }
+  }
+  if (!to) {
+    return { ok: false, error: 'ADMIN_ALERT_EMAIL not configured' }
+  }
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject: 'Osmani Admin — install analytics reset code',
+      html: `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;background:#0b0f1a;color:#e2e8f0;padding:24px;">
+        <p style="font-size:11px;text-transform:uppercase;letter-spacing:0.2em;color:#f87171;">Danger zone</p>
+        <h1 style="color:#fff;">Install analytics reset</h1>
+        <p>Use this one-time code within <strong>5 minutes</strong>:</p>
+        <p style="font-size:32px;font-weight:bold;letter-spacing:0.35em;color:#fbbf24;font-family:monospace;">${otp}</p>
+        <p style="color:#94a3b8;font-size:13px;">If you did not request this, ignore this email and review admin access.</p>
+      </body></html>`,
+    }),
+  })
+
+  const text = await res.text()
+  if (!res.ok) {
+    console.error('[resend] analytics reset OTP failed', res.status, text)
+    return { ok: false, error: text }
+  }
+  return { ok: true }
+}
