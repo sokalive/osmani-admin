@@ -6,6 +6,7 @@ import { useToast } from '../context/ToastContext.jsx'
 import {
   deleteAllNotifications,
   getNotifications,
+  getOnesignalDiagnostics,
   postNotification,
   putNotification,
   syncStreamUrl,
@@ -64,6 +65,8 @@ function NotificationsPage() {
   const [touched, setTouched] = useState(false)
   const [sending, setSending] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
+  const [diag, setDiag] = useState(null)
+  const [diagBusy, setDiagBusy] = useState(false)
   const [flash, setFlash] = useState(null)
 
   const showFlash = useCallback((type, msg) => {
@@ -192,6 +195,19 @@ function NotificationsPage() {
     }
   }
 
+  async function loadDiagnostics() {
+    setDiagBusy(true)
+    try {
+      const report = await getOnesignalDiagnostics()
+      setDiag(report)
+    } catch (e) {
+      showToast('error', e?.message || 'Could not load OneSignal diagnostics')
+      setDiag(null)
+    } finally {
+      setDiagBusy(false)
+    }
+  }
+
   async function incrementClicks(id) {
     const n = notifications.find((x) => x.id === id)
     if (!n) return
@@ -228,6 +244,40 @@ function NotificationsPage() {
             <span className="text-slate-300">Subscribed Users</span> segment). Deep links and images
             are stored for in-app history; the push uses title and message only.
           </p>
+          <div className="mt-3">
+            <button
+              type="button"
+              disabled={diagBusy}
+              onClick={() => void loadDiagnostics()}
+              className="rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-amber-500/40 hover:text-amber-200 disabled:opacity-50"
+            >
+              {diagBusy ? 'Checking OneSignal…' : 'Check push subscription health'}
+            </button>
+          </div>
+          {diag ? (
+            <div className="mt-3 rounded-xl border border-slate-700/60 bg-slate-900/50 p-3 text-xs text-slate-300">
+              {diag.app ? (
+                <p>
+                  App: <span className="text-white">{diag.app.name || diag.appId}</span> · players{' '}
+                  {diag.app.players ?? '—'} · messageable (push-eligible){' '}
+                  <span className="font-semibold text-amber-200">{diag.app.messageable_players ?? '—'}</span>
+                </p>
+              ) : null}
+              {diag.subscribedUsersSegment ? (
+                <p className="mt-1">
+                  Segment &quot;{diag.subscribedUsersSegment.name}&quot;:{' '}
+                  {diag.subscribedUsersSegment.subscriber_count ?? '—'} subscribers
+                </p>
+              ) : null}
+              {Array.isArray(diag.analysis) && diag.analysis.length > 0 ? (
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-slate-400">
+                  {diag.analysis.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
         </header>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">

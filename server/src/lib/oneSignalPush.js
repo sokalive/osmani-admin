@@ -3,17 +3,22 @@
  * @see https://documentation.onesignal.com/reference/create-notification
  *
  * POST https://api.onesignal.com/notifications
- * Body matches dashboard “send to Subscribed Users” (User Model + push channel).
+ * Body: included_segments ["Subscribed Users"] + headings/contents (no target_channel).
+ * target_channel is required for include_aliases and SMS/RCS+segments, not for push segment broadcasts.
  */
 
 const ONESIGNAL_API_URL = 'https://api.onesignal.com/notifications'
 const PRODUCTION_SEGMENT = 'Subscribed Users'
 const ONESIGNAL_LOG_MAX = 24_000
 
-function getConfig() {
+export function getOneSignalConfig() {
   const appId = String(process.env.ONESIGNAL_APP_ID ?? '').trim()
   const restKey = String(process.env.ONESIGNAL_REST_API_KEY ?? process.env.ONESIGNAL_API_KEY ?? '').trim()
   return { appId, restKey }
+}
+
+function getConfig() {
+  return getOneSignalConfig()
 }
 
 export function isOneSignalConfigured() {
@@ -46,7 +51,6 @@ export function buildProductionOneSignalBody({ appId, title, message }) {
   return {
     app_id: appId,
     included_segments: [PRODUCTION_SEGMENT],
-    target_channel: 'push',
     headings: { en: String(title).trim() },
     contents: { en: String(message).trim() },
   }
@@ -115,8 +119,20 @@ export async function sendOneSignalNotification(opts, logMeta = {}) {
 
   if (!id || hasErrors) {
     const errMsg = formatOneSignalFailure(res.status, raw)
+    let hint = ''
+    try {
+      const appRes = await fetch(`https://api.onesignal.com/apps/${encodeURIComponent(appId)}`, {
+        headers: { Authorization: `Key ${restKey}` },
+      })
+      const appRaw = await appRes.json().catch(() => ({}))
+      if (appRes.ok) {
+        hint = ` App stats: players=${appRaw?.players ?? '?'}, messageable_players=${appRaw?.messageable_players ?? '?'}.`
+      }
+    } catch {
+      /* ignore */
+    }
     throw new Error(
-      errMsg || `OneSignal: no notification id (likely zero push subscribers in "${PRODUCTION_SEGMENT}")`,
+      (errMsg || `OneSignal: no notification id (likely zero push subscribers in "${PRODUCTION_SEGMENT}")`) + hint,
     )
   }
 

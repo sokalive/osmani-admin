@@ -627,6 +627,7 @@ export const getNotifications = () => adminApiGet('/notifications')
 export const getRuntimeNotifications = (audience = 'all') =>
   apiGet(`/notifications/runtime?audience=${encodeURIComponent(String(audience || 'all'))}`)
 export const postNotification = (body) => adminApiPost('/notifications', body)
+export const getOnesignalDiagnostics = () => adminApiGet('/notifications/onesignal-diagnostics')
 export const putNotification = (id, body) => adminApiPut(`/notifications/${encodeURIComponent(id)}`, body)
 export const deleteNotification = (id) => adminApiDelete(`/notifications/${encodeURIComponent(id)}`)
 export const deleteAllNotifications = () => adminApiRequest('/notifications/all', { method: 'DELETE' })

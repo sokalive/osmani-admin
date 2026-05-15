@@ -119,6 +119,7 @@ restApi.get('/', (_req, res) => {
       '/analytics/presence/stop',
       '/notifications',
       '/notifications/all',
+      '/notifications/onesignal-diagnostics',
       '/notifications/runtime',
       '/runtime/app-modes',
       '/update-check',

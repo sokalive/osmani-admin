@@ -9,6 +9,8 @@ import {
   updateNotificationById,
 } from '../lib/runtimeNotifications.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { fetchOneSignalSubscriptionDiagnostics } from '../lib/oneSignalDiagnostics.js'
+import { isOneSignalConfigured } from '../lib/oneSignalPush.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const notificationsRouter = Router()
@@ -39,6 +41,23 @@ notificationsRouter.get('/notifications', requireAdminPanelAccess, async (_req, 
     res.json(rows)
   } catch (e) {
     console.error('[notifications] GET failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+/** Read-only: app messageable_players, segment subscriber_count, backend vs dashboard request shape. */
+notificationsRouter.get('/notifications/onesignal-diagnostics', requireAdminPanelAccess, async (_req, res) => {
+  try {
+    if (!isOneSignalConfigured()) {
+      return res.status(503).json({
+        error: 'OneSignal is not configured. Set ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY on the server.',
+      })
+    }
+    const report = await fetchOneSignalSubscriptionDiagnostics()
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(report)
+  } catch (e) {
+    console.error('[notifications] onesignal-diagnostics failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
