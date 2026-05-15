@@ -3,7 +3,6 @@
  * @see https://docs.sonicpesa.com/pages/payments.html
  */
 import crypto from 'node:crypto'
-import { formatPhone } from '../../../zenopayClient.js'
 import {
   webhookExplicitFailure,
   webhookSuccess,
@@ -46,12 +45,78 @@ function authHeaders(cred) {
     Accept: 'application/json',
     'X-API-KEY': String(process.env.SONICPESA_API_KEY || cred.apiKey || '').trim(),
   }
+  const secretKey = String(process.env.SONICPESA_SECRET_KEY || '').trim()
+  if (secretKey) headers['X-SECRET-KEY'] = secretKey
   const accountId = String(process.env.SONICPESA_ACCOUNT_ID || cred.accountId || '').trim()
   if (accountId) {
     headers['X-Account-Id'] = accountId
     headers['X-Merchant-Id'] = accountId
   }
   return headers
+}
+
+/** Tanzania MSISDN for SonicPesa body: 255XXXXXXXXX (no +). */
+function sonicBuyerPhone(phone) {
+  let p = String(phone ?? '')
+    .trim()
+    .replace(/\D/g, '')
+  if (!p) return ''
+  if (p.startsWith('0')) p = `255${p.slice(1)}`
+  if (p.startsWith('255')) return p
+  if (p.length === 9) return `255${p}`
+  return p
+}
+
+function maskPhoneForLog(phone) {
+  const p = String(phone ?? '')
+  if (p.length < 8) return '***'
+  return `${p.slice(0, 6)}***${p.slice(-2)}`
+}
+
+function logPayloadForDebug(payload) {
+  return {
+    ...payload,
+    buyer_phone: maskPhoneForLog(payload.buyer_phone),
+  }
+}
+
+/**
+ * SonicPesa may return HTTP 200 with status:"error" — treat body.status and data.order_id.
+ */
+export function isCreateOrderAccepted(httpRes) {
+  if (!httpRes?.ok) return false
+  const body = httpRes.body && typeof httpRes.body === 'object' ? httpRes.body : {}
+  const topStatus = String(body.status ?? '').trim().toLowerCase()
+  if (topStatus === 'error' || topStatus === 'failed') return false
+  if (topStatus === 'success') return true
+  const data = body.data && typeof body.data === 'object' ? body.data : null
+  if (data?.order_id != null && String(data.order_id).trim() !== '') return true
+  if (body.order_id != null && String(body.order_id).trim() !== '') return true
+  if (body.success === true) return true
+  return false
+}
+
+/**
+ * Build POST /payment/create_order JSON per SonicPesa docs (buyer_phone = 255…, no +).
+ */
+export function buildCreateOrderPayload(cred, { phone, amount, orderId, currency = 'TZS' }) {
+  const buyerPhone = sonicBuyerPhone(phone)
+  const amountInt = Math.round(Number(amount))
+  const accountId = String(process.env.SONICPESA_ACCOUNT_ID || cred?.accountId || '').trim()
+  const payload = {
+    buyer_email: String(process.env.SONICPESA_BUYER_EMAIL || 'customer@osmani.tv').trim(),
+    buyer_name: String(process.env.SONICPESA_BUYER_NAME || 'Osmani Customer').trim(),
+    buyer_phone: buyerPhone,
+    amount: amountInt,
+    currency: String(currency || 'TZS').trim() || 'TZS',
+  }
+  if (accountId) payload.account_id = accountId
+  const merchantRef = String(orderId ?? '').trim()
+  if (merchantRef && process.env.SONICPESA_INCLUDE_MERCHANT_REF === '1') {
+    payload.merchant_order_id = merchantRef
+    payload.reference = merchantRef
+  }
+  return { payload, buyerPhone, amountInt, merchantRef }
 }
 
 async function httpJson(url, { method = 'GET', headers = {}, body } = {}) {
@@ -121,38 +186,59 @@ export function normalizeResponse(raw, httpStatus = 0) {
  */
 export async function createOrder(cred, { phone, amount, orderId, currency = 'TZS' }) {
   const url = `${apiBase(cred)}${collectPath()}`
-  const buyerPhone = formatPhone(phone).replace(/^\+/, '')
-  if (!buyerPhone || !buyerPhone.startsWith('255')) {
+  const built = buildCreateOrderPayload(cred, { phone, amount, orderId, currency })
+  const { payload, buyerPhone, amountInt, merchantRef } = built
+  if (!buyerPhone || !buyerPhone.startsWith('255') || buyerPhone.length < 12) {
     return {
       ok: false,
+      httpOk: false,
       status: 0,
-      body: { error: 'buyer_phone must be valid Tanzania +255…' },
+      body: { error: 'buyer_phone must be valid Tanzania 255XXXXXXXXX' },
       normalized: null,
+      requestPayload: payload,
     }
   }
-  const amountInt = Math.round(Number(amount))
   if (!Number.isFinite(amountInt) || amountInt <= 0) {
     return {
       ok: false,
+      httpOk: false,
       status: 0,
       body: { error: 'amount must be a positive integer' },
       normalized: null,
+      requestPayload: payload,
     }
   }
-  const payload = {
-    buyer_phone: buyerPhone,
-    amount: amountInt,
-    currency: String(currency || 'TZS').trim() || 'TZS',
-  }
-  const merchantRef = String(orderId ?? '').trim()
-  if (merchantRef) {
-    payload.merchant_order_id = merchantRef
-    payload.reference = merchantRef
-  }
-  console.log(LOG_PREFIX, 'createOrder', { url, merchantRef, amount: amountInt })
-  const res = await httpJson(url, { method: 'POST', headers: authHeaders(cred), body: payload })
+  const headerMeta = authHeaders(cred)
+  console.log(LOG_PREFIX, 'createOrder request', {
+    url,
+    merchantRef,
+    headers: {
+      'X-API-KEY': headerMeta['X-API-KEY'] ? `${headerMeta['X-API-KEY'].slice(0, 6)}…` : '(missing)',
+      'X-SECRET-KEY': headerMeta['X-SECRET-KEY'] ? '(set)' : '(not set)',
+      'X-Account-Id': headerMeta['X-Account-Id'] || '(not set)',
+    },
+    body: logPayloadForDebug(payload),
+    accountInBody: Boolean(payload.account_id),
+  })
+  const res = await httpJson(url, { method: 'POST', headers: headerMeta, body: payload })
+  const accepted = isCreateOrderAccepted(res)
   const normalized = normalizeResponse(res.body, res.status)
-  return { ...res, normalized, merchantOrderId: merchantRef }
+  console.log(LOG_PREFIX, 'createOrder response', {
+    url,
+    merchantRef,
+    httpStatus: res.status,
+    httpOk: res.ok,
+    accepted,
+    body: res.body,
+  })
+  return {
+    ...res,
+    ok: accepted,
+    httpOk: res.ok,
+    normalized,
+    merchantOrderId: merchantRef,
+    requestPayload: payload,
+  }
 }
 
 /**

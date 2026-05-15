@@ -90,6 +90,13 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       },
     })
     if (!sp.ok) {
+      console.error('[sonicpesa] create-order failed', {
+        orderId,
+        httpStatus: sp.status,
+        httpOk: sp.httpOk,
+        request: sp.requestPayload,
+        response: sp.body,
+      })
       liveSyncBus.publish('analytics.transaction_updated', {
         topics: ['analytics'],
         orderId,
@@ -100,6 +107,8 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
         error: 'SonicPesa payment initiation failed',
         orderId,
         transactionId: tx.id,
+        httpStatus: sp.status,
+        request: sp.requestPayload,
         details: sp.body,
       })
     }
