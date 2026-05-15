@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useLocation, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   Ban,
@@ -23,6 +23,7 @@ import {
   YAxis,
 } from 'recharts'
 import Topbar from '../components/Topbar'
+import SecurityPinModal from '../components/SecurityPinModal'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   deleteSecurityAlert,
@@ -34,6 +35,7 @@ import {
   postSecurityDeviceAction,
   postSecurityDevicesBulkAction,
   postSecurityLogsBulkDelete,
+  postVerifyAdminSecurityPin,
   putSecuritySuite,
   syncStreamUrl,
 } from '../lib/api'
@@ -187,8 +189,12 @@ function pathToTab(pathname) {
 
 function SecurityDashboardPage() {
   const { showToast } = useToast()
+  const navigate = useNavigate()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
+  const [pageUnlocked, setPageUnlocked] = useState(false)
+  const [pinError, setPinError] = useState('')
+  const [pinBusy, setPinBusy] = useState(false)
   const pathTab = pathToTab(location.pathname)
   const queryTab = searchParams.get('tab')
   const tab =
@@ -208,7 +214,38 @@ function SecurityDashboardPage() {
   const [detailDevice, setDetailDevice] = useState(null)
   const [confirm, setConfirm] = useState(null)
 
-  const setTab = (id) => setSearchParams({ tab: id })
+  const setTab = (id) => {
+    if (location.pathname !== '/security') {
+      navigate(`/security?tab=${encodeURIComponent(id)}`, { replace: true })
+      return
+    }
+    setSearchParams({ tab: id })
+  }
+
+  useEffect(() => {
+    setPageUnlocked(false)
+    setPinError('')
+  }, [location.pathname])
+
+  async function handleGatePinSubmit(pin) {
+    setPinBusy(true)
+    setPinError('')
+    try {
+      await postVerifyAdminSecurityPin(pin)
+      setPageUnlocked(true)
+      showToast('success', 'Security Center unlocked')
+    } catch (e) {
+      setPinError(e?.message || 'Incorrect PIN')
+      showToast('error', e?.message || 'Incorrect PIN')
+    } finally {
+      setPinBusy(false)
+    }
+  }
+
+  function handleGateClose() {
+    if (pinBusy) return
+    navigate('/', { replace: true })
+  }
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -232,10 +269,12 @@ function SecurityDashboardPage() {
   }, [levelFilter, search, showToast])
 
   useEffect(() => {
+    if (!pageUnlocked) return
     void loadAll()
-  }, [loadAll])
+  }, [loadAll, pageUnlocked])
 
   useEffect(() => {
+    if (!pageUnlocked) return undefined
     const es = new EventSource(syncStreamUrl(['config']))
     const refresh = () => void loadAll()
     ;[
@@ -247,7 +286,7 @@ function SecurityDashboardPage() {
       'security_event_logged',
     ].forEach((ev) => es.addEventListener(ev, refresh))
     return () => es.close()
-  }, [loadAll])
+  }, [loadAll, pageUnlocked])
 
   const chartData = useMemo(
     () =>
@@ -334,6 +373,29 @@ function SecurityDashboardPage() {
   function toggleAllDevices() {
     setSelectedDevices((prev) =>
       prev.size === devices.length ? new Set() : new Set(devices.map((d) => d.device_id)),
+    )
+  }
+
+  if (!pageUnlocked) {
+    return (
+      <>
+        <Topbar />
+        <main className="mt-6 flex min-h-[50vh] flex-1 flex-col items-center justify-center gap-4 px-4">
+          <Shield className="h-12 w-12 text-cyan-500/60" />
+          <p className="text-center text-sm text-slate-400">
+            Enter the security PIN to open the anti-tamper dashboard.
+          </p>
+        </main>
+        <SecurityPinModal
+          open
+          title="Enter Security PIN"
+          submitLabel="Unlock"
+          errorText={pinError}
+          busy={pinBusy}
+          onClose={handleGateClose}
+          onSubmit={handleGatePinSubmit}
+        />
+      </>
     )
   }
 

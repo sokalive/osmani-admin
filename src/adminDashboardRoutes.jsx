@@ -47,9 +47,21 @@ export const dashboardRouteElements = [
   <Route key="popup-settings" path="popup-settings" element={<PopupSettingsPage />} />,
   <Route key="device-control" path="device-control" element={<DeviceControlPage />} />,
   <Route key="security" path="security" element={<SecurityDashboardPage />} />,
-  <Route key="security-alerts" path="security-alerts" element={<SecurityDashboardPage />} />,
-  <Route key="security-risk" path="security-risk" element={<SecurityDashboardPage />} />,
-  <Route key="security-logs" path="security-logs" element={<SecurityDashboardPage />} />,
+  <Route
+    key="security-alerts"
+    path="security-alerts"
+    element={<Navigate to="/security?tab=alerts" replace />}
+  />,
+  <Route
+    key="security-risk"
+    path="security-risk"
+    element={<Navigate to="/security?tab=risk" replace />}
+  />,
+  <Route
+    key="security-logs"
+    path="security-logs"
+    element={<Navigate to="/security?tab=logs" replace />}
+  />,
   <Route key="transfer-codes" path="transfer-codes" element={<TransferCodesPage />} />,
   <Route key="manual-subscription" path="manual-subscription" element={<ManualSubscriptionPage />} />,
   <Route key="admin-security" path="admin-security" element={<AdminSecurityPage />} />,

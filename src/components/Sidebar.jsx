@@ -3,7 +3,6 @@ import {
   BarChart3,
   Bell,
   Building2,
-  ClipboardList,
   CreditCard,
   Download,
   KeyRound,
@@ -45,8 +44,6 @@ const menuItems = [
   { id: 'popup', label: 'Popup Settings', icon: PanelTopOpen, path: '/popup-settings' },
   { id: 'device', label: 'Device Control', icon: TabletSmartphone, path: '/device-control' },
   { id: 'security', label: 'Security Center', icon: ShieldAlert, path: '/security' },
-  { id: 'security-risk', label: 'Risk Devices', icon: ShieldCheck, path: '/security-risk' },
-  { id: 'security-logs', label: 'Security Logs', icon: ClipboardList, path: '/security-logs' },
   { id: 'transfer', label: 'Transfer Codes', icon: KeyRound, path: '/transfer-codes' },
 ]
 
