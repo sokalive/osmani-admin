@@ -562,7 +562,27 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
        ds.transaction_id,
        (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
        (COALESCE(ds.manual_admin_blocked, false) OR COALESCE(ad.is_blocked, false)) AS blocked_now,
-       ad.block_reason
+       ad.block_reason,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
+         ELSE 0::bigint
+       END AS remaining_seconds,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 3600.0)::int)
+         ELSE 0
+       END AS remaining_hours,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
+         ELSE 0
+       END AS remaining_days,
+       (
+         ds.expires_at IS NOT NULL
+         AND ds.expires_at > now()
+         AND ds.expires_at <= now() + interval '48 hours'
+       ) AS near_expiry
      FROM device_subscriptions ds
      LEFT JOIN admin_devices ad
        ON ad.device_id = ds.device_id

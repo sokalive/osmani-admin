@@ -50,6 +50,14 @@ function normalizeSubscriptionPayload(body) {
         }
       : null
 
+  const remSec = Number(payload.remainingSeconds ?? payload.remaining_seconds ?? 0)
+  const remHr = Number(payload.remainingHours ?? payload.remaining_hours ?? 0)
+  const remDay = Number(payload.remainingDays ?? payload.remaining_days ?? 0)
+  const safeSec = Number.isFinite(remSec) && remSec > 0 ? Math.floor(remSec) : 0
+  const safeHr = Number.isFinite(remHr) && remHr > 0 ? Math.floor(remHr) : 0
+  const safeDay = Number.isFinite(remDay) && remDay > 0 ? Math.floor(remDay) : 0
+  const nearExpiry = payload.nearExpiry === true || payload.near_expiry === true
+
   return {
     active,
     isActive: active,
@@ -69,6 +77,14 @@ function normalizeSubscriptionPayload(body) {
           ? Number(payload.plan_duration_days) || 0
           : null,
     manualGift,
+    remainingSeconds: safeSec,
+    remaining_seconds: safeSec,
+    remainingHours: safeHr,
+    remaining_hours: safeHr,
+    remainingDays: safeDay,
+    remaining_days: safeDay,
+    nearExpiry,
+    near_expiry: nearExpiry,
     playbackAllowed: payload.playbackAllowed === true,
     playbackGateReason: payload.playbackGateReason != null ? String(payload.playbackGateReason) : null,
     plans,

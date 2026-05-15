@@ -71,8 +71,48 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   }
 }
 
+function reminderFieldsFromRow(row) {
+  if (!row) {
+    return {
+      remainingSeconds: 0,
+      remaining_seconds: 0,
+      remainingHours: 0,
+      remaining_hours: 0,
+      remainingDays: 0,
+      remaining_days: 0,
+      nearExpiry: false,
+      near_expiry: false,
+    }
+  }
+  const rs = row.remaining_seconds
+  const remSec = rs != null ? Number(rs) : 0
+  const safeSec = Number.isFinite(remSec) && remSec > 0 ? Math.floor(remSec) : 0
+  const rh = row.remaining_hours
+  const remHr = rh != null ? Number(rh) : 0
+  const rd = row.remaining_days
+  const remDay = rd != null ? Number(rd) : 0
+  return {
+    remainingSeconds: safeSec,
+    remaining_seconds: safeSec,
+    remainingHours: Number.isFinite(remHr) && remHr > 0 ? remHr : 0,
+    remaining_hours: Number.isFinite(remHr) && remHr > 0 ? remHr : 0,
+    remainingDays: Number.isFinite(remDay) && remDay > 0 ? remDay : 0,
+    remaining_days: Number.isFinite(remDay) && remDay > 0 ? remDay : 0,
+    nearExpiry: Boolean(row.near_expiry),
+    near_expiry: Boolean(row.near_expiry),
+  }
+}
+
 function rowToPublicStatus(row) {
-  if (!row) return { active: false, status: null, expiresAt: null }
+  if (!row) {
+    return {
+      active: false,
+      status: null,
+      expiresAt: null,
+      expires_at: null,
+      ...reminderFieldsFromRow(null),
+    }
+  }
   const active = row.active_now === true && row.blocked_now !== true
   const status =
     row.blocked_now === true ? 'blocked' : active ? 'active' : row.status === 'active' ? 'expired' : row.status
@@ -84,8 +124,10 @@ function rowToPublicStatus(row) {
     isActive: active,
     status,
     expiresAt,
+    expires_at: expiresAt,
     blocked: row.blocked_now === true,
     blockReason: row.block_reason ? String(row.block_reason) : null,
+    ...reminderFieldsFromRow(row),
   }
 }
 
@@ -103,7 +145,7 @@ function coercePlanDurationDays(txnSummary) {
 }
 
 export function normalizeVerifyResponse(pub, txnSummary) {
-  const expiresAt = pub.expiresAt ?? null
+  const expiresAt = pub.expiresAt ?? pub.expires_at ?? null
   const amount =
     txnSummary != null && txnSummary.amount != null ? Number(txnSummary.amount) : null
   const currency =
@@ -121,6 +163,7 @@ export function normalizeVerifyResponse(pub, txnSummary) {
 
   return {
     ...pub,
+    expiresAt,
     expires_at: expiresAt,
     amount,
     currency,
@@ -505,7 +548,19 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
 
   const toSsePayload = (row) => {
     const pub = rowToPublicStatus(row)
-    return { isActive: pub.isActive === true, expiresAt: pub.expiresAt ?? null }
+    return {
+      isActive: pub.isActive === true,
+      expiresAt: pub.expiresAt ?? null,
+      expires_at: pub.expires_at ?? null,
+      remainingSeconds: pub.remainingSeconds ?? 0,
+      remaining_seconds: pub.remaining_seconds ?? 0,
+      remainingHours: pub.remainingHours ?? 0,
+      remaining_hours: pub.remaining_hours ?? 0,
+      remainingDays: pub.remainingDays ?? 0,
+      remaining_days: pub.remaining_days ?? 0,
+      nearExpiry: pub.nearExpiry === true,
+      near_expiry: pub.near_expiry === true,
+    }
   }
 
   const send = () => {
