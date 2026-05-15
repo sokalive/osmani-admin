@@ -106,6 +106,7 @@ export async function reconcileOrderWithZenoPay(orderId) {
       out.phase = 'provider_request_failed'
       console.warn('[activation-sync] SonicPesa order-status failed', {
         orderId: shortId(oid),
+        verifyId: shortId(verifyId),
         httpStatus: z.status,
         body: typeof z.body === 'object' ? z.body : String(z.body).slice(0, 200),
       })
@@ -119,6 +120,11 @@ export async function reconcileOrderWithZenoPay(orderId) {
 
     if (nextStatus === txn.status) {
       out.phase = 'still_pending_or_unknown'
+      console.log('[activation-sync] SonicPesa still pending', {
+        orderId: shortId(oid),
+        verifyId: shortId(verifyId),
+        payment_status: z.normalized?.paymentStatus ?? body?.data?.payment_status ?? null,
+      })
       return out
     }
 
@@ -150,6 +156,12 @@ export async function reconcileOrderWithZenoPay(orderId) {
     const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn(txn)
     out.activation = act
     emitIfActivated(act, oid)
+    console.log('[activation-sync] SonicPesa poll completed + activation', {
+      orderId: shortId(oid),
+      reason: act.reason,
+      activated: act.activated === true,
+      deviceId: act.deviceId ? shortId(act.deviceId, 16) : null,
+    })
     return out
   }
 

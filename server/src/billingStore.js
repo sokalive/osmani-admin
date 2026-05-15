@@ -312,6 +312,18 @@ export async function getTransactionByOrderId(orderId) {
   return rows[0] ?? null
 }
 
+/** Lookup by provider order id (SonicPesa `sp_…` stored in external_id). */
+export async function getTransactionByExternalId(externalId) {
+  const id = String(externalId ?? '').trim()
+  if (!id) return null
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT * FROM transactions WHERE external_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [id],
+  )
+  return rows[0] ?? null
+}
+
 export async function updateTransactionByOrderId(orderId, { status, external_id, raw_payload }) {
   const pool = requirePool()
   const { rows } = await pool.query(

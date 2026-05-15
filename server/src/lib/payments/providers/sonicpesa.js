@@ -33,10 +33,9 @@ function collectPath() {
   return p.startsWith('/') ? p : `/${p}`
 }
 
-function verifyPath(orderId) {
-  const oid = encodeURIComponent(String(orderId ?? '').trim())
-  const tpl = String(process.env.SONICPESA_VERIFY_PATH || '/payment/status/{order_id}').trim()
-  return tpl.replace(/\{order_id\}/g, oid).replace(/^([^/])/, '/$1')
+function orderStatusPath() {
+  const p = String(process.env.SONICPESA_ORDER_STATUS_PATH || '/payment/order_status').trim()
+  return p.startsWith('/') ? p : `/${p}`
 }
 
 function authHeaders(cred) {
@@ -154,19 +153,21 @@ export function normalizeResponse(raw, httpStatus = 0) {
     data.order_id ?? data.orderId ?? body.order_id ?? body.orderId ?? '',
   ).trim()
   const paymentStatus = String(
-    data.payment_status ?? data.status ?? body.status ?? '',
+    data.payment_status ?? data.status ?? body.payment_status ?? '',
   ).trim()
   const transId = String(
     data.transid ?? data.transaction_id ?? data.trans_id ?? body.transid ?? '',
   ).trim()
   const message = String(body.message ?? data.message ?? '').trim()
+  /** API wrapper `status:"success"` ≠ paid — only payment_status / webhook helpers decide. */
   const succeeded =
-    String(body.status ?? '').toLowerCase() === 'success' ||
     ['SUCCESS', 'COMPLETED', 'PAID'].includes(paymentStatus.toUpperCase()) ||
     webhookSuccess(body) ||
     webhookSuccess(data)
   const failed =
-    ['FAILED', 'DECLINED', 'CANCELLED', 'REJECTED'].includes(paymentStatus.toUpperCase()) ||
+    ['FAILED', 'DECLINED', 'CANCELLED', 'REJECTED', 'USERCANCELLED'].includes(
+      paymentStatus.toUpperCase(),
+    ) ||
     webhookExplicitFailure(body) ||
     webhookExplicitFailure(data)
   return {
@@ -249,13 +250,25 @@ export async function verifyPayment(cred, orderId) {
   if (!oid) {
     return { ok: false, status: 0, body: { error: 'order_id is required' }, normalized: null }
   }
-  const path = verifyPath(oid)
-  const url = /^https?:\/\//i.test(path)
-    ? path.replace(/\/+$/, '')
-    : `${apiBase(cred)}${path.startsWith('/') ? path : `/${path}`}`
-  console.log(LOG_PREFIX, 'verifyPayment', { url })
-  const res = await httpJson(url, { method: 'GET', headers: authHeaders(cred) })
+  const envFull = String(process.env.SONICPESA_ORDER_STATUS_URL || '').trim()
+  const url = envFull
+    ? envFull.replace(/\/+$/, '')
+    : `${apiBase(cred)}${orderStatusPath()}`
+  const payload = { order_id: oid }
+  console.log(LOG_PREFIX, 'verifyPayment request', { url, order_id: oid })
+  const res = await httpJson(url, {
+    method: 'POST',
+    headers: authHeaders(cred),
+    body: payload,
+  })
   const normalized = normalizeResponse(res.body, res.status)
+  console.log(LOG_PREFIX, 'verifyPayment response', {
+    httpStatus: res.status,
+    payment_status: normalized.paymentStatus,
+    succeeded: normalized.succeeded,
+    failed: normalized.failed,
+    body: res.body,
+  })
   return { ...res, normalized }
 }
 
@@ -289,9 +302,45 @@ export function verifyWebhookSignature(req, body) {
   return a2.length === b2.length && crypto.timingSafeEqual(a2, b2)
 }
 
-function webhookOrderIdFromBody(body) {
+function webhookOrderIdCandidates(body) {
   const o = body && typeof body === 'object' ? body : {}
-  return String(o.order_id ?? o.orderId ?? o.merchant_order_id ?? o.reference ?? '').trim()
+  const nested = [o.data, o.payment, o.payload, o.transaction].filter(
+    (x) => x && typeof x === 'object',
+  )
+  const objs = [o, ...nested]
+  const keys = [
+    'order_id',
+    'orderId',
+    'merchant_order_id',
+    'merchant_reference',
+    'reference',
+    'tx_ref',
+  ]
+  const out = []
+  const seen = new Set()
+  for (const obj of objs) {
+    for (const k of keys) {
+      const v = String(obj[k] ?? '').trim()
+      if (v && !seen.has(v)) {
+        seen.add(v)
+        out.push(v)
+      }
+    }
+  }
+  return out
+}
+
+async function resolveTransactionForWebhook(billing, body) {
+  const ids = webhookOrderIdCandidates(body)
+  for (const id of ids) {
+    const txn = await billing.getTransactionByOrderId(id)
+    if (txn) return { txn, merchantOrderId: String(txn.order_id) }
+  }
+  for (const id of ids) {
+    const txn = await billing.getTransactionByExternalId(id)
+    if (txn) return { txn, merchantOrderId: String(txn.order_id) }
+  }
+  return { txn: null, merchantOrderId: null, candidateIds: ids }
 }
 
 /**
@@ -301,6 +350,11 @@ export async function handleWebhook(req, res, deps) {
   const body = req.body && typeof req.body === 'object' ? req.body : {}
   const { billing, liveSyncBus, deviceSubscriptionBus, recordWebhookMeta } = deps
   try {
+    console.log(LOG_PREFIX, 'webhook received', {
+      candidateIds: webhookOrderIdCandidates(body),
+      payment_status:
+        body?.payment_status ?? body?.data?.payment_status ?? body?.status ?? null,
+    })
     if (!verifyWebhookSignature(req, body)) {
       console.warn(LOG_PREFIX, 'webhook invalid signature')
       return res.status(401).type('text/plain').send('invalid signature')
@@ -308,39 +362,51 @@ export async function handleWebhook(req, res, deps) {
     if (typeof recordWebhookMeta === 'function') {
       await recordWebhookMeta(body)
     }
-    const orderId = webhookOrderIdFromBody(body)
-    if (!orderId) {
-      return res.sendStatus(200)
-    }
-    const txn = await billing.getTransactionByOrderId(orderId)
-    if (!txn) {
-      console.warn(LOG_PREFIX, 'webhook unknown order', orderId)
+    const resolved = await resolveTransactionForWebhook(billing, body)
+    const { txn, merchantOrderId, candidateIds } = resolved
+    if (!txn || !merchantOrderId) {
+      console.warn(LOG_PREFIX, 'webhook unknown order', { candidateIds })
       return res.sendStatus(200)
     }
     const prevPayload = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
     if (prevPayload.payment_provider !== 'sonicpesa') {
-      console.warn(LOG_PREFIX, 'webhook order not sonicpesa', orderId)
+      console.warn(LOG_PREFIX, 'webhook order not sonicpesa', merchantOrderId)
       return res.sendStatus(200)
     }
     if (txn.status === 'completed') {
+      console.log(LOG_PREFIX, 'webhook already completed', merchantOrderId)
       return res.sendStatus(200)
     }
     const ok = sonicPaymentSucceeded(body)
     const fail = sonicExplicitFailure(body)
     const nextStatus = ok ? 'completed' : fail ? 'failed' : txn.status
-    const transId = body.transid ?? body.transaction_id ?? body.external_id
-    await billing.updateTransactionByOrderId(orderId, {
+    const data = body.data && typeof body.data === 'object' ? body.data : body
+    const transId =
+      data.transid ?? data.transaction_id ?? body.transid ?? body.transaction_id ?? body.external_id
+    const providerOrderId = String(data.order_id ?? body.order_id ?? txn.external_id ?? '').trim()
+    console.log(LOG_PREFIX, 'webhook apply', {
+      merchantOrderId,
+      providerOrderId: providerOrderId || null,
+      ok,
+      fail,
+      nextStatus,
+    })
+    await billing.updateTransactionByOrderId(merchantOrderId, {
       status: nextStatus,
-      external_id: transId != null ? String(transId) : txn.external_id,
+      external_id:
+        transId != null
+          ? String(transId)
+          : providerOrderId || txn.external_id,
       raw_payload: {
         ...prevPayload,
+        provider_order_id: providerOrderId || prevPayload.provider_order_id,
         sonic_webhook: body,
         webhookAt: new Date().toISOString(),
       },
     })
     liveSyncBus.publish('analytics.transaction_updated', {
       topics: ['analytics'],
-      orderId,
+      orderId: merchantOrderId,
       status: nextStatus,
       deviceId: txn.device_id,
     })
@@ -348,13 +414,20 @@ export async function handleWebhook(req, res, deps) {
       const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn({
         ...txn,
         status: 'completed',
+        order_id: merchantOrderId,
+      })
+      console.log(LOG_PREFIX, 'webhook activation', {
+        merchantOrderId,
+        activated: act.activated === true,
+        reason: act.reason,
+        deviceId: act.deviceId ? `${String(act.deviceId).slice(0, 12)}…` : null,
       })
       if (!act.skipped && act.deviceId) {
         deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
         liveSyncBus.publish('analytics.subscription_updated', {
           topics: ['analytics'],
           deviceId: act.deviceId,
-          orderId,
+          orderId: merchantOrderId,
         })
       }
     }
