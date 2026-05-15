@@ -1,11 +1,13 @@
 /**
  * Admin panel display-only date/time helpers.
- * Parses ISO/epoch timestamps and formats in the viewer's local timezone (no fixed IANA zone).
+ * Parses ISO timestamps and formats in Africa/Dar_es_Salaam (12-hour, AM/PM).
  * Does not modify stored values or backend behavior.
  */
 
-/** Swahili month names (Mei, Aprili, …); time uses local wall clock. */
-export const ADMIN_DATETIME_LOCALE = 'sw'
+export const ADMIN_DISPLAY_TIMEZONE = 'Africa/Dar_es_Salaam'
+
+/** English labels for consistency with AM/PM in the admin shell. */
+export const ADMIN_DATETIME_LOCALE = 'en-GB'
 
 function coerceDate(value) {
   if (value == null || value === '') return null
@@ -17,13 +19,14 @@ function coerceDate(value) {
 }
 
 /**
- * Full local datetime: "17 Mei 2026 9:15 PM" style (12-hour, locale month names).
+ * Full datetime in Dar es Salaam: e.g. "17 May 2026, 9:15 pm"
  */
 export function formatAdminDateTime(value, { fallback = '—' } = {}) {
   const d = coerceDate(value)
   if (!d) return fallback
   try {
     return new Intl.DateTimeFormat(ADMIN_DATETIME_LOCALE, {
+      timeZone: ADMIN_DISPLAY_TIMEZONE,
       day: 'numeric',
       month: 'long',
       year: 'numeric',
@@ -42,6 +45,7 @@ export function formatAdminDateOnly(value, { fallback = '' } = {}) {
   if (!d) return fallback
   try {
     return new Intl.DateTimeFormat(ADMIN_DATETIME_LOCALE, {
+      timeZone: ADMIN_DISPLAY_TIMEZONE,
       day: 'numeric',
       month: 'long',
       year: 'numeric',
@@ -51,12 +55,13 @@ export function formatAdminDateOnly(value, { fallback = '' } = {}) {
   }
 }
 
-/** Short time for charts / compact UI (local 12-hour). */
+/** Short time for charts / compact UI (12-hour, Dar es Salaam). */
 export function formatAdminTimeShort(value, { fallback = '—' } = {}) {
   const d = coerceDate(value)
   if (!d) return fallback
   try {
     return new Intl.DateTimeFormat(ADMIN_DATETIME_LOCALE, {
+      timeZone: ADMIN_DISPLAY_TIMEZONE,
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,

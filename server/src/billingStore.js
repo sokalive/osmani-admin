@@ -424,8 +424,8 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput) {
 /** --- Subscriptions --- */
 
 /**
- * Expiry at end-of-window: DATE_TRUNC('day', anchor + N days) + 18 hours (DB NOW / TZ consistent).
- * Anchor is subscription stacking baseline for renewals (existing expiry while active; otherwise now).
+ * Voucher-style expiry: expires_at = anchor + (duration_days × 24 hours), using PostgreSQL `now()`.
+ * Anchor = current expires_at while still active (stack renewals), else `now()` (new purchase / lapsed).
  */
 function dbQuery(client) {
   return client && typeof client.query === 'function'
@@ -455,10 +455,7 @@ export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, dur
        SELECT
          anchor.previous_expires_at,
          anchor.anchor_at,
-         (
-           date_trunc('day', anchor.anchor_at + ($2::int * interval '1 day'))
-           + interval '18 hours'
-         )::timestamptz AS computed_expires_at
+         (anchor.anchor_at + ($2::bigint * interval '24 hours'))::timestamptz AS computed_expires_at
        FROM anchor
      )
      SELECT
@@ -485,17 +482,14 @@ export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, dur
 }
 
 /**
- * Expiry at end-of-window from **now** (no stacking — legacy helper).
+ * Exact-duration expiry from **now** (no stacking — legacy helper).
  * Prefer {@link computeDeviceSubscriptionExpiryAfterPurchase} for device activation.
  */
 export async function subscriptionExpiresAtEndOfDay(durationDays) {
   const pool = requirePool()
   const days = Math.max(1, Number(durationDays) || 30)
   const { rows } = await pool.query(
-    `SELECT (
-       date_trunc('day', now() + ($1::int * interval '1 day'))
-       + interval '18 hours'
-     )::timestamptz AS expires_at`,
+    `SELECT (now() + ($1::bigint * interval '24 hours'))::timestamptz AS expires_at`,
     [days],
   )
   const exp = rows[0]?.expires_at

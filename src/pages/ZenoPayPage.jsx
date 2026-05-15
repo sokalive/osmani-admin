@@ -16,6 +16,7 @@ import {
   syncStreamUrl,
   putZenopaySettings,
 } from '../lib/api'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
 function defaultSettings() {
   return {
@@ -725,7 +726,11 @@ function ZenoPayPage() {
                 ) : null}
                 <p>
                   Expires:{' '}
-                  <span className="font-semibold text-white">{subscriptionState.expiresAt || '—'}</span>
+                  <span className="font-semibold text-white">
+                    {subscriptionState.expiresAt
+                      ? formatAdminDateTime(subscriptionState.expiresAt)
+                      : '—'}
+                  </span>
                 </p>
                 <p>
                   Modes:{' '}

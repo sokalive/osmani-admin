@@ -4,6 +4,7 @@ import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deleteUser, deleteUsersBulk, getPlans, getUsers, putUser, syncStreamUrl } from '../lib/api'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
 function inputClass() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
@@ -11,21 +12,6 @@ function inputClass() {
 
 function labelClass() {
   return 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400'
-}
-
-function toEat(iso) {
-  if (!iso) return '-'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '-'
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Africa/Dar_es_Salaam',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(d)
 }
 
 function remainingLabel(expiresAt) {
@@ -450,7 +436,7 @@ function UsersPage() {
                           {r.plan_id != null ? planMap.get(Number(r.plan_id)) || `Plan #${r.plan_id}` : '-'}
                         </td>
                         <td className="px-4 py-3 text-slate-400">{toEat(r.started_at)}</td>
-                        <td className="px-4 py-3 text-slate-400">{toEat(r.expires_at)}</td>
+                        <td className="px-4 py-3 text-slate-400">{formatAdminDateTime(r.expires_at, { fallback: '-' })}</td>
                         <td className="px-4 py-3 text-slate-300">{remainingLabel(r.expires_at)}</td>
                         <td className="px-4 py-3">
                           <span

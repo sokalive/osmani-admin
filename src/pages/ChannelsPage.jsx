@@ -16,6 +16,7 @@ import {
   updateChannelFormData,
 } from '../lib/api'
 import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '../lib/channelApiModel'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
 function reorderById(list, fromId, toId) {
   const next = [...list]
@@ -300,7 +301,8 @@ function ChannelsPage() {
           ) : null}
           {isSubscribed ? (
             <p className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
-              Device subscription active{expiresAt ? ` · until ${expiresAt}` : ''} · playback{' '}
+              Device subscription active
+              {expiresAt ? ` · until ${formatAdminDateTime(expiresAt)}` : ''} · playback{' '}
               {`${playbackAllowed ? 'allowed' : playbackGateReason ? `disabled (${playbackGateReason})` : 'checking'}.`}
             </p>
           ) : blocked ? (
