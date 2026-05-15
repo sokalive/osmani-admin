@@ -72,6 +72,7 @@ export function migrateStoredChannel(c) {
     category,
     bottomTab,
     playerType: normalizePlayerType(c.playerType),
+    sortOrder: Number(c.sortOrder ?? c.sort_order) || 0,
     url: (c.url || '').trim(),
     name: (c.name || '').trim(),
   }
@@ -163,6 +164,12 @@ export function parseChannelInput(body, file, existing = null) {
     referer: str(b.referer),
     userAgent: str(b.userAgent),
     playerType: normalizePlayerType(b.playerType ?? (ex != null ? ex.playerType : 'exo')),
+    sortOrder:
+      b.sortOrder != null || b.sort_order != null
+        ? Number(b.sortOrder ?? b.sort_order) || 0
+        : ex != null
+          ? Number(ex.sortOrder) || 0
+          : 0,
   }
 }
 
@@ -186,6 +193,10 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
     referer: parsed.referer,
     userAgent: parsed.userAgent,
     playerType: normalizePlayerType(parsed.playerType),
+    sortOrder:
+      parsed.sortOrder != null
+        ? Number(parsed.sortOrder) || 0
+        : Number(base.sortOrder) || Number(id) || 0,
     createdAt: base.createdAt || nowIso,
     updatedAt: nowIso,
   }
@@ -285,6 +296,8 @@ export function channelToResponse(c, req) {
     },
     bottomTabsDisplay: bottomTabCsv,
     visibleTabs,
+    sortOrder: Number(m.sortOrder) || 0,
+    sort_order: Number(m.sortOrder) || 0,
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,
     live: Boolean(m.isLive),

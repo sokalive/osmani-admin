@@ -4,6 +4,7 @@ import { hashOtpCode } from './adminFingerprint.js'
 
 export const OTP_PURPOSE_ANALYTICS_RESET = 'analytics_reset'
 export const OTP_PURPOSE_ADMIN_SECURITY_GATE = 'admin_security_gate'
+export const OTP_PURPOSE_ADMIN_SECURITY_DESTRUCTIVE = 'admin_security_destructive'
 
 export const CHALLENGE_TTL_MINUTES = 15
 export const OTP_TTL_MINUTES = 5
@@ -55,6 +56,14 @@ export async function ensureAdminOtpChallengeTables(client) {
     ON analytics_reset_challenges (purpose, completed_at DESC)
     WHERE completed_at IS NOT NULL;
   `)
+  await q.query(`
+    ALTER TABLE analytics_reset_challenges
+    ADD COLUMN IF NOT EXISTS action_type TEXT;
+  `)
+  await q.query(`
+    ALTER TABLE analytics_reset_challenges
+    ADD COLUMN IF NOT EXISTS action_payload JSONB;
+  `)
 }
 
 function hashChallengeToken(token) {
@@ -102,14 +111,18 @@ function challengeOpen(row) {
   return Date.now() - t.getTime() <= CHALLENGE_TTL_MINUTES * 60 * 1000
 }
 
-export async function createOtpChallenge(purpose, meta) {
+export async function createOtpChallenge(purpose, meta, action = null) {
   await ensureAdminOtpChallengeTables()
   const token = generateChallengeToken()
   const tokenHash = hashChallengeToken(token)
+  const actionType = action?.type ? String(action.type).slice(0, 64) : null
+  const actionPayload =
+    action?.payload && typeof action.payload === 'object' ? action.payload : null
   const { rows } = await pool().query(
     `INSERT INTO ${TABLE} (
-       purpose, challenge_token_hash, admin_user_id, admin_email, ip_address, user_agent, device_label, password_verified_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+       purpose, challenge_token_hash, admin_user_id, admin_email, ip_address, user_agent, device_label,
+       password_verified_at, action_type, action_payload
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9::jsonb)
      RETURNING id`,
     [
       purpose,
@@ -119,6 +132,8 @@ export async function createOtpChallenge(purpose, meta) {
       String(meta.ip ?? '').slice(0, 80),
       String(meta.userAgent ?? '').slice(0, 400),
       String(meta.deviceLabel ?? '').slice(0, 200),
+      actionType,
+      actionPayload,
     ],
   )
   return {
@@ -210,6 +225,9 @@ export async function verifyOtpForChallenge(token, otpPlain, purpose) {
     challengeId: String(row.id),
     adminEmail: String(row.admin_email),
     adminUserId: String(row.admin_user_id),
+    actionType: row.action_type ? String(row.action_type) : null,
+    actionPayload:
+      row.action_payload && typeof row.action_payload === 'object' ? row.action_payload : null,
   }
 }
 

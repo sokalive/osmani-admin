@@ -13,8 +13,10 @@ import {
   deleteChannelById,
   getChannelById,
   getNextChannelId,
+  getNextChannelSortOrder,
   insertChannel,
   readChannels,
+  reorderChannels,
   updateChannel,
 } from '../store.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
@@ -61,8 +63,7 @@ channelsRouter.get('/', async (req, res) => {
   const t0 = Date.now()
   try {
     const list = await readChannels()
-    const sorted = [...list].sort((a, b) => Number(a.id) - Number(b.id))
-    const payload = sorted.map((c) => {
+    const payload = list.map((c) => {
       const api = channelToResponse(c, req)
       logChannelStreamDiagGet(c, api, {
         db_read_to_response_ms: Date.now() - t0,
@@ -92,8 +93,9 @@ channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) 
       return res.status(400).json({ error: 'name and url (stream URL) are required' })
     }
     const nextId = await getNextChannelId()
+    const sortOrder = await getNextChannelSortOrder()
     const now = new Date().toISOString()
-    const created = mergeChannelRecord(null, parsed, nextId, now)
+    const created = mergeChannelRecord(null, { ...parsed, sortOrder }, nextId, now)
     await insertChannel(created)
     liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('created', created.id))
     void triggerServerHealthBroadcast().catch((err) => {
@@ -104,6 +106,28 @@ channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) 
     res.status(201).json(createdBody)
   } catch (e) {
     console.error('[channels] POST / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+channelsRouter.post('/reorder', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const orders = Array.isArray(body.orders) ? body.orders : []
+    if (orders.length === 0) {
+      return res.status(400).json({ error: 'orders array required' })
+    }
+    const updated = await reorderChannels(orders)
+    liveSyncBus.publish(
+      'config.channels_changed',
+      channelCatalogSyncPayload('reordered', null),
+    )
+    void triggerServerHealthBroadcast().catch((err) => {
+      console.error('[channels] health refresh after reorder failed:', err)
+    })
+    res.json({ ok: true, updated })
+  } catch (e) {
+    console.error('[channels] POST /reorder failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

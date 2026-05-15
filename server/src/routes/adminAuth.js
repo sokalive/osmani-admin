@@ -6,6 +6,7 @@ import { adminAuthAudit } from '../lib/adminAuthAudit.js'
 import { signAdminJwt, verifyAdminJwt } from '../lib/adminJwt.js'
 import { sendAdminOtpEmail, sendAdminSecurityGateOtpEmail } from '../lib/resendOtpMail.js'
 import {
+  OTP_PURPOSE_ADMIN_SECURITY_DESTRUCTIVE,
   OTP_PURPOSE_ADMIN_SECURITY_GATE,
   adminAlertEmail,
   createOtpChallenge,
@@ -14,6 +15,7 @@ import {
   verifyOtpForChallenge,
   CHALLENGE_TTL_MINUTES,
 } from '../lib/adminOtpChallengeStore.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { isAdminPanelAuthRequired } from '../middleware/adminPanelAuthGate.js'
 import {
   adminSecurityPinFromBody,
@@ -645,6 +647,221 @@ adminAuthRouter.post('/admin-security/verify-otp', attachAdminReq, async (req, r
     res.status(status).json({ ok: false, error: msg })
   }
 })
+
+const DESTRUCTIVE_DELETE_DEVICES = 'delete_devices'
+const DESTRUCTIVE_DELETE_ALL_LOGS = 'delete_all_security_logs'
+
+function emitSecurityLogsSync(payload) {
+  liveSyncBus.publish('security_logs_changed', {
+    topics: ['config'],
+    ...payload,
+    synced_at: new Date().toISOString(),
+  })
+  liveSyncBus.publish('security_alerts_changed', {
+    topics: ['config'],
+    ...payload,
+    synced_at: new Date().toISOString(),
+  })
+}
+
+function parseDestructiveAction(body) {
+  const b = body && typeof body === 'object' ? body : {}
+  const action = String(b.action ?? '').trim()
+  if (action === DESTRUCTIVE_DELETE_DEVICES) {
+    const ids = Array.isArray(b.deviceIds ?? b.device_ids)
+      ? (b.deviceIds ?? b.device_ids).map((x) => String(x).trim()).filter(Boolean)
+      : []
+    if (ids.length === 0) throw new Error('deviceIds required')
+    return { type: DESTRUCTIVE_DELETE_DEVICES, payload: { deviceIds: ids } }
+  }
+  if (action === DESTRUCTIVE_DELETE_ALL_LOGS) {
+    return { type: DESTRUCTIVE_DELETE_ALL_LOGS, payload: {} }
+  }
+  throw new Error('Invalid destructive action')
+}
+
+adminAuthRouter.post(
+  '/admin-security/destructive/start',
+  attachAdminReq,
+  requireAdminSecurityPageGate,
+  async (req, res) => {
+    const pool = getPool()
+    try {
+      const pin = adminSecurityPinFromBody(req)
+      if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+      if (!verifyAdminSecurityPin(pin)) {
+        adminAuthAudit('security_pin_denied', { email: req.adminEmail, gate: 'destructive' })
+        return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+      }
+
+      const action = parseDestructiveAction(req.body)
+      const meta = adminSecurityMeta(req)
+      const challenge = await createOtpChallenge(
+        OTP_PURPOSE_ADMIN_SECURITY_DESTRUCTIVE,
+        meta,
+        action,
+      )
+      const alertTo = adminAlertEmail()
+      if (!alertTo) {
+        return res.status(503).json({ ok: false, error: 'ADMIN_ALERT_EMAIL is not configured' })
+      }
+
+      const issued = await issueOtpForChallenge(
+        challenge.challengeToken,
+        OTP_PURPOSE_ADMIN_SECURITY_DESTRUCTIVE,
+      )
+      const mailed = await sendAdminSecurityGateOtpEmail({ to: alertTo, otp: issued.otp })
+      if (!mailed.ok) {
+        return res.status(503).json({ ok: false, error: 'Could not send OTP email (check Resend configuration)' })
+      }
+
+      await logOtpSecurityEvent(pool, {
+        actor: meta.adminEmail,
+        eventType: 'Admin Security destructive OTP sent',
+        status: 'completed',
+        detail: `Action: ${action.type}`,
+        metadata: { ip: meta.ip, action: action.type, challenge_id: challenge.challengeId },
+      })
+
+      res.json({
+        ok: true,
+        challengeToken: challenge.challengeToken,
+        maskedEmail: maskAlertEmail(alertTo),
+        resendAvailableAt: issued.resendAvailableAt,
+        action: action.type,
+      })
+    } catch (e) {
+      console.error('[admin-security] destructive/start', e)
+      res.status(400).json({ ok: false, error: String(e.message || e) })
+    }
+  },
+)
+
+adminAuthRouter.post(
+  '/admin-security/destructive/resend-otp',
+  attachAdminReq,
+  requireAdminSecurityPageGate,
+  async (req, res) => {
+    const pool = getPool()
+    try {
+      const challengeToken = String(req.body?.challengeToken ?? req.body?.challenge_token ?? '').trim()
+      if (!challengeToken) return res.status(400).json({ ok: false, error: 'challengeToken required' })
+      const alertTo = adminAlertEmail()
+      if (!alertTo) return res.status(503).json({ ok: false, error: 'ADMIN_ALERT_EMAIL not configured' })
+
+      const issued = await issueOtpForChallenge(
+        challengeToken,
+        OTP_PURPOSE_ADMIN_SECURITY_DESTRUCTIVE,
+      )
+      const mailed = await sendAdminSecurityGateOtpEmail({ to: alertTo, otp: issued.otp })
+      if (!mailed.ok) {
+        return res.status(503).json({ ok: false, error: 'Could not send OTP email' })
+      }
+
+      await logOtpSecurityEvent(pool, {
+        actor: req.adminEmail,
+        eventType: 'Admin Security destructive OTP resent',
+        status: 'completed',
+        detail: `OTP resent to ${alertTo}`,
+        metadata: { ip: clientIp(req), challenge_id: issued.challengeId, resend: true },
+      })
+
+      res.json({
+        ok: true,
+        maskedEmail: maskAlertEmail(alertTo),
+        resendAvailableAt: issued.resendAvailableAt,
+      })
+    } catch (e) {
+      const status = String(e.message || '').includes('wait') ? 429 : 400
+      res.status(status).json({ ok: false, error: String(e.message || e) })
+    }
+  },
+)
+
+adminAuthRouter.post(
+  '/admin-security/destructive/execute',
+  attachAdminReq,
+  requireAdminSecurityPageGate,
+  async (req, res) => {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })
+    try {
+      const challengeToken = String(req.body?.challengeToken ?? req.body?.challenge_token ?? '').trim()
+      const otp = String(req.body?.otp ?? req.body?.code ?? '').trim()
+      const confirmCurrent =
+        req.body?.confirm_current_device === true || req.body?.confirmCurrentDevice === true
+      if (!challengeToken || !otp) {
+        return res.status(400).json({ ok: false, error: 'challengeToken and otp required' })
+      }
+
+      const verified = await verifyOtpForChallenge(
+        challengeToken,
+        otp,
+        OTP_PURPOSE_ADMIN_SECURITY_DESTRUCTIVE,
+      )
+      const actionType = verified.actionType
+      const payload = verified.actionPayload || {}
+
+      if (actionType === DESTRUCTIVE_DELETE_DEVICES) {
+        const deviceIds = Array.isArray(payload.deviceIds)
+          ? payload.deviceIds.map((x) => String(x).trim()).filter(Boolean)
+          : []
+        if (deviceIds.length === 0) {
+          return res.status(400).json({ ok: false, error: 'No devices in challenge' })
+        }
+        const curHash = currentSessionFingerprintHash(req)
+        for (const id of deviceIds) {
+          const row = await authStore.getTrustedDeviceRowById(id, req.adminUserId)
+          if (row?.device_fingerprint_hash === curHash && !confirmCurrent) {
+            return sendCurrentDeviceConfirm(res)
+          }
+        }
+        const deleted = await authStore.deleteTrustedDevicesBulk(deviceIds, req.adminUserId)
+        adminAuthAudit('devices_bulk_removed', {
+          email: req.adminEmail,
+          count: deleted,
+          device_ids: deviceIds,
+        })
+        await logOtpSecurityEvent(pool, {
+          actor: req.adminEmail,
+          eventType: 'Admin Security bulk device delete',
+          status: 'completed',
+          detail: `Removed ${deleted} trusted device(s)`,
+          metadata: { ip: clientIp(req), deleted, device_ids: deviceIds },
+        })
+        return res.json({ ok: true, deleted, action: actionType })
+      }
+
+      if (actionType === DESTRUCTIVE_DELETE_ALL_LOGS) {
+        const out = await pool.query(`DELETE FROM security_events`)
+        const deleted = Number(out.rowCount) || 0
+        emitSecurityLogsSync({ action: 'bulk_delete', deleted, mode: 'all', source: 'admin_security' })
+        await logOtpSecurityEvent(pool, {
+          actor: req.adminEmail,
+          eventType: 'Admin Security cleared all security logs',
+          status: 'completed',
+          detail: `Deleted ${deleted} security log row(s)`,
+          metadata: { ip: clientIp(req), deleted },
+        })
+        adminAuthAudit('security_logs_cleared', { email: req.adminEmail, deleted })
+        return res.json({ ok: true, deleted, action: actionType })
+      }
+
+      return res.status(400).json({ ok: false, error: 'Unknown destructive action' })
+    } catch (e) {
+      const msg = String(e.message || e)
+      await logOtpSecurityEvent(pool, {
+        actor: req.adminEmail,
+        eventType: 'Admin Security destructive action failed',
+        status: 'failed',
+        detail: msg,
+        metadata: { ip: clientIp(req) },
+      }).catch(() => {})
+      const status = msg.includes('expired') || msg.includes('Invalid') ? 403 : 400
+      res.status(status).json({ ok: false, error: msg })
+    }
+  },
+)
 
 adminAuthRouter.get('/devices', attachAdminReq, requireAdminSecurityPageGate, async (req, res) => {
   try {

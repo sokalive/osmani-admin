@@ -28,6 +28,7 @@ function rowToChannel(row) {
     referer: row.referer ?? '',
     userAgent: row.user_agent ?? '',
     playerType: normalizePlayerType(row.player_type),
+    sortOrder: Number(row.sort_order) || 0,
     createdAt: ca instanceof Date ? ca.toISOString() : ca,
     updatedAt: ua instanceof Date ? ua.toISOString() : ua,
   }
@@ -52,6 +53,7 @@ function channelToRowParams(c) {
     c.referer ?? '',
     c.userAgent ?? '',
     normalizePlayerType(c.playerType),
+    Number(c.sortOrder) || 0,
     c.createdAt ?? new Date().toISOString(),
     c.updatedAt ?? new Date().toISOString(),
   ]
@@ -77,8 +79,8 @@ export async function readChannels() {
   const { rows } = await pool.query(
     `SELECT id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
             access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
-            created_at, updated_at
-     FROM channels ORDER BY id ASC`,
+            sort_order, created_at, updated_at
+     FROM channels ORDER BY sort_order ASC, id ASC`,
   )
   return rows.map(rowToChannel)
 }
@@ -96,7 +98,7 @@ export async function getChannelById(id) {
   const { rows } = await pool.query(
     `SELECT id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
             access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
-            created_at, updated_at
+            sort_order, created_at, updated_at
      FROM channels WHERE id = $1`,
     [Number(id)],
   )
@@ -111,8 +113,8 @@ export async function insertChannel(c) {
     `INSERT INTO channels (
        id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
        access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
-       created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::timestamptz,$19::timestamptz)`,
+       sort_order, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::timestamptz,$20::timestamptz)`,
     p,
   )
 }
@@ -126,7 +128,7 @@ export async function updateChannel(c) {
        name = $2, url = $3, thumbnail = $4, category = $5, bottom_tab = $6,
        is_live = $7, is_hd = $8, is_active = $9, show_in_app = $10, access_type = $11,
        backup_stream_1 = $12, backup_stream_2 = $13, origin = $14, referer = $15, user_agent = $16,
-       player_type = $17, created_at = $18::timestamptz, updated_at = $19::timestamptz
+       player_type = $17, sort_order = $18, created_at = $19::timestamptz, updated_at = $20::timestamptz
      WHERE id = $1`,
     p,
   )
@@ -136,6 +138,42 @@ export async function deleteChannelById(id) {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
   await pool.query('DELETE FROM channels WHERE id = $1', [Number(id)])
+}
+
+export async function reorderChannels(orders) {
+  const pool = getPool()
+  if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
+  const list = Array.isArray(orders) ? orders : []
+  if (list.length === 0) return 0
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    let n = 0
+    for (const item of list) {
+      const id = Number(item?.id)
+      const sortOrder = Number(item?.sortOrder ?? item?.sort_order)
+      if (!Number.isFinite(id) || !Number.isFinite(sortOrder)) continue
+      await client.query(
+        `UPDATE channels SET sort_order = $2, updated_at = now() WHERE id = $1`,
+        [id, sortOrder],
+      )
+      n += 1
+    }
+    await client.query('COMMIT')
+    return n
+  } catch (e) {
+    await client.query('ROLLBACK')
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
+export async function getNextChannelSortOrder() {
+  const pool = getPool()
+  if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
+  const { rows } = await pool.query(`SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM channels`)
+  return Number(rows[0]?.n ?? 1)
 }
 
 /**

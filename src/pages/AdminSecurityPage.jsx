@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import SecurityPinModal from '../components/SecurityPinModal'
 import AdminSecurityOtpModal from '../components/AdminSecurityOtpModal'
+import AdminSecurityConfirmModal from '../components/AdminSecurityConfirmModal'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   ApiError,
@@ -13,10 +14,14 @@ import {
   postAdminDeviceBlock,
   postAdminDeviceForceOtp,
   postAdminDeviceUnblock,
+  postAdminSecurityDestructiveExecute,
+  postAdminSecurityDestructiveResendOtp,
+  postAdminSecurityDestructiveStart,
   postAdminSecurityResendOtp,
   postAdminSecurityVerifyOtp,
   postAdminSecurityVerifyPin,
   setAdminSecurityGateToken,
+  syncStreamUrl,
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
@@ -40,6 +45,22 @@ export default function AdminSecurityPage() {
   const [pinError, setPinError] = useState('')
   const [pinBusy, setPinBusy] = useState(false)
 
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [pendingDestructive, setPendingDestructive] = useState(null)
+  const [destructiveOtpOpen, setDestructiveOtpOpen] = useState(false)
+  const [destructiveChallengeToken, setDestructiveChallengeToken] = useState('')
+  const [destructiveMaskedEmail, setDestructiveMaskedEmail] = useState('')
+  const [destructiveResendAt, setDestructiveResendAt] = useState('')
+  const [destructiveOtpError, setDestructiveOtpError] = useState('')
+  const [destructiveBusy, setDestructiveBusy] = useState(false)
+  const [confirmBusy, setConfirmBusy] = useState(false)
+
+  const allSelected = useMemo(
+    () => rows.length > 0 && rows.every((r) => selectedIds.has(r.id)),
+    [rows, selectedIds],
+  )
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -62,6 +83,16 @@ export default function AdminSecurityPage() {
   useEffect(() => {
     if (pageUnlocked) void load()
   }, [pageUnlocked, load])
+
+  useEffect(() => {
+    if (!pageUnlocked) return undefined
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onLogs = () => {
+      showToast('info', 'Security logs updated (SSE)')
+    }
+    es.addEventListener('security_logs_changed', onLogs)
+    return () => es.close()
+  }, [pageUnlocked, showToast])
 
   useEffect(() => {
     if (!pageUnlocked && !otpModalOpen) {
@@ -140,6 +171,153 @@ export default function AdminSecurityPage() {
     setPinModal(null)
     setOtpModalOpen(false)
     setChallengeToken('')
+  }
+
+  function toggleSelectAll() {
+    if (allSelected) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(rows.map((r) => r.id)))
+    }
+  }
+
+  function toggleRowSelected(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function requestDeleteSelected() {
+    const ids = rows.filter((r) => selectedIds.has(r.id)).map((r) => r.id)
+    if (ids.length === 0) {
+      showToast('error', 'Chagua angalau kifaa kimoja')
+      return
+    }
+    setPendingDestructive({
+      action: 'delete_devices',
+      deviceIds: ids,
+      title: 'Futa vifaa vilivyochaguliwa',
+      message: `Unaondoa vifaa ${ids.length} vinavyoaminiwa. Hatua hii haiwezi kutenduliwa.`,
+      requireTyped: false,
+    })
+    setConfirmOpen(true)
+  }
+
+  function requestDeleteAllLogs() {
+    setPendingDestructive({
+      action: 'delete_all_security_logs',
+      title: 'Futa rekodi zote za usalama',
+      message:
+        'Hii itafuta rekodi zote za security_events (logs/alerts). Haiathiri usajili wala vifaa vinavyoaminiwa.',
+      requireTyped: true,
+    })
+    setConfirmOpen(true)
+  }
+
+  function closeDestructiveFlow() {
+    setConfirmOpen(false)
+    setPendingDestructive(null)
+    setDestructiveOtpOpen(false)
+    setDestructiveChallengeToken('')
+    setDestructiveOtpError('')
+    setConfirmBusy(false)
+    setDestructiveBusy(false)
+  }
+
+  function onConfirmDestructive() {
+    setConfirmOpen(false)
+    setPinError('')
+    setPinModal({ kind: 'destructive' })
+  }
+
+  async function handleDestructivePinSubmit(pin) {
+    if (!pendingDestructive) return
+    setPinBusy(true)
+    setPinError('')
+    try {
+      const out = await postAdminSecurityDestructiveStart({
+        securityPin: pin,
+        action: pendingDestructive.action,
+        deviceIds: pendingDestructive.deviceIds,
+      })
+      setDestructiveChallengeToken(out.challengeToken || '')
+      setDestructiveMaskedEmail(out.maskedEmail || '')
+      setDestructiveResendAt(out.resendAvailableAt || '')
+      setDestructiveOtpError('')
+      setPinModal(null)
+      setDestructiveOtpOpen(true)
+      showToast('success', 'OTP imetumwa kwa uthibitishaji wa hatua hii')
+    } catch (e) {
+      setPinError(e?.message || 'PIN si sahihi')
+    } finally {
+      setPinBusy(false)
+    }
+  }
+
+  async function handleDestructiveOtpResend() {
+    if (!destructiveChallengeToken) return
+    setDestructiveBusy(true)
+    setDestructiveOtpError('')
+    try {
+      const out = await postAdminSecurityDestructiveResendOtp({
+        challengeToken: destructiveChallengeToken,
+      })
+      setDestructiveMaskedEmail(out.maskedEmail || destructiveMaskedEmail)
+      setDestructiveResendAt(out.resendAvailableAt || '')
+      showToast('success', 'OTP imetumwa tena')
+    } catch (e) {
+      setDestructiveOtpError(e?.message || 'Haikuwezekana kutuma OTP tena')
+    } finally {
+      setDestructiveBusy(false)
+    }
+  }
+
+  async function handleDestructiveOtpSubmit(code) {
+    if (!destructiveChallengeToken || !pendingDestructive) return
+    setDestructiveBusy(true)
+    setDestructiveOtpError('')
+    try {
+      const run = (confirmCurrent) =>
+        postAdminSecurityDestructiveExecute({
+          challengeToken: destructiveChallengeToken,
+          otp: code,
+          confirmCurrentDevice: confirmCurrent,
+        })
+      let out
+      try {
+        out = await run(false)
+      } catch (e) {
+        if (!(e instanceof ApiError)) throw e
+        const errCode = e.body && typeof e.body === 'object' ? e.body.code : undefined
+        if (e.status === 409 && errCode === 'CONFIRM_CURRENT_DEVICE') {
+          const ok = window.confirm(
+            'Baadhi ya vifaa vilivyochaguliwa ni kifaa unachokitumia sasa. Endelea?',
+          )
+          if (!ok) return
+          out = await run(true)
+        } else {
+          throw e
+        }
+      }
+      showToast(
+        'success',
+        pendingDestructive.action === 'delete_all_security_logs'
+          ? `Imefutwa rekodi ${out.deleted ?? 0}`
+          : `Imeondolewa vifaa ${out.deleted ?? 0}`,
+      )
+      setSelectedIds(new Set())
+      closeDestructiveFlow()
+      await load()
+    } catch (e) {
+      const msg = e?.message || 'Imeshindikana'
+      setDestructiveOtpError(msg)
+      showToast('error', msg)
+    } finally {
+      setDestructiveBusy(false)
+    }
   }
 
   function openActionModal(run) {
@@ -221,6 +399,42 @@ export default function AdminSecurityPage() {
         }}
         onSubmit={handleActionPinSubmit}
       />
+      <SecurityPinModal
+        open={pinModalKind === 'destructive'}
+        title="PIN kwa hatua hatari"
+        errorText={pinError}
+        busy={pinBusy}
+        onClose={() => {
+          if (!pinBusy) {
+            setPinModal(null)
+            closeDestructiveFlow()
+          }
+        }}
+        onSubmit={handleDestructivePinSubmit}
+      />
+      <AdminSecurityOtpModal
+        open={destructiveOtpOpen}
+        maskedEmail={destructiveMaskedEmail}
+        resendAvailableAt={destructiveResendAt}
+        errorText={destructiveOtpError}
+        busy={destructiveBusy}
+        onClose={() => {
+          if (!destructiveBusy) closeDestructiveFlow()
+        }}
+        onSubmit={handleDestructiveOtpSubmit}
+        onResend={handleDestructiveOtpResend}
+      />
+      <AdminSecurityConfirmModal
+        open={confirmOpen}
+        title={pendingDestructive?.title ?? ''}
+        message={pendingDestructive?.message ?? ''}
+        requireTyped={pendingDestructive?.requireTyped === true}
+        busy={confirmBusy}
+        onClose={() => {
+          if (!confirmBusy) closeDestructiveFlow()
+        }}
+        onConfirm={onConfirmDestructive}
+      />
 
       <Topbar />
       <main className="mt-6 flex min-h-0 flex-1 flex-col gap-6">
@@ -263,6 +477,22 @@ export default function AdminSecurityPage() {
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
+                  disabled={loading || selectedIds.size === 0 || destructiveBusy}
+                  onClick={requestDeleteSelected}
+                  className="rounded-xl border border-rose-500/40 bg-rose-950/40 px-4 py-2 text-sm font-semibold text-rose-100 hover:bg-rose-900/40 disabled:opacity-40"
+                >
+                  Delete Selected ({selectedIds.size})
+                </button>
+                <button
+                  type="button"
+                  disabled={loading || destructiveBusy}
+                  onClick={requestDeleteAllLogs}
+                  className="rounded-xl border border-rose-500/40 bg-rose-950/40 px-4 py-2 text-sm font-semibold text-rose-100 hover:bg-rose-900/40 disabled:opacity-40"
+                >
+                  Delete All Sessions/Logs
+                </button>
+                <button
+                  type="button"
                   disabled={loading}
                   onClick={() => void load()}
                   className="rounded-xl border border-slate-600 bg-slate-900/80 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
@@ -280,9 +510,18 @@ export default function AdminSecurityPage() {
             </header>
 
             <section className="overflow-x-auto rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
-              <table className="min-w-[920px] w-full border-collapse text-left text-sm">
+              <table className="min-w-[980px] w-full border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-700/60 bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+                    <th className="w-10 px-3 py-3">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={toggleSelectAll}
+                        aria-label="Chagua vyote"
+                        className="h-4 w-4 rounded border-slate-500"
+                      />
+                    </th>
                     <th className="px-3 py-3 font-semibold">Kifaa</th>
                     <th className="px-3 py-3 font-semibold">Browser</th>
                     <th className="px-3 py-3 font-semibold">IP</th>
@@ -295,13 +534,13 @@ export default function AdminSecurityPage() {
                 <tbody className="divide-y divide-slate-800/80">
                   {loading && rows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-3 py-10 text-center text-slate-500">
+                      <td colSpan={8} className="px-3 py-10 text-center text-slate-500">
                         Inapakia…
                       </td>
                     </tr>
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-3 py-10 text-center text-slate-500">
+                      <td colSpan={8} className="px-3 py-10 text-center text-slate-500">
                         Hakuna vifaa bado.
                       </td>
                     </tr>
@@ -311,6 +550,15 @@ export default function AdminSecurityPage() {
                       const b = busyId === r.id
                       return (
                         <tr key={r.id} className="bg-slate-950/20 hover:bg-slate-900/40">
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(r.id)}
+                              onChange={() => toggleRowSelected(r.id)}
+                              aria-label={`Chagua ${r.deviceName || 'kifaa'}`}
+                              className="h-4 w-4 rounded border-slate-500"
+                            />
+                          </td>
                           <td className="px-3 py-2.5">
                             <span className="text-slate-200">{r.deviceName || '—'}</span>
                             {r.isCurrentDevice ? (

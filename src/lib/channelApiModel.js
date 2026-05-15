@@ -70,6 +70,7 @@ export function uiFromApiRow(c) {
 
   return {
     id: String(c.id),
+    sortOrder: Number(c.sortOrder ?? c.sort_order) || 0,
     name: c.name ?? '',
     category,
     displaySection: category,
@@ -194,5 +195,6 @@ export function apiBodyFromUiChannel(ch) {
     isActive: Boolean(ch.active),
     showInApp: ch.showInApp !== false,
     thumbnailUrl: ch.thumbnailUrl ?? null,
+    sortOrder: Number(ch.sortOrder) || 0,
   }
 }

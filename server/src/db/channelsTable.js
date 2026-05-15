@@ -27,4 +27,13 @@ export async function ensureChannelsTable(client) {
       CONSTRAINT channels_access_type_check CHECK (access_type IN ('free', 'premium'))
     );
   `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+  `)
+  await client.query(`
+    UPDATE channels SET sort_order = id WHERE sort_order IS NULL OR sort_order = 0;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS channels_sort_order_idx ON channels (sort_order ASC, id ASC);
+  `)
 }

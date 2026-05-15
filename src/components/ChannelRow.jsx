@@ -1,4 +1,4 @@
-import { Pencil, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, GripVertical, Pencil, Trash2 } from 'lucide-react'
 import ToggleSwitch from './ToggleSwitch'
 
 function ChannelRow({
@@ -9,8 +9,21 @@ function ChannelRow({
   onEdit,
   onDelete,
   justAdded = false,
+  reorderDisabled = false,
+  dragChannelId,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+  onMoveUp,
+  onMoveDown,
+  onMoveTop,
+  onMoveBottom,
+  canMoveUp = false,
+  canMoveDown = false,
 }) {
   const premium = channel.accessPremium === true
+  const dragging = dragChannelId === channel.id
 
   return (
     <tr
@@ -18,9 +31,11 @@ function ChannelRow({
         justAdded
           ? 'bg-amber-500/[0.12] shadow-[0_0_24px_rgba(251,191,36,0.12)] ring-1 ring-amber-400/40 ring-inset'
           : ''
-      }`}
+      } ${dragging ? 'bg-amber-500/10 ring-1 ring-amber-400/30 ring-inset' : ''}`}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
-      <td className="w-12 px-5 py-5 align-middle">
+      <td className="w-12 px-3 py-5 align-middle">
         <input
           type="checkbox"
           checked={selected}
@@ -28,6 +43,41 @@ function ChannelRow({
           className="h-4 w-4 rounded border-slate-500/80 bg-slate-900/80 text-emerald-500 focus:ring-emerald-500/40 focus:ring-offset-0 focus:ring-offset-transparent"
           aria-label={`Select ${channel.name}`}
         />
+      </td>
+      <td className="w-24 px-2 py-5 align-middle">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            draggable={!reorderDisabled}
+            disabled={reorderDisabled}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-white/10 hover:text-amber-300 disabled:cursor-not-allowed disabled:opacity-30"
+            aria-label={`Drag ${channel.name}`}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+          <div className="flex flex-col">
+            <button
+              type="button"
+              disabled={!canMoveUp || reorderDisabled}
+              onClick={onMoveUp}
+              className="rounded p-0.5 text-slate-500 hover:text-cyan-300 disabled:opacity-30"
+              aria-label="Move up"
+            >
+              <ArrowUp className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              disabled={!canMoveDown || reorderDisabled}
+              onClick={onMoveDown}
+              className="rounded p-0.5 text-slate-500 hover:text-cyan-300 disabled:opacity-30"
+              aria-label="Move down"
+            >
+              <ArrowDown className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
       </td>
       <td className="min-w-[200px] px-5 py-5 align-middle">
         <div className="flex min-w-0 items-center gap-4">
@@ -97,8 +147,26 @@ function ChannelRow({
           </span>
         )}
       </td>
-      <td className="w-28 px-5 py-5 align-middle">
-        <div className="flex items-center gap-1">
+      <td className="w-36 px-3 py-5 align-middle">
+        <div className="flex flex-wrap items-center gap-1">
+          <button
+            type="button"
+            disabled={reorderDisabled}
+            onClick={onMoveTop}
+            className="rounded-md border border-slate-600/60 px-1.5 py-1 text-[10px] font-bold text-slate-400 hover:bg-slate-800 disabled:opacity-30"
+            title="Move to top"
+          >
+            <ChevronsUp className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            disabled={reorderDisabled}
+            onClick={onMoveBottom}
+            className="rounded-md border border-slate-600/60 px-1.5 py-1 text-[10px] font-bold text-slate-400 hover:bg-slate-800 disabled:opacity-30"
+            title="Move to bottom"
+          >
+            <ChevronsDown className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={onEdit}

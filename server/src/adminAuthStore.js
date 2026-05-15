@@ -159,6 +159,16 @@ export async function deleteTrustedDevice(deviceId, userId) {
   return Number(rowCount) > 0
 }
 
+export async function deleteTrustedDevicesBulk(deviceIds, userId) {
+  const ids = Array.isArray(deviceIds) ? deviceIds.map((x) => String(x).trim()).filter(Boolean) : []
+  if (ids.length === 0) return 0
+  const { rowCount } = await pool().query(
+    `DELETE FROM admin_panel_trusted_devices WHERE admin_user_id = $1 AND id = ANY($2::uuid[])`,
+    [userId, ids],
+  )
+  return Number(rowCount) || 0
+}
+
 export async function setDeviceForceOtp(deviceId, userId, force = true) {
   const { rowCount } = await pool().query(
     `UPDATE admin_panel_trusted_devices SET force_otp_next = $3 WHERE id = $1 AND admin_user_id = $2 AND blocked = false`,

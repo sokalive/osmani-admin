@@ -126,6 +126,10 @@ export function updateChannelFormData(id, formData) {
   }).then(parseJsonSafeResponse)
 }
 
+export function postChannelsReorder(orders) {
+  return adminApiPost('/channels/reorder', { orders })
+}
+
 export function deleteChannel(id) {
   return adminApiDelete(`/channels/${encodeURIComponent(id)}`)
 }
@@ -409,6 +413,50 @@ export async function postAdminSecurityVerifyOtp({ challengeToken, otp }) {
     body: JSON.stringify({
       challengeToken: String(challengeToken ?? '').trim(),
       otp: String(otp ?? '').trim(),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postAdminSecurityDestructiveStart({ securityPin, action, deviceIds }) {
+  const res = await fetch(joinPath('/admin/auth/admin-security/destructive/start'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminSecurityApiHeaders(),
+    body: JSON.stringify({
+      security_pin: String(securityPin ?? '').trim(),
+      action: String(action ?? '').trim(),
+      deviceIds: Array.isArray(deviceIds) ? deviceIds : undefined,
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postAdminSecurityDestructiveResendOtp({ challengeToken }) {
+  const res = await fetch(joinPath('/admin/auth/admin-security/destructive/resend-otp'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminSecurityApiHeaders(),
+    body: JSON.stringify({ challengeToken: String(challengeToken ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postAdminSecurityDestructiveExecute({ challengeToken, otp, confirmCurrentDevice }) {
+  const res = await fetch(joinPath('/admin/auth/admin-security/destructive/execute'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminSecurityApiHeaders(),
+    body: JSON.stringify({
+      challengeToken: String(challengeToken ?? '').trim(),
+      otp: String(otp ?? '').trim(),
+      confirm_current_device: confirmCurrentDevice === true,
     }),
   })
   const body = await parseJsonSafe(res)

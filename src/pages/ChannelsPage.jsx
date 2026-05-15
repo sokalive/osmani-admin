@@ -9,12 +9,23 @@ import {
   addChannelFormData,
   deleteChannel,
   getChannels,
+  postChannelsReorder,
   putAppGlobalSettings,
   syncStreamUrl,
   updateChannel,
   updateChannelFormData,
 } from '../lib/api'
 import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '../lib/channelApiModel'
+
+function reorderById(list, fromId, toId) {
+  const next = [...list]
+  const fi = next.findIndex((x) => String(x.id) === String(fromId))
+  const ti = next.findIndex((x) => String(x.id) === String(toId))
+  if (fi < 0 || ti < 0 || fi === ti) return list
+  const [row] = next.splice(fi, 1)
+  next.splice(ti, 0, row)
+  return next
+}
 
 function ChannelsPage() {
   const { showToast } = useToast()
@@ -38,6 +49,8 @@ function ChannelsPage() {
   const [editingChannel, setEditingChannel] = useState(null)
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [modesSaving, setModesSaving] = useState(false)
+  const [dragChannelId, setDragChannelId] = useState(null)
+  const [reorderBusy, setReorderBusy] = useState(false)
 
   const isFreeMode = appModes.free_mode === true
   const isEmergencyMode = appModes.emergency_mode === true
@@ -113,15 +126,67 @@ function ChannelsPage() {
     }
   }
 
+  const sortedChannels = useMemo(() => {
+    return [...channels].sort((a, b) => {
+      const da = Number(a.sortOrder) || 0
+      const db = Number(b.sortOrder) || 0
+      if (da !== db) return da - db
+      return Number(a.id) - Number(b.id)
+    })
+  }, [channels])
+
+  const reorderDisabled = searchQuery.trim().length > 0 || reorderBusy
+
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    if (!q) return channels
-    return channels.filter(
+    if (!q) return sortedChannels
+    return sortedChannels.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.category.toLowerCase().includes(q),
     )
-  }, [channels, searchQuery])
+  }, [sortedChannels, searchQuery])
+
+  const persistSortOrder = useCallback(
+    async (ordered) => {
+      setReorderBusy(true)
+      try {
+        const orders = ordered.map((c, i) => ({
+          id: Number(c.id),
+          sortOrder: i,
+        }))
+        await postChannelsReorder(orders)
+        await loadChannels()
+        showToast('success', 'Channel order saved')
+      } catch (e) {
+        showToast('error', e?.message || 'Could not save order')
+        await loadChannels()
+      } finally {
+        setReorderBusy(false)
+      }
+    },
+    [loadChannels, showToast],
+  )
+
+  const applyReorder = useCallback(
+    (nextList) => {
+      setChannels(nextList)
+      void persistSortOrder(nextList)
+    },
+    [persistSortOrder],
+  )
+
+  const moveChannelToIndex = useCallback(
+    (id, toIndex) => {
+      const next = [...sortedChannels]
+      const fromIndex = next.findIndex((c) => String(c.id) === String(id))
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
+      const [row] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, row)
+      applyReorder(next)
+    },
+    [applyReorder, sortedChannels],
+  )
 
   const allFilteredSelected =
     filtered.length > 0 && filtered.every((c) => selectedIds.has(c.id))
@@ -213,6 +278,10 @@ function ChannelsPage() {
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-white sm:text-3xl">
             Channels
           </h1>
+          <p className="mt-1 max-w-xl text-sm text-slate-400">
+            Drag the handle or use arrows to reorder. App clients use saved order within each tab/category.
+            {reorderDisabled && searchQuery.trim() ? ' Clear search to reorder.' : ''}
+          </p>
           {isEmergencyMode ? (
             <p className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
               Emergency mode active. Runtime clients should stop playback immediately and keep channels hidden
@@ -290,20 +359,51 @@ function ChannelsPage() {
               </thead>
 
               <tbody>
-                {filtered.map((channel) => (
-                  <ChannelRow
-                    key={channel.id}
-                    channel={channel}
-                    selected={selectedIds.has(channel.id)}
-                    onToggleSelected={() => toggleRow(channel.id)}
-                    onToggleAccess={(next) => handleToggleAccess(channel.id, next)}
-                    onEdit={() => {
-                      setAddModalOpen(false)
-                      setEditingChannel(channel)
-                    }}
-                    onDelete={() => handleDelete(channel.id)}
-                  />
-                ))}
+                {filtered.map((channel) => {
+                  const globalIndex = sortedChannels.findIndex((c) => c.id === channel.id)
+                  return (
+                    <ChannelRow
+                      key={channel.id}
+                      channel={channel}
+                      selected={selectedIds.has(channel.id)}
+                      onToggleSelected={() => toggleRow(channel.id)}
+                      onToggleAccess={(next) => handleToggleAccess(channel.id, next)}
+                      onEdit={() => {
+                        setAddModalOpen(false)
+                        setEditingChannel(channel)
+                      }}
+                      onDelete={() => handleDelete(channel.id)}
+                      reorderDisabled={reorderDisabled}
+                      dragChannelId={dragChannelId}
+                      canMoveUp={globalIndex > 0}
+                      canMoveDown={globalIndex >= 0 && globalIndex < sortedChannels.length - 1}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', String(channel.id))
+                        e.dataTransfer.effectAllowed = 'move'
+                        setDragChannelId(channel.id)
+                      }}
+                      onDragEnd={() => setDragChannelId(null)}
+                      onDragOver={(e) => {
+                        e.preventDefault()
+                        e.dataTransfer.dropEffect = 'move'
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const fromId = e.dataTransfer.getData('text/plain')
+                        if (!fromId || String(fromId) === String(channel.id)) return
+                        const next = reorderById(sortedChannels, fromId, channel.id)
+                        if (next === sortedChannels) return
+                        setDragChannelId(null)
+                        applyReorder(next)
+                      }}
+                      onMoveUp={() => moveChannelToIndex(channel.id, globalIndex - 1)}
+                      onMoveDown={() => moveChannelToIndex(channel.id, globalIndex + 1)}
+                      onMoveTop={() => moveChannelToIndex(channel.id, 0)}
+                      onMoveBottom={() => moveChannelToIndex(channel.id, sortedChannels.length - 1)}
+                    />
+                  )
+                })}
               </tbody>
             </table>
 
