@@ -44,7 +44,8 @@ const menuItems = [
   { id: 'server-health', label: 'Server Health', icon: Server, path: '/server-health' },
   { id: 'popup', label: 'Popup Settings', icon: PanelTopOpen, path: '/popup-settings' },
   { id: 'device', label: 'Device Control', icon: TabletSmartphone, path: '/device-control' },
-  { id: 'security-alerts', label: 'Security Alerts', icon: ShieldAlert, path: '/security-alerts' },
+  { id: 'security', label: 'Security Center', icon: ShieldAlert, path: '/security' },
+  { id: 'security-risk', label: 'Risk Devices', icon: ShieldCheck, path: '/security-risk' },
   { id: 'security-logs', label: 'Security Logs', icon: ClipboardList, path: '/security-logs' },
   { id: 'transfer', label: 'Transfer Codes', icon: KeyRound, path: '/transfer-codes' },
 ]

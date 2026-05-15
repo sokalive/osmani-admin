@@ -700,6 +700,25 @@ export const postSecurityLog = (entry) => adminApiPost('/security-logs', entry)
 export const deleteSecurityLog = (id) => adminApiDelete(`/security-logs/${encodeURIComponent(id)}`)
 export const postSecurityLogsBulkDelete = (body) => adminApiPost('/security-logs/bulk-delete', body)
 
+export const getSecurityStats = () => adminApiGet('/security/stats')
+export const getSecurityRiskDevices = (params = {}) => {
+  const q = new URLSearchParams()
+  if (params.q) q.set('q', params.q)
+  if (params.level) q.set('level', params.level)
+  if (params.limit) q.set('limit', String(params.limit))
+  const qs = q.toString()
+  return adminApiGet(`/security/devices${qs ? `?${qs}` : ''}`)
+}
+export const getSecurityRiskDevice = (deviceId) =>
+  adminApiGet(`/security/devices/${encodeURIComponent(deviceId)}`)
+export const postSecurityDeviceAction = (deviceId, body) =>
+  adminApiPost(`/security/devices/${encodeURIComponent(deviceId)}/action`, body)
+export const postSecurityDevicesBulkAction = (body) =>
+  adminApiPost('/security/devices/bulk-action', body)
+
+export const postRuntimeSecurityReport = (body) =>
+  apiPost('/runtime/security-report', body)
+
 export const getDashboard = () => apiGet('/dashboard')
 export const putDashboardSettings = (body) => apiPut('/settings/dashboard', body)
 

@@ -23,6 +23,7 @@ import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentPro
 import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
+import { deviceSecurityReportsRouter } from './deviceSecurityReports.js'
 import { adminAuthRouter } from './adminAuth.js'
 import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { offerCodesAdminRouter } from './offerCodesAdmin.js'
@@ -195,6 +196,7 @@ restApi.get('/admin/panel-diagnostics', requireAdminPanelAccess, async (_req, re
 })
 
 restApi.use('/runtime', runtimePublicRouter)
+restApi.use(deviceSecurityReportsRouter)
 
 restApi.post('/zeno-webhook', handleZenoPayWebhook)
 

@@ -386,6 +386,42 @@ export async function ensureBillingTables(client) {
   `)
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS device_security_profiles (
+      device_id TEXT PRIMARY KEY,
+      phone_user TEXT NOT NULL DEFAULT '',
+      app_version TEXT NOT NULL DEFAULT '',
+      risk_type TEXT NOT NULL DEFAULT '',
+      risk_score INT NOT NULL DEFAULT 0,
+      rooted BOOLEAN NOT NULL DEFAULT false,
+      emulator BOOLEAN NOT NULL DEFAULT false,
+      clone_detected BOOLEAN NOT NULL DEFAULT false,
+      debugger BOOLEAN NOT NULL DEFAULT false,
+      frida BOOLEAN NOT NULL DEFAULT false,
+      tampered_apk BOOLEAN NOT NULL DEFAULT false,
+      signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+      security_level TEXT NOT NULL DEFAULT 'warning',
+      admin_status TEXT NOT NULL DEFAULT 'monitoring',
+      temp_block_until TIMESTAMPTZ,
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      CONSTRAINT device_security_profiles_level_check
+        CHECK (security_level IN ('warning', 'limited', 'blocked', 'critical')),
+      CONSTRAINT device_security_profiles_admin_status_check
+        CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block'))
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_security_profiles_level_idx
+    ON device_security_profiles (security_level, updated_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_security_profiles_last_seen_idx
+    ON device_security_profiles (last_seen_at DESC);
+  `)
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS admin_otp_codes (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       admin_id TEXT NOT NULL DEFAULT 'admin',

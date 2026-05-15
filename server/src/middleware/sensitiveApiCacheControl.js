@@ -27,6 +27,8 @@ export function applySensitiveJsonGetNoStore(req, res, next) {
     p.startsWith('/notifications/') ||
     p === '/security-logs' ||
     p.startsWith('/security-logs/') ||
+    p === '/security/stats' ||
+    p.startsWith('/security/') ||
     p === '/transfer-codes' ||
     p.startsWith('/transfer-codes/') ||
     p === '/server-health' ||

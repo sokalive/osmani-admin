@@ -10,8 +10,7 @@ import NotificationsPage from './pages/NotificationsPage'
 import PaymentProvidersPage from './pages/PaymentProvidersPage'
 import PlansPage from './pages/PlansPage'
 import PopupSettingsPage from './pages/PopupSettingsPage'
-import SecurityAlertsPage from './pages/SecurityAlertsPage'
-import SecurityLogsPage from './pages/SecurityLogsPage'
+import SecurityDashboardPage from './pages/SecurityDashboardPage'
 import ServerHealthPage from './pages/ServerHealthPage'
 import TransferCodesPage from './pages/TransferCodesPage'
 import ManualSubscriptionPage from './pages/ManualSubscriptionPage'
@@ -47,8 +46,10 @@ export const dashboardRouteElements = [
   <Route key="server-health" path="server-health" element={<ServerHealthPage />} />,
   <Route key="popup-settings" path="popup-settings" element={<PopupSettingsPage />} />,
   <Route key="device-control" path="device-control" element={<DeviceControlPage />} />,
-  <Route key="security-alerts" path="security-alerts" element={<SecurityAlertsPage />} />,
-  <Route key="security-logs" path="security-logs" element={<SecurityLogsPage />} />,
+  <Route key="security" path="security" element={<SecurityDashboardPage />} />,
+  <Route key="security-alerts" path="security-alerts" element={<SecurityDashboardPage />} />,
+  <Route key="security-risk" path="security-risk" element={<SecurityDashboardPage />} />,
+  <Route key="security-logs" path="security-logs" element={<SecurityDashboardPage />} />,
   <Route key="transfer-codes" path="transfer-codes" element={<TransferCodesPage />} />,
   <Route key="manual-subscription" path="manual-subscription" element={<ManualSubscriptionPage />} />,
   <Route key="admin-security" path="admin-security" element={<AdminSecurityPage />} />,

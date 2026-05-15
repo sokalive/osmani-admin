@@ -147,24 +147,61 @@ function appModesForVerify(modesPayload) {
   }
 }
 
-function derivePlaybackGate(pub, modesPayload) {
+function derivePlaybackGate(pub, modesPayload, securityPolicy = null) {
   const modes = appModesForVerify(modesPayload).app_modes
   if (modes.emergency_mode) {
-    return { playbackAllowed: false, playbackGateReason: 'emergency_mode' }
+    return { playbackAllowed: false, playbackGateReason: 'emergency_mode', limitedPlayback: false }
   }
   if (modes.maintenance_mode) {
-    return { playbackAllowed: false, playbackGateReason: 'maintenance_mode' }
+    return { playbackAllowed: false, playbackGateReason: 'maintenance_mode', limitedPlayback: false }
   }
   if (pub.blocked === true) {
-    return { playbackAllowed: false, playbackGateReason: 'blocked_device' }
+    return { playbackAllowed: false, playbackGateReason: 'blocked_device', limitedPlayback: false }
   }
+
+  let baseAllowed = false
+  let baseReason = 'subscription_inactive'
   if (pub.active === true) {
-    return { playbackAllowed: true, playbackGateReason: 'subscription_active' }
+    baseAllowed = true
+    baseReason = 'subscription_active'
+  } else if (modes.free_mode) {
+    baseAllowed = true
+    baseReason = 'free_mode'
   }
-  if (modes.free_mode) {
-    return { playbackAllowed: true, playbackGateReason: 'free_mode' }
+
+  const sec = securityPolicy && typeof securityPolicy === 'object' ? securityPolicy : null
+  if (sec?.whitelisted) {
+    return {
+      playbackAllowed: baseAllowed,
+      playbackGateReason: baseReason,
+      limitedPlayback: false,
+      securityLevel: sec.security_level || 'warning',
+      securityBypass: true,
+    }
   }
-  return { playbackAllowed: false, playbackGateReason: 'subscription_inactive' }
+  if (sec?.deny_playback) {
+    return {
+      playbackAllowed: false,
+      playbackGateReason: 'security_blocked',
+      limitedPlayback: false,
+      securityLevel: sec.security_level || 'blocked',
+    }
+  }
+  if (sec?.limited_playback && baseAllowed) {
+    return {
+      playbackAllowed: true,
+      playbackGateReason: baseReason,
+      limitedPlayback: true,
+      securityLevel: sec.security_level || 'limited',
+    }
+  }
+
+  return {
+    playbackAllowed: baseAllowed,
+    playbackGateReason: baseReason,
+    limitedPlayback: false,
+    securityLevel: sec?.security_level || null,
+  }
 }
 
 /**
@@ -197,7 +234,10 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     server_time_ms: Date.now(),
   }))
   const runtimeModes = appModesForVerify(modesPayload)
-  const playbackGate = derivePlaybackGate(pub, modesPayload)
+  const securityPolicy = await import('../lib/deviceSecurityStore.js')
+    .then((m) => m.getPlaybackSecurityPolicy(d))
+    .catch(() => null)
+  const playbackGate = derivePlaybackGate(pub, modesPayload, securityPolicy)
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
     console.log('[subscription_verify_debug]', {
@@ -240,6 +280,9 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     manualGift,
     playbackAllowed: playbackGate.playbackAllowed,
     playbackGateReason: playbackGate.playbackGateReason,
+    limitedPlayback: playbackGate.limitedPlayback === true,
+    securityLevel: playbackGate.securityLevel ?? null,
+    securityBypass: playbackGate.securityBypass === true,
   }
 
   if (!pub.active) {
