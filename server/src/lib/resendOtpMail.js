@@ -98,3 +98,43 @@ export async function sendAnalyticsResetOtpEmail({ to, otp }) {
   }
   return { ok: true }
 }
+
+/** Admin Security page gate OTP — sent to ADMIN_ALERT_EMAIL only. */
+export async function sendAdminSecurityGateOtpEmail({ to, otp }) {
+  const key = String(process.env.RESEND_API_KEY ?? '').trim()
+  const from = String(process.env.RESEND_FROM_EMAIL ?? '').trim()
+  if (!key || !from) {
+    console.warn('[resend] RESEND_API_KEY or RESEND_FROM_EMAIL missing — admin security gate OTP skipped')
+    return { ok: false, skipped: true }
+  }
+  if (!to) {
+    return { ok: false, error: 'ADMIN_ALERT_EMAIL not configured' }
+  }
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject: 'Osmani Admin — Security page access code',
+      html: `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;background:#0b0f1a;color:#e2e8f0;padding:24px;">
+        <p style="font-size:11px;text-transform:uppercase;letter-spacing:0.2em;color:#34d399;">Admin Security</p>
+        <h1 style="color:#fff;">Trusted devices access</h1>
+        <p>Enter this code within <strong>5 minutes</strong> after your PIN:</p>
+        <p style="font-size:32px;font-weight:bold;letter-spacing:0.35em;color:#fbbf24;font-family:monospace;">${otp}</p>
+        <p style="color:#94a3b8;font-size:13px;">Single-use. If you did not request this, secure your admin account immediately.</p>
+      </body></html>`,
+    }),
+  })
+
+  const text = await res.text()
+  if (!res.ok) {
+    console.error('[resend] admin security gate OTP failed', res.status, text)
+    return { ok: false, error: text }
+  }
+  return { ok: true }
+}

@@ -154,6 +154,15 @@ export async function ensureBillingTables(client) {
     ON analytics_reset_challenges (completed_at DESC)
     WHERE completed_at IS NOT NULL;
   `)
+  await client.query(`
+    ALTER TABLE analytics_reset_challenges
+    ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'analytics_reset';
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS analytics_reset_challenges_purpose_completed_idx
+    ON analytics_reset_challenges (purpose, completed_at DESC)
+    WHERE completed_at IS NOT NULL;
+  `)
 
   await client.query(`
     ALTER TABLE live_sessions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT now();

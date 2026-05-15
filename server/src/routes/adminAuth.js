@@ -1,9 +1,19 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
+import { getPool } from '../db/pool.js'
 import * as authStore from '../adminAuthStore.js'
 import { adminAuthAudit } from '../lib/adminAuthAudit.js'
 import { signAdminJwt, verifyAdminJwt } from '../lib/adminJwt.js'
-import { sendAdminOtpEmail } from '../lib/resendOtpMail.js'
+import { sendAdminOtpEmail, sendAdminSecurityGateOtpEmail } from '../lib/resendOtpMail.js'
+import {
+  OTP_PURPOSE_ADMIN_SECURITY_GATE,
+  adminAlertEmail,
+  createOtpChallenge,
+  issueOtpForChallenge,
+  logOtpSecurityEvent,
+  verifyOtpForChallenge,
+  CHALLENGE_TTL_MINUTES,
+} from '../lib/adminOtpChallengeStore.js'
 import { isAdminPanelAuthRequired } from '../middleware/adminPanelAuthGate.js'
 import {
   adminSecurityPinFromBody,
@@ -107,6 +117,52 @@ function pendingJwt(user, fpHash) {
     },
     { ttlSeconds: 900 },
   )
+}
+
+function adminSecurityMeta(req) {
+  return {
+    adminUserId: String(req.adminUserId ?? ''),
+    adminEmail: String(req.adminEmail ?? ''),
+    ip: clientIp(req),
+    userAgent: String(req.headers['user-agent'] ?? '').slice(0, 400),
+    deviceLabel: String(req.headers['x-admin-device-fingerprint'] ?? '').slice(0, 64),
+  }
+}
+
+function maskAlertEmail(email) {
+  const e = String(email ?? '')
+  return e.replace(/^(.{2}).*(@.*)$/, '$1***$2')
+}
+
+function securityPageGateJwt(userId, email, challengeId) {
+  return signAdminJwt(
+    {
+      sub: userId,
+      em: email,
+      typ: 'admin_security_gate',
+      ch: challengeId,
+    },
+    { ttlSeconds: CHALLENGE_TTL_MINUTES * 60 },
+  )
+}
+
+function requireAdminSecurityPageGate(req, res, next) {
+  if (req.adminEmergency === true) return next()
+  const gate = String(req.headers['x-admin-security-gate'] ?? '').trim()
+  const payload = verifyAdminJwt(gate)
+  if (
+    !payload ||
+    payload.typ !== 'admin_security_gate' ||
+    String(payload.sub) !== String(req.adminUserId)
+  ) {
+    return res.status(403).json({
+      ok: false,
+      code: 'SECURITY_GATE_REQUIRED',
+      error: 'Admin Security email OTP required',
+    })
+  }
+  req.adminSecurityGate = payload
+  return next()
 }
 
 function requireAdminSecurityPin(req, res, next) {
@@ -446,7 +502,151 @@ adminAuthRouter.post('/verify-security-pin', attachAdminReq, (req, res) => {
   res.json({ ok: true })
 })
 
-adminAuthRouter.get('/devices', attachAdminReq, async (req, res) => {
+/** Admin Security page: PIN ok → email OTP challenge (does not unlock page alone). */
+adminAuthRouter.post('/admin-security/verify-pin', attachAdminReq, async (req, res) => {
+  const pool = getPool()
+  try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      adminAuthAudit('security_pin_denied', { email: req.adminEmail, gate: 'admin_security_otp' })
+      await logOtpSecurityEvent(pool, {
+        actor: req.adminEmail,
+        eventType: 'Admin Security PIN denied',
+        status: 'failed',
+        detail: 'Invalid PIN before OTP',
+        metadata: { ip: clientIp(req), purpose: OTP_PURPOSE_ADMIN_SECURITY_GATE },
+      })
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
+
+    const meta = adminSecurityMeta(req)
+    const challenge = await createOtpChallenge(OTP_PURPOSE_ADMIN_SECURITY_GATE, meta)
+    const alertTo = adminAlertEmail()
+    if (!alertTo) {
+      return res.status(503).json({ ok: false, error: 'ADMIN_ALERT_EMAIL is not configured' })
+    }
+
+    const issued = await issueOtpForChallenge(challenge.challengeToken, OTP_PURPOSE_ADMIN_SECURITY_GATE)
+    const mailed = await sendAdminSecurityGateOtpEmail({ to: alertTo, otp: issued.otp })
+    if (!mailed.ok) {
+      return res.status(503).json({ ok: false, error: 'Could not send OTP email (check Resend configuration)' })
+    }
+
+    await logOtpSecurityEvent(pool, {
+      actor: meta.adminEmail,
+      eventType: 'Admin Security OTP sent',
+      status: 'completed',
+      detail: `OTP emailed to ${alertTo}`,
+      metadata: {
+        ip: meta.ip,
+        purpose: OTP_PURPOSE_ADMIN_SECURITY_GATE,
+        challenge_id: challenge.challengeId,
+      },
+    })
+    adminAuthAudit('admin_security_otp_sent', { email: req.adminEmail })
+
+    res.json({
+      ok: true,
+      requiresOtp: true,
+      challengeToken: challenge.challengeToken,
+      expiresAt: challenge.expiresAt,
+      maskedEmail: maskAlertEmail(alertTo),
+      resendAvailableAt: issued.resendAvailableAt,
+    })
+  } catch (e) {
+    console.error('[admin-security] verify-pin', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+adminAuthRouter.post('/admin-security/resend-otp', attachAdminReq, async (req, res) => {
+  const pool = getPool()
+  try {
+    const challengeToken = String(req.body?.challengeToken ?? req.body?.challenge_token ?? '').trim()
+    if (!challengeToken) return res.status(400).json({ ok: false, error: 'challengeToken required' })
+    const alertTo = adminAlertEmail()
+    if (!alertTo) return res.status(503).json({ ok: false, error: 'ADMIN_ALERT_EMAIL not configured' })
+
+    const issued = await issueOtpForChallenge(challengeToken, OTP_PURPOSE_ADMIN_SECURITY_GATE)
+    const mailed = await sendAdminSecurityGateOtpEmail({ to: alertTo, otp: issued.otp })
+    if (!mailed.ok) {
+      return res.status(503).json({ ok: false, error: 'Could not send OTP email' })
+    }
+
+    await logOtpSecurityEvent(pool, {
+      actor: req.adminEmail,
+      eventType: 'Admin Security OTP resent',
+      status: 'completed',
+      detail: `OTP resent to ${alertTo}`,
+      metadata: { ip: clientIp(req), challenge_id: issued.challengeId, resend: true },
+    })
+
+    res.json({
+      ok: true,
+      maskedEmail: maskAlertEmail(alertTo),
+      resendAvailableAt: issued.resendAvailableAt,
+    })
+  } catch (e) {
+    console.error('[admin-security] resend-otp', e)
+    const status = String(e.message || '').includes('wait') ? 429 : 400
+    await logOtpSecurityEvent(pool, {
+      actor: req.adminEmail,
+      eventType: 'Admin Security OTP resend failed',
+      status: 'failed',
+      detail: String(e.message || e),
+      metadata: { ip: clientIp(req) },
+    }).catch(() => {})
+    res.status(status).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+adminAuthRouter.post('/admin-security/verify-otp', attachAdminReq, async (req, res) => {
+  const pool = getPool()
+  try {
+    const challengeToken = String(req.body?.challengeToken ?? req.body?.challenge_token ?? '').trim()
+    const otp = String(req.body?.otp ?? req.body?.code ?? '').trim()
+    if (!challengeToken || !otp) {
+      return res.status(400).json({ ok: false, error: 'challengeToken and otp required' })
+    }
+
+    const verified = await verifyOtpForChallenge(
+      challengeToken,
+      otp,
+      OTP_PURPOSE_ADMIN_SECURITY_GATE,
+    )
+    const gateToken = securityPageGateJwt(req.adminUserId, req.adminEmail, verified.challengeId)
+
+    await logOtpSecurityEvent(pool, {
+      actor: req.adminEmail,
+      eventType: 'Admin Security OTP verified',
+      status: 'completed',
+      detail: 'Admin Security page unlocked',
+      metadata: {
+        ip: clientIp(req),
+        challenge_id: verified.challengeId,
+        otp_verified: true,
+      },
+    })
+    adminAuthAudit('admin_security_gate_ok', { email: req.adminEmail })
+
+    res.json({ ok: true, gateToken, expiresInSeconds: CHALLENGE_TTL_MINUTES * 60 })
+  } catch (e) {
+    console.error('[admin-security] verify-otp', e)
+    const msg = String(e.message || e)
+    await logOtpSecurityEvent(pool, {
+      actor: req.adminEmail,
+      eventType: 'Admin Security OTP verify failed',
+      status: 'failed',
+      detail: msg,
+      metadata: { ip: clientIp(req), otp_verified: false },
+    }).catch(() => {})
+    const status = msg.includes('expired') || msg.includes('Invalid') ? 403 : 400
+    res.status(status).json({ ok: false, error: msg })
+  }
+})
+
+adminAuthRouter.get('/devices', attachAdminReq, requireAdminSecurityPageGate, async (req, res) => {
   try {
     const rows = await authStore.listTrustedDevicesForUser(req.adminUserId)
     const fpRaw = String(req.headers['x-admin-device-fingerprint'] ?? '').trim()
@@ -470,7 +670,12 @@ adminAuthRouter.get('/devices', attachAdminReq, async (req, res) => {
   }
 })
 
-adminAuthRouter.post('/devices/:id/block', attachAdminReq, requireAdminSecurityPin, async (req, res) => {
+adminAuthRouter.post(
+  '/devices/:id/block',
+  attachAdminReq,
+  requireAdminSecurityPageGate,
+  requireAdminSecurityPin,
+  async (req, res) => {
   try {
     const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
     if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
@@ -487,7 +692,12 @@ adminAuthRouter.post('/devices/:id/block', attachAdminReq, requireAdminSecurityP
   }
 })
 
-adminAuthRouter.post('/devices/:id/unblock', attachAdminReq, requireAdminSecurityPin, async (req, res) => {
+adminAuthRouter.post(
+  '/devices/:id/unblock',
+  attachAdminReq,
+  requireAdminSecurityPageGate,
+  requireAdminSecurityPin,
+  async (req, res) => {
   try {
     const ok = await authStore.setDeviceBlocked(req.params.id, req.adminUserId, false)
     if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
@@ -498,7 +708,12 @@ adminAuthRouter.post('/devices/:id/unblock', attachAdminReq, requireAdminSecurit
   }
 })
 
-adminAuthRouter.delete('/devices/:id', attachAdminReq, requireAdminSecurityPin, async (req, res) => {
+adminAuthRouter.delete(
+  '/devices/:id',
+  attachAdminReq,
+  requireAdminSecurityPageGate,
+  requireAdminSecurityPin,
+  async (req, res) => {
   try {
     const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
     if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
@@ -515,7 +730,12 @@ adminAuthRouter.delete('/devices/:id', attachAdminReq, requireAdminSecurityPin, 
   }
 })
 
-adminAuthRouter.post('/devices/:id/force-otp', attachAdminReq, requireAdminSecurityPin, async (req, res) => {
+adminAuthRouter.post(
+  '/devices/:id/force-otp',
+  attachAdminReq,
+  requireAdminSecurityPageGate,
+  requireAdminSecurityPin,
+  async (req, res) => {
   try {
     const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
     if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })

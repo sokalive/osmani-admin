@@ -2,15 +2,21 @@ import { useCallback, useEffect, useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import SecurityPinModal from '../components/SecurityPinModal'
+import AdminSecurityOtpModal from '../components/AdminSecurityOtpModal'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   ApiError,
+  clearAdminSecurityGateToken,
   deleteAdminTrustedDevice,
   getAdminAuthDevices,
+  getAdminSecurityGateToken,
   postAdminDeviceBlock,
   postAdminDeviceForceOtp,
   postAdminDeviceUnblock,
-  postVerifyAdminSecurityPin,
+  postAdminSecurityResendOtp,
+  postAdminSecurityVerifyOtp,
+  postAdminSecurityVerifyPin,
+  setAdminSecurityGateToken,
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
@@ -20,9 +26,16 @@ export default function AdminSecurityPage() {
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
 
-  const [pageUnlocked, setPageUnlocked] = useState(false)
+  const [pageUnlocked, setPageUnlocked] = useState(() => !!getAdminSecurityGateToken())
   const [pinModal, setPinModal] = useState(null)
   const pinModalKind = pinModal?.kind ?? null
+
+  const [otpModalOpen, setOtpModalOpen] = useState(false)
+  const [challengeToken, setChallengeToken] = useState('')
+  const [maskedEmail, setMaskedEmail] = useState('')
+  const [resendAvailableAt, setResendAvailableAt] = useState('')
+  const [otpError, setOtpError] = useState('')
+  const [otpBusy, setOtpBusy] = useState(false)
 
   const [pinError, setPinError] = useState('')
   const [pinBusy, setPinBusy] = useState(false)
@@ -33,6 +46,12 @@ export default function AdminSecurityPage() {
       const out = await getAdminAuthDevices()
       setRows(Array.isArray(out?.devices) ? out.devices : [])
     } catch (e) {
+      if (e instanceof ApiError && e.status === 403 && e.body?.code === 'SECURITY_GATE_REQUIRED') {
+        clearAdminSecurityGateToken()
+        setPageUnlocked(false)
+        setOtpModalOpen(false)
+        setChallengeToken('')
+      }
       showToast('error', e?.message || 'Haikuwezekana kupakia vifaa')
       setRows([])
     } finally {
@@ -45,26 +64,82 @@ export default function AdminSecurityPage() {
   }, [pageUnlocked, load])
 
   useEffect(() => {
-    if (!pageUnlocked) {
+    if (!pageUnlocked && !otpModalOpen) {
       setPinModal({ kind: 'gate' })
       setPinError('')
     }
-  }, [pageUnlocked])
+  }, [pageUnlocked, otpModalOpen])
 
   async function handleGatePinSubmit(pin) {
     setPinBusy(true)
     setPinError('')
     try {
-      await postVerifyAdminSecurityPin(pin)
-      setPageUnlocked(true)
+      const out = await postAdminSecurityVerifyPin(pin)
+      setChallengeToken(out.challengeToken || '')
+      setMaskedEmail(out.maskedEmail || '')
+      setResendAvailableAt(out.resendAvailableAt || '')
+      setOtpError('')
       setPinModal(null)
-      showToast('success', 'Umeidhinishwa')
+      setOtpModalOpen(true)
+      showToast('success', 'OTP imetumwa kwa barua pepe ya admin')
     } catch (e) {
       setPinError(e?.message || 'PIN si sahihi')
       showToast('error', e?.message || 'PIN si sahihi')
     } finally {
       setPinBusy(false)
     }
+  }
+
+  async function handleOtpSubmit(code) {
+    if (!challengeToken) return
+    setOtpBusy(true)
+    setOtpError('')
+    try {
+      const out = await postAdminSecurityVerifyOtp({ challengeToken, otp: code })
+      setAdminSecurityGateToken(out.gateToken)
+      setOtpModalOpen(false)
+      setChallengeToken('')
+      setPageUnlocked(true)
+      showToast('success', 'Umeidhinishwa')
+    } catch (e) {
+      const msg = e?.message || 'OTP si sahihi'
+      setOtpError(msg)
+      showToast('error', msg)
+    } finally {
+      setOtpBusy(false)
+    }
+  }
+
+  async function handleOtpResend() {
+    if (!challengeToken) return
+    setOtpBusy(true)
+    setOtpError('')
+    try {
+      const out = await postAdminSecurityResendOtp({ challengeToken })
+      setMaskedEmail(out.maskedEmail || maskedEmail)
+      setResendAvailableAt(out.resendAvailableAt || '')
+      showToast('success', 'OTP imetumwa tena')
+    } catch (e) {
+      setOtpError(e?.message || 'Haikuwezekana kutuma OTP tena')
+    } finally {
+      setOtpBusy(false)
+    }
+  }
+
+  function closeOtpFlow() {
+    if (otpBusy) return
+    setOtpModalOpen(false)
+    setChallengeToken('')
+    setOtpError('')
+    setPinModal({ kind: 'gate' })
+  }
+
+  function lockPage() {
+    clearAdminSecurityGateToken()
+    setPageUnlocked(false)
+    setPinModal(null)
+    setOtpModalOpen(false)
+    setChallengeToken('')
   }
 
   function openActionModal(run) {
@@ -123,6 +198,16 @@ export default function AdminSecurityPage() {
         }}
         onSubmit={handleGatePinSubmit}
       />
+      <AdminSecurityOtpModal
+        open={otpModalOpen}
+        maskedEmail={maskedEmail}
+        resendAvailableAt={resendAvailableAt}
+        errorText={otpError}
+        busy={otpBusy}
+        onClose={closeOtpFlow}
+        onSubmit={handleOtpSubmit}
+        onResend={handleOtpResend}
+      />
       <SecurityPinModal
         open={pinModalKind === 'action'}
         title="Ingiza Security PIN"
@@ -145,7 +230,8 @@ export default function AdminSecurityPage() {
             <div className="max-w-md text-center">
               <h2 className="text-xl font-bold text-white">Admin Security imefungwa</h2>
               <p className="mt-2 text-sm text-slate-400">
-                Thibiti PIN ili kuona au kuhariri vifaa vinavyoaminiwa.
+                Thibiti PIN, kisha OTP kutoka kwa barua pepe ya admin, ili kuona au kuhariri vifaa
+                vinavyoaminiwa.
               </p>
             </div>
             <button
@@ -185,10 +271,7 @@ export default function AdminSecurityPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setPageUnlocked(false)
-                    setPinModal(null)
-                  }}
+                  onClick={lockPage}
                   className="rounded-xl border border-slate-600 bg-slate-900/80 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
                 >
                   Funga ukurasa
@@ -334,3 +417,4 @@ export default function AdminSecurityPage() {
     </>
   )
 }
+

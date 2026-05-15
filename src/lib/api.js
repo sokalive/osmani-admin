@@ -231,6 +231,25 @@ export function subscriptionStreamUrl(deviceId, opts = {}) {
 export const postAcknowledgeManualGift = (body) =>
   apiPost('/subscription/acknowledge-manual-gift', body)
 
+const ADMIN_SECURITY_GATE_KEY = 'osmani_admin_security_gate'
+
+export function getAdminSecurityGateToken() {
+  if (typeof sessionStorage === 'undefined') return ''
+  return sessionStorage.getItem(ADMIN_SECURITY_GATE_KEY) || ''
+}
+
+export function setAdminSecurityGateToken(token) {
+  if (typeof sessionStorage === 'undefined') return
+  const t = String(token ?? '').trim()
+  if (t) sessionStorage.setItem(ADMIN_SECURITY_GATE_KEY, t)
+  else sessionStorage.removeItem(ADMIN_SECURITY_GATE_KEY)
+}
+
+export function clearAdminSecurityGateToken() {
+  if (typeof sessionStorage === 'undefined') return
+  sessionStorage.removeItem(ADMIN_SECURITY_GATE_KEY)
+}
+
 /** Matches server ADMIN_API_TOKEN + optional Bearer session when ADMIN_PANEL_AUTH_REQUIRED=true. */
 export function adminPanelApiHeaders() {
   const legacyToken = String(import.meta.env.VITE_ADMIN_API_TOKEN ?? '').trim() || '3030'
@@ -243,6 +262,14 @@ export function adminPanelApiHeaders() {
     const jwt = sessionStorage.getItem('osmani_admin_token')
     if (jwt) h.Authorization = `Bearer ${jwt}`
   }
+  return h
+}
+
+/** Admin Security trusted-devices page: session JWT + email OTP gate token. */
+export function adminSecurityApiHeaders() {
+  const h = adminPanelApiHeaders()
+  const gate = getAdminSecurityGateToken()
+  if (gate) h['X-Admin-Security-Gate'] = gate
   return h
 }
 
@@ -329,19 +356,60 @@ export function postAdminLogout() {
 export async function getAdminAuthDevices() {
   const res = await fetch(joinPath('/admin/auth/devices'), {
     ...ADMIN_FETCH_DEFAULTS,
-    headers: adminPanelApiHeaders(),
+    headers: adminSecurityApiHeaders(),
   })
   const body = await parseJsonSafe(res)
   if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
   return body
 }
 
+/** Security Dashboard PIN gate only — does not send email OTP. */
 export async function postVerifyAdminSecurityPin(securityPin) {
   const res = await fetch(joinPath('/admin/auth/verify-security-pin'), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({ security_pin: String(securityPin ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+/** Admin Security page: PIN ok → OTP challenge created and emailed. */
+export async function postAdminSecurityVerifyPin(securityPin) {
+  const res = await fetch(joinPath('/admin/auth/admin-security/verify-pin'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({ security_pin: String(securityPin ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postAdminSecurityResendOtp({ challengeToken }) {
+  const res = await fetch(joinPath('/admin/auth/admin-security/resend-otp'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({ challengeToken: String(challengeToken ?? '').trim() }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postAdminSecurityVerifyOtp({ challengeToken, otp }) {
+  const res = await fetch(joinPath('/admin/auth/admin-security/verify-otp'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      challengeToken: String(challengeToken ?? '').trim(),
+      otp: String(otp ?? '').trim(),
+    }),
   })
   const body = await parseJsonSafe(res)
   if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
@@ -359,7 +427,7 @@ export async function postAdminDeviceBlock(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/block`), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
-    headers: adminPanelApiHeaders(),
+    headers: adminSecurityApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
   })
   const body = await parseJsonSafe(res)
@@ -371,7 +439,7 @@ export async function postAdminDeviceUnblock(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/unblock`), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
-    headers: adminPanelApiHeaders(),
+    headers: adminSecurityApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
   })
   const body = await parseJsonSafe(res)
@@ -383,7 +451,7 @@ export async function deleteAdminTrustedDevice(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}`), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'DELETE',
-    headers: adminPanelApiHeaders(),
+    headers: adminSecurityApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
   })
   const body = res.status === 204 ? null : await parseJsonSafe(res)
@@ -395,7 +463,7 @@ export async function postAdminDeviceForceOtp(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/force-otp`), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
-    headers: adminPanelApiHeaders(),
+    headers: adminSecurityApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
   })
   const body = await parseJsonSafe(res)
