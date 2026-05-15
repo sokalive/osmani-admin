@@ -6,6 +6,7 @@ import {
   flushDueNotifications,
   listNotificationsAdmin,
   listRuntimeNotifications,
+  syncStaleOneSignalStats,
   updateNotificationById,
 } from '../lib/runtimeNotifications.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
@@ -129,3 +130,9 @@ setInterval(() => {
     console.error('[notifications] scheduled flush failed:', e)
   })
 }, Math.max(10_000, Number(process.env.NOTIFICATIONS_SCHEDULER_MS) || 30_000))
+
+setInterval(() => {
+  void syncStaleOneSignalStats().catch((e) => {
+    console.error('[notifications] OneSignal stats refresh failed:', e)
+  })
+}, Math.max(15_000, Number(process.env.ONESIGNAL_STATS_REFRESH_MS) || 30_000))

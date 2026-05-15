@@ -5,8 +5,20 @@ import { getPool } from '../db/pool.js'
 import { liveSyncBus } from './liveSyncBus.js'
 import { UPLOADS_DIR, ensureUploadsDir } from '../multerUpload.js'
 import { isOneSignalConfigured, sendOneSignalNotification } from './oneSignalPush.js'
+import {
+  fetchOneSignalMessageStats,
+  normalizeOneSignalStatsPayload,
+} from './oneSignalStats.js'
 
 const DEFAULT_PUBLIC_BASE = 'https://osmani-admin-api.onrender.com'
+const ONESIGNAL_STATS_STALE_MS = Math.max(
+  15_000,
+  Number(process.env.ONESIGNAL_STATS_STALE_MS) || 45_000,
+)
+const ONESIGNAL_STATS_SYNC_LIMIT = Math.min(
+  25,
+  Math.max(1, Number(process.env.ONESIGNAL_STATS_SYNC_LIMIT) || 12),
+)
 
 function resolvePublicBaseUrl() {
   return String(process.env.BASE_URL ?? '').trim().replace(/\/$/, '') || DEFAULT_PUBLIC_BASE
@@ -165,8 +177,121 @@ function toApiNotification(row) {
     payload: p,
     onesignalId: p.onesignal_id != null ? String(p.onesignal_id) : null,
     onesignalRecipients: Number(p.onesignal_recipients) || null,
+    onesignalDelivered:
+      p.onesignal_delivered != null && p.onesignal_delivered !== '' ? Number(p.onesignal_delivered) : null,
+    onesignalConfirmed:
+      p.onesignal_confirmed != null && p.onesignal_confirmed !== ''
+        ? Number(p.onesignal_confirmed)
+        : null,
+    onesignalFailed:
+      p.onesignal_failed != null && p.onesignal_failed !== '' ? Number(p.onesignal_failed) : null,
+    onesignalErrored:
+      p.onesignal_errored != null && p.onesignal_errored !== '' ? Number(p.onesignal_errored) : null,
+    onesignalClicked:
+      p.onesignal_clicked != null && p.onesignal_clicked !== '' ? Number(p.onesignal_clicked) : null,
+    onesignalCtr:
+      p.onesignal_ctr != null && p.onesignal_ctr !== '' ? Number(p.onesignal_ctr) : null,
+    onesignalSentAt: p.onesignal_sent_at != null ? String(p.onesignal_sent_at) : null,
+    onesignalStatsSyncedAt:
+      p.onesignal_stats_synced_at != null ? String(p.onesignal_stats_synced_at) : null,
     deliveryError: p.onesignal_error != null ? String(p.onesignal_error).slice(0, 500) : null,
   }
+}
+
+/**
+ * Pull delivery/click stats from OneSignal and merge into notification payload.
+ */
+export async function syncOneSignalStatsForRow(row) {
+  if (!row || !isOneSignalConfigured()) return null
+  const pool = requirePool()
+  const id = String(row.id)
+  const basePayload = sanitizePayload(row.payload)
+  const messageId = basePayload.onesignal_id != null ? String(basePayload.onesignal_id).trim() : ''
+  if (!messageId) return null
+
+  try {
+    const raw = await fetchOneSignalMessageStats(messageId)
+    const statsPatch = normalizeOneSignalStatsPayload(raw, basePayload)
+    const merged = {
+      ...basePayload,
+      ...statsPatch,
+      onesignal_recipients:
+        basePayload.onesignal_recipients ??
+        (Number(raw?.successful) > 0 ? Number(raw.successful) : basePayload.onesignal_recipients),
+    }
+    const sentAtFromOs = statsPatch.onesignal_sent_at
+    await pool.query(
+      `UPDATE notifications
+       SET payload = $2::jsonb,
+           sent_at = COALESCE(sent_at, $3::timestamptz),
+           updated_at = now()
+       WHERE id = $1`,
+      [id, JSON.stringify(merged), sentAtFromOs],
+    )
+    publishNotificationsChanged({ action: 'stats_synced', notificationId: id })
+    return merged
+  } catch (e) {
+    const merged = {
+      ...basePayload,
+      onesignal_stats_synced_at: new Date().toISOString(),
+      onesignal_stats_error: String(e.message || e).slice(0, 500),
+    }
+    await pool.query(
+      `UPDATE notifications SET payload = $2::jsonb, updated_at = now() WHERE id = $1`,
+      [id, JSON.stringify(merged)],
+    )
+    return null
+  }
+}
+
+export async function syncOneSignalStatsById(notificationId) {
+  const pool = requirePool()
+  const { rows } = await pool.query(`SELECT * FROM notifications WHERE id = $1 LIMIT 1`, [
+    String(notificationId),
+  ])
+  if (!rows[0]) return null
+  return syncOneSignalStatsForRow(rows[0])
+}
+
+/** Refresh stats for recently sent pushes (stale or never synced). */
+export async function syncStaleOneSignalStats({ limit = ONESIGNAL_STATS_SYNC_LIMIT } = {}) {
+  if (!isOneSignalConfigured()) return 0
+  const pool = requirePool()
+  const max = Math.min(25, Math.max(1, Number(limit) || ONESIGNAL_STATS_SYNC_LIMIT))
+  const staleSec = Math.ceil(ONESIGNAL_STATS_STALE_MS / 1000)
+  const { rows } = await pool.query(
+    `SELECT *
+     FROM notifications
+     WHERE status = 'sent'
+       AND COALESCE(payload->>'onesignal_id', '') <> ''
+       AND COALESCE(sent_at, created_at) > now() - interval '30 days'
+       AND (
+         payload->>'onesignal_stats_synced_at' IS NULL
+         OR (payload->>'onesignal_stats_synced_at')::timestamptz < now() - ($1::int * interval '1 second')
+       )
+     ORDER BY COALESCE(sent_at, created_at) DESC
+     LIMIT $2`,
+    [staleSec, max],
+  )
+  let synced = 0
+  for (const row of rows) {
+    const out = await syncOneSignalStatsForRow(row)
+    if (out) synced += 1
+  }
+  return synced
+}
+
+function scheduleOneSignalStatsRefresh(notificationId) {
+  const id = String(notificationId)
+  const run = () => {
+    void syncOneSignalStatsById(id).catch((e) => {
+      console.error('[notifications] OneSignal stats sync failed:', e)
+    })
+  }
+  run()
+  setTimeout(run, 8_000)
+  setTimeout(run, 30_000)
+  setTimeout(run, 120_000)
 }
 
 function publishNotificationsChanged(meta = {}) {
@@ -232,6 +357,7 @@ export async function flushDueNotifications() {
          WHERE id = $1`,
         [id, JSON.stringify(newPayload)],
       )
+      scheduleOneSignalStatsRefresh(id)
     } catch (e) {
       const failPayload = {
         ...sanitizePayload(row.payload),
@@ -288,6 +414,7 @@ function normalizeAdminNotificationInput(body, existing = null) {
 
 export async function listNotificationsAdmin() {
   await flushDueNotifications()
+  await syncStaleOneSignalStats()
   const pool = requirePool()
   const { rows } = await pool.query(
     `SELECT *
@@ -382,6 +509,9 @@ export async function createAdminNotification(body, actor = 'Admin') {
     ],
   )
   publishNotificationsChanged({ action: 'created', notificationId: rows[0]?.id })
+  if (next.status === 'sent' && mergedPayload.onesignal_id) {
+    scheduleOneSignalStatsRefresh(rows[0]?.id)
+  }
   return toApiNotification(rows[0])
 }
 

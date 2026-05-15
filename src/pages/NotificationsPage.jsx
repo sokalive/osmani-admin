@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Bell, MousePointerClick } from 'lucide-react'
+import { Bell, MousePointerClick, X } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
@@ -19,6 +19,34 @@ function inputClass() {
 
 function labelClass() {
   return 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400'
+}
+
+function statNum(value) {
+  if (value == null || Number.isNaN(Number(value))) return '—'
+  return Number(value).toLocaleString()
+}
+
+function statPct(value) {
+  if (value == null || Number.isNaN(Number(value))) return '—'
+  return `${Number(value).toFixed(1)}%`
+}
+
+function StatBadge({ label, value, tone = 'slate' }) {
+  const tones = {
+    emerald: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-100',
+    sky: 'border-sky-500/35 bg-sky-500/15 text-sky-100',
+    red: 'border-red-500/35 bg-red-500/15 text-red-100',
+    amber: 'border-amber-500/35 bg-amber-500/15 text-amber-100',
+    slate: 'border-slate-600/50 bg-slate-800/60 text-slate-200',
+  }
+  return (
+    <span
+      className={`inline-flex min-w-[4.5rem] flex-col rounded-lg border px-2 py-1 text-center ring-1 ring-white/[0.03] ${tones[tone] || tones.slate}`}
+    >
+      <span className="text-[9px] font-bold uppercase tracking-wide opacity-80">{label}</span>
+      <span className="text-sm font-bold tabular-nums">{value}</span>
+    </span>
+  )
 }
 
 function NotificationsPage() {
@@ -42,7 +70,7 @@ function NotificationsPage() {
   useEffect(() => {
     const id = window.setInterval(() => {
       loadNotifications()
-    }, 60_000)
+    }, 15_000)
     return () => window.clearInterval(id)
   }, [loadNotifications])
 
@@ -70,6 +98,7 @@ function NotificationsPage() {
   const [diag, setDiag] = useState(null)
   const [diagBusy, setDiagBusy] = useState(false)
   const [flash, setFlash] = useState(null)
+  const [detailRow, setDetailRow] = useState(null)
 
   const showFlash = useCallback((type, msg) => {
     setFlash({ type, message: msg })
@@ -77,9 +106,13 @@ function NotificationsPage() {
   }, [])
 
   const stats = useMemo(() => {
-    const sent = notifications.filter((n) => n.status === 'sent').length
-    const clicks = notifications.reduce((s, n) => s + (Number(n.clicks) || 0), 0)
-    return { sent, clicks }
+    const sentRows = notifications.filter((n) => n.status === 'sent')
+    const sent = sentRows.length
+    const delivered = sentRows.reduce((s, n) => s + (Number(n.onesignalDelivered) || 0), 0)
+    const clicked = sentRows.reduce((s, n) => s + (Number(n.onesignalClicked) || 0), 0)
+    const failed = sentRows.reduce((s, n) => s + (Number(n.onesignalFailed) || 0), 0)
+    const ctr = delivered > 0 ? Math.round((clicked / delivered) * 1000) / 10 : null
+    return { sent, delivered, clicked, failed, ctr }
   }, [notifications])
 
   useEffect(() => {
@@ -289,20 +322,32 @@ function NotificationsPage() {
           ) : null}
         </header>
 
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <div className="rounded-2xl border border-violet-500/25 bg-violet-950/25 p-5 ring-1 ring-violet-500/15">
             <div className="flex items-center gap-2 text-violet-300">
               <Bell className="h-5 w-5" />
-              <span className="text-xs font-semibold uppercase tracking-wide">Total sent</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wide">Campaigns sent</span>
             </div>
             <p className="mt-3 text-4xl font-bold text-white">{stats.sent}</p>
+          </div>
+          <div className="rounded-2xl border border-emerald-500/25 bg-emerald-950/20 p-4 ring-1 ring-emerald-500/15">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-300">Delivered</span>
+            <p className="mt-2 text-3xl font-bold text-white">{statNum(stats.delivered)}</p>
           </div>
           <div className="rounded-2xl border border-cyan-500/25 bg-cyan-950/25 p-5 ring-1 ring-cyan-500/15">
             <div className="flex items-center gap-2 text-cyan-300">
               <MousePointerClick className="h-5 w-5" />
-              <span className="text-xs font-semibold uppercase tracking-wide">Total clicks</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wide">Clicked (OneSignal)</span>
             </div>
-            <p className="mt-3 text-4xl font-bold text-white">{stats.clicks}</p>
+            <p className="mt-3 text-4xl font-bold text-white">{statNum(stats.clicked)}</p>
+          </div>
+          <div className="rounded-2xl border border-red-500/25 bg-red-950/20 p-4 ring-1 ring-red-500/15">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-red-300">Failed</span>
+            <p className="mt-2 text-3xl font-bold text-white">{statNum(stats.failed)}</p>
+          </div>
+          <div className="col-span-2 rounded-2xl border border-amber-500/25 bg-amber-950/20 p-4 ring-1 ring-amber-500/15 sm:col-span-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-300">Avg CTR</span>
+            <p className="mt-2 text-3xl font-bold text-white">{stats.ctr != null ? statPct(stats.ctr) : '—'}</p>
           </div>
         </section>
 
@@ -435,7 +480,12 @@ function NotificationsPage() {
 
         <section>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-semibold text-white">History</h2>
+            <div>
+              <h2 className="text-lg font-semibold text-white">History</h2>
+              <p className="text-xs text-slate-500">
+                Delivery stats sync from OneSignal automatically (refreshes every 15s while this page is open).
+              </p>
+            </div>
             <button
               type="button"
               disabled={deletingAll || notifications.length === 0}
@@ -447,17 +497,18 @@ function NotificationsPage() {
           </div>
           <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[800px] border-collapse text-left text-sm">
+              <table className="w-full min-w-[1100px] border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-700/80 bg-slate-900/50 text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-4 py-3 font-semibold">Title</th>
                     <th className="px-4 py-3 font-semibold">Message</th>
-                    <th className="px-4 py-3 font-semibold">Link</th>
-                    <th className="px-4 py-3 font-semibold">Clicks</th>
+                    <th className="px-4 py-3 font-semibold">Delivered</th>
+                    <th className="px-4 py-3 font-semibold">Clicked</th>
+                    <th className="px-4 py-3 font-semibold">Failed</th>
+                    <th className="px-4 py-3 font-semibold">CTR</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
-                    <th className="px-4 py-3 font-semibold">Push</th>
-                    <th className="px-4 py-3 font-semibold">Date</th>
-                    <th className="px-4 py-3 font-semibold text-right">Action</th>
+                    <th className="px-4 py-3 font-semibold">Sent</th>
+                    <th className="px-4 py-3 font-semibold text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -470,10 +521,22 @@ function NotificationsPage() {
                       <td className="max-w-[200px] truncate px-4 py-3 text-slate-400">
                         {n.message}
                       </td>
-                      <td className="max-w-[140px] truncate px-4 py-3 font-mono text-xs text-amber-200/90">
-                        {n.targetType}
+                      <td className="px-4 py-3">
+                        <StatBadge label="Del" value={statNum(n.onesignalDelivered)} tone="emerald" />
                       </td>
-                      <td className="px-4 py-3 text-slate-200">{n.clicks ?? 0}</td>
+                      <td className="px-4 py-3">
+                        <StatBadge label="Clk" value={statNum(n.onesignalClicked)} tone="sky" />
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatBadge label="Fail" value={statNum(n.onesignalFailed)} tone="red" />
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatBadge
+                          label="CTR"
+                          value={n.onesignalCtr != null ? statPct(n.onesignalCtr) : '—'}
+                          tone="amber"
+                        />
+                      </td>
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex rounded-lg px-2 py-0.5 text-[11px] font-bold uppercase ring-1 ${
@@ -495,29 +558,31 @@ function NotificationsPage() {
                           </p>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3 font-mono text-[11px] text-slate-400">
-                        {n.onesignalId ? (
-                          <span title={n.onesignalId}>
-                            {n.onesignalId.slice(0, 12)}…
-                            {n.onesignalRecipients != null ? (
-                              <span className="mt-0.5 block text-slate-500">
-                                {n.onesignalRecipients} rcpt
-                              </span>
-                            ) : null}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
                       <td className="px-4 py-3 whitespace-nowrap text-slate-400">
-                        {n.sentAt
-                          ? new Date(n.sentAt).toLocaleString()
-                          : n.scheduleAt
-                            ? `Due ${new Date(n.scheduleAt).toLocaleString()}`
-                            : new Date(n.createdAt).toLocaleString()}
+                        {n.onesignalSentAt
+                          ? new Date(n.onesignalSentAt).toLocaleString()
+                          : n.sentAt
+                            ? new Date(n.sentAt).toLocaleString()
+                            : n.scheduleAt
+                              ? `Due ${new Date(n.scheduleAt).toLocaleString()}`
+                              : new Date(n.createdAt).toLocaleString()}
+                        {n.onesignalStatsSyncedAt ? (
+                          <p className="mt-0.5 text-[10px] text-slate-600" title={n.onesignalStatsSyncedAt}>
+                            synced {new Date(n.onesignalStatsSyncedAt).toLocaleTimeString()}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="inline-flex flex-col items-end gap-1 sm:flex-row sm:items-center">
+                          {n.onesignalId ? (
+                            <button
+                              type="button"
+                              onClick={() => setDetailRow(n)}
+                              className="rounded-lg border border-slate-600 px-2 py-1 text-xs font-medium text-slate-300 hover:border-violet-500/40 hover:text-violet-200"
+                            >
+                              Details
+                            </button>
+                          ) : null}
                           {n.status === 'sent' ? (
                             <button
                               type="button"
@@ -547,6 +612,88 @@ function NotificationsPage() {
             ) : null}
           </div>
         </section>
+
+        {detailRow ? (
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notif-detail-title"
+          >
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/75"
+              aria-label="Close"
+              onClick={() => setDetailRow(null)}
+            />
+            <div className="relative z-10 w-full max-w-lg rounded-2xl border border-slate-700/80 bg-slate-950 p-6 shadow-2xl ring-1 ring-white/10">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h3 id="notif-detail-title" className="text-lg font-semibold text-white">
+                    {detailRow.title}
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-400">{detailRow.message}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDetailRow(null)}
+                  className="rounded-lg border border-slate-600 p-1.5 text-slate-400 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mb-4 flex flex-wrap gap-2">
+                <StatBadge label="Delivered" value={statNum(detailRow.onesignalDelivered)} tone="emerald" />
+                <StatBadge label="Confirmed" value={statNum(detailRow.onesignalConfirmed)} tone="emerald" />
+                <StatBadge label="Clicked" value={statNum(detailRow.onesignalClicked)} tone="sky" />
+                <StatBadge label="Failed" value={statNum(detailRow.onesignalFailed)} tone="red" />
+                <StatBadge
+                  label="CTR"
+                  value={detailRow.onesignalCtr != null ? statPct(detailRow.onesignalCtr) : '—'}
+                  tone="amber"
+                />
+              </div>
+              <dl className="space-y-2 text-xs text-slate-400">
+                <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
+                  <dt>OneSignal ID</dt>
+                  <dd className="max-w-[60%] truncate font-mono text-slate-200" title={detailRow.onesignalId || ''}>
+                    {detailRow.onesignalId || '—'}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
+                  <dt>Deep link</dt>
+                  <dd className="max-w-[60%] truncate font-mono text-amber-200/90">{detailRow.targetType}</dd>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
+                  <dt>Sent (OneSignal)</dt>
+                  <dd className="text-slate-200">
+                    {detailRow.onesignalSentAt
+                      ? new Date(detailRow.onesignalSentAt).toLocaleString()
+                      : detailRow.sentAt
+                        ? new Date(detailRow.sentAt).toLocaleString()
+                        : '—'}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
+                  <dt>Stats synced</dt>
+                  <dd className="text-slate-200">
+                    {detailRow.onesignalStatsSyncedAt
+                      ? new Date(detailRow.onesignalStatsSyncedAt).toLocaleString()
+                      : 'Pending…'}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
+                  <dt>Admin click attribution</dt>
+                  <dd className="text-slate-200">{detailRow.clicks ?? 0}</dd>
+                </div>
+                <div className="flex justify-between gap-4 py-2">
+                  <dt>Status</dt>
+                  <dd className="text-slate-200">{detailRow.deliveryState === 'failed' ? 'failed' : detailRow.status}</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        ) : null}
       </main>
     </>
   )
