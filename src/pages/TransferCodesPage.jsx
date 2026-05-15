@@ -19,7 +19,6 @@ import {
   putTransferCode,
 } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
-import { appendSecurityLog } from '../lib/securityActivityLog'
 
 function effectiveStatus(row, nowMs) {
   if (row.status === 'revoked' || row.status === 'used') return row.status
@@ -85,6 +84,7 @@ function TransferCodesPage() {
     es.addEventListener('transfer_requested', onRefresh)
     es.addEventListener('transfer_completed', onRefresh)
     es.addEventListener('transfer_rejected', onRefresh)
+    es.addEventListener('transfer_codes_changed', onRefresh)
     return () => es.close()
   }, [loadCodes])
 
@@ -169,12 +169,6 @@ function TransferCodesPage() {
         return next
       })
       await loadCodes()
-      appendSecurityLog({
-        actor: 'Admin',
-        eventType: 'Code transfer',
-        status: 'completed',
-        detail: `revoked · id ${String(cid).slice(0, 8)}…`,
-      })
       showFlash('success', 'Code revoked.')
     } catch (e) {
       showToast('error', e?.message || 'Revoke failed')
@@ -183,14 +177,8 @@ function TransferCodesPage() {
 
   async function generateOne() {
     try {
-      const created = await postTransferCode({ deviceUser: 'Unassigned device', hours: 24 })
+      await postTransferCode({ deviceUser: 'Unassigned device', hours: 24 })
       await loadCodes()
-      appendSecurityLog({
-        actor: 'Admin',
-        eventType: 'Code transfer',
-        status: 'completed',
-        detail: `issued ${created?.code || 'transfer code'} · expires ${(created?.expiresAt || '').slice(0, 10)}`,
-      })
       showFlash('success', 'New transfer code generated.')
     } catch (e) {
       showToast('error', e?.message || 'Generate failed')

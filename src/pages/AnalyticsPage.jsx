@@ -24,6 +24,7 @@ import {
   getAnalyticsChannels,
   getAnalyticsLocations,
   getAnalyticsOverview,
+  getChannels,
   syncStreamUrl,
   getAnalyticsTrend,
 } from '../lib/api'
@@ -100,6 +101,7 @@ function AnalyticsPage() {
   const { showToast } = useToast()
   const [overview, setOverview] = useState({})
   const [channels, setChannels] = useState([])
+  const [channelCatalog, setChannelCatalog] = useState([])
   const [locations, setLocations] = useState([])
   const [trend, setTrend] = useState([])
   const [isLoading, setIsLoading] = useState(true)
@@ -111,14 +113,16 @@ function AnalyticsPage() {
   const load = useCallback(async () => {
     try {
       setError('')
-      const [o, c, l, t] = await Promise.all([
+      const [o, c, l, t, catalog] = await Promise.all([
         getAnalyticsOverview(),
         getAnalyticsChannels(),
         getAnalyticsLocations(),
         getAnalyticsTrend(),
+        getChannels(),
       ])
       setOverview(o && typeof o === 'object' ? o : {})
       setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
+      setChannelCatalog(Array.isArray(catalog) ? catalog : [])
       setLocations(Array.isArray(l) ? l : [])
       setTrend(Array.isArray(t) ? t : [])
       setIsDegraded(Boolean(o?.degraded || c?.degraded))
@@ -129,6 +133,7 @@ function AnalyticsPage() {
       setError(e?.message || 'Could not load analytics')
       setOverview({})
       setChannels([])
+      setChannelCatalog([])
       setLocations([])
       setTrend([])
       setLoaded(true)
@@ -197,14 +202,23 @@ function AnalyticsPage() {
   }, [trend])
 
   const topContent = useMemo(
-    () =>
-      (Array.isArray(channels) ? channels : []).slice(0, 8).map((r) => ({
+    () => {
+      const nameById = new Map(
+        (Array.isArray(channelCatalog) ? channelCatalog : []).map((row) => [
+          String(row?.id ?? '').trim(),
+          String(row?.name ?? '').trim(),
+        ]),
+      )
+      return (Array.isArray(channels) ? channels : []).slice(0, 8).map((r) => ({
         id: String(r.channel_id ?? ''),
-        title: String(r.channel_id ?? 'Unknown Channel'),
+        title:
+          nameById.get(String(r.channel_id ?? '').trim()) ||
+          String(r.channel_id ?? 'Unknown Channel'),
         views: Number(r.viewers) || 0,
         bar: 100,
-      })),
-    [channels],
+      }))
+    },
+    [channelCatalog, channels],
   )
 
   const vOnline = useCountUp(onlineNow, { duration: 900 })
@@ -257,17 +271,17 @@ function AnalyticsPage() {
             display={vOnline.toLocaleString('en-TZ')}
             icon={Radio}
             gradientClass="bg-gradient-to-br from-cyan-400/95 via-teal-600/95 to-slate-900/95"
-            sub="Estimated from active subscriptions"
+            sub="Active live sessions within runtime TTL"
           />
           <MetricCard
-            title="New Users Today"
+            title="New Subscriptions Today"
             display={vNewUsers.toLocaleString('en-TZ')}
             icon={UserPlus}
             gradientClass="bg-gradient-to-br from-violet-400/95 via-purple-700/95 to-slate-900/95"
-            sub="From device subscriptions"
+            sub="Started device subscriptions today"
           />
           <MetricCard
-            title="Daily Active Users"
+            title="Live Devices Today"
             display={vDau.toLocaleString('en-TZ')}
             icon={Activity}
             gradientClass="bg-gradient-to-br from-emerald-400/95 via-emerald-700/95 to-slate-900/95"
@@ -290,8 +304,8 @@ function AnalyticsPage() {
         </section>
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <ChartBlock title="Live users trend (recent)" chartId="d7" data={chartShort} />
-          <ChartBlock title="Live users trend (24h)" chartId="d30" data={chartLong} />
+          <ChartBlock title="App installs growth (recent)" chartId="d7" data={chartShort} />
+          <ChartBlock title="App installs growth (24h)" chartId="d30" data={chartLong} />
         </div>
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">

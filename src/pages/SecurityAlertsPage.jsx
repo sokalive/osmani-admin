@@ -15,8 +15,10 @@ import {
   deleteSecurityAlert,
   getSecuritySuite,
   postAdminForceTransferPhone,
+  postSubscriptionRevoke,
   postSecurityAlertsBulkDelete,
   postSecuritySuiteRestoreWhitelist,
+  syncStreamUrl,
   putSecuritySuite,
 } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
@@ -83,6 +85,22 @@ function SecurityAlertsPage() {
 
   useEffect(() => {
     load()
+  }, [load])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onRefresh = () => {
+      void load()
+    }
+    es.addEventListener('security_event_logged', onRefresh)
+    es.addEventListener('security_alerts_changed', onRefresh)
+    es.addEventListener('security_logs_changed', onRefresh)
+    es.addEventListener('security_suite_changed', onRefresh)
+    es.addEventListener('transfer_requested', onRefresh)
+    es.addEventListener('transfer_completed', onRefresh)
+    es.addEventListener('transfer_rejected', onRefresh)
+    es.addEventListener('subscription_revoked', onRefresh)
+    return () => es.close()
   }, [load])
 
   const stats = useMemo(() => {
@@ -276,6 +294,24 @@ function SecurityAlertsPage() {
     }
   }, [showToast])
 
+  const handleRuntimeRevoke = useCallback(
+    async (deviceId) => {
+      const id = String(deviceId ?? '').trim()
+      if (!id) {
+        showToast('error', 'No device id on this alert (actor empty).')
+        return
+      }
+      try {
+        await postSubscriptionRevoke({ device_id: id })
+        showToast('success', `Runtime revoked · ${id.slice(0, 24)}${id.length > 24 ? '…' : ''}`)
+        await load()
+      } catch (e) {
+        showToast('error', e?.message || 'Runtime revoke failed')
+      }
+    },
+    [load, showToast],
+  )
+
   return (
     <>
       <Topbar />
@@ -285,7 +321,7 @@ function SecurityAlertsPage() {
             Security Alerts
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Real-time monitoring of suspicious activity
+            Backend-driven monitoring of suspicious runtime and device activity.
           </p>
         </header>
 
@@ -498,17 +534,17 @@ function SecurityAlertsPage() {
                     <div className="flex w-full flex-wrap gap-1.5 lg:justify-end">
                       <button
                         type="button"
-                        onClick={() => persistBlock(deviceIdFromAlert(a), '30m temporary block')}
+                        onClick={() => persistBlock(deviceIdFromAlert(a), 'Blocked by security alert')}
                         className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/20"
                       >
-                        Block 30m
+                        Block Device
                       </button>
                       <button
                         type="button"
                         onClick={() => deleteOne(a.id)}
                         className="rounded-lg border border-sky-500/35 bg-sky-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-sky-100 hover:bg-sky-500/20"
                       >
-                        Allow Once
+                        Resolve Alert
                       </button>
                       <button
                         type="button"
@@ -519,12 +555,10 @@ function SecurityAlertsPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={() =>
-                          persistBlock(deviceIdFromAlert(a), 'Account locked (security alert)')
-                        }
+                        onClick={() => handleRuntimeRevoke(deviceIdFromAlert(a))}
                         className="rounded-lg border border-red-500/45 bg-red-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-red-100 hover:bg-red-500/25"
                       >
-                        Lock Account
+                        Revoke Runtime
                       </button>
                       <button
                         type="button"
@@ -539,14 +573,6 @@ function SecurityAlertsPage() {
                         className="rounded-lg border border-slate-600 bg-slate-900/70 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
                       >
                         View Logs
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteOne(a.id)}
-                        className="inline-flex items-center gap-1 rounded-lg border border-red-500/35 bg-red-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-red-200 hover:bg-red-500/20"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete
                       </button>
                     </div>
                   </div>

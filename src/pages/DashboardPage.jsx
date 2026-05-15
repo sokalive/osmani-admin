@@ -26,31 +26,11 @@ const OVERVIEW_FALLBACK = {
   newUsersToday: 0,
 }
 
-function expandLocationsForCard(rows) {
-  if (!Array.isArray(rows)) return []
-  const out = []
-  for (const row of rows) {
-    const n = Math.min(5000, Math.max(0, Math.floor(Number(row.users) || 0)))
-    const country = String(row.country || '').trim()
-    const cc =
-      country.length === 2
-        ? country.toUpperCase()
-        : country.slice(0, 2).toUpperCase() || 'TZ'
-    for (let i = 0; i < n; i += 1) {
-      out.push({
-        countryCode: cc || 'TZ',
-        countryName: country || 'Tanzania',
-        status: 'online',
-      })
-    }
-  }
-  return out
-}
-
 function DashboardPage() {
   const { showToast } = useToast()
   const [overview, setOverview] = useState(OVERVIEW_FALLBACK)
   const [channels, setChannels] = useState([])
+  const [topFiveChannels, setTopFiveChannels] = useState([])
   const [channelCatalog, setChannelCatalog] = useState([])
   const [locations, setLocations] = useState([])
   const [trend, setTrend] = useState([])
@@ -65,9 +45,9 @@ function DashboardPage() {
         getAnalyticsTrend(),
         getChannels(),
       ])
-      console.log('API DATA:', o)
       setOverview((o && typeof o === 'object' ? o : null) || OVERVIEW_FALLBACK)
       setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
+      setTopFiveChannels(Array.isArray(c?.top5) ? c.top5 : [])
       setChannelCatalog(Array.isArray(catalog) ? catalog : [])
       setLocations(Array.isArray(l) ? l : [])
       setTrend(
@@ -88,6 +68,7 @@ function DashboardPage() {
       showToast('error', e?.message || 'Could not load dashboard')
       setOverview({})
       setChannels([])
+      setTopFiveChannels([])
       setChannelCatalog([])
       setLocations([])
       setTrend([])
@@ -124,11 +105,6 @@ function DashboardPage() {
     return n.toLocaleString('en-TZ')
   }, [overview])
 
-  const liveUsersList = useMemo(
-    () => expandLocationsForCard(locations),
-    [locations],
-  )
-
   const channelNameById = useMemo(() => {
     const m = new Map()
     for (const row of Array.isArray(channelCatalog) ? channelCatalog : []) {
@@ -151,8 +127,15 @@ function DashboardPage() {
   }, [channels, channelNameById])
 
   const topFiveEligible = useMemo(() => {
-    return mostWatched.filter((x) => Number(x.watchers) >= 10)
-  }, [mostWatched])
+    const rows = Array.isArray(topFiveChannels) ? topFiveChannels : []
+    return rows.map((r) => ({
+      id: String(r.channel_id ?? ''),
+      name:
+        channelNameById.get(String(r.channel_id ?? '').trim()) ||
+        String(r.channel_id ?? 'Unknown Channel'),
+      watchers: Number(r.viewers) || 0,
+    }))
+  }, [channelNameById, topFiveChannels])
 
   const section1Cards = [
     {
@@ -174,7 +157,7 @@ function DashboardPage() {
             <StatCard key={`top-${section1Cards[0].title}`} {...section1Cards[0]} />
             <MostWatchedChannelsListCard channels={mostWatched} />
             <MostWatchedChannelsCard channels={topFiveEligible} />
-            <LiveUserLocationsCard users={liveUsersList} />
+            <LiveUserLocationsCard locations={locations} />
           </section>
         </div>
         <LiveUsersTrendSection points={trend} />

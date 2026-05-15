@@ -2,6 +2,11 @@
  * OneSignal REST API — production push (no mock).
  * @see https://documentation.onesignal.com/reference/create-notification
  *
+ * Uses the current Create notification URL (`https://api.onesignal.com/notifications`).
+ * Legacy `https://onesignal.com/api/v1/notifications` can mis-resolve segment/filter audiences
+ * for User Model apps while subscription-id sends still appear to work. Override with
+ * ONESIGNAL_API_URL if needed.
+ *
  * Audience (non-all): uses tag filter. Mobile app must set the same tag on devices, e.g.
  *   OneSignal.User.addTag("osmani_audience", "premium")
  * Tag key overridable via ONESIGNAL_AUDIENCE_TAG_KEY (default: osmani_audience).
@@ -13,7 +18,12 @@
  * include_player_ids — no segments/filters. Only one targeting mode per request.
  */
 
-const ONESIGNAL_API = 'https://onesignal.com/api/v1/notifications'
+const ONESIGNAL_API_DEFAULT = 'https://api.onesignal.com/notifications'
+
+function getOneSignalApiUrl() {
+  const u = String(process.env.ONESIGNAL_API_URL ?? '').trim()
+  return u || ONESIGNAL_API_DEFAULT
+}
 
 /** Classify targeting from the exact object POSTed to OneSignal (after app_id merge). */
 export function classifyOneSignalTargetingWire(body) {
@@ -82,17 +92,18 @@ async function postOneSignalCreate(body, meta = {}) {
       ? String(meta.targetingBranchSelected)
       : null
 
+  const apiUrl = getOneSignalApiUrl()
   // TEMP: exact wire verification (production + test). Remove after diagnosing OneSignal targeting.
   logOneSignalDiag('before_post', {
     source: meta.source || 'unknown',
-    url: ONESIGNAL_API,
+    url: apiUrl,
     targetingWire: wire.branch,
     targetingWireDetail: wire.detail,
     targetingBranchSelected,
     requestPayload: full,
   })
 
-  const res = await fetch(ONESIGNAL_API, {
+  const res = await fetch(apiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -104,7 +115,7 @@ async function postOneSignalCreate(body, meta = {}) {
 
   logOneSignalDiag('after_post', {
     source: meta.source || 'unknown',
-    url: ONESIGNAL_API,
+    url: apiUrl,
     httpStatus: res.status,
     ok: res.ok,
     targetingWire: wire.branch,

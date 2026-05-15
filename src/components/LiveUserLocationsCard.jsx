@@ -14,30 +14,77 @@ function flagEmoji(countryCode) {
   }
 }
 
-function aggregateOnlineByCountry(users) {
-  const map = new Map()
-  for (const u of users) {
-    if (u.status !== 'online') continue
-    const key = u.countryCode
-    const existing = map.get(key)
-    if (existing) {
-      existing.count += 1
-    } else {
-      map.set(key, {
-        countryCode: key,
-        countryName: u.countryName,
-        count: 1,
-      })
+const UNKNOWN = 'Unknown Location'
+
+/**
+ * API rows use `{ country, users }` where `country` is a normalized label such as `TZ • Dar es Salaam`.
+ */
+function parseCountryPlaceLine(rawLabel) {
+  const raw = String(rawLabel ?? '').trim() || UNKNOWN
+  const bullet = /^([A-Za-z]{2})\s*[•·]\s*(.+)$/u.exec(raw)
+  if (bullet) {
+    const countryCode = bullet[1].toUpperCase()
+    const place = bullet[2].trim() || UNKNOWN
+    return {
+      countryCode,
+      displayLine: `${countryCode} • ${place}`,
     }
   }
-  return [...map.values()].sort((a, b) => b.count - a.count)
+  const isoOnly = /^([A-Za-z]{2})$/u.exec(raw)
+  if (isoOnly) {
+    const countryCode = isoOnly[1].toUpperCase()
+    return {
+      countryCode,
+      displayLine: `${countryCode} • ${UNKNOWN}`,
+    }
+  }
+  const leadIso = /^([A-Za-z]{2})\b/u.exec(raw)
+  if (leadIso) {
+    const countryCode = leadIso[1].toUpperCase()
+    const rest = raw.slice(2).replace(/^\s*[•·\-|]\s*/u, '').trim()
+    const place = rest && rest !== countryCode ? rest : UNKNOWN
+    return {
+      countryCode,
+      displayLine: `${countryCode} • ${place}`,
+    }
+  }
+  return {
+    countryCode: '',
+    displayLine: raw,
+  }
+}
+
+function userCountLabel(n) {
+  const count = Math.max(0, Math.floor(Number(n) || 0))
+  if (count <= 0) return ''
+  if (count === 1) return '1 user'
+  return `${count} users`
+}
+
+function normalizeLocationRows(locations) {
+  if (!Array.isArray(locations)) return []
+  return locations
+    .map((row) => {
+      const raw = String(row?.country ?? '').trim() || UNKNOWN
+      const count = Math.max(0, Math.floor(Number(row?.users) || 0))
+      const { countryCode, displayLine } = parseCountryPlaceLine(raw)
+      return {
+        /** Full bucket label from API — unique per region/city row (not only ISO). */
+        key: raw,
+        countryCode,
+        displayLine,
+        count,
+      }
+    })
+    .filter((row) => row.count > 0)
+    .sort((a, b) => b.count - a.count || String(a.displayLine).localeCompare(String(b.displayLine)))
 }
 
 /**
  * Same footprint as other `.dashboard-card` tiles — header fixed, list scrolls inside.
  */
-function LiveUserLocationsCard({ users, className = 'dashboard-card' }) {
-  const rows = useMemo(() => aggregateOnlineByCountry(users), [users])
+function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
+  const rows = useMemo(() => normalizeLocationRows(locations), [locations])
 
   return (
     <article
@@ -54,7 +101,7 @@ function LiveUserLocationsCard({ users, className = 'dashboard-card' }) {
       <div className="card-content">
         <ul className="live-locations-list">
           {rows.map((row) => (
-            <li key={row.countryCode} className="live-location-row">
+            <li key={row.key} className="live-location-row">
               <span className="flex min-w-0 flex-1 items-center gap-2.5">
                 <span
                   className="inline-flex shrink-0 items-center justify-center leading-none"
@@ -63,12 +110,12 @@ function LiveUserLocationsCard({ users, className = 'dashboard-card' }) {
                 >
                   {flagEmoji(row.countryCode)}
                 </span>
-                <span className="truncate text-[15px] font-semibold text-[#FFFFFF]">
-                  {row.countryName}
+                <span className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-[#FFFFFF]">
+                  {row.displayLine}
                 </span>
               </span>
               <span className="shrink-0 text-[14px] font-medium tabular-nums text-[#BFC7D5]">
-                {row.count} users
+                {userCountLabel(row.count)}
               </span>
             </li>
           ))}

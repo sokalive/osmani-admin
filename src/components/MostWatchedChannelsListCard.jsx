@@ -30,7 +30,7 @@ function MostWatchedChannelsListCard({ channels, className = 'dashboard-card' })
                 {row.name}
               </span>
               <span className="watcher-badge dashboard-mwc-watchers-pill shrink-0 tabular-nums">
-                {row.watchers.toLocaleString()} watchers
+                {row.watchers.toLocaleString()} live sessions
               </span>
             </li>
           ))}

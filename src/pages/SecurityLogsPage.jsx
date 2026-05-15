@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ClipboardList, Shield, Trash2 } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { deleteSecurityLog, getSecurityLogs, postSecurityLogsBulkDelete } from '../lib/api'
+import { deleteSecurityLog, getSecurityLogs, postSecurityLogsBulkDelete, syncStreamUrl } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
 
 function isTransferAttempt(row) {
@@ -32,6 +32,21 @@ function SecurityLogsPage() {
   useEffect(() => {
     const id = window.setInterval(refresh, 45_000)
     return () => window.clearInterval(id)
+  }, [refresh])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onRefresh = () => {
+      void refresh()
+    }
+    es.addEventListener('security_event_logged', onRefresh)
+    es.addEventListener('security_logs_changed', onRefresh)
+    es.addEventListener('security_alerts_changed', onRefresh)
+    es.addEventListener('transfer_requested', onRefresh)
+    es.addEventListener('transfer_completed', onRefresh)
+    es.addEventListener('transfer_rejected', onRefresh)
+    es.addEventListener('subscription_revoked', onRefresh)
+    return () => es.close()
   }, [refresh])
 
   const stats = useMemo(() => {

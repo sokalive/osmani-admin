@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { getAdminAuthStatus } from '../lib/api'
+import { getAdminAuthMe, getAdminAuthStatus, postAdminLogout } from '../lib/api'
 
 const TOKEN_KEY = 'osmani_admin_token'
 const PENDING_OTP_KEY = 'osmani_admin_pending_otp_token'
@@ -16,6 +16,7 @@ export function AdminAuthProvider({ children }) {
   const [email, setEmail] = useState(() =>
     typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('osmani_admin_email') : null,
   )
+  const [sessionChecked, setSessionChecked] = useState(false)
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -65,18 +66,53 @@ export function AdminAuthProvider({ children }) {
   }, [])
 
   const logout = useCallback(() => {
+    void postAdminLogout().catch(() => {})
     sessionStorage.removeItem(TOKEN_KEY)
     sessionStorage.removeItem('osmani_admin_email')
     sessionStorage.removeItem(PENDING_OTP_KEY)
     sessionStorage.removeItem(PENDING_EMAIL_KEY)
     setTokenState(null)
     setEmail(null)
+    setSessionChecked(true)
     window.dispatchEvent(new Event('osmani-admin-auth'))
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!ready) return undefined
+    if (!panelAuthRequired || !token) {
+      setSessionChecked(true)
+      return undefined
+    }
+    setSessionChecked(false)
+    void getAdminAuthMe()
+      .then((me) => {
+        if (cancelled) return
+        if (!me || me.ok !== true) {
+          logout()
+          return
+        }
+        const nextEmail = String(me.email ?? '').trim()
+        if (nextEmail) {
+          sessionStorage.setItem('osmani_admin_email', nextEmail)
+          setEmail(nextEmail)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) logout()
+      })
+      .finally(() => {
+        if (!cancelled) setSessionChecked(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ready, panelAuthRequired, token, logout])
 
   const value = useMemo(
     () => ({
       ready,
+      sessionChecked,
       panelAuthRequired,
       token,
       email,
@@ -85,7 +121,7 @@ export function AdminAuthProvider({ children }) {
       logout,
       refreshStatus,
     }),
-    [ready, panelAuthRequired, token, email, setSession, setPendingOtp, logout, refreshStatus],
+    [ready, sessionChecked, panelAuthRequired, token, email, setSession, setPendingOtp, logout, refreshStatus],
   )
 
   return <AdminAuthContext.Provider value={value}>{children}</AdminAuthContext.Provider>

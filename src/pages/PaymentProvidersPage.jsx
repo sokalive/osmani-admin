@@ -6,6 +6,7 @@ import {
   deletePaymentProvider,
   getPaymentProvidersSettings,
   postPaymentProviderFormData,
+  syncStreamUrl,
   putPaymentProviderFormData,
 } from '../lib/api'
 
@@ -52,6 +53,15 @@ function PaymentProvidersPage() {
       cancelled = true
       cancelAnimationFrame(raf)
     }
+  }, [load])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['config']))
+    const onRefresh = () => {
+      void load()
+    }
+    es.addEventListener('config.payment_providers_changed', onRefresh)
+    return () => es.close()
   }, [load])
 
   useEffect(() => {

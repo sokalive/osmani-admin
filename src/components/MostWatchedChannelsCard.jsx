@@ -47,7 +47,7 @@ function MostWatchedChannelsCard({ channels, className = 'dashboard-card' }) {
                   <span>{row.name}</span>
                 </p>
                 <p className="dashboard-top5-meta mt-1 tabular-nums">
-                  {row.watchers.toLocaleString()} active watchers
+                  {row.watchers.toLocaleString()} active live sessions
                 </p>
               </li>
             )

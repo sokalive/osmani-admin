@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { deleteTransactionsBulk, getTransactions } from '../lib/api'
+import { deleteTransactionsBulk, getTransactions, syncStreamUrl } from '../lib/api'
 import { endOfDay, isSameLocalDay, startOfDay } from '../lib/dates'
 import { formatTsh } from '../lib/formatMoney'
 
@@ -96,6 +96,16 @@ function TransactionsPage() {
 
   useEffect(() => {
     loadTx()
+  }, [loadTx])
+
+  useEffect(() => {
+    const es = new EventSource(syncStreamUrl(['analytics']))
+    const onRefresh = () => {
+      void loadTx()
+    }
+    es.addEventListener('analytics.transaction_updated', onRefresh)
+    es.addEventListener('analytics.subscription_updated', onRefresh)
+    return () => es.close()
   }, [loadTx])
 
   const todayStats = useMemo(() => computeTodayStats(transactions), [transactions])
@@ -311,7 +321,7 @@ function TransactionsPage() {
               <tbody>
                 {slice.map((row) => (
                   <tr
-                    key={row.id}
+                    key={row.order_id}
                     className="border-b border-slate-800/80 transition-colors hover:bg-slate-900/55"
                   >
                     <td className="px-4 py-3.5">
