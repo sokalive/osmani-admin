@@ -7,17 +7,9 @@ import {
   deleteAllNotifications,
   getNotifications,
   postNotification,
-  postOnesignalTestPush,
   putNotification,
   syncStreamUrl,
 } from '../lib/api'
-
-const AUDIENCES = [
-  { value: 'all', label: 'All users' },
-  { value: 'premium', label: 'Premium subscribers' },
-  { value: 'trial', label: 'Free trial' },
-  { value: 'inactive', label: 'Inactive / lapsed' },
-]
 
 function inputClass() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
@@ -65,7 +57,6 @@ function NotificationsPage() {
   const [message, setMessage] = useState('')
   const [imagePreview, setImagePreview] = useState(null)
   const [imageData, setImageData] = useState('')
-  const [targetAudience, setTargetAudience] = useState('all')
   const [targetType, setTargetType] = useState('osmani://home')
   const [scheduleDate, setScheduleDate] = useState('')
   const [scheduleTime, setScheduleTime] = useState('')
@@ -73,10 +64,6 @@ function NotificationsPage() {
   const [touched, setTouched] = useState(false)
   const [sending, setSending] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
-  const [testSubId, setTestSubId] = useState('')
-  const [testOnesignalUserId, setTestOnesignalUserId] = useState('')
-  const [testPlayerId, setTestPlayerId] = useState('')
-  const [testBusy, setTestBusy] = useState(false)
   const [flash, setFlash] = useState(null)
 
   const showFlash = useCallback((type, msg) => {
@@ -146,7 +133,7 @@ function NotificationsPage() {
         title: title.trim(),
         message: message.trim(),
         image: imageData || '',
-        targetAudience,
+        targetAudience: 'all',
         targetType: targetType.trim(),
         scheduleAt: instant ? null : new Date(iso).toISOString(),
         status: instant ? 'sent' : 'scheduled',
@@ -160,8 +147,8 @@ function NotificationsPage() {
         showFlash(
           'success',
           typeof r === 'number'
-            ? `Push sent via OneSignal (${r} recipients${id ? `, id ${id.slice(0, 8)}…` : ''}).`
-            : 'Push sent via OneSignal.',
+            ? `Push sent to all users (${r} recipients${id ? `, OneSignal ${id.slice(0, 8)}…` : ''}).`
+            : 'Push sent to all users via OneSignal.',
         )
       } else {
         showFlash('success', 'Notification scheduled; OneSignal will send at the chosen time.')
@@ -170,7 +157,6 @@ function NotificationsPage() {
       setMessage('')
       setImageData('')
       setImagePreview(null)
-      setTargetAudience('all')
       setTargetType('osmani://home')
       setScheduleDate('')
       setScheduleTime('')
@@ -206,30 +192,6 @@ function NotificationsPage() {
     }
   }
 
-  async function handleOnesignalTestPush() {
-    setTestBusy(true)
-    try {
-      console.info(
-        '[NotificationsPage] Send test push to ID(s) → admin POST /notifications/onesignal-test-push (not /notifications)',
-      )
-      const out = await postOnesignalTestPush({
-        subscriptionId: testSubId.trim() || undefined,
-        onesignalUserId: testOnesignalUserId.trim() || undefined,
-        playerId: testPlayerId.trim() || undefined,
-      })
-      const r = out?.recipients
-      const id = out?.onesignalId
-      showFlash(
-        'success',
-        `Test push OK (${out?.targeting || 'target'}): ${typeof r === 'number' ? r : '?'} recipients${id ? `, OneSignal id ${String(id).slice(0, 12)}…` : ''}.`,
-      )
-    } catch (e) {
-      showToast('error', e?.message || 'Test push failed')
-    } finally {
-      setTestBusy(false)
-    }
-  }
-
   async function incrementClicks(id) {
     const n = notifications.find((x) => x.id === id)
     if (!n) return
@@ -262,13 +224,9 @@ function NotificationsPage() {
             Notifications
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Compose campaigns, schedule sends, and review performance. Instant sends use OneSignal (
-            <code className="text-slate-500">ONESIGNAL_APP_ID</code>,{' '}
-            <code className="text-slate-500">ONESIGNAL_REST_API_KEY</code> on the server). Segmented
-            audiences use the tag <code className="text-slate-500">osmani_audience</code> (override with{' '}
-            <code className="text-slate-500">ONESIGNAL_AUDIENCE_TAG_KEY</code>) — values{' '}
-            <code className="text-slate-500">premium</code>, <code className="text-slate-500">trial</code>,{' '}
-            <code className="text-slate-500">inactive</code> must match tags set on devices.
+            Send push notifications to all subscribed app users via OneSignal (
+            <span className="text-slate-300">Subscribed Users</span> segment). Deep links and images
+            are stored for in-app history; the push uses title and message only.
           </p>
         </header>
 
@@ -290,7 +248,7 @@ function NotificationsPage() {
         </section>
 
         <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
-          <h2 className="text-lg font-semibold text-white">Create notification</h2>
+          <h2 className="text-lg font-semibold text-white">Send notification</h2>
           <form onSubmit={handleSend} className="mt-4 space-y-4">
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="lg:col-span-2">
@@ -339,34 +297,27 @@ function NotificationsPage() {
                     className="mt-3 max-h-40 rounded-xl border border-slate-600 object-contain"
                   />
                 ) : null}
+                <p className="mt-1 text-xs text-slate-500">
+                  Stored in admin history only; not attached to the OneSignal push.
+                </p>
               </div>
               <div>
-                <label className={labelClass()} htmlFor="n-aud">
-                  Target audience
-                </label>
-                <select
-                  id="n-aud"
-                  value={targetAudience}
-                  onChange={(e) => setTargetAudience(e.target.value)}
-                  className={inputClass()}
-                >
-                  {AUDIENCES.map((a) => (
-                    <option key={a.value} value={a.value}>
-                      {a.label}
-                    </option>
-                  ))}
-                </select>
+                <label className={labelClass()}>Audience</label>
+                <p className="rounded-xl border border-slate-600/50 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-200">
+                  All users
+                </p>
+                <p className="mt-1 text-xs text-slate-500">OneSignal segment: Subscribed Users</p>
               </div>
               <div>
                 <label className={labelClass()} htmlFor="n-link">
-                  Target type (deep link)
+                  Deep link (in-app)
                 </label>
                 <input
                   id="n-link"
                   value={targetType}
                   onChange={(e) => setTargetType(e.target.value)}
                   className={inputClass()}
-                  placeholder="osmani://channel/…"
+                  placeholder="osmani://home"
                 />
                 {touched && errors.targetType ? (
                   <p className="mt-1 text-xs text-red-400">{errors.targetType}</p>
@@ -423,74 +374,6 @@ function NotificationsPage() {
           </form>
         </section>
 
-        <details className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-4 ring-1 ring-white/[0.04]">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-300">
-            Backend OneSignal ID test (temporary verification)
-          </summary>
-          <p className="mt-2 text-xs leading-relaxed text-slate-500">
-            One targeting field only (priority: push subscription → OneSignal user → legacy player). No segments or tag
-            filters.             The dashboard <span className="font-semibold text-slate-400">User ID</span> is{' '}
-            <code className="text-slate-400">onesignal_id</code> — use the middle field,{' '}
-            <span className="font-semibold text-slate-400">not</span> as{' '}
-            <code className="text-slate-400">include_subscription_ids</code>{' '}
-            (that yields “All included players are not subscribed”). Leave all blank for env:{' '}
-            <code className="text-slate-400">ONESIGNAL_DEBUG_SUBSCRIPTION_ID</code>,{' '}
-            <code className="text-slate-400">ONESIGNAL_DEBUG_ONESIGNAL_USER_ID</code>,{' '}
-            <code className="text-slate-400">ONESIGNAL_DEBUG_PLAYER_ID</code>.
-          </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <div>
-              <label className={labelClass()} htmlFor="os-test-sub">
-                Push subscription ID
-              </label>
-              <input
-                id="os-test-sub"
-                value={testSubId}
-                onChange={(e) => setTestSubId(e.target.value)}
-                className={inputClass()}
-                placeholder="User → Subscriptions → Push row → Subscription ID"
-                autoComplete="off"
-              />
-            </div>
-            <div>
-              <label className={labelClass()} htmlFor="os-test-osuser">
-                OneSignal user ID (onesignal_id)
-              </label>
-              <input
-                id="os-test-osuser"
-                value={testOnesignalUserId}
-                onChange={(e) => setTestOnesignalUserId(e.target.value)}
-                className={inputClass()}
-                placeholder="User profile / list “User ID” — include_aliases + push"
-                autoComplete="off"
-              />
-            </div>
-            <div>
-              <label className={labelClass()} htmlFor="os-test-player">
-                Player ID (legacy)
-              </label>
-              <input
-                id="os-test-player"
-                value={testPlayerId}
-                onChange={(e) => setTestPlayerId(e.target.value)}
-                className={inputClass()}
-                placeholder="Only if the two UUID fields above are empty"
-                autoComplete="off"
-              />
-            </div>
-          </div>
-          <div className="mt-4">
-            <button
-              type="button"
-              disabled={testBusy}
-              onClick={() => void handleOnesignalTestPush()}
-              className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
-            >
-              {testBusy ? 'Sending test…' : 'Send test push to ID(s)'}
-            </button>
-          </div>
-        </details>
-
         <section>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-semibold text-white">History</h2>
@@ -505,12 +388,11 @@ function NotificationsPage() {
           </div>
           <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+              <table className="w-full min-w-[800px] border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-700/80 bg-slate-900/50 text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-4 py-3 font-semibold">Title</th>
                     <th className="px-4 py-3 font-semibold">Message</th>
-                    <th className="px-4 py-3 font-semibold">Target</th>
                     <th className="px-4 py-3 font-semibold">Link</th>
                     <th className="px-4 py-3 font-semibold">Clicks</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
@@ -529,7 +411,6 @@ function NotificationsPage() {
                       <td className="max-w-[200px] truncate px-4 py-3 text-slate-400">
                         {n.message}
                       </td>
-                      <td className="px-4 py-3 text-slate-300">{n.targetAudience}</td>
                       <td className="max-w-[140px] truncate px-4 py-3 font-mono text-xs text-amber-200/90">
                         {n.targetType}
                       </td>
@@ -547,7 +428,10 @@ function NotificationsPage() {
                           {n.deliveryState === 'failed' ? 'failed' : n.status}
                         </span>
                         {n.deliveryError ? (
-                          <p className="mt-1 max-w-[180px] truncate text-[10px] text-red-400/90" title={n.deliveryError}>
+                          <p
+                            className="mt-1 max-w-[180px] truncate text-[10px] text-red-400/90"
+                            title={n.deliveryError}
+                          >
                             {n.deliveryError}
                           </p>
                         ) : null}
@@ -557,7 +441,9 @@ function NotificationsPage() {
                           <span title={n.onesignalId}>
                             {n.onesignalId.slice(0, 12)}…
                             {n.onesignalRecipients != null ? (
-                              <span className="mt-0.5 block text-slate-500">{n.onesignalRecipients} rcpt</span>
+                              <span className="mt-0.5 block text-slate-500">
+                                {n.onesignalRecipients} rcpt
+                              </span>
                             ) : null}
                           </span>
                         ) : (
@@ -593,10 +479,6 @@ function NotificationsPage() {
               <p className="py-12 text-center text-slate-500">No notifications yet.</p>
             ) : null}
           </div>
-          <p className="mt-2 text-xs text-slate-500">
-            “+1 click” updates stored click counts for reconciliation. Delivery uses OneSignal; scheduled rows send
-            when due if the server can reach OneSignal.
-          </p>
         </section>
       </main>
     </>

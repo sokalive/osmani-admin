@@ -627,8 +627,6 @@ export const getNotifications = () => adminApiGet('/notifications')
 export const getRuntimeNotifications = (audience = 'all') =>
   apiGet(`/notifications/runtime?audience=${encodeURIComponent(String(audience || 'all'))}`)
 export const postNotification = (body) => adminApiPost('/notifications', body)
-/** Admin-only: verify backend → OneSignal using include_subscription_ids, include_aliases.onesignal_id (+ target_channel push), or include_player_ids (no production audience change). */
-export const postOnesignalTestPush = (body) => adminApiPost('/notifications/onesignal-test-push', body)
 export const putNotification = (id, body) => adminApiPut(`/notifications/${encodeURIComponent(id)}`, body)
 export const deleteNotification = (id) => adminApiDelete(`/notifications/${encodeURIComponent(id)}`)
 export const deleteAllNotifications = () => adminApiRequest('/notifications/all', { method: 'DELETE' })

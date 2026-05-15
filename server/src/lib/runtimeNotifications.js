@@ -190,16 +190,8 @@ export async function flushDueNotifications() {
         imagePath = await persistNotificationDataUrlImageIfNeeded(imagePath)
         await pool.query(`UPDATE notifications SET image = $2 WHERE id = $1`, [id, imagePath])
       }
-      const pushImageUrl =
-        imagePath && (imagePath.startsWith('http') ? imagePath : imagePath.startsWith('/uploads/') ? absoluteUrlForStoredPath(imagePath) : '')
       const result = await sendOneSignalNotification(
-        {
-          title: row.title,
-          message: row.message,
-          url: row.target_type,
-          imageUrl: pushImageUrl || '',
-          audience: row.target_audience,
-        },
+        { title: row.title, message: row.message },
         { source: 'notifications.flushDueNotifications', notificationId: id },
       )
       const newPayload = {
@@ -252,7 +244,7 @@ function normalizeAdminNotificationInput(body, existing = null) {
     title: text(payload.title ?? existing?.title, 200),
     message: text(payload.message ?? existing?.message, 4000),
     image: sanitizeImage(payload.image ?? existing?.image),
-    targetAudience: asAudience(payload.targetAudience ?? payload.target_audience ?? existing?.target_audience, 'all'),
+    targetAudience: 'all',
     targetType: text(payload.targetType ?? payload.target_type ?? existing?.target_type, 512) || 'osmani://home',
     status,
     deliveryState: asDeliveryState(
@@ -320,17 +312,8 @@ export async function createAdminNotification(body, actor = 'Admin') {
         'OneSignal is not configured. Set ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY on the server, then retry.',
       )
     }
-    const img = String(imageForDb ?? '').trim()
-    const pushImageUrl =
-      img && (img.startsWith('http') ? img : img.startsWith('/uploads/') ? absoluteUrlForStoredPath(img) : '')
     const result = await sendOneSignalNotification(
-      {
-        title: next.title,
-        message: next.message,
-        url: next.targetType,
-        imageUrl: pushImageUrl || '',
-        audience: next.targetAudience,
-      },
+      { title: next.title, message: next.message },
       { source: 'notifications.createAdminNotification' },
     )
     mergedPayload = {
