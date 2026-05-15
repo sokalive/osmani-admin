@@ -9,16 +9,8 @@ import {
   RefreshCw,
   UserPlus,
 } from 'lucide-react'
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 import Topbar from '../components/Topbar'
+import InstallsGrowthChart from '../components/InstallsGrowthChart'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   getAnalyticsChannels,
@@ -53,49 +45,6 @@ function MetricCard({ title, display, icon: Icon, gradientClass, sub }) {
   )
 }
 
-function ChartBlock({ title, data, chartId, dataKey = 'revenue' }) {
-  const gid = `rev-${chartId}`
-  return (
-    <div className="rounded-2xl border border-slate-700/60 bg-slate-950/50 p-5 ring-1 ring-white/[0.04]">
-      <h3 className="text-sm font-semibold text-white">{title}</h3>
-      <div className="mt-4 h-[280px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-            <defs>
-              <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#fbbf24" stopOpacity={0.35} />
-                <stop offset="100%" stopColor="#fbbf24" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.45} />
-            <XAxis dataKey="label" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#475569' }} />
-            <YAxis
-              tick={{ fill: '#94a3b8', fontSize: 11 }}
-              axisLine={{ stroke: '#475569' }}
-              tickFormatter={(v) => `${Math.round(v / 1000)}k`}
-            />
-            <Tooltip
-              contentStyle={{
-                background: '#0f172a',
-                border: '1px solid rgba(251,191,36,0.35)',
-                borderRadius: '12px',
-              }}
-              labelStyle={{ color: '#e2e8f0' }}
-              formatter={(val) => [`${Number(val).toLocaleString('en-TZ')} users`, 'Users']}
-            />
-            <Area
-              type="monotone"
-              dataKey={dataKey}
-              stroke="#fbbf24"
-              strokeWidth={2}
-              fill={`url(#${gid})`}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  )
-}
 
 function AnalyticsPage() {
   const { showToast } = useToast()
@@ -183,7 +132,7 @@ function AnalyticsPage() {
         hour12: false,
         timeZone: 'Africa/Dar_es_Salaam',
       }),
-      revenue: Number(r.users) || 0,
+      installs: Number(r.users) || 0,
     }))
   }, [trend])
 
@@ -197,7 +146,7 @@ function AnalyticsPage() {
         hour12: false,
         timeZone: 'Africa/Dar_es_Salaam',
       }),
-      revenue: Number(r.users) || 0,
+      installs: Number(r.users) || 0,
     }))
   }, [trend])
 
@@ -304,8 +253,20 @@ function AnalyticsPage() {
         </section>
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <ChartBlock title="App installs growth (recent)" chartId="d7" data={chartShort} />
-          <ChartBlock title="App installs growth (24h)" chartId="d30" data={chartLong} />
+          <InstallsGrowthChart
+            title="App installs growth (recent)"
+            subtitle="Last ~12 buckets · cumulative installs"
+            chartId="recent"
+            data={chartShort}
+            emptyLabel={isLoading && !loaded ? 'Loading install trend…' : 'No install data yet.'}
+          />
+          <InstallsGrowthChart
+            title="App installs growth (24h)"
+            subtitle="Last ~96 buckets · cumulative installs"
+            chartId="24h"
+            data={chartLong}
+            emptyLabel={isLoading && !loaded ? 'Loading install trend…' : 'No install data yet.'}
+          />
         </div>
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">

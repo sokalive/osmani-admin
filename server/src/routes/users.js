@@ -84,6 +84,47 @@ usersRouter.put('/:device_id', requireAdminPanelAccess, async (req, res) => {
   }
 })
 
+usersRouter.delete('/bulk', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceIds = Array.isArray(b.device_ids)
+      ? b.device_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
+      : []
+    if (deviceIds.length === 0) {
+      return res.status(400).json({ error: 'device_ids array is required', deleted: 0, skipped: 0 })
+    }
+    const force = b.force === true
+    let deleted = 0
+    let skipped = 0
+    const errors = []
+    for (const deviceId of deviceIds) {
+      const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
+      if (!row) {
+        skipped += 1
+        continue
+      }
+      const exp = row.expires_at instanceof Date ? row.expires_at : new Date(String(row.expires_at))
+      const activeNow =
+        row.status === 'active' &&
+        exp instanceof Date &&
+        !Number.isNaN(exp.getTime()) &&
+        exp > new Date()
+      if (activeNow && !force) {
+        skipped += 1
+        errors.push({ device_id: deviceId, error: 'active_without_force' })
+        continue
+      }
+      await billing.deleteDeviceUserCascade(deviceId)
+      notifyDeviceSubscription(deviceId, 'admin_users_bulk_delete')
+      deleted += 1
+    }
+    res.json({ ok: true, deleted, skipped, errors })
+  } catch (e) {
+    console.error('[users] DELETE /bulk failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
 usersRouter.delete('/:device_id', requireAdminPanelAccess, async (req, res) => {
   try {
     const deviceId = String(req.params.device_id ?? '').trim()

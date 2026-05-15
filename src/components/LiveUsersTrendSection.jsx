@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { TrendingUp } from 'lucide-react'
 import {
   Area,
   AreaChart,
@@ -8,19 +9,23 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import {
+  computeChartYAxis,
+  computeInstallSeriesStats,
+  formatChartCountTick,
+} from '../lib/chartFormat'
 
 /** Full-width analytics-style panel below dashboard cards. */
 function LiveUsersTrendSection({ points }) {
   const data = Array.isArray(points) ? points : []
-
-  const yDomain = useMemo(() => {
-    if (!data.length) return [0, 10]
-    const vals = data.map((d) => Number(d.users) || 0)
-    const min = Math.min(...vals, 0)
-    const max = Math.max(...vals, 10)
-    const pad = (max - min) * 0.15 || 1
-    return [Math.floor(min - pad), Math.ceil(max + pad)]
-  }, [data])
+  const stats = useMemo(
+    () => computeInstallSeriesStats(data.map((d) => ({ installs: Number(d.users) || 0 })), 'installs'),
+    [data],
+  )
+  const yAxis = useMemo(
+    () => computeChartYAxis(data.map((d) => Number(d.users) || 0)),
+    [data],
+  )
 
   return (
     <section
@@ -31,12 +36,26 @@ function LiveUsersTrendSection({ points }) {
         className="box-border w-full rounded-[20px] border border-slate-600/35 bg-gradient-to-b from-[#0f172a] to-[#020617] p-4 shadow-[0_12px_28px_rgba(0,0,0,0.22)] sm:p-5"
         style={{ minHeight: '420px' }}
       >
-        <h2
-          id="live-users-trend-heading"
-          className="mb-4 text-lg font-bold tracking-tight text-[#FFFFFF] sm:mb-5 sm:text-xl"
-        >
-          App Installs Growth
-        </h2>
+        <div className="mb-4 flex flex-col gap-3 sm:mb-5 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2
+              id="live-users-trend-heading"
+              className="text-lg font-bold tracking-tight text-[#FFFFFF] sm:text-xl"
+            >
+              App Installs Growth
+            </h2>
+            <p className="mt-1 text-xs text-[#BFC7D5]">
+              Total {stats.total.toLocaleString('en-US')} installs
+              {stats.growthPct != null ? (
+                <span className="ml-2 text-emerald-300">
+                  <TrendingUp className="mr-0.5 inline h-3.5 w-3.5" />
+                  {stats.growthPct >= 0 ? '+' : ''}
+                  {stats.growthPct.toFixed(1)}%
+                </span>
+              ) : null}
+            </p>
+          </div>
+        </div>
 
         <div className="h-[min(380px,calc(100vw-4rem))] w-full min-h-[280px]">
           <ResponsiveContainer width="100%" height="100%">
@@ -71,12 +90,13 @@ function LiveUsersTrendSection({ points }) {
               />
 
               <YAxis
-                domain={yDomain}
-                tickFormatter={(v) => `${Math.round(v)}`}
+                domain={yAxis.domain}
+                ticks={yAxis.ticks}
+                tickFormatter={formatChartCountTick}
                 tick={{ fill: '#BFC7D5', fontSize: 11 }}
                 tickLine={false}
                 axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
-                width={44}
+                width={48}
               />
 
               <Tooltip

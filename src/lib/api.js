@@ -163,6 +163,10 @@ export const deleteUser = (id, { force = false } = {}) => {
   return adminApiDelete(path)
 }
 
+/** Bulk delete device subscriptions (admin). Body: { device_ids: string[], force?: boolean } */
+export const deleteUsersBulk = (body) =>
+  adminApiRequest('/users/bulk', { method: 'DELETE', body })
+
 /** --- Transactions --- (optional server-side filters) */
 export function getTransactions(params = {}) {
   const q = new URLSearchParams()
