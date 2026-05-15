@@ -62,6 +62,14 @@ function parseInstallInstanceId(v) {
   return s.slice(0, 128)
 }
 
+/** Mobile sends `install_instance_id`; accept legacy aliases. */
+function parseInstallInstanceIdFromBody(body) {
+  const b = body && typeof body === 'object' ? body : {}
+  return parseInstallInstanceId(
+    b.install_instance_id ?? b.installInstanceId ?? b.install_id ?? b.installId,
+  )
+}
+
 async function cleanupStaleSessions(pool) {
   try {
     await pool.query(
@@ -285,14 +293,28 @@ analyticsRouter.post('/install', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    await pool.query(
+    const installInstanceId = parseInstallInstanceIdFromBody(req.body)
+    const insertRes = await pool.query(
       `INSERT INTO app_installs (device_id, install_instance_id, installed_at)
        VALUES ($1, $2, now())
-       ON CONFLICT (device_id, install_instance_id) DO NOTHING`,
-      [deviceId, parseInstallInstanceId(req.body?.install_instance_id ?? req.body?.install_id)],
+       ON CONFLICT (device_id, install_instance_id) DO NOTHING
+       RETURNING id`,
+      [deviceId, installInstanceId],
     )
-    liveSyncBus.publish('analytics.install', { topics: ['analytics'], deviceId })
-    return res.json({ ok: true, device_id: deviceId })
+    const inserted = insertRes.rowCount > 0
+    if (inserted) {
+      liveSyncBus.publish('analytics.install', {
+        topics: ['analytics'],
+        deviceId,
+        installInstanceId,
+      })
+    }
+    return res.json({
+      ok: true,
+      inserted,
+      device_id: deviceId,
+      install_instance_id: installInstanceId,
+    })
   } catch (e) {
     console.error('[analytics/install]', e)
     return res.status(500).json({ ok: false, error: String(e.message || e) })
