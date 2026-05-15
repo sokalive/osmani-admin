@@ -7,14 +7,9 @@ import { useDeviceSubscription } from '../context/DeviceSubscriptionContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   getDeviceControlSettings,
-  postAdminForceTransfer,
   postAdminForceTransferPhone,
   postManualSubscriptionBulkBlock,
   postManualSubscriptionBulkUnblock,
-  postSubscriptionRecover,
-  postSubscriptionRevoke,
-  postTransferConfirm,
-  postTransferRequest,
   putDeviceControlSettings,
   syncStreamUrl,
 } from '../lib/api'
@@ -76,14 +71,7 @@ const TABS = [
 
 function DeviceControlPage() {
   const { showToast } = useToast()
-  const {
-    trackedDeviceId,
-    trackedFingerprint,
-    subscriptionState,
-    trackSubscriptionDevice,
-    refreshSubscriptionState,
-    clearSubscription,
-  } = useDeviceSubscription()
+  const { trackSubscriptionDevice, refreshSubscriptionState } = useDeviceSubscription()
   const [cfg, setCfg] = useState(() => defaultDevice())
   const [draft, setDraft] = useState(() => ({
     transferMode: defaultDevice().transferMode,
@@ -94,21 +82,8 @@ function DeviceControlPage() {
   const [tab, setTab] = useState('settings')
   const [flash, setFlash] = useState(null)
   const [forcePaymentPhone, setForcePaymentPhone] = useState('')
-  const [forceSourceDeviceId, setForceSourceDeviceId] = useState('')
-  const [forceTargetDeviceId, setForceTargetDeviceId] = useState('')
-  const [runtimeDeviceId, setRuntimeDeviceId] = useState('')
-  const [runtimeFingerprint, setRuntimeFingerprint] = useState('')
-  const [requestSourceDeviceId, setRequestSourceDeviceId] = useState('')
-  const [requestPaymentPhone, setRequestPaymentPhone] = useState('')
-  const [requestTargetFingerprint, setRequestTargetFingerprint] = useState('')
-  const [confirmCode, setConfirmCode] = useState('')
-  const [confirmTargetDeviceId, setConfirmTargetDeviceId] = useState('')
-  const [confirmTargetFingerprint, setConfirmTargetFingerprint] = useState('')
-  const [revokeDeviceId, setRevokeDeviceId] = useState('')
-  const [recoverDeviceId, setRecoverDeviceId] = useState('')
-  const [recoverFingerprint, setRecoverFingerprint] = useState('')
-  const [issuedTransfer, setIssuedTransfer] = useState(null)
-  const [runtimeBusy, setRuntimeBusy] = useState('')
+  const [forceNewDeviceId, setForceNewDeviceId] = useState('')
+  const [forceSubmitting, setForceSubmitting] = useState(false)
 
   const [pendingSel, setPendingSel] = useState(() => new Set())
   const [pendingBulkPin, setPendingBulkPin] = useState(null)
@@ -178,11 +153,6 @@ function DeviceControlPage() {
     return () => es.close()
   }, [loadCfg])
 
-  useEffect(() => {
-    if (trackedDeviceId) setRuntimeDeviceId(trackedDeviceId)
-    if (trackedFingerprint) setRuntimeFingerprint(trackedFingerprint)
-  }, [trackedDeviceId, trackedFingerprint])
-
   const dirty = useMemo(
     () =>
       draft.transferMode !== cfg.transferMode ||
@@ -210,12 +180,7 @@ function DeviceControlPage() {
     async (deviceId, fingerprint = '') => {
       const nextDeviceId = String(deviceId ?? '').trim()
       const nextFingerprint = String(fingerprint ?? '').trim()
-      if (!nextDeviceId) {
-        showToast('error', 'Enter a device ID to track runtime state.')
-        return
-      }
-      setRuntimeDeviceId(nextDeviceId)
-      setRuntimeFingerprint(nextFingerprint)
+      if (!nextDeviceId) return
       trackSubscriptionDevice({
         deviceId: nextDeviceId,
         fingerprint: nextFingerprint,
@@ -225,11 +190,11 @@ function DeviceControlPage() {
           deviceId: nextDeviceId,
           fingerprint: nextFingerprint,
         })
-      } catch (e) {
-        showToast('error', e?.message || 'Could not refresh tracked runtime state')
+      } catch {
+        // Non-blocking: transfer already succeeded; runtime refresh is best-effort.
       }
     },
-    [refreshSubscriptionState, showToast, trackSubscriptionDevice],
+    [refreshSubscriptionState, trackSubscriptionDevice],
   )
 
   async function handleSaveSettings(e) {
@@ -263,12 +228,12 @@ function DeviceControlPage() {
     async (e) => {
       e.preventDefault()
       const phone = forcePaymentPhone.trim()
-      const deviceId = forceTargetDeviceId.trim()
+      const deviceId = forceNewDeviceId.trim()
       if (!phone || !deviceId) {
         showToast('error', 'Enter payment phone and new device ID.')
         return
       }
-      setRuntimeBusy('force-phone')
+      setForceSubmitting(true)
       try {
         await postAdminForceTransferPhone({
           payment_phone: phone,
@@ -277,166 +242,25 @@ function DeviceControlPage() {
         await trackRuntimeDevice(deviceId)
         setCfg((c) =>
           appendLog(
-            `Force transfer completed · ${phone.replace(/\s+/g, '')} → ${deviceId.slice(0, 32)}${deviceId.length > 32 ? '…' : ''}`,
+            `Force transfer completed - ${phone.replace(/\s+/g, '')} -> ${deviceId.slice(0, 32)}${deviceId.length > 32 ? '...' : ''}`,
           )(c),
         )
         setForcePaymentPhone('')
-        setForceTargetDeviceId('')
+        setForceNewDeviceId('')
         await loadCfg()
         showFlash('success', 'Force transfer completed.')
       } catch (err) {
         showToast('error', err?.message || 'Force transfer failed')
       } finally {
-        setRuntimeBusy('')
+        setForceSubmitting(false)
       }
     },
-    [appendLog, forcePaymentPhone, forceTargetDeviceId, loadCfg, showToast, trackRuntimeDevice],
+    [appendLog, forceNewDeviceId, forcePaymentPhone, loadCfg, showToast, trackRuntimeDevice],
   )
 
-  const handleForceTransferByIdSubmit = useCallback(
-    async (e) => {
-      e.preventDefault()
-      const source = forceSourceDeviceId.trim()
-      const target = forceTargetDeviceId.trim()
-      if (!source || !target) {
-        showToast('error', 'Enter source device ID and target device ID.')
-        return
-      }
-      setRuntimeBusy('force-id')
-      try {
-        await postAdminForceTransfer({
-          source_device_id: source,
-          target_device_id: target,
-        })
-        await trackRuntimeDevice(target)
-        setForceTargetDeviceId('')
-        setForceSourceDeviceId('')
-        await loadCfg()
-        showFlash('success', 'Admin device-to-device force transfer completed.')
-      } catch (err) {
-        showToast('error', err?.message || 'Device force transfer failed')
-      } finally {
-        setRuntimeBusy('')
-      }
-    },
-    [forceSourceDeviceId, forceTargetDeviceId, loadCfg, showToast, trackRuntimeDevice],
-  )
-
-  const handleTransferRequestSubmit = useCallback(
-    async (e) => {
-      e.preventDefault()
-      const source = requestSourceDeviceId.trim()
-      const phone = requestPaymentPhone.trim()
-      if (!source || !phone) {
-        showToast('error', 'Enter source device ID and payment phone.')
-        return
-      }
-      setRuntimeBusy('request')
-      try {
-        const out = await postTransferRequest({
-          source_device_id: source,
-          payment_phone: phone,
-          ...(requestTargetFingerprint.trim() ? { target_fingerprint: requestTargetFingerprint.trim() } : {}),
-        })
-        setIssuedTransfer(out)
-        setConfirmCode(String(out?.code ?? ''))
-        await loadCfg()
-        showFlash('success', 'Canonical transfer code issued.')
-      } catch (err) {
-        showToast('error', err?.message || 'Transfer request failed')
-      } finally {
-        setRuntimeBusy('')
-      }
-    },
-    [loadCfg, requestPaymentPhone, requestSourceDeviceId, requestTargetFingerprint, showToast],
-  )
-
-  const handleTransferConfirmSubmit = useCallback(
-    async (e) => {
-      e.preventDefault()
-      const code = confirmCode.trim()
-      const target = confirmTargetDeviceId.trim()
-      const fingerprint = confirmTargetFingerprint.trim()
-      if (!code || !target) {
-        showToast('error', 'Enter transfer code and target device ID.')
-        return
-      }
-      setRuntimeBusy('confirm')
-      try {
-        const out = await postTransferConfirm({
-          code,
-          target_device_id: target,
-          ...(fingerprint ? { target_fingerprint: fingerprint } : {}),
-        })
-        await trackRuntimeDevice(target, fingerprint)
-        await loadCfg()
-        showFlash(
-          'success',
-          `Transfer confirmed. Source ${String(out?.source_device_id || '').slice(0, 18)} -> target ${target.slice(0, 18)}`,
-        )
-      } catch (err) {
-        showToast('error', err?.message || 'Transfer confirm failed')
-      } finally {
-        setRuntimeBusy('')
-      }
-    },
-    [confirmCode, confirmTargetDeviceId, confirmTargetFingerprint, loadCfg, showToast, trackRuntimeDevice],
-  )
-
-  const handleRevokeSubmit = useCallback(
-    async (e) => {
-      e.preventDefault()
-      const deviceId = revokeDeviceId.trim()
-      if (!deviceId) {
-        showToast('error', 'Enter a device ID to revoke.')
-        return
-      }
-      setRuntimeBusy('revoke')
-      try {
-        await postSubscriptionRevoke({ device_id: deviceId })
-        await trackRuntimeDevice(deviceId)
-        await loadCfg()
-        showFlash('success', 'Subscription revoked. Runtime invalidation should propagate immediately.')
-      } catch (err) {
-        showToast('error', err?.message || 'Revoke failed')
-      } finally {
-        setRuntimeBusy('')
-      }
-    },
-    [loadCfg, revokeDeviceId, showToast, trackRuntimeDevice],
-  )
-
-  const handleRecoverSubmit = useCallback(
-    async (e) => {
-      e.preventDefault()
-      const deviceId = recoverDeviceId.trim()
-      const fingerprint = recoverFingerprint.trim()
-      if (!deviceId || !fingerprint) {
-        showToast('error', 'Enter device ID and fingerprint to recover.')
-        return
-      }
-      setRuntimeBusy('recover')
-      try {
-        await postSubscriptionRecover({
-          device_id: deviceId,
-          fingerprint,
-        })
-        await trackRuntimeDevice(deviceId, fingerprint)
-        await loadCfg()
-        showFlash('success', 'Recovery applied. Runtime refresh is now tracking the recovered device.')
-      } catch (err) {
-        showToast('error', err?.message || 'Recover failed')
-      } finally {
-        setRuntimeBusy('')
-      }
-    },
-    [loadCfg, recoverDeviceId, recoverFingerprint, showToast, trackRuntimeDevice],
-  )
-
-  const trackedRuntimeId = trackedDeviceId || runtimeDeviceId
-  const runtimeGateLabel =
-    subscriptionState.playbackGateReason ||
-    (subscriptionState.playbackAllowed ? 'playback_allowed' : 'awaiting_runtime_refresh')
+  function labelClass() {
+    return 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400'
+  }
 
   return (
     <>
@@ -717,288 +541,62 @@ function DeviceControlPage() {
           </section>
         ) : null}
 
-        {tab === 'force' ? (
-          <section className="grid gap-6 xl:grid-cols-2">
-            <div className="space-y-5 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04] xl:col-span-2">
-              <div>
-                <h2 className="text-lg font-semibold text-white">Tracked Runtime Device</h2>
-                <p className="mt-2 text-sm text-slate-400">
-                  Shared runtime watcher uses canonical verify/status plus subscription SSE so revoke, transfer,
-                  and recover changes invalidate the website immediately.
-                </p>
-              </div>
-              <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto_auto]">
-                <input
-                  type="text"
-                  placeholder="Device ID to track"
-                  value={runtimeDeviceId}
-                  onChange={(e) => setRuntimeDeviceId(e.target.value)}
-                  className={inputClass()}
-                />
-                <input
-                  type="text"
-                  placeholder="Fingerprint (optional)"
-                  value={runtimeFingerprint}
-                  onChange={(e) => setRuntimeFingerprint(e.target.value)}
-                  className={inputClass()}
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    void trackRuntimeDevice(runtimeDeviceId, runtimeFingerprint)
-                  }}
-                  className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-100 hover:bg-amber-500/20"
-                >
-                  Track Runtime
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    clearSubscription()
-                    setRuntimeDeviceId('')
-                    setRuntimeFingerprint('')
-                  }}
-                  className="rounded-xl border border-slate-600 px-4 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-800"
-                >
-                  Clear
-                </button>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Tracked device</p>
-                  <p className="mt-1 text-sm text-white">{trackedRuntimeId || '—'}</p>
-                </div>
-                <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Subscription status</p>
-                  <p className="mt-1 text-sm text-white">{subscriptionState.status || 'unknown'}</p>
-                </div>
-                <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Playback gate</p>
-                  <p className="mt-1 text-sm text-white">{runtimeGateLabel}</p>
-                </div>
-                <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Expires</p>
-                  <p className="mt-1 text-sm text-white">{subscriptionState.expiresAt || '—'}</p>
-                </div>
-              </div>
-            </div>
-
-            <form
-              onSubmit={handleTransferRequestSubmit}
-              className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
-            >
-              <div>
-                <h2 className="text-lg font-semibold text-white">Canonical Transfer Request</h2>
-                <p className="mt-2 text-sm text-slate-400">
-                  Calls <code>/api/transfer/request</code> with the mobile-compatible DTO.
-                </p>
-              </div>
-              <input
-                type="text"
-                placeholder="Source device ID"
-                value={requestSourceDeviceId}
-                onChange={(e) => setRequestSourceDeviceId(e.target.value)}
-                className={inputClass()}
-              />
-              <input
-                type="tel"
-                placeholder="Payment phone"
-                value={requestPaymentPhone}
-                onChange={(e) => setRequestPaymentPhone(e.target.value)}
-                className={inputClass()}
-              />
-              <input
-                type="text"
-                placeholder="Target fingerprint (optional)"
-                value={requestTargetFingerprint}
-                onChange={(e) => setRequestTargetFingerprint(e.target.value)}
-                className={inputClass()}
-              />
-              {issuedTransfer ? (
-                <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-xs text-slate-300">
-                  <p>code: {issuedTransfer.code}</p>
-                  <p>expires_at: {issuedTransfer.expires_at || '—'}</p>
-                  <p>source_device_id: {issuedTransfer.source_device_id || '—'}</p>
-                </div>
-              ) : null}
-              <button
-                type="submit"
-                disabled={runtimeBusy !== ''}
-                className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-6 py-3 text-sm font-bold text-slate-950 disabled:opacity-50"
-              >
-                {runtimeBusy === 'request' ? 'Issuing…' : 'Issue Transfer Code'}
-              </button>
-            </form>
-
-            <form
-              onSubmit={handleTransferConfirmSubmit}
-              className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
-            >
-              <div>
-                <h2 className="text-lg font-semibold text-white">Canonical Transfer Confirm</h2>
-                <p className="mt-2 text-sm text-slate-400">
-                  Confirms ownership move through <code>/api/transfer/confirm</code> and switches runtime
-                  tracking to the target device.
-                </p>
-              </div>
-              <input
-                type="text"
-                placeholder="Transfer code"
-                value={confirmCode}
-                onChange={(e) => setConfirmCode(e.target.value.toUpperCase())}
-                className={inputClass()}
-              />
-              <input
-                type="text"
-                placeholder="Target device ID"
-                value={confirmTargetDeviceId}
-                onChange={(e) => setConfirmTargetDeviceId(e.target.value)}
-                className={inputClass()}
-              />
-              <input
-                type="text"
-                placeholder="Target fingerprint (optional)"
-                value={confirmTargetFingerprint}
-                onChange={(e) => setConfirmTargetFingerprint(e.target.value)}
-                className={inputClass()}
-              />
-              <button
-                type="submit"
-                disabled={runtimeBusy !== ''}
-                className="rounded-xl bg-gradient-to-r from-emerald-400 to-teal-500 px-6 py-3 text-sm font-bold text-slate-950 disabled:opacity-50"
-              >
-                {runtimeBusy === 'confirm' ? 'Confirming…' : 'Confirm Transfer'}
-              </button>
-            </form>
-
+                {tab === 'force' ? (
+          <div className="flex justify-center px-2">
             <form
               onSubmit={handleForceTransferSubmit}
-              className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
+              className="w-full max-w-xl space-y-6 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-8 shadow-[0_16px_48px_rgba(0,0,0,0.35)] ring-1 ring-amber-500/10"
             >
-              <div>
-                <h2 className="text-lg font-semibold text-white">Admin Force Transfer by Phone</h2>
+              <div className="text-center">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/15 ring-1 ring-amber-400/30">
+                  <Zap className="h-6 w-6 text-amber-300" />
+                </div>
+                <h2 className="text-xl font-bold text-white">Force Transfer Device</h2>
                 <p className="mt-2 text-sm text-slate-400">
-                  Uses <code>/api/transfer/admin-force-phone</code> to move the subscription without client
-                  confirmation.
+                  Transfer a subscription to a new device without requiring old device confirmation.
                 </p>
               </div>
-              <input
-                type="tel"
-                autoComplete="tel"
-                placeholder="Payment phone"
-                value={forcePaymentPhone}
-                onChange={(e) => setForcePaymentPhone(e.target.value)}
-                className={inputClass()}
-              />
-              <input
-                type="text"
-                placeholder="Target device ID"
-                value={forceTargetDeviceId}
-                onChange={(e) => setForceTargetDeviceId(e.target.value)}
-                className={inputClass()}
-              />
-              <button
-                type="submit"
-                disabled={runtimeBusy !== ''}
-                className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-6 py-3 text-sm font-bold text-slate-950 disabled:opacity-50"
-              >
-                {runtimeBusy === 'force-phone' ? 'Transferring…' : 'Force Transfer by Phone'}
-              </button>
-            </form>
 
-            <form
-              onSubmit={handleForceTransferByIdSubmit}
-              className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
-            >
               <div>
-                <h2 className="text-lg font-semibold text-white">Admin Force Transfer by Device IDs</h2>
-                <p className="mt-2 text-sm text-slate-400">
-                  Uses <code>/api/transfer/admin-force</code> for explicit source/target migration.
-                </p>
+                <label className={labelClass()} htmlFor="force-phone">
+                  Namba ya zamani (iliyolipia kifurushi)
+                </label>
+                <input
+                  id="force-phone"
+                  type="tel"
+                  autoComplete="tel"
+                  placeholder="e.g. +255712345678"
+                  value={forcePaymentPhone}
+                  onChange={(e) => setForcePaymentPhone(e.target.value)}
+                  className={inputClass()}
+                />
+                <p className="mt-1.5 text-xs text-slate-500">Weka namba iliyotumika kulipia kifurushi</p>
               </div>
-              <input
-                type="text"
-                placeholder="Source device ID"
-                value={forceSourceDeviceId}
-                onChange={(e) => setForceSourceDeviceId(e.target.value)}
-                className={inputClass()}
-              />
-              <input
-                type="text"
-                placeholder="Target device ID"
-                value={forceTargetDeviceId}
-                onChange={(e) => setForceTargetDeviceId(e.target.value)}
-                className={inputClass()}
-              />
-              <button
-                type="submit"
-                disabled={runtimeBusy !== ''}
-                className="rounded-xl bg-gradient-to-r from-orange-400 to-amber-500 px-6 py-3 text-sm font-bold text-slate-950 disabled:opacity-50"
-              >
-                {runtimeBusy === 'force-id' ? 'Moving…' : 'Force Transfer by IDs'}
-              </button>
-            </form>
 
-            <form
-              onSubmit={handleRevokeSubmit}
-              className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
-            >
               <div>
-                <h2 className="text-lg font-semibold text-white">Revoke Runtime</h2>
-                <p className="mt-2 text-sm text-slate-400">
-                  Calls <code>/api/subscription/revoke</code> and keeps the website pinned to the revoked
-                  device so runtime invalidation is visible.
-                </p>
+                <label className={labelClass()} htmlFor="force-device-id">
+                  Device ID ya simu mpya
+                </label>
+                <input
+                  id="force-device-id"
+                  type="text"
+                  placeholder="Paste new device ID"
+                  value={forceNewDeviceId}
+                  onChange={(e) => setForceNewDeviceId(e.target.value)}
+                  className={inputClass()}
+                />
+                <p className="mt-1.5 text-xs text-slate-500">Pata Device ID kutoka kwenye simu mpya ya user</p>
               </div>
-              <input
-                type="text"
-                placeholder="Device ID to revoke"
-                value={revokeDeviceId}
-                onChange={(e) => setRevokeDeviceId(e.target.value)}
-                className={inputClass()}
-              />
-              <button
-                type="submit"
-                disabled={runtimeBusy !== ''}
-                className="rounded-xl bg-gradient-to-r from-rose-500 to-red-600 px-6 py-3 text-sm font-bold text-white disabled:opacity-50"
-              >
-                {runtimeBusy === 'revoke' ? 'Revoking…' : 'Revoke Subscription'}
-              </button>
-            </form>
 
-            <form
-              onSubmit={handleRecoverSubmit}
-              className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
-            >
-              <div>
-                <h2 className="text-lg font-semibold text-white">Recover Runtime</h2>
-                <p className="mt-2 text-sm text-slate-400">
-                  Calls <code>/api/subscription/recover</code> using the canonical device/fingerprint DTO.
-                </p>
-              </div>
-              <input
-                type="text"
-                placeholder="Recovered device ID"
-                value={recoverDeviceId}
-                onChange={(e) => setRecoverDeviceId(e.target.value)}
-                className={inputClass()}
-              />
-              <input
-                type="text"
-                placeholder="Fingerprint"
-                value={recoverFingerprint}
-                onChange={(e) => setRecoverFingerprint(e.target.value)}
-                className={inputClass()}
-              />
               <button
                 type="submit"
-                disabled={runtimeBusy !== ''}
-                className="rounded-xl bg-gradient-to-r from-sky-400 to-cyan-500 px-6 py-3 text-sm font-bold text-slate-950 disabled:opacity-50"
+                disabled={forceSubmitting}
+                className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-8 py-3.5 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-opacity hover:opacity-95 disabled:opacity-50"
               >
-                {runtimeBusy === 'recover' ? 'Recovering…' : 'Recover Subscription'}
+                {forceSubmitting ? 'Transferring?' : 'Force Transfer Device'}
               </button>
             </form>
-          </section>
+          </div>
         ) : null}
       </main>
     </>
