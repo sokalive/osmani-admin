@@ -3,12 +3,12 @@
  * @see https://documentation.onesignal.com/reference/create-notification
  *
  * POST https://api.onesignal.com/notifications
- * Body: included_segments ["Subscribed Users"] + headings/contents (no target_channel).
+ * Body: included_segments ["Total Subscriptions"] + headings/contents (no target_channel).
  * target_channel is required for include_aliases and SMS/RCS+segments, not for push segment broadcasts.
  */
 
 const ONESIGNAL_API_URL = 'https://api.onesignal.com/notifications'
-const PRODUCTION_SEGMENT = 'Subscribed Users'
+const PRODUCTION_SEGMENT = 'Total Subscriptions'
 const ONESIGNAL_LOG_MAX = 24_000
 
 export function getOneSignalConfig() {

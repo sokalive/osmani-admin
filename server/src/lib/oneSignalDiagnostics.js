@@ -32,7 +32,7 @@ export async function fetchOneSignalSubscriptionDiagnostics() {
     }
   }
 
-  const productionSegment = 'Subscribed Users'
+  const productionSegment = 'Total Subscriptions'
   const backendBroadcastBody = buildProductionOneSignalBody({
     appId,
     title: 'Diagnostic title',

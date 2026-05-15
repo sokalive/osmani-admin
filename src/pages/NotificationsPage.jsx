@@ -241,7 +241,7 @@ function NotificationsPage() {
           </h1>
           <p className="mt-1 text-sm text-slate-400">
             Send push notifications to all subscribed app users via OneSignal (
-            <span className="text-slate-300">Subscribed Users</span> segment). Deep links and images
+            <span className="text-slate-300">Total Subscriptions</span> segment). Deep links and images
             are stored for in-app history; the push uses title and message only.
           </p>
           <div className="mt-3">
@@ -356,7 +356,7 @@ function NotificationsPage() {
                 <p className="rounded-xl border border-slate-600/50 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-200">
                   All users
                 </p>
-                <p className="mt-1 text-xs text-slate-500">OneSignal segment: Subscribed Users</p>
+                <p className="mt-1 text-xs text-slate-500">OneSignal segment: Total Subscriptions</p>
               </div>
               <div>
                 <label className={labelClass()} htmlFor="n-link">
