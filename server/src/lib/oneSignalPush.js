@@ -45,21 +45,30 @@ function formatOneSignalFailure(httpStatus, raw) {
 }
 
 /**
- * Build the exact production broadcast body (no filters, aliases, or subscription lists).
+ * Build the production broadcast body (no filters, aliases, or subscription lists).
+ * @param {string} [imageUrl] - public HTTPS URL for rich push (Android big_picture, etc.)
  */
-export function buildProductionOneSignalBody({ appId, title, message }) {
-  return {
+export function buildProductionOneSignalBody({ appId, title, message, imageUrl }) {
+  const body = {
     app_id: appId,
     included_segments: [PRODUCTION_SEGMENT],
     headings: { en: String(title).trim() },
     contents: { en: String(message).trim() },
   }
+  const img = String(imageUrl ?? '').trim()
+  if (img.startsWith('https://')) {
+    body.big_picture = img
+    body.chrome_web_image = img
+    body.ios_attachments = { id1: img }
+  }
+  return body
 }
 
 /**
  * @param {object} opts
  * @param {string} opts.title
  * @param {string} opts.message
+ * @param {string} [opts.imageUrl] - public HTTPS image URL for rich push
  * @param {object} [logMeta] - e.g. { source: 'notifications.createAdminNotification' }
  */
 export async function sendOneSignalNotification(opts, logMeta = {}) {
@@ -75,7 +84,12 @@ export async function sendOneSignalNotification(opts, logMeta = {}) {
   if (!title) throw new Error('OneSignal: title is required')
   if (!message) throw new Error('OneSignal: message is required')
 
-  const requestPayload = buildProductionOneSignalBody({ appId, title, message })
+  const requestPayload = buildProductionOneSignalBody({
+    appId,
+    title,
+    message,
+    imageUrl: opts.imageUrl,
+  })
   const requestHeaders = {
     'Content-Type': 'application/json; charset=utf-8',
     Authorization: 'Key [REDACTED]',

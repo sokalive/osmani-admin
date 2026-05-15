@@ -22,6 +22,28 @@ export function absoluteUrlForStoredPath(relativePath) {
   return `${base}/${rel.replace(/^\/+/, '')}`
 }
 
+/** Public HTTPS URL suitable for OneSignal rich push (big_picture / ios_attachments). */
+export function resolveOneSignalPushImageUrl(imageField) {
+  const stored = String(imageField ?? '').trim()
+  if (!stored) return ''
+  const absolute = absoluteUrlForStoredPath(stored)
+  if (absolute.startsWith('https://')) return absolute
+  return ''
+}
+
+/**
+ * Persist data-URL uploads to /uploads and return { imageForDb, pushImageUrl }.
+ */
+export async function prepareNotificationImageForPush(imageField) {
+  let imageForDb = sanitizeImage(imageField)
+  if (!imageForDb) return { imageForDb: '', pushImageUrl: '' }
+  if (imageForDb.startsWith('data:image')) {
+    imageForDb = await persistNotificationDataUrlImageIfNeeded(imageForDb)
+  }
+  const pushImageUrl = resolveOneSignalPushImageUrl(imageForDb)
+  return { imageForDb, pushImageUrl }
+}
+
 /**
  * Writes data-URL images to disk; returns `/uploads/...` or original if already a URL/path.
  */
@@ -186,12 +208,13 @@ export async function flushDueNotifications() {
         )
         continue
       }
-      if (imagePath.startsWith('data:image')) {
-        imagePath = await persistNotificationDataUrlImageIfNeeded(imagePath)
+      const { imageForDb, pushImageUrl } = await prepareNotificationImageForPush(imagePath)
+      if (imageForDb && imageForDb !== imagePath) {
+        imagePath = imageForDb
         await pool.query(`UPDATE notifications SET image = $2 WHERE id = $1`, [id, imagePath])
       }
       const result = await sendOneSignalNotification(
-        { title: row.title, message: row.message },
+        { title: row.title, message: row.message, imageUrl: pushImageUrl },
         { source: 'notifications.flushDueNotifications', notificationId: id },
       )
       const newPayload = {
@@ -299,11 +322,14 @@ export async function createAdminNotification(body, actor = 'Admin') {
   const pool = requirePool()
 
   let imageForDb = next.image
+  let pushImageUrl = ''
   let mergedPayload = { ...next.payload }
   let deliveryState = next.deliveryState
 
-  if (next.kind === 'admin' && next.image && String(next.image).startsWith('data:image')) {
-    imageForDb = await persistNotificationDataUrlImageIfNeeded(next.image)
+  if (next.kind === 'admin' && next.image) {
+    const prepared = await prepareNotificationImageForPush(next.image)
+    imageForDb = prepared.imageForDb
+    pushImageUrl = prepared.pushImageUrl
   }
 
   if (next.kind === 'admin' && next.status === 'sent') {
@@ -313,7 +339,7 @@ export async function createAdminNotification(body, actor = 'Admin') {
       )
     }
     const result = await sendOneSignalNotification(
-      { title: next.title, message: next.message },
+      { title: next.title, message: next.message, imageUrl: pushImageUrl },
       { source: 'notifications.createAdminNotification' },
     )
     mergedPayload = {
@@ -424,10 +450,10 @@ export async function deleteNotificationById(id) {
   return false
 }
 
-/** Deletes all admin campaign rows (system-generated rows are kept). */
+/** Deletes all rows shown in admin notification history. */
 export async function deleteAllNotificationsAdmin() {
   const pool = requirePool()
-  const { rowCount } = await pool.query(`DELETE FROM notifications WHERE kind = 'admin'`)
+  const { rowCount } = await pool.query(`DELETE FROM notifications`)
   const n = Number(rowCount) || 0
   if (n > 0) {
     publishNotificationsChanged({ action: 'bulk_deleted' })

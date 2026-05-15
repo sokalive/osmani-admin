@@ -5,6 +5,7 @@ import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   deleteAllNotifications,
+  deleteNotification,
   getNotifications,
   getOnesignalDiagnostics,
   postNotification,
@@ -65,6 +66,7 @@ function NotificationsPage() {
   const [touched, setTouched] = useState(false)
   const [sending, setSending] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
+  const [deletingId, setDeletingId] = useState(null)
   const [diag, setDiag] = useState(null)
   const [diagBusy, setDiagBusy] = useState(false)
   const [flash, setFlash] = useState(null)
@@ -172,26 +174,33 @@ function NotificationsPage() {
   }
 
   async function handleDeleteAllHistory() {
-    if (
-      !window.confirm(
-        'Delete all admin campaign notifications from history? System alerts stay; this cannot be undone.',
-      )
-    ) {
+    if (!window.confirm('Delete all notification history? This cannot be undone.')) {
       return
     }
     setDeletingAll(true)
     try {
       const out = await deleteAllNotifications()
       const n = Number(out?.deleted ?? 0)
-      showFlash(
-        'success',
-        n > 0 ? `Deleted ${n} notification(s).` : 'No admin campaigns to remove (system entries may still be listed).',
-      )
+      showFlash('success', n > 0 ? `Deleted ${n} notification(s).` : 'History was already empty.')
       await loadNotifications()
     } catch (e) {
       showToast('error', e?.message || 'Delete failed')
     } finally {
       setDeletingAll(false)
+    }
+  }
+
+  async function handleDeleteOne(id) {
+    if (!window.confirm('Delete this notification from history?')) return
+    setDeletingId(id)
+    try {
+      await deleteNotification(id)
+      showToast('success', 'Notification deleted.')
+      await loadNotifications()
+    } catch (e) {
+      showToast('error', e?.message || 'Delete failed')
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -241,8 +250,8 @@ function NotificationsPage() {
           </h1>
           <p className="mt-1 text-sm text-slate-400">
             Send push notifications to all subscribed app users via OneSignal (
-            <span className="text-slate-300">Total Subscriptions</span> segment). Deep links and images
-            are stored for in-app history; the push uses title and message only.
+            <span className="text-slate-300">Total Subscriptions</span> segment). Images are uploaded to the
+            server and attached to the push when available over HTTPS; deep links are stored for in-app history.
           </p>
           <div className="mt-3">
             <button
@@ -348,7 +357,7 @@ function NotificationsPage() {
                   />
                 ) : null}
                 <p className="mt-1 text-xs text-slate-500">
-                  Stored in admin history only; not attached to the OneSignal push.
+                  Shown in push (Android/iOS) when the server can serve it over HTTPS.
                 </p>
               </div>
               <div>
@@ -508,17 +517,25 @@ function NotificationsPage() {
                             : new Date(n.createdAt).toLocaleString()}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {n.status === 'sent' ? (
+                        <div className="inline-flex flex-col items-end gap-1 sm:flex-row sm:items-center">
+                          {n.status === 'sent' ? (
+                            <button
+                              type="button"
+                              onClick={() => incrementClicks(n.id)}
+                              className="rounded-lg border border-slate-600 px-2 py-1 text-xs font-medium text-slate-300 hover:border-amber-500/40 hover:text-amber-200"
+                            >
+                              +1 click
+                            </button>
+                          ) : null}
                           <button
                             type="button"
-                            onClick={() => incrementClicks(n.id)}
-                            className="rounded-lg border border-slate-600 px-2 py-1 text-xs font-medium text-slate-300 hover:border-amber-500/40 hover:text-amber-200"
+                            disabled={deletingId === n.id || deletingAll}
+                            onClick={() => void handleDeleteOne(n.id)}
+                            className="rounded-lg border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                            +1 click
+                            {deletingId === n.id ? 'Deleting…' : 'Delete'}
                           </button>
-                        ) : (
-                          <span className="text-xs text-slate-600">—</span>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   ))}
