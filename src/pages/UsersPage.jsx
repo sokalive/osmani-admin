@@ -1,32 +1,18 @@
 import { useCallback, useEffect, useMemo, useState, Component } from 'react'
 import { Loader2, Pencil, Trash2 } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
+import SubscriptionEditModal from '../components/SubscriptionEditModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deleteUser, deleteUsersBulk, getPlans, getUsers, putUser, syncStreamUrl } from '../lib/api'
-import { formatAdminDateTime } from '../lib/formatAdminDateTime'
+import { formatAdminDateTime, formatAdminRemainingFromExpiry } from '../lib/formatAdminDateTime'
 
 function inputClass() {
-  return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
+  return 'w-full rounded-xl border border-slate-600/60 bg-[#0a0e16] px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-[#f5b301]/50 focus:outline-none focus:ring-2 focus:ring-[#f5b301]/20'
 }
 
 function labelClass() {
-  return 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400'
-}
-
-function remainingLabel(expiresAt) {
-  if (expiresAt == null || expiresAt === '') return '—'
-  const end = new Date(expiresAt)
-  if (Number.isNaN(end.getTime())) return '—'
-  const ms = end.getTime() - Date.now()
-  if (ms <= 0) return 'Expired'
-  const s = Math.floor(ms / 1000)
-  const d = Math.floor(s / 86400)
-  const h = Math.floor((s % 86400) / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  if (d > 0) return `${d}d ${h}h`
-  if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
+  return 'mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400'
 }
 
 function ConfirmModal({ open, title, message, confirmLabel, loading, onConfirm, onCancel }) {
@@ -65,80 +51,6 @@ function ConfirmModal({ open, title, message, confirmLabel, loading, onConfirm, 
             {confirmLabel}
           </button>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function EditModal({ row, onClose, onSave }) {
-  const [expiresAt, setExpiresAt] = useState('')
-  const [status, setStatus] = useState('active')
-
-  useEffect(() => {
-    if (!row) return
-    setExpiresAt(row.expires_at ? String(row.expires_at).slice(0, 16) : '')
-    setStatus(row.status === 'expired' ? 'expired' : 'active')
-  }, [row])
-
-  if (!row) return null
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/75 backdrop-blur-[2px]"
-        aria-label="Close"
-        onClick={onClose}
-      />
-      <div className="relative w-full max-w-md rounded-2xl border border-slate-600/50 bg-[#0f172a] p-6 shadow-2xl ring-1 ring-amber-500/15">
-        <h2 className="text-xl font-bold text-white">Edit subscription</h2>
-        <form
-          className="mt-4 space-y-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            onSave({
-              device_id: row.device_id,
-              expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
-              status,
-            })
-          }}
-        >
-          <div>
-            <label className={labelClass()}>Device ID</label>
-            <input value={row.device_id} disabled className={`${inputClass()} opacity-70`} />
-          </div>
-          <div>
-            <label className={labelClass()}>Expiry (ISO)</label>
-            <input
-              type="datetime-local"
-              value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
-              className={inputClass()}
-            />
-          </div>
-          <div>
-            <label className={labelClass()}>Status</label>
-            <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputClass()}>
-              <option value="active">active</option>
-              <option value="expired">expired</option>
-            </select>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-xl border border-slate-600 px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-5 py-2.5 text-sm font-bold text-slate-950 shadow-[0_8px_24px_rgba(251,191,36,0.3)]"
-            >
-              Save
-            </button>
-          </div>
-        </form>
       </div>
     </div>
   )
@@ -199,6 +111,7 @@ function UsersPageContent() {
   const [selected, setSelected] = useState(() => new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [confirm, setConfirm] = useState(null)
+  const [remainingClock, setRemainingClock] = useState(0)
 
   const loadAll = useCallback(async () => {
     try {
@@ -227,6 +140,11 @@ function UsersPageContent() {
     es.addEventListener('analytics.transaction_updated', onRefresh)
     return () => es.close()
   }, [loadAll])
+
+  useEffect(() => {
+    const id = window.setInterval(() => setRemainingClock((t) => t + 1), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
 
   function showFlash(type, message) {
     setFlash({ type, message })
@@ -289,6 +207,7 @@ function UsersPageContent() {
       showFlash('success', 'Subscription updated.')
     } catch (e) {
       showToast('error', e?.message || 'Update failed')
+      throw e
     }
   }
 
@@ -486,7 +405,9 @@ function UsersPageContent() {
                         <td className="px-4 py-3 text-slate-400">
                           {formatAdminDateTime(r.expires_at, { fallback: '-' })}
                         </td>
-                        <td className="px-4 py-3 text-slate-300">{remainingLabel(r.expires_at)}</td>
+                        <td className="px-4 py-3 text-slate-300">
+                          {formatAdminRemainingFromExpiry(r.expires_at)}
+                        </td>
                         <td className="px-4 py-3">
                           <span
                             className={`inline-flex rounded-lg px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide ring-1 ${
@@ -532,7 +453,12 @@ function UsersPageContent() {
           ) : null}
         </div>
 
-        <EditModal row={editing} onClose={() => setEditing(null)} onSave={handleSave} />
+        <SubscriptionEditModal
+          row={editing}
+          plans={plans}
+          onClose={() => setEditing(null)}
+          onSave={handleSave}
+        />
 
         <ConfirmModal
           open={confirm?.kind === 'selected'}
