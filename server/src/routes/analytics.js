@@ -1,10 +1,19 @@
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
 import { tryRecordAppInstall } from '../lib/installAnalytics.js'
+import {
+  cleanupStaleSessions,
+  LIVE_PRESENCE_WINDOW_SECONDS,
+  livePresenceWindowInterval,
+  SESSION_PRUNE_SECONDS,
+  startLivePresenceJanitor,
+} from '../lib/livePresence.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { mergeLocationBucketsByNormalizedLabel, normalizeLocationPayload } from '../lib/analyticsLocation.js'
 
 export const analyticsRouter = Router()
+
+startLivePresenceJanitor()
 
 const OVERVIEW_ZERO = {
   onlineNow: 0,
@@ -14,8 +23,7 @@ const OVERVIEW_ZERO = {
   totalInstalls: 0,
 }
 
-const SESSION_TTL_SECONDS = Math.max(30, Number(process.env.ANALYTICS_SESSION_TTL_SECONDS) || 180)
-const SESSION_TTL_INTERVAL = `${SESSION_TTL_SECONDS} seconds`
+const LIVE_WINDOW_INTERVAL = livePresenceWindowInterval()
 
 function numOrZero(v) {
   const n = Number(v)
@@ -71,36 +79,6 @@ function parseInstallInstanceIdFromBody(body) {
   )
 }
 
-async function cleanupStaleSessions(pool) {
-  try {
-    await pool.query(
-      `DELETE FROM live_sessions
-       WHERE COALESCE(updated_at, started_at, now()) < (now() - $1::interval)`,
-      [SESSION_TTL_INTERVAL],
-    )
-  } catch (e) {
-    console.error('[analytics] cleanupStaleSessions:', e)
-  }
-}
-
-async function resolveLiveSessionsTimeExpr(pool) {
-  try {
-    const { rows } = await pool.query(
-      `SELECT column_name
-       FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = 'live_sessions'`,
-    )
-    const cols = new Set(rows.map((r) => String(r.column_name)))
-    if (cols.has('updated_at')) return 'updated_at'
-    if (cols.has('created_at')) return 'created_at'
-    if (cols.has('started_at')) return 'started_at'
-    return null
-  } catch (e) {
-    console.error('[analytics] resolveLiveSessionsTimeExpr:', e)
-    return null
-  }
-}
-
 analyticsRouter.get('/overview', async (_req, res) => {
   try {
     const pool = getPool()
@@ -121,7 +99,7 @@ analyticsRouter.get('/overview', async (_req, res) => {
        WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
       'overview.onlineNow',
       (r) => numOrZero(r?.c),
-      [SESSION_TTL_INTERVAL],
+      [LIVE_WINDOW_INTERVAL],
     )
     const dauTodayRaw = await safeQueryScalar(
       pool,
@@ -168,7 +146,10 @@ analyticsRouter.get('/overview', async (_req, res) => {
       newUsersToday: newUsersTodayRaw ?? 0,
       revenueToday: revenueTodayRaw ?? 0,
       totalInstalls: totalInstallsRaw ?? 0,
-      sessionTtlSeconds: SESSION_TTL_SECONDS,
+      livePresenceWindowSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
+      sessionPruneSeconds: SESSION_PRUNE_SECONDS,
+      /** @deprecated use livePresenceWindowSeconds */
+      sessionTtlSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
       ...(degraded ? { degraded: true } : {}),
     })
   } catch (e) {
@@ -201,7 +182,7 @@ analyticsRouter.get('/channels', async (_req, res) => {
          AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
        GROUP BY channel_id
        ORDER BY viewers DESC`,
-      [SESSION_TTL_INTERVAL],
+      [LIVE_WINDOW_INTERVAL],
     )
     const mapped = rows.map((r) => ({
       channel_id: String(r.channel_id),
@@ -238,7 +219,7 @@ analyticsRouter.get('/locations', async (_req, res) => {
          AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
        GROUP BY country
        ORDER BY users DESC`,
-      [SESSION_TTL_INTERVAL],
+      [LIVE_WINDOW_INTERVAL],
     )
     res.json(mergeLocationBucketsByNormalizedLabel(rows))
   } catch (e) {

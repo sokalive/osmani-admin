@@ -95,7 +95,7 @@ function AnalyticsPage() {
 
   useEffect(() => {
     load()
-    const id = window.setInterval(load, 5000)
+    const id = window.setInterval(load, 3000)
     return () => window.clearInterval(id)
   }, [load])
 
@@ -111,6 +111,7 @@ function AnalyticsPage() {
     es.addEventListener('analytics.session_start', onSync)
     es.addEventListener('analytics.session_heartbeat', onSync)
     es.addEventListener('analytics.session_end', onSync)
+    es.addEventListener('analytics.presence_expired', onSync)
     es.addEventListener('analytics.transaction_updated', onSync)
     es.addEventListener('analytics.subscription_updated', onSync)
     return () => {
