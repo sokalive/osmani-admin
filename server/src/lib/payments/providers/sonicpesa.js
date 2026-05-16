@@ -159,11 +159,10 @@ export function normalizeResponse(raw, httpStatus = 0) {
     data.transid ?? data.transaction_id ?? data.trans_id ?? body.transid ?? '',
   ).trim()
   const message = String(body.message ?? data.message ?? '').trim()
-  /** API wrapper `status:"success"` ≠ paid — only payment_status / webhook helpers decide. */
+  /** API wrapper `status:"success"` ≠ paid — use payment_status + same settlement rules as ZenoPay reconcile. */
   const succeeded =
     ['SUCCESS', 'COMPLETED', 'PAID'].includes(paymentStatus.toUpperCase()) ||
-    webhookSuccess(body) ||
-    webhookSuccess(data)
+    webhookSuccess(body)
   const failed =
     ['FAILED', 'DECLINED', 'CANCELLED', 'REJECTED', 'USERCANCELLED'].includes(
       paymentStatus.toUpperCase(),

@@ -2,21 +2,113 @@ import * as billing from '../billingStore.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 
-/** ZenoPay often sends `payment_status: "COMPLETED"` under `data` — read all layers. */
-function statusStringsFromWebhook(body) {
-  const nested = [body, body?.data, body?.payload, body?.payment, body?.transaction].filter(
-    (x) => x && typeof x === 'object',
-  )
-  /** Order-status API returns `data: [{ payment_status: "COMPLETED" }]`. */
-  if (Array.isArray(body?.data)) {
+/** Flat objects to scan (excludes arrays mistaken as objects). */
+function walkPaymentPayloadObjects(body) {
+  if (body == null || typeof body !== 'object') return []
+  const out = []
+  const push = (x) => {
+    if (x && typeof x === 'object' && !Array.isArray(x)) out.push(x)
+  }
+  push(body)
+  push(body.data)
+  push(body.payload)
+  push(body.payment)
+  push(body.transaction)
+  if (Array.isArray(body.data)) {
     for (const item of body.data) {
-      if (item && typeof item === 'object') nested.push(item)
+      push(item)
     }
   }
+  return out
+}
+
+const PENDING_LIKE_PAYMENT = new Set([
+  'pending',
+  'processing',
+  'initiated',
+  'created',
+  'sent',
+  'waiting',
+  'queued',
+  'submitted',
+  'partial',
+  'in_progress',
+  'inprogress',
+  'awaiting',
+  'open',
+  'new',
+])
+
+const SETTLED_PAYMENT_STATUS = new Set([
+  'completed',
+  'paid',
+  'success',
+  'successful',
+  'succeeded',
+  'ok',
+  'confirmed',
+  'captured',
+  'complete',
+])
+
+function norm(s) {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase()
+}
+
+function isPendingLikeStatus(s) {
+  return PENDING_LIKE_PAYMENT.has(norm(s))
+}
+
+function isSettledPaymentStatusField(s) {
+  const v = norm(s)
+  if (!v || isPendingLikeStatus(v)) return false
+  return SETTLED_PAYMENT_STATUS.has(v)
+}
+
+/** Only `completed` / `paid` on generic `status`/`state`/`result` — not `success` (often means “STK sent”, HTTP OK). */
+function isConservativeGenericPaid(s) {
+  const v = norm(s)
+  return v === 'completed' || v === 'paid'
+}
+
+/**
+ * True when provider payload shows settled funds (webhook or order-status poll).
+ * Does not treat bare `success: true` / generic `status: "success"` as paid — that caused early activation.
+ */
+export function webhookSuccess(body) {
+  const objs = walkPaymentPayloadObjects(body)
+  for (const o of objs) {
+    for (const pk of ['payment_status', 'PaymentStatus', 'paymentStatus']) {
+      if (!(pk in o)) continue
+      const raw = o[pk]
+      if (raw == null || raw === '') continue
+      if (isSettledPaymentStatusField(raw)) return true
+    }
+  }
+  for (const o of objs) {
+    for (const gk of ['status', 'state', 'result']) {
+      if (!(gk in o)) continue
+      const raw = o[gk]
+      if (raw == null || raw === '') continue
+      if (isPendingLikeStatus(raw)) continue
+      if (isConservativeGenericPaid(raw)) return true
+    }
+  }
+  if (body?.paid === true) return true
+  const d = body?.data
+  if (d && typeof d === 'object' && !Array.isArray(d) && d.paid === true) return true
+  return false
+}
+
+/** ZenoPay often sends `payment_status: "COMPLETED"` under `data` — read all layers. */
+function statusStringsFromWebhook(body) {
+  const objs = walkPaymentPayloadObjects(body)
   const keys = ['payment_status', 'status', 'state', 'result']
   const out = []
   const seen = new Set()
-  for (const o of nested) {
+  for (const o of objs) {
     for (const k of keys) {
       const v = o[k]
       if (v == null || v === '') continue
@@ -28,17 +120,6 @@ function statusStringsFromWebhook(body) {
     }
   }
   return out
-}
-
-export function webhookSuccess(body) {
-  for (const raw of statusStringsFromWebhook(body)) {
-    const s = raw.toLowerCase()
-    if (['completed', 'success', 'paid', 'successful', 'ok'].includes(s)) return true
-  }
-  if (body?.success === true || body?.paid === true) return true
-  const d = body?.data
-  if (d && typeof d === 'object' && (d.success === true || d.paid === true)) return true
-  return false
 }
 
 export function webhookExplicitFailure(body) {
