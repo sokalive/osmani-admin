@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import multer from 'multer'
-import { UPLOADS_DIR, ensureUploadsDir } from './multerUpload.js'
+import { UPLOADS_DIR, ensureUploadsDir } from '../multerUpload.js'
 
 export const APK_UPLOADS_DIR = path.join(UPLOADS_DIR, 'apks')
 
