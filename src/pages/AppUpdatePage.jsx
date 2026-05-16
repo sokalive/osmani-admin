@@ -29,6 +29,15 @@ function defaultCfg() {
   }
 }
 
+function cloneCfg(value) {
+  return { ...defaultCfg(), ...(value && typeof value === 'object' ? value : {}) }
+}
+
+function isEmptySnapshot(snapshot) {
+  const base = defaultCfg()
+  return JSON.stringify(cloneCfg(snapshot)) === JSON.stringify(base)
+}
+
 function defaultRuntime() {
   return {
     decision: 'NONE',
@@ -158,23 +167,46 @@ function RuntimeField({ label, value, wide = false }) {
 
 function AppUpdatePage() {
   const { showToast } = useToast()
-  const [cfg, setCfg] = useState(() => defaultCfg())
-  const [draft, setDraft] = useState(() => ({ ...defaultCfg() }))
+  /** Last server snapshot (load/save/upload refresh) — baseline for “Reset changes”. */
+  const [savedSnapshot, setSavedSnapshot] = useState(() => defaultCfg())
+  const [draft, setDraft] = useState(() => defaultCfg())
   const [runtime, setRuntime] = useState(() => defaultRuntime())
   const [flash, setFlash] = useState(null)
   const [apkFile, setApkFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadError, setUploadError] = useState(null)
   const apkInputRef = useRef(null)
+
+  function clearApkUploadUi() {
+    setApkFile(null)
+    setUploading(false)
+    setUploadProgress(0)
+    setUploadError(null)
+    if (apkInputRef.current) apkInputRef.current.value = ''
+  }
+
+  function handleResetDraft() {
+    setDraft(cloneCfg(savedSnapshot))
+    clearApkUploadUi()
+    setFlash(null)
+  }
+
+  function handleClearForm() {
+    setDraft(defaultCfg())
+    clearApkUploadUi()
+    setFlash(null)
+  }
 
   const load = useCallback(async () => {
     try {
       const [settings, runtimePayload] = await Promise.all([getAppUpdateSettings(), getUpdateCheck()])
       const normalizedRuntime = normalizeRuntimePayload(runtimePayload)
-      const merged = { ...defaultCfg(), ...normalizeSettingsPayload(settings, normalizedRuntime) }
-      setCfg(merged)
-      setDraft(merged)
+      const merged = cloneCfg(normalizeSettingsPayload(settings, normalizedRuntime))
+      setSavedSnapshot(merged)
+      setDraft(cloneCfg(merged))
       setRuntime(normalizedRuntime)
+      clearApkUploadUi()
     } catch (e) {
       showToast('error', e?.message || 'Could not load app update settings')
     }
@@ -196,7 +228,16 @@ function AppUpdatePage() {
     return () => es.close()
   }, [load])
 
-  const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(cfg), [draft, cfg])
+  const draftDirty = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(savedSnapshot),
+    [draft, savedSnapshot],
+  )
+  const uploadUiDirty = apkFile !== null || uploading || uploadProgress > 0 || Boolean(uploadError)
+  const dirty = draftDirty || uploadUiDirty
+  const canClearForm = useMemo(
+    () => !isEmptySnapshot(draft) || uploadUiDirty || !isEmptySnapshot(savedSnapshot),
+    [draft, uploadUiDirty, savedSnapshot],
+  )
 
   const previewMode = useMemo(() => previewModeLabel(draft), [draft])
   const previewSource = useMemo(() => previewSourceLabel(draft.source), [draft.source])
@@ -247,6 +288,7 @@ function AppUpdatePage() {
   function handleApkFileChange(e) {
     const file = e.target.files?.[0] ?? null
     setApkFile(file)
+    setUploadError(null)
     e.target.value = ''
   }
 
@@ -257,29 +299,22 @@ function AppUpdatePage() {
     }
     setUploading(true)
     setUploadProgress(0)
+    setUploadError(null)
     try {
       const result = await postAppUpdateApkUpload(apkFile, {
         onProgress: (pct) => setUploadProgress(pct),
       })
-      const merged = {
-        ...draft,
-        apkUrl: String(result?.apkUrl ?? '').trim(),
-        sha256: String(result?.sha256 ?? '').trim(),
-        versionCode: Number(result?.versionCode) || draft.versionCode,
-        versionName: String(result?.versionName ?? '').trim(),
-        packageName: String(result?.packageName ?? '').trim(),
-        source: 'apk',
-      }
-      setDraft(merged)
-      setCfg(merged)
-      setApkFile(null)
       setUploadProgress(100)
-      showFlash('success', `APK v${merged.versionCode} uploaded and linked.`)
+      showFlash('success', `APK v${result?.versionCode ?? ''} uploaded and linked.`)
       await load()
     } catch (err) {
-      showToast('error', err?.message || 'APK upload failed')
+      const message = err?.message || 'APK upload failed'
+      setUploadError(message)
+      showToast('error', message)
     } finally {
       setUploading(false)
+      setApkFile(null)
+      if (apkInputRef.current) apkInputRef.current.value = ''
       window.setTimeout(() => setUploadProgress(0), 1200)
     }
   }
@@ -403,7 +438,7 @@ function AppUpdatePage() {
                     placeholder="13"
                   />
                   <p className="mt-1.5 text-xs text-slate-500">
-                    Must increase when uploading a new APK (current: {cfg.versionCode || 0})
+                    Must increase when uploading a new APK (current: {savedSnapshot.versionCode || 0})
                   </p>
                 </div>
                 <div>
@@ -464,6 +499,11 @@ function AppUpdatePage() {
                     {uploading ? 'Uploading…' : 'Upload APK'}
                   </button>
                 </div>
+                {uploadError ? (
+                  <p className="mt-4 text-sm text-red-400" role="alert">
+                    {uploadError}
+                  </p>
+                ) : null}
                 {uploading || uploadProgress > 0 ? (
                   <div className="mt-5">
                     <div className="mb-1 flex justify-between text-xs text-slate-400">
@@ -519,19 +559,27 @@ function AppUpdatePage() {
             <div className="flex flex-col gap-3">
               <button
                 type="submit"
-                disabled={!dirty}
+                disabled={!draftDirty}
                 className="w-full rounded-2xl bg-gradient-to-r from-[#f5b301] via-amber-400 to-yellow-500 py-4 text-base font-bold text-slate-950 shadow-[0_10px_32px_rgba(245,179,1,0.35)] transition-transform enabled:hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Save Settings
               </button>
               <button
                 type="button"
-                onClick={() => setDraft({ ...cfg })}
+                onClick={handleResetDraft}
                 disabled={!dirty}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-600/80 py-3 text-sm font-medium text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-800/50 disabled:opacity-40"
               >
                 <RefreshCw className="h-4 w-4" />
                 Reset changes
+              </button>
+              <button
+                type="button"
+                onClick={handleClearForm}
+                disabled={!canClearForm}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-700/80 py-3 text-sm font-medium text-slate-400 transition-colors hover:border-slate-600 hover:bg-slate-800/40 hover:text-slate-200 disabled:opacity-40"
+              >
+                Clear form
               </button>
             </div>
 
