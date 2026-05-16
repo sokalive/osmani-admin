@@ -794,6 +794,50 @@ export const getAppUpdateSettings = () => adminApiGet('/settings/app-update')
 export const putAppUpdateSettings = (body) => adminApiPut('/settings/app-update', body)
 export const getUpdateCheck = () => apiGet('/update-check')
 
+/**
+ * Upload APK to server storage (multipart). Reports upload progress 0–100 via onProgress.
+ */
+export function postAppUpdateApkUpload(file, { onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new ApiError('No APK file selected', 400, null))
+      return
+    }
+    const formData = new FormData()
+    formData.append('apk', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', joinPath('/settings/app-update/upload-apk'))
+    const headers = adminPanelApiHeaders()
+    Object.entries(headers).forEach(([key, value]) => {
+      if (key.toLowerCase() !== 'content-type') xhr.setRequestHeader(key, value)
+    })
+    xhr.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable || typeof onProgress !== 'function') return
+      onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)))
+    })
+    xhr.addEventListener('load', () => {
+      let body = null
+      try {
+        body = xhr.responseText ? JSON.parse(xhr.responseText) : null
+      } catch {
+        body = xhr.responseText
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body)
+        return
+      }
+      reject(new ApiError(msgFromBody(body, xhr.status), xhr.status, body))
+    })
+    xhr.addEventListener('error', () => {
+      reject(new ApiError('APK upload failed (network error)', 0, null))
+    })
+    xhr.addEventListener('abort', () => {
+      reject(new ApiError('APK upload cancelled', 0, null))
+    })
+    xhr.send(formData)
+  })
+}
+
 export const getPopupSettings = () => adminApiGet('/popup-settings')
 export const putPopupSettings = (body) => adminApiPut('/popup-settings', body)
 export const getRuntimePopupSettings = () => apiGet('/settings/popup')

@@ -1,6 +1,10 @@
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
+import { parseApkMetadata } from '../lib/apkMetadata.js'
+import { APK_UPLOADS_DIR, uploadApkFile } from '../lib/apkUploadMulter.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
@@ -15,6 +19,11 @@ const UPDATE_KEYS = {
   apkUrl: 'update_apk_url',
   apkHash: 'update_apk_hash',
   playstoreUrl: 'update_playstore_url',
+  title: 'update_title',
+  message: 'update_message',
+  versionCode: 'update_version_code',
+  versionName: 'update_version_name',
+  packageName: 'update_package_name',
 }
 
 const DEFAULTS = {
@@ -25,6 +34,11 @@ const DEFAULTS = {
   [UPDATE_KEYS.apkUrl]: '',
   [UPDATE_KEYS.apkHash]: '',
   [UPDATE_KEYS.playstoreUrl]: '',
+  [UPDATE_KEYS.title]: '',
+  [UPDATE_KEYS.message]: '',
+  [UPDATE_KEYS.versionCode]: '0',
+  [UPDATE_KEYS.versionName]: '',
+  [UPDATE_KEYS.packageName]: '',
 }
 
 const VERIFY_MAX_APK_BYTES = Math.max(
@@ -88,6 +102,11 @@ function toPublicConfig(rowsByKey, tag = 'decision') {
   const apkUrlRaw = text(rowsByKey[UPDATE_KEYS.apkUrl] ?? DEFAULTS[UPDATE_KEYS.apkUrl], 4000)
   const apkSha256Raw = normalizeHash(rowsByKey[UPDATE_KEYS.apkHash] ?? DEFAULTS[UPDATE_KEYS.apkHash])
   const playstoreUrlRaw = text(rowsByKey[UPDATE_KEYS.playstoreUrl] ?? DEFAULTS[UPDATE_KEYS.playstoreUrl], 4000)
+  const updateTitle = text(rowsByKey[UPDATE_KEYS.title] ?? DEFAULTS[UPDATE_KEYS.title], 256)
+  const updateMessage = text(rowsByKey[UPDATE_KEYS.message] ?? DEFAULTS[UPDATE_KEYS.message], 4000)
+  const versionCode = parseVersionCode(rowsByKey[UPDATE_KEYS.versionCode] ?? DEFAULTS[UPDATE_KEYS.versionCode])
+  const versionName = text(rowsByKey[UPDATE_KEYS.versionName] ?? DEFAULTS[UPDATE_KEYS.versionName], 64)
+  const packageName = text(rowsByKey[UPDATE_KEYS.packageName] ?? DEFAULTS[UPDATE_KEYS.packageName], 256)
   const hasAnyUrl = Boolean(apkUrlRaw || playstoreUrlRaw)
   const apkUrl =
     source === 'apk' ? pickFirstNonEmpty(apkUrlRaw, playstoreUrlRaw) : text(apkUrlRaw, 4000)
@@ -110,6 +129,11 @@ function toPublicConfig(rowsByKey, tag = 'decision') {
       : decision === 'SOFT' && !hasAnyUrl
         ? 'Update available'
         : ''
+  const composedNotice = pickFirstNonEmpty(
+    updateMessage,
+    updateTitle && updateMessage ? `${updateTitle}: ${updateMessage}` : updateTitle,
+    fallbackNotice,
+  )
 
   logDecisionContext(tag, {
     source,
@@ -128,7 +152,12 @@ function toPublicConfig(rowsByKey, tag = 'decision') {
     playstore_url: playstoreUrl,
     auto_download: autoDownload,
     server_time: new Date().toISOString(),
-    notice: fallbackNotice,
+    notice: composedNotice,
+    update_title: updateTitle,
+    update_message: updateMessage,
+    version_code: versionCode,
+    version_name: versionName,
+    package_name: packageName,
     // admin view compatibility fields
     softUpdate: soft,
     forceUpdate: force,
@@ -136,6 +165,11 @@ function toPublicConfig(rowsByKey, tag = 'decision') {
     apkUrl,
     sha256: apkSha256,
     playstoreUrl,
+    updateTitle,
+    updateMessage,
+    versionCode,
+    versionName,
+    packageName,
   }
 }
 
@@ -205,6 +239,75 @@ function validateHttpsUrl(value) {
   }
 }
 
+/** Hosted APK URLs may use http on localhost; external URLs still require https. */
+function validateApkUrl(value) {
+  const u = text(value, 4000)
+  if (!u) return { ok: true, value: '' }
+  try {
+    const parsed = new URL(u)
+    if (parsed.pathname.includes('/uploads/apks/')) {
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        return { ok: true, value: parsed.toString() }
+      }
+      return { ok: false, error: 'Invalid hosted APK URL' }
+    }
+    return validateHttpsUrl(u)
+  } catch {
+    return { ok: false, error: 'Invalid URL' }
+  }
+}
+
+function parseVersionCode(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.trunc(n)
+}
+
+function resolvePublicOrigin(req) {
+  const env = String(process.env.BASE_URL || process.env.PUBLIC_BASE_URL || '').trim()
+  if (env) return env.replace(/\/+$/, '')
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
+    .split(',')[0]
+    .trim()
+  const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').trim()
+  if (!host) return ''
+  return `${proto}://${host}`.replace(/\/+$/, '')
+}
+
+function hostedApkPublicUrl(origin, filename) {
+  const base = String(origin ?? '').replace(/\/+$/, '')
+  const name = path.basename(String(filename ?? ''))
+  if (!base || !name) return ''
+  return `${base}/uploads/apks/${encodeURIComponent(name)}`
+}
+
+async function sha256File(filePath) {
+  const hash = crypto.createHash('sha256')
+  await new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(filePath)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('error', reject)
+    stream.on('end', resolve)
+  })
+  return hash.digest('hex')
+}
+
+async function upsertSetting(pool, key, value) {
+  await pool.query(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [key, value],
+  )
+}
+
+async function writeSettingsMap(pool, map) {
+  await ensureAppSettingsTable(pool)
+  for (const [key, value] of Object.entries(map)) {
+    await upsertSetting(pool, key, value)
+  }
+}
+
 appUpdateRouter.get('/settings/app-update', requireAdminPanelAccess, async (_req, res) => {
   try {
     const pool = getPool()
@@ -218,6 +321,11 @@ appUpdateRouter.get('/settings/app-update', requireAdminPanelAccess, async (_req
       apkUrl: data.apkUrl,
       sha256: data.sha256,
       playstoreUrl: data.playstoreUrl,
+      updateTitle: data.updateTitle,
+      updateMessage: data.updateMessage,
+      versionCode: data.versionCode,
+      versionName: data.versionName,
+      packageName: data.packageName,
     })
   } catch (e) {
     console.error('[settings/app-update] GET', e)
@@ -235,7 +343,16 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
     const rawApkUrl = text(body.apkUrl, 4000)
     const rawPlaystoreUrl = text(body.playstoreUrl, 4000)
     const rawHash = normalizeHash(body.sha256)
-    const apkCheck = validateHttpsUrl(rawApkUrl)
+    const rowsBefore = await loadRowsByKey(pool)
+    const storedVersionCode = parseVersionCode(rowsBefore[UPDATE_KEYS.versionCode])
+    const incomingVersionCode = parseVersionCode(body.versionCode)
+    if (incomingVersionCode > 0 && incomingVersionCode < storedVersionCode) {
+      return res.status(400).json({
+        error: `versionCode must be greater than current (${storedVersionCode})`,
+      })
+    }
+
+    const apkCheck = validateApkUrl(rawApkUrl)
     const playCheck = validateHttpsUrl(rawPlaystoreUrl)
     if (!apkCheck.ok && rawApkUrl) {
       console.warn('[app-update] rejected URL (apk_url):', rawApkUrl)
@@ -254,6 +371,13 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       [UPDATE_KEYS.apkUrl]: apkCheck.ok ? apkCheck.value : '',
       [UPDATE_KEYS.apkHash]: isValidSha256(rawHash) ? rawHash : '',
       [UPDATE_KEYS.playstoreUrl]: playCheck.ok ? playCheck.value : '',
+      [UPDATE_KEYS.title]: text(body.updateTitle ?? body.title, 256),
+      [UPDATE_KEYS.message]: text(body.updateMessage ?? body.message, 4000),
+      [UPDATE_KEYS.versionCode]: String(
+        incomingVersionCode > 0 ? incomingVersionCode : storedVersionCode,
+      ),
+      [UPDATE_KEYS.versionName]: text(body.versionName, 64),
+      [UPDATE_KEYS.packageName]: text(body.packageName, 256),
     }
 
     await ensureAppSettingsTable(pool)
@@ -314,11 +438,135 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       apkUrl: stored.apkUrl,
       sha256: stored.sha256,
       playstoreUrl: stored.playstoreUrl,
+      updateTitle: stored.updateTitle,
+      updateMessage: stored.updateMessage,
+      versionCode: stored.versionCode,
+      versionName: stored.versionName,
+      packageName: stored.packageName,
     })
   } catch (e) {
     console.error('[settings/app-update] PUT', e)
     return res.status(500).json({ error: String(e.message || e) })
   }
+})
+
+appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess, (req, res) => {
+  uploadApkFile.single('apk')(req, res, (multerErr) => {
+    void (async () => {
+      if (multerErr) {
+        const msg =
+          multerErr.code === 'LIMIT_FILE_SIZE'
+            ? 'APK file is too large'
+            : String(multerErr.message || multerErr)
+        return res.status(400).json({ ok: false, error: msg })
+      }
+      const pool = getPool()
+      if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })
+      if (!req.file?.path) {
+        return res.status(400).json({ ok: false, error: 'apk file is required' })
+      }
+
+      let stagedPath = req.file.path
+      try {
+        const meta = await parseApkMetadata(stagedPath)
+        if (!meta) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Could not read APK metadata (package, versionCode, versionName)',
+          })
+        }
+
+        const rowsBefore = await loadRowsByKey(pool)
+        const currentCode = parseVersionCode(rowsBefore[UPDATE_KEYS.versionCode])
+        if (meta.versionCode <= currentCode) {
+          return res.status(400).json({
+            ok: false,
+            error: `APK versionCode must be greater than current (${currentCode}). Uploaded: ${meta.versionCode}`,
+            currentVersionCode: currentCode,
+            uploadedVersionCode: meta.versionCode,
+          })
+        }
+
+        const safeName = String(meta.versionName || meta.versionCode)
+          .replace(/[^\w.\-]+/g, '_')
+          .slice(0, 48)
+        const finalFilename = `osmani-v${meta.versionCode}-${safeName}.apk`
+        const finalPath = path.join(APK_UPLOADS_DIR, finalFilename)
+        if (fs.existsSync(finalPath)) {
+          fs.unlinkSync(finalPath)
+        }
+        fs.renameSync(stagedPath, finalPath)
+        stagedPath = finalPath
+
+        const sha256 = await sha256File(finalPath)
+        const origin = resolvePublicOrigin(req)
+        const apkUrl = hostedApkPublicUrl(origin, finalFilename)
+        if (!apkUrl) {
+          return res.status(500).json({
+            ok: false,
+            error: 'Could not build public APK URL (set BASE_URL on the server)',
+          })
+        }
+
+        const next = {
+          ...rowsBefore,
+          [UPDATE_KEYS.apkUrl]: apkUrl,
+          [UPDATE_KEYS.apkHash]: sha256,
+          [UPDATE_KEYS.versionCode]: String(meta.versionCode),
+          [UPDATE_KEYS.versionName]: meta.versionName,
+          [UPDATE_KEYS.packageName]: meta.packageName,
+          [UPDATE_KEYS.source]: 'apk',
+        }
+        await writeSettingsMap(pool, {
+          [UPDATE_KEYS.apkUrl]: apkUrl,
+          [UPDATE_KEYS.apkHash]: sha256,
+          [UPDATE_KEYS.versionCode]: String(meta.versionCode),
+          [UPDATE_KEYS.versionName]: meta.versionName,
+          [UPDATE_KEYS.packageName]: meta.packageName,
+          [UPDATE_KEYS.source]: 'apk',
+        })
+
+        const decisionData = toPublicConfig(next, 'upload-apk')
+        liveSyncBus.publish('config.app_update_changed', {
+          topics: ['config'],
+          action: 'apk_uploaded',
+          updateDecision: decisionData.decision,
+          versionCode: meta.versionCode,
+          synced_at: new Date().toISOString(),
+        })
+
+        const stored = toPublicConfig(await loadRowsByKey(pool), 'upload-apk:stored')
+        return res.json({
+          ok: true,
+          apkUrl: stored.apkUrl,
+          sha256: stored.sha256,
+          versionCode: meta.versionCode,
+          versionName: meta.versionName,
+          packageName: meta.packageName,
+          filename: finalFilename,
+          sizeBytes: fs.statSync(finalPath).size,
+          softUpdate: stored.softUpdate,
+          forceUpdate: stored.forceUpdate,
+          autoDownload: stored.autoDownload,
+          source: normalizeUiSource(stored.source),
+          playstoreUrl: stored.playstoreUrl,
+          updateTitle: stored.updateTitle,
+          updateMessage: stored.updateMessage,
+        })
+      } catch (e) {
+        console.error('[settings/app-update/upload-apk]', e)
+        return res.status(500).json({ ok: false, error: String(e.message || e) })
+      } finally {
+        if (stagedPath && fs.existsSync(stagedPath) && stagedPath.includes('upload-')) {
+          try {
+            fs.unlinkSync(stagedPath)
+          } catch {
+            /* ignore cleanup */
+          }
+        }
+      }
+    })()
+  })
 })
 
 appUpdateRouter.get('/update-check', async (_req, res) => {
@@ -335,6 +583,11 @@ appUpdateRouter.get('/update-check', async (_req, res) => {
       auto_download: data.auto_download,
       server_time: data.server_time,
       notice: data.notice,
+      update_title: data.update_title,
+      update_message: data.update_message,
+      version_code: data.version_code,
+      version_name: data.version_name,
+      package_name: data.package_name,
     })
   } catch (e) {
     console.error('[update-check] GET', e)
@@ -356,6 +609,11 @@ appUpdateRouter.post('/update-check', async (_req, res) => {
       auto_download: data.auto_download,
       server_time: data.server_time,
       notice: data.notice,
+      update_title: data.update_title,
+      update_message: data.update_message,
+      version_code: data.version_code,
+      version_name: data.version_name,
+      package_name: data.package_name,
     })
   } catch (e) {
     console.error('[update-check] POST', e)

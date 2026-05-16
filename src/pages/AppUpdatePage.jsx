@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, RefreshCw, Smartphone, Store } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Download, RefreshCw, Smartphone, Store, Upload } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import ToggleSwitch from '../components/ToggleSwitch'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getAppUpdateSettings, getUpdateCheck, putAppUpdateSettings, syncStreamUrl } from '../lib/api'
+import {
+  getAppUpdateSettings,
+  getUpdateCheck,
+  postAppUpdateApkUpload,
+  putAppUpdateSettings,
+  syncStreamUrl,
+} from '../lib/api'
 
 function defaultCfg() {
   return {
@@ -15,6 +21,11 @@ function defaultCfg() {
     apkUrl: '',
     sha256: '',
     playstoreUrl: '',
+    updateTitle: '',
+    updateMessage: '',
+    versionCode: 0,
+    versionName: '',
+    packageName: '',
   }
 }
 
@@ -60,12 +71,19 @@ function normalizeRuntimePayload(payload) {
     auto_download: body.auto_download === true,
     server_time: String(body.server_time ?? '').trim(),
     notice: String(body.notice ?? '').trim(),
+    update_title: String(body.update_title ?? '').trim(),
+    update_message: String(body.update_message ?? '').trim(),
+    version_code: Number(body.version_code) || 0,
+    version_name: String(body.version_name ?? '').trim(),
+    package_name: String(body.package_name ?? '').trim(),
   }
 }
 
 function normalizeSettingsPayload(settings, runtime) {
   const body = settings && typeof settings === 'object' ? settings : {}
   const runtimeBody = normalizeRuntimePayload(runtime)
+  const versionCodeRaw = body.versionCode ?? body.version_code ?? runtimeBody.version_code
+  const versionCodeNum = Number(versionCodeRaw)
   return {
     softUpdate: body.softUpdate === true,
     forceUpdate: body.forceUpdate === true,
@@ -75,7 +93,18 @@ function normalizeSettingsPayload(settings, runtime) {
     apkUrl: String(body.apkUrl ?? runtimeBody.apk_url ?? '').trim(),
     sha256: String(body.sha256 ?? runtimeBody.apk_sha256 ?? '').trim(),
     playstoreUrl: String(body.playstoreUrl ?? runtimeBody.playstore_url ?? '').trim(),
+    updateTitle: String(body.updateTitle ?? body.update_title ?? runtimeBody.update_title ?? '').trim(),
+    updateMessage: String(
+      body.updateMessage ?? body.update_message ?? runtimeBody.update_message ?? '',
+    ).trim(),
+    versionCode: Number.isFinite(versionCodeNum) && versionCodeNum > 0 ? Math.trunc(versionCodeNum) : 0,
+    versionName: String(body.versionName ?? body.version_name ?? runtimeBody.version_name ?? '').trim(),
+    packageName: String(body.packageName ?? body.package_name ?? runtimeBody.package_name ?? '').trim(),
   }
+}
+
+function readOnlyInputClass() {
+  return `${inputClass()} cursor-not-allowed opacity-90`
 }
 
 function runtimeTimeLabel(value) {
@@ -133,6 +162,10 @@ function AppUpdatePage() {
   const [draft, setDraft] = useState(() => ({ ...defaultCfg() }))
   const [runtime, setRuntime] = useState(() => defaultRuntime())
   const [flash, setFlash] = useState(null)
+  const [apkFile, setApkFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const apkInputRef = useRef(null)
 
   const load = useCallback(async () => {
     try {
@@ -168,6 +201,13 @@ function AppUpdatePage() {
   const previewMode = useMemo(() => previewModeLabel(draft), [draft])
   const previewSource = useMemo(() => previewSourceLabel(draft.source), [draft.source])
   const previewAuto = useMemo(() => (draft.autoDownload ? 'Enabled' : 'Disabled'), [draft.autoDownload])
+  const previewVersion = useMemo(() => {
+    const code = Number(draft.versionCode) || 0
+    const name = String(draft.versionName || '').trim()
+    if (code > 0 && name) return `${name} (${code})`
+    if (code > 0) return String(code)
+    return '—'
+  }, [draft.versionCode, draft.versionName])
 
   function showFlash(type, message) {
     setFlash({ type, message })
@@ -185,6 +225,11 @@ function AppUpdatePage() {
         apkUrl: draft.apkUrl.trim(),
         sha256: draft.sha256.trim(),
         playstoreUrl: draft.playstoreUrl.trim(),
+        updateTitle: draft.updateTitle.trim(),
+        updateMessage: draft.updateMessage.trim(),
+        versionCode: Number(draft.versionCode) || 0,
+        versionName: draft.versionName.trim(),
+        packageName: draft.packageName.trim(),
       }
       console.info('[AppUpdatePage] save payload:', payload)
       await putAppUpdateSettings(payload)
@@ -192,6 +237,50 @@ function AppUpdatePage() {
       showFlash('success', 'App update configuration saved.')
     } catch (err) {
       showToast('error', err?.message || 'Save failed')
+    }
+  }
+
+  function handleChooseApk() {
+    apkInputRef.current?.click()
+  }
+
+  function handleApkFileChange(e) {
+    const file = e.target.files?.[0] ?? null
+    setApkFile(file)
+    e.target.value = ''
+  }
+
+  async function handleUploadApk() {
+    if (!apkFile) {
+      showToast('error', 'Choose an APK file first')
+      return
+    }
+    setUploading(true)
+    setUploadProgress(0)
+    try {
+      const result = await postAppUpdateApkUpload(apkFile, {
+        onProgress: (pct) => setUploadProgress(pct),
+      })
+      const merged = {
+        ...draft,
+        apkUrl: String(result?.apkUrl ?? '').trim(),
+        sha256: String(result?.sha256 ?? '').trim(),
+        versionCode: Number(result?.versionCode) || draft.versionCode,
+        versionName: String(result?.versionName ?? '').trim(),
+        packageName: String(result?.packageName ?? '').trim(),
+        source: 'apk',
+      }
+      setDraft(merged)
+      setCfg(merged)
+      setApkFile(null)
+      setUploadProgress(100)
+      showFlash('success', `APK v${merged.versionCode} uploaded and linked.`)
+      await load()
+    } catch (err) {
+      showToast('error', err?.message || 'APK upload failed')
+    } finally {
+      setUploading(false)
+      window.setTimeout(() => setUploadProgress(0), 1200)
     }
   }
 
@@ -272,18 +361,148 @@ function AppUpdatePage() {
 
             <section className={`${cardClass()} space-y-5`}>
               <div>
-                <h2 className="text-lg font-bold text-white">Package details</h2>
-                <p className="mt-1 text-sm text-slate-500">URLs and integrity checks for the update package</p>
+                <h2 className="text-lg font-bold text-white">Update copy</h2>
+                <p className="mt-1 text-sm text-slate-500">Title and message shown in the client update UI</p>
+              </div>
+
+              <div>
+                <label className={labelClass()}>Update Title</label>
+                <input
+                  value={draft.updateTitle}
+                  onChange={(e) => setDraft((d) => ({ ...d, updateTitle: e.target.value }))}
+                  className={inputClass()}
+                  placeholder="New version available"
+                />
+              </div>
+
+              <div>
+                <label className={labelClass()}>Update Message</label>
+                <textarea
+                  value={draft.updateMessage}
+                  onChange={(e) => setDraft((d) => ({ ...d, updateMessage: e.target.value }))}
+                  rows={3}
+                  className={`${inputClass()} min-h-[88px] resize-y`}
+                  placeholder="Please update to continue with the latest features and fixes."
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className={labelClass()}>Version Code</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={draft.versionCode || ''}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        versionCode: Math.max(0, Math.trunc(Number(e.target.value) || 0)),
+                      }))
+                    }
+                    className={inputClass()}
+                    placeholder="13"
+                  />
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    Must increase when uploading a new APK (current: {cfg.versionCode || 0})
+                  </p>
+                </div>
+                <div>
+                  <label className={labelClass()}>Version Name</label>
+                  <input
+                    value={draft.versionName}
+                    onChange={(e) => setDraft((d) => ({ ...d, versionName: e.target.value }))}
+                    className={inputClass()}
+                    placeholder="1.2.0"
+                  />
+                </div>
+              </div>
+
+              {draft.packageName ? (
+                <p className="text-xs text-slate-500">
+                  Package: <span className="font-mono text-slate-300">{draft.packageName}</span>
+                </p>
+              ) : null}
+            </section>
+
+            <section className={`${cardClass()} space-y-5`}>
+              <div>
+                <h2 className="text-lg font-bold text-white">APK upload</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Upload a release APK — URL and SHA-256 are saved automatically
+                </p>
+              </div>
+
+              <input
+                ref={apkInputRef}
+                type="file"
+                accept=".apk,application/vnd.android.package-archive"
+                className="hidden"
+                onChange={handleApkFileChange}
+              />
+
+              <div className="rounded-2xl border-2 border-dashed border-slate-600/80 bg-[#0a0e16] p-6 text-center">
+                <Upload className="mx-auto h-10 w-10 text-[#f5b301]/80" aria-hidden />
+                <p className="mt-3 text-sm font-medium text-slate-200">
+                  {apkFile ? apkFile.name : 'No file selected'}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">Android package (.apk) only</p>
+                <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-center">
+                  <button
+                    type="button"
+                    onClick={handleChooseApk}
+                    disabled={uploading}
+                    className="rounded-xl border border-[#f5b301]/50 bg-[#f5b301]/10 px-5 py-2.5 text-sm font-semibold text-[#f5c842] hover:bg-[#f5b301]/20 disabled:opacity-50"
+                  >
+                    Choose APK
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleUploadApk()}
+                    disabled={!apkFile || uploading}
+                    className="rounded-xl bg-gradient-to-r from-[#f5b301] to-yellow-500 px-5 py-2.5 text-sm font-bold text-slate-950 disabled:opacity-50"
+                  >
+                    {uploading ? 'Uploading…' : 'Upload APK'}
+                  </button>
+                </div>
+                {uploading || uploadProgress > 0 ? (
+                  <div className="mt-5">
+                    <div className="mb-1 flex justify-between text-xs text-slate-400">
+                      <span>Upload progress</span>
+                      <span>{uploadProgress}%</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-[#f5b301] to-yellow-500 transition-all duration-200"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               <div>
                 <label className={labelClass()}>APK URL</label>
                 <input
+                  readOnly
                   value={draft.apkUrl}
-                  onChange={(e) => setDraft((d) => ({ ...d, apkUrl: e.target.value }))}
-                  className={inputClass()}
-                  placeholder="https://example.com/app-release.apk"
+                  className={readOnlyInputClass()}
+                  placeholder="Upload an APK to generate the URL"
                 />
+                <p className="mt-1.5 text-xs text-slate-500">Set automatically after upload</p>
+              </div>
+
+              <div>
+                <label className={labelClass()}>APK SHA-256 Hash</label>
+                <textarea
+                  readOnly
+                  value={draft.sha256}
+                  rows={2}
+                  className={`${readOnlyInputClass()} min-h-[72px] resize-none font-mono text-xs`}
+                  placeholder="Computed on upload"
+                />
+                <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                  Leave empty to skip verification on the client
+                </p>
               </div>
 
               <div>
@@ -294,20 +513,6 @@ function AppUpdatePage() {
                   className={inputClass()}
                   placeholder="https://play.google.com/store/apps/details?id=..."
                 />
-              </div>
-
-              <div>
-                <label className={labelClass()}>APK SHA-256 Hash</label>
-                <textarea
-                  value={draft.sha256}
-                  onChange={(e) => setDraft((d) => ({ ...d, sha256: e.target.value }))}
-                  rows={3}
-                  placeholder="64-character hex checksum"
-                  className={`${inputClass()} min-h-[96px] resize-y font-mono text-xs`}
-                />
-                <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                  Leave empty to skip verification…
-                </p>
               </div>
             </section>
 
@@ -339,6 +544,7 @@ function AppUpdatePage() {
               <PreviewRow label="Mode" value={previewMode} />
               <PreviewRow label="Source" value={previewSource} />
               <PreviewRow label="Auto Download" value={previewAuto} />
+              <PreviewRow label="Version" value={previewVersion} />
             </section>
 
             <section className={`${cardClass()} space-y-4`}>
@@ -359,6 +565,11 @@ function AppUpdatePage() {
                 <RuntimeField label="playstore_url" value={runtime.playstore_url || '—'} wide />
                 <RuntimeField label="apk_sha256" value={runtime.apk_sha256 || '—'} wide />
                 <RuntimeField label="notice" value={runtime.notice || '—'} wide />
+                <RuntimeField label="update_title" value={runtime.update_title || '—'} />
+                <RuntimeField label="update_message" value={runtime.update_message || '—'} wide />
+                <RuntimeField label="version_code" value={String(runtime.version_code || 0)} />
+                <RuntimeField label="version_name" value={runtime.version_name || '—'} />
+                <RuntimeField label="package_name" value={runtime.package_name || '—'} wide />
               </div>
             </section>
           </form>
