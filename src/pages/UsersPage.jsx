@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, Component } from 'react'
 import { Loader2, Pencil, Trash2 } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
@@ -15,8 +15,9 @@ function labelClass() {
 }
 
 function remainingLabel(expiresAt) {
-  const end = new Date(expiresAt || '')
-  if (Number.isNaN(end.getTime())) return 'Expired'
+  if (expiresAt == null || expiresAt === '') return '—'
+  const end = new Date(expiresAt)
+  if (Number.isNaN(end.getTime())) return '—'
   const ms = end.getTime() - Date.now()
   if (ms <= 0) return 'Expired'
   const s = Math.floor(ms / 1000)
@@ -143,7 +144,51 @@ function EditModal({ row, onClose, onSave }) {
   )
 }
 
-function UsersPage() {
+class UsersPageErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[UsersPage] render error', error?.message || error, info?.componentStack)
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <>
+          <Topbar />
+          <main className="mt-6 flex min-h-0 flex-1 flex-col gap-4 px-4">
+            <div className="rounded-2xl border border-red-500/40 bg-red-950/30 p-6 text-red-100">
+              <h1 className="text-lg font-bold text-white">Users page failed to load</h1>
+              <p className="mt-2 text-sm text-red-200/90">
+                {String(this.state.error?.message || this.state.error || 'Unknown error')}
+              </p>
+              <p className="mt-3 text-xs text-slate-400">
+                Check the browser console for <code className="text-slate-300">[UsersPage]</code> details.
+              </p>
+              <button
+                type="button"
+                className="mt-4 rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+                onClick={() => this.setState({ error: null })}
+              >
+                Try again
+              </button>
+            </div>
+          </main>
+        </>
+      )
+    }
+    return this.props.children
+  }
+}
+
+function UsersPageContent() {
   const { showToast } = useToast()
   const [rows, setRows] = useState([])
   const [plans, setPlans] = useState([])
@@ -435,8 +480,12 @@ function UsersPage() {
                         <td className="px-4 py-3 text-slate-300">
                           {r.plan_id != null ? planMap.get(Number(r.plan_id)) || `Plan #${r.plan_id}` : '-'}
                         </td>
-                        <td className="px-4 py-3 text-slate-400">{toEat(r.started_at)}</td>
-                        <td className="px-4 py-3 text-slate-400">{formatAdminDateTime(r.expires_at, { fallback: '-' })}</td>
+                        <td className="px-4 py-3 text-slate-400">
+                          {formatAdminDateTime(r.started_at, { fallback: '-' })}
+                        </td>
+                        <td className="px-4 py-3 text-slate-400">
+                          {formatAdminDateTime(r.expires_at, { fallback: '-' })}
+                        </td>
                         <td className="px-4 py-3 text-slate-300">{remainingLabel(r.expires_at)}</td>
                         <td className="px-4 py-3">
                           <span
@@ -511,4 +560,10 @@ function UsersPage() {
   )
 }
 
-export default UsersPage
+export default function UsersPage() {
+  return (
+    <UsersPageErrorBoundary>
+      <UsersPageContent />
+    </UsersPageErrorBoundary>
+  )
+}
