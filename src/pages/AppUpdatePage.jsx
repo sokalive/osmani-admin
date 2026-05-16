@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, RefreshCw } from 'lucide-react'
+import { Download, RefreshCw, Smartphone, Store } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import ToggleSwitch from '../components/ToggleSwitch'
 import Topbar from '../components/Topbar'
@@ -32,7 +32,15 @@ function defaultRuntime() {
 }
 
 function inputClass() {
-  return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
+  return 'w-full rounded-xl border border-slate-600/60 bg-[#0a0e16] px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-[#f5b301]/50 focus:outline-none focus:ring-2 focus:ring-[#f5b301]/20'
+}
+
+function labelClass() {
+  return 'mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400'
+}
+
+function cardClass() {
+  return 'rounded-2xl border border-slate-700/50 bg-[#0b0f17] p-5 shadow-[0_12px_40px_rgba(0,0,0,0.35)] ring-1 ring-white/[0.04] sm:p-6'
 }
 
 function normalizeRuntimeSource(value) {
@@ -77,6 +85,48 @@ function runtimeTimeLabel(value) {
   return date.toLocaleString()
 }
 
+function previewModeLabel(draft) {
+  if (draft.forceUpdate) return 'Force Update'
+  if (draft.softUpdate) return 'Soft Update'
+  return 'None'
+}
+
+function previewSourceLabel(source) {
+  return source === 'play' ? 'Google Play Store' : 'In-App APK Update'
+}
+
+function ModeToggleRow({ title, description, checked, onChange }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-slate-800/70 py-5 last:border-b-0 last:pb-0 first:pt-0">
+      <div className="min-w-0 flex-1 pr-2">
+        <p className="text-base font-semibold text-white">{title}</p>
+        <p className="mt-1.5 text-sm leading-relaxed text-slate-400">{description}</p>
+      </div>
+      <ToggleSwitch checked={checked} onChange={onChange} aria-label={title} />
+    </div>
+  )
+}
+
+function PreviewRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-slate-800/60 py-3 last:border-b-0">
+      <span className="text-sm text-slate-400">{label}</span>
+      <span className="text-right text-sm font-semibold text-[#f5c842]">{value}</span>
+    </div>
+  )
+}
+
+function RuntimeField({ label, value, wide = false }) {
+  return (
+    <div
+      className={`rounded-xl border border-slate-700/60 bg-[#0a0e16] px-4 py-3 ${wide ? 'sm:col-span-2' : ''}`}
+    >
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-1 break-all text-sm font-medium text-emerald-300/95">{value}</p>
+    </div>
+  )
+}
+
 function AppUpdatePage() {
   const { showToast } = useToast()
   const [cfg, setCfg] = useState(() => defaultCfg())
@@ -115,6 +165,10 @@ function AppUpdatePage() {
 
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(cfg), [draft, cfg])
 
+  const previewMode = useMemo(() => previewModeLabel(draft), [draft])
+  const previewSource = useMemo(() => previewSourceLabel(draft.source), [draft.source])
+  const previewAuto = useMemo(() => (draft.autoDownload ? 'Enabled' : 'Disabled'), [draft.autoDownload])
+
   function showFlash(type, message) {
     setFlash({ type, message })
     window.setTimeout(() => setFlash(null), 4000)
@@ -144,224 +198,171 @@ function AppUpdatePage() {
   return (
     <>
       <Topbar />
-      <main className="mt-6 flex min-h-0 flex-1 flex-col gap-6">
-        {flash ? (
-          <FlashMessage type={flash.type} message={flash.message} onDismiss={() => setFlash(null)} />
-        ) : null}
+      <main className="mt-6 flex min-h-0 flex-1 flex-col">
+        <div className="mx-auto w-full max-w-2xl flex flex-col gap-8 pb-10">
+          {flash ? (
+            <FlashMessage type={flash.type} message={flash.message} onDismiss={() => setFlash(null)} />
+          ) : null}
 
-        <header>
-          <h1 className="text-2xl font-bold text-white sm:text-3xl">App Update</h1>
-          <p className="mt-1 text-sm text-slate-400">Rollout policy and package source</p>
-        </header>
+          <header className="space-y-2">
+            <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">App Update Control</h1>
+            <p className="text-sm text-slate-400 sm:text-base">Manage how users receive app updates</p>
+          </header>
 
-        <form onSubmit={handleSave} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <section className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-400/90">
-              Update modes
-            </h2>
-            <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
-              <span className="text-sm text-slate-300">Soft update</span>
-              <ToggleSwitch
-                checked={draft.softUpdate}
-                onChange={(v) => setDraft((d) => ({ ...d, softUpdate: v }))}
-              />
-            </div>
-            <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
-              <span className="text-sm text-slate-300">Force update</span>
-              <ToggleSwitch
-                checked={draft.forceUpdate}
-                onChange={(v) => setDraft((d) => ({ ...d, forceUpdate: v }))}
-              />
-            </div>
-            <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
-              <span className="text-sm text-slate-300">Auto download</span>
-              <ToggleSwitch
-                checked={draft.autoDownload}
-                onChange={(v) => setDraft((d) => ({ ...d, autoDownload: v }))}
-              />
-            </div>
+          <form onSubmit={handleSave} className="flex flex-col gap-6">
+            <section className={cardClass()}>
+              <h2 className="mb-1 text-lg font-bold text-white">Update Mode</h2>
+              <p className="mb-4 text-sm text-slate-500">Choose how updates are presented to users</p>
+              <div>
+                <ModeToggleRow
+                  title="Soft Update"
+                  description="Users see an update popup every 5 minutes but can continue using the app"
+                  checked={draft.softUpdate}
+                  onChange={(v) => setDraft((d) => ({ ...d, softUpdate: v }))}
+                />
+                <ModeToggleRow
+                  title="Force Update"
+                  description="Lock the entire app until the user updates"
+                  checked={draft.forceUpdate}
+                  onChange={(v) => setDraft((d) => ({ ...d, forceUpdate: v }))}
+                />
+                <ModeToggleRow
+                  title="Auto Download"
+                  description="Automatically download the APK in the background"
+                  checked={draft.autoDownload}
+                  onChange={(v) => setDraft((d) => ({ ...d, autoDownload: v }))}
+                />
+              </div>
+            </section>
 
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
-                Source
-              </label>
-              <div className="flex gap-3">
+            <section className={cardClass()}>
+              <h2 className="mb-1 text-lg font-bold text-white">Update Source</h2>
+              <p className="mb-5 text-sm text-slate-500">Where users download the update from</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => setDraft((d) => ({ ...d, source: 'apk' }))}
-                  className={`flex flex-1 items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium transition-colors ${
+                  className={`flex min-h-[88px] flex-col items-center justify-center gap-2 rounded-2xl border-2 px-4 py-5 text-center transition-all ${
                     draft.source === 'apk'
-                      ? 'border-amber-500/60 bg-amber-500/15 text-amber-100'
-                      : 'border-slate-600 bg-slate-900/50 text-slate-400'
+                      ? 'border-[#f5b301]/70 bg-[#f5b301]/10 text-[#f5c842] shadow-[0_0_24px_rgba(245,179,1,0.12)]'
+                      : 'border-slate-700/80 bg-[#0a0e16] text-slate-400 hover:border-slate-600 hover:text-slate-200'
                   }`}
                 >
-                  <Download className="h-4 w-4" />
-                  APK
+                  <Download
+                    className={`h-7 w-7 ${draft.source === 'apk' ? 'text-[#f5b301]' : 'text-slate-500'}`}
+                  />
+                  <span className="text-sm font-semibold leading-snug">In-App APK Update</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setDraft((d) => ({ ...d, source: 'play' }))}
-                  className={`flex flex-1 items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium transition-colors ${
+                  className={`flex min-h-[88px] flex-col items-center justify-center gap-2 rounded-2xl border-2 px-4 py-5 text-center transition-all ${
                     draft.source === 'play'
-                      ? 'border-amber-500/60 bg-amber-500/15 text-amber-100'
-                      : 'border-slate-600 bg-slate-900/50 text-slate-400'
+                      ? 'border-[#f5b301]/70 bg-[#f5b301]/10 text-[#f5c842] shadow-[0_0_24px_rgba(245,179,1,0.12)]'
+                      : 'border-slate-700/80 bg-[#0a0e16] text-slate-400 hover:border-slate-600 hover:text-slate-200'
                   }`}
                 >
-                  Google Play
+                  <Store
+                    className={`h-7 w-7 ${draft.source === 'play' ? 'text-[#f5b301]' : 'text-slate-500'}`}
+                  />
+                  <span className="text-sm font-semibold leading-snug">Google Play Store</span>
                 </button>
               </div>
-            </div>
-          </section>
+            </section>
 
-          <section className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-400/90">
-              Package
-            </h2>
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
-                APK URL
-              </label>
-              <input
-                value={draft.apkUrl}
-                onChange={(e) => setDraft((d) => ({ ...d, apkUrl: e.target.value }))}
-                className={inputClass()}
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
-                Play Store URL
-              </label>
-              <input
-                value={draft.playstoreUrl}
-                onChange={(e) => setDraft((d) => ({ ...d, playstoreUrl: e.target.value }))}
-                className={inputClass()}
-                placeholder="https://play.google.com/store/apps/details?id=..."
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
-                SHA-256 hash
-              </label>
-              <textarea
-                value={draft.sha256}
-                onChange={(e) => setDraft((d) => ({ ...d, sha256: e.target.value }))}
-                rows={3}
-                placeholder="64-character hex checksum"
-                className={`${inputClass()} min-h-[88px] resize-y font-mono text-xs`}
-              />
+            <section className={`${cardClass()} space-y-5`}>
+              <div>
+                <h2 className="text-lg font-bold text-white">Package details</h2>
+                <p className="mt-1 text-sm text-slate-500">URLs and integrity checks for the update package</p>
+              </div>
+
+              <div>
+                <label className={labelClass()}>APK URL</label>
+                <input
+                  value={draft.apkUrl}
+                  onChange={(e) => setDraft((d) => ({ ...d, apkUrl: e.target.value }))}
+                  className={inputClass()}
+                  placeholder="https://example.com/app-release.apk"
+                />
+              </div>
+
+              <div>
+                <label className={labelClass()}>Play Store URL</label>
+                <input
+                  value={draft.playstoreUrl}
+                  onChange={(e) => setDraft((d) => ({ ...d, playstoreUrl: e.target.value }))}
+                  className={inputClass()}
+                  placeholder="https://play.google.com/store/apps/details?id=..."
+                />
+              </div>
+
+              <div>
+                <label className={labelClass()}>APK SHA-256 Hash</label>
+                <textarea
+                  value={draft.sha256}
+                  onChange={(e) => setDraft((d) => ({ ...d, sha256: e.target.value }))}
+                  rows={3}
+                  placeholder="64-character hex checksum"
+                  className={`${inputClass()} min-h-[96px] resize-y font-mono text-xs`}
+                />
+                <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                  Leave empty to skip verification…
+                </p>
+              </div>
+            </section>
+
+            <div className="flex flex-col gap-3">
+              <button
+                type="submit"
+                disabled={!dirty}
+                className="w-full rounded-2xl bg-gradient-to-r from-[#f5b301] via-amber-400 to-yellow-500 py-4 text-base font-bold text-slate-950 shadow-[0_10px_32px_rgba(245,179,1,0.35)] transition-transform enabled:hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Save Settings
+              </button>
+              <button
+                type="button"
+                onClick={() => setDraft({ ...cfg })}
+                disabled={!dirty}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-600/80 py-3 text-sm font-medium text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-800/50 disabled:opacity-40"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Reset changes
+              </button>
             </div>
 
-            <div className="rounded-xl border border-dashed border-slate-600 bg-slate-900/50 p-4">
-              <p className="text-[11px] font-semibold uppercase text-slate-500">Save payload</p>
-              <ul className="mt-2 space-y-1 text-xs text-slate-400">
-                <li>
-                  Soft: <span className="text-slate-200">{draft.softUpdate ? 'on' : 'off'}</span>
-                </li>
-                <li>
-                  Force: <span className="text-slate-200">{draft.forceUpdate ? 'on' : 'off'}</span>
-                </li>
-                <li>
-                  Auto DL: <span className="text-slate-200">{draft.autoDownload ? 'on' : 'off'}</span>
-                </li>
-                <li>
-                  Source: <span className="text-slate-200">{draft.source}</span>
-                </li>
-                <li className="truncate font-mono text-[11px] text-amber-200/90">
-                  apkUrl: {draft.apkUrl || '—'}
-                </li>
-                <li className="truncate font-mono text-[11px] text-amber-200/90">
-                  playstoreUrl: {draft.playstoreUrl || '—'}
-                </li>
-              </ul>
-            </div>
-          </section>
+            <section className={cardClass()}>
+              <div className="mb-4 flex items-center gap-2">
+                <Smartphone className="h-5 w-5 text-[#f5b301]" aria-hidden />
+                <h2 className="text-lg font-bold text-white">Preview</h2>
+              </div>
+              <p className="mb-4 text-sm text-slate-500">Summary of current draft settings</p>
+              <PreviewRow label="Mode" value={previewMode} />
+              <PreviewRow label="Source" value={previewSource} />
+              <PreviewRow label="Auto Download" value={previewAuto} />
+            </section>
 
-          <section className="space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04] lg:col-span-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-emerald-400/90">
-              Canonical Runtime Payload
-            </h2>
-            <p className="text-sm text-slate-400">
-              This mirrors the live `GET /api/update-check` contract consumed by runtime clients.
-            </p>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  decision
-                </p>
-                <p className="mt-1 text-sm text-emerald-200">{runtime.decision}</p>
-              </div>
-              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  source
-                </p>
-                <p className="mt-1 text-sm text-emerald-200">{runtime.source}</p>
-              </div>
-              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  auto_download
-                </p>
-                <p className="mt-1 text-sm text-emerald-200">
-                  {runtime.auto_download ? 'true' : 'false'}
+            <section className={`${cardClass()} space-y-4`}>
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+                  Canonical Runtime Payload
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Mirrors live <code className="text-slate-400">GET /api/update-check</code> for runtime clients.
                 </p>
               </div>
-              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  server_time
-                </p>
-                <p className="mt-1 text-sm text-emerald-200">{runtimeTimeLabel(runtime.server_time)}</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <RuntimeField label="decision" value={runtime.decision} />
+                <RuntimeField label="source" value={runtime.source} />
+                <RuntimeField label="auto_download" value={runtime.auto_download ? 'true' : 'false'} />
+                <RuntimeField label="server_time" value={runtimeTimeLabel(runtime.server_time)} />
+                <RuntimeField label="apk_url" value={runtime.apk_url || '—'} wide />
+                <RuntimeField label="playstore_url" value={runtime.playstore_url || '—'} wide />
+                <RuntimeField label="apk_sha256" value={runtime.apk_sha256 || '—'} wide />
+                <RuntimeField label="notice" value={runtime.notice || '—'} wide />
               </div>
-              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3 md:col-span-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  apk_url
-                </p>
-                <p className="mt-1 break-all font-mono text-xs text-emerald-200/95">
-                  {runtime.apk_url || '—'}
-                </p>
-              </div>
-              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3 md:col-span-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  playstore_url
-                </p>
-                <p className="mt-1 break-all font-mono text-xs text-emerald-200/95">
-                  {runtime.playstore_url || '—'}
-                </p>
-              </div>
-              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3 md:col-span-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  apk_sha256
-                </p>
-                <p className="mt-1 break-all font-mono text-xs text-emerald-200/95">
-                  {runtime.apk_sha256 || '—'}
-                </p>
-              </div>
-              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 px-4 py-3 md:col-span-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  notice
-                </p>
-                <p className="mt-1 text-sm text-emerald-200">{runtime.notice || '—'}</p>
-              </div>
-            </div>
-          </section>
-
-          <div className="flex flex-wrap justify-end gap-3 lg:col-span-2">
-            <button
-              type="button"
-              onClick={() => setDraft({ ...cfg })}
-              disabled={!dirty}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-6 py-3 text-sm font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-40"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Reset
-            </button>
-            <button
-              type="submit"
-              disabled={!dirty}
-              className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-8 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] disabled:opacity-40"
-            >
-              Save settings
-            </button>
-          </div>
-        </form>
+            </section>
+          </form>
+        </div>
       </main>
     </>
   )
