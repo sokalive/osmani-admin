@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
+import { tryRecordAppInstall } from '../lib/installAnalytics.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { mergeLocationBucketsByNormalizedLabel, normalizeLocationPayload } from '../lib/analyticsLocation.js'
 
@@ -294,26 +295,16 @@ analyticsRouter.post('/install', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const installInstanceId = parseInstallInstanceIdFromBody(req.body)
-    const insertRes = await pool.query(
-      `INSERT INTO app_installs (device_id, install_instance_id, installed_at)
-       VALUES ($1, $2, now())
-       ON CONFLICT (device_id, install_instance_id) DO NOTHING
-       RETURNING id`,
-      [deviceId, installInstanceId],
+    const { inserted, deviceId: d, installInstanceId: iid } = await tryRecordAppInstall(
+      pool,
+      deviceId,
+      installInstanceId,
     )
-    const inserted = insertRes.rowCount > 0
-    if (inserted) {
-      liveSyncBus.publish('analytics.install', {
-        topics: ['analytics'],
-        deviceId,
-        installInstanceId,
-      })
-    }
     return res.json({
       ok: true,
       inserted,
-      device_id: deviceId,
-      install_instance_id: installInstanceId,
+      device_id: d,
+      install_instance_id: iid,
     })
   } catch (e) {
     console.error('[analytics/install]', e)
@@ -343,6 +334,10 @@ analyticsRouter.post('/session/start', async (req, res) => {
          updated_at = now()`,
       [deviceId, channelId, country],
     )
+    const iid = parseInstallInstanceIdFromBody(req.body)
+    void tryRecordAppInstall(pool, deviceId, iid).catch((e) => {
+      console.error('[analytics/session/start] tryRecordAppInstall:', e)
+    })
     liveSyncBus.publish('analytics.session_start', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
@@ -373,6 +368,10 @@ analyticsRouter.post('/session/heartbeat', async (req, res) => {
          updated_at = now()`,
       [deviceId, channelId, country],
     )
+    const iidHb = parseInstallInstanceIdFromBody(req.body)
+    void tryRecordAppInstall(pool, deviceId, iidHb).catch((e) => {
+      console.error('[analytics/session/heartbeat] tryRecordAppInstall:', e)
+    })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
@@ -423,6 +422,10 @@ analyticsRouter.post('/presence/start', async (req, res) => {
          updated_at = now()`,
       [deviceId, channelId, country],
     )
+    const iidPs = parseInstallInstanceIdFromBody(req.body)
+    void tryRecordAppInstall(pool, deviceId, iidPs).catch((e) => {
+      console.error('[analytics/presence/start] tryRecordAppInstall:', e)
+    })
     liveSyncBus.publish('analytics.session_start', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
@@ -453,6 +456,10 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
          updated_at = now()`,
       [deviceId, channelId, country],
     )
+    const iidPh = parseInstallInstanceIdFromBody(req.body)
+    void tryRecordAppInstall(pool, deviceId, iidPh).catch((e) => {
+      console.error('[analytics/presence/heartbeat] tryRecordAppInstall:', e)
+    })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {

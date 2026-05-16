@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { tryRecordAppInstall } from './lib/installAnalytics.js'
 import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
 import { getPool } from './db/pool.js'
@@ -605,6 +606,9 @@ export async function touchLivePresence({ deviceId, country = null, channelId = 
        updated_at = now()`,
     [d, safeChannel, safeCountry],
   )
+  void tryRecordAppInstall(pool, d, '').catch((e) => {
+    console.error('[touchLivePresence] tryRecordAppInstall failed:', e)
+  })
   return { deviceId: d, country: safeCountry, channelId: safeChannel }
 }
 

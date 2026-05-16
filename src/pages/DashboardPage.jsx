@@ -89,6 +89,8 @@ function DashboardPage() {
     }
     es.addEventListener('snapshot', onSync)
     es.addEventListener('analytics.install', onSync)
+    es.addEventListener('analytics.install_reset', onSync)
+    es.addEventListener('analytics.reset', onSync)
     es.addEventListener('analytics.session_start', onSync)
     es.addEventListener('analytics.session_heartbeat', onSync)
     es.addEventListener('analytics.session_end', onSync)
