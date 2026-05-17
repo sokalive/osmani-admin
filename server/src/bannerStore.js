@@ -37,9 +37,11 @@ const SELECT_PUBLIC = `
 `
 
 /**
- * Visibility: active + enabled + event window, plus optional daily timer.
- * The daily timer uses the database server clock so runtime clients can treat
- * `/api/banners` as canonical visibility truth.
+ * Visibility for GET /api/banners: active + enabled + event date range only.
+ * Daily event_timer windows are returned as metadata (startTime/endTime/useTimer);
+ * runtime apps apply device-local schedule (see src/utils/bannerSchedule.js).
+ * Server-side LOCALTIME filtering was removed — it used the DB host timezone (UTC on
+ * Render) while admin configures "local" daily windows, which hid banners entirely.
  */
 const PUBLIC_VISIBILITY_WHERE = `
   b.active = true
@@ -48,20 +50,9 @@ const PUBLIC_VISIBILITY_WHERE = `
     (b.event_start IS NULL AND b.event_end IS NULL)
     OR (b.event_start <= NOW() AND (b.event_end IS NULL OR NOW() < b.event_end))
   )
-  AND (
-    b.event_timer = false
-    OR (
-      b.daily_start IS NOT NULL
-      AND b.daily_end IS NOT NULL
-      AND (
-        (b.daily_start < b.daily_end AND LOCALTIME >= b.daily_start AND LOCALTIME < b.daily_end)
-        OR (b.daily_start > b.daily_end AND (LOCALTIME >= b.daily_start OR LOCALTIME < b.daily_end))
-      )
-    )
-  )
 `
 
-/** Public GET /api/banners — canonical runtime-visible banners only. */
+/** Public GET /api/banners — active promos with schedule metadata for client filtering. */
 export async function listBannersPublic() {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required.')

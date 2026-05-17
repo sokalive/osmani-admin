@@ -218,8 +218,9 @@ function BannersPage() {
               Banners
             </h1>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
-              Manage hero tiles and routing. Public list uses active, enabled, event dates, and
-              optional daily timer. Drag the handle to reorder; preview updates every minute.
+              Manage hero tiles and routing. The public API returns active, enabled banners within
+              their event dates; apps apply the daily timer locally. Drag to reorder; preview updates
+              every minute.
             </p>
           </div>
           <button

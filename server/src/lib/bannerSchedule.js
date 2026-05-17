@@ -1,7 +1,8 @@
 /**
- * Daily window using local time. Times are "HH:mm" (24h).
- * Overnight windows (e.g. 22:00–06:00) are supported.
+ * Banner schedule helpers (shared semantics with admin src/utils/bannerSchedule.js).
+ * Daily windows use HH:mm in the viewer's local clock (device or configured region).
  */
+
 export function parseTimeToMinutes(value) {
   if (value == null || typeof value !== 'string') return null
   const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim())
@@ -24,7 +25,6 @@ export function isNowInDailyWindow(startTime, endTime, now = new Date()) {
   return cur >= start || cur < end
 }
 
-/** Event range from API (ISO strings or null). Open-ended when one bound missing. */
 export function isNowInEventWindow(eventStart, eventEnd, now = new Date()) {
   const startRaw = eventStart ?? null
   const endRaw = eventEnd ?? null
@@ -41,13 +41,12 @@ export function isNowInEventWindow(eventStart, eventEnd, now = new Date()) {
   return true
 }
 
-function isBannerActiveFlag(banner) {
+export function isBannerActiveFlag(banner) {
   if (!banner || typeof banner !== 'object') return false
   if (banner.isActive === false || banner.is_active === false || banner.active === false) return false
   return true
 }
 
-/** Active + event window + legacy daily schedule: banner appears in the carousel / hero strip. */
 export function isBannerShownInCarousel(banner, now = new Date()) {
   if (!isBannerActiveFlag(banner)) return false
   const es = banner.eventStart ?? banner.event_start
@@ -55,12 +54,8 @@ export function isBannerShownInCarousel(banner, now = new Date()) {
   if (!isNowInEventWindow(es, ee, now)) return false
   const useTimer = Boolean(banner.useTimer ?? banner.eventTimer ?? banner.event_timer)
   if (!useTimer) return true
-  const start = banner.startTime ?? banner.dailyStart ?? banner.daily_start ?? ''
+  const start =
+    banner.startTime ?? banner.dailyStart ?? banner.daily_start ?? ''
   const end = banner.endTime ?? banner.dailyEnd ?? banner.daily_end ?? ''
   return isNowInDailyWindow(start, end, now)
-}
-
-/** End-user can tap / navigate — requires enabled AND currently shown. */
-export function canBannerReceiveInteractions(banner, now = new Date()) {
-  return Boolean(banner?.isEnabled) && isBannerShownInCarousel(banner, now)
 }

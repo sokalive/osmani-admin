@@ -1,10 +1,18 @@
 import { resolveThumbnailForApi } from './channelNormalize.js'
 
-function formatTimeForApi(t) {
+/** Normalize PostgreSQL TIME / strings to HH:mm for API clients. */
+export function formatTimeForApi(t) {
   if (t == null) return ''
+  if (t instanceof Date && !Number.isNaN(t.getTime())) {
+    return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
+  }
   const s = String(t).trim()
   if (!s) return ''
-  return s.length >= 5 ? s.slice(0, 5) : s
+  const m = /^(\d{1,2}):(\d{2})/.exec(s)
+  if (m) {
+    return `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`
+  }
+  return ''
 }
 
 function formatTsForApi(v) {
@@ -21,7 +29,7 @@ function fullImageUrl(row, req) {
 
 /**
  * GET /api/banners — runtime shape for public clients.
- * Includes enabled + schedule fields so website/APK can mirror backend-driven visibility state.
+ * Includes enabled + schedule fields; apps apply daily event_timer windows in device-local time.
  */
 export function bannerToPublicResponse(row, req) {
   if (!row) return null
@@ -127,6 +135,7 @@ export function bannerToResponse(row, req) {
     dailyStart: formatTimeForApi(row.daily_start),
     dailyEnd: formatTimeForApi(row.daily_end),
     is_active: Boolean(row.active),
+    active: Boolean(row.active),
     badge_enabled: Boolean(row.badge_enabled),
     badge_color: String(row.badge_color ?? '#FBBF24').trim() || '#FBBF24',
     badge_blink: Boolean(row.badge_blink),
