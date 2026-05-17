@@ -5,9 +5,9 @@ import ToggleSwitch from './ToggleSwitch'
 import { getChannels } from '../lib/api'
 import {
   canBannerReceiveInteractions,
+  getBannerEventPhase,
   isBannerShownInCarousel,
   isNowInDailyWindow,
-  isNowInEventWindow,
   parseTimeToMinutes,
 } from '../utils/bannerSchedule'
 
@@ -380,7 +380,7 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
   const timerWindowNow = form.useTimer
     ? isNowInDailyWindow(form.startTime, form.endTime, previewNow)
     : true
-  const eventWindowNow = isNowInEventWindow(eventStartIso, eventEndIso, previewNow)
+  const eventPhase = getBannerEventPhase(eventStartIso, eventEndIso, previewNow)
 
   const previewBadgeVisible = form.badgeEnabled && form.badge.trim().length > 0
   const previewImageSrc =
@@ -798,14 +798,16 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                         }`}
                       >
                         {!timerWindowNow
-                          ? 'Outside today’s daily window — slot hidden while timer is on.'
-                          : !eventWindowNow
-                            ? 'Outside event date window — slot hidden.'
-                            : tapsWouldWork
-                              ? 'Inside windows — slot visible and taps enabled.'
-                              : slotWouldShow && !form.isEnabled
-                                ? 'Inside windows — slot would show; taps disabled (enable off).'
-                                : 'Inside windows but inactive — slot hidden.'}
+                          ? 'Outside today’s daily window — app may hide while timer is on.'
+                          : eventPhase === 'ended'
+                            ? 'Past event_end — hidden from public API.'
+                            : eventPhase === 'upcoming'
+                              ? 'Pre-start — visible in app (COMING SOON); countdown to event_start.'
+                              : tapsWouldWork
+                                ? 'Live window — visible; taps enabled.'
+                                : slotWouldShow && !form.isEnabled
+                                  ? 'Live window — visible; taps disabled (enable off).'
+                                  : 'Inactive — hidden from public API.'}
                       </p>
                     </div>
                   </motion.div>
@@ -821,13 +823,15 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                         : 'bg-slate-800/80 text-slate-400 ring-1 ring-slate-600/50'
                   }`}
                 >
-                  {!eventWindowNow
-                    ? 'Outside event date window — slot hidden.'
-                    : tapsWouldWork
-                      ? 'Visible (no daily timer) — taps follow Enabled.'
-                      : slotWouldShow && !form.isEnabled
-                        ? 'Would show; taps disabled.'
-                        : 'Not shown (inactive or other rules).'}
+                  {eventPhase === 'ended'
+                    ? 'Past event_end — hidden from public API.'
+                    : eventPhase === 'upcoming'
+                      ? 'Pre-start — visible in app (COMING SOON); no daily timer.'
+                      : tapsWouldWork
+                        ? 'Live window — visible; taps follow Enabled.'
+                        : slotWouldShow && !form.isEnabled
+                          ? 'Live window — visible; taps disabled.'
+                          : 'Inactive — hidden from public API.'}
                 </p>
               ) : null}
 

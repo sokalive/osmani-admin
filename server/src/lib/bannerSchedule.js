@@ -1,6 +1,5 @@
 /**
- * Banner schedule helpers (shared semantics with admin src/utils/bannerSchedule.js).
- * Daily windows use HH:mm in the viewer's local clock (device or configured region).
+ * Banner schedule helpers (aligned with admin src/utils/bannerSchedule.js).
  */
 
 export function parseTimeToMinutes(value) {
@@ -25,20 +24,31 @@ export function isNowInDailyWindow(startTime, endTime, now = new Date()) {
   return cur >= start || cur < end
 }
 
-export function isNowInEventWindow(eventStart, eventEnd, now = new Date()) {
-  const startRaw = eventStart ?? null
+export function isBannerEventNotExpired(eventEnd, now = new Date()) {
   const endRaw = eventEnd ?? null
-  if ((startRaw == null || startRaw === '') && (endRaw == null || endRaw === '')) return true
+  if (endRaw == null || endRaw === '') return true
+  const e = new Date(endRaw).getTime()
+  if (Number.isNaN(e)) return true
+  return now.getTime() < e
+}
+
+export function isNowInEventWindow(_eventStart, eventEnd, now = new Date()) {
+  return isBannerEventNotExpired(eventEnd, now)
+}
+
+export function getBannerEventPhase(eventStart, eventEnd, now = new Date()) {
   const t = now.getTime()
-  if (startRaw != null && startRaw !== '') {
-    const s = new Date(startRaw).getTime()
-    if (!Number.isNaN(s) && t < s) return false
-  }
+  const endRaw = eventEnd ?? null
   if (endRaw != null && endRaw !== '') {
     const e = new Date(endRaw).getTime()
-    if (!Number.isNaN(e) && t > e) return false
+    if (!Number.isNaN(e) && t >= e) return 'ended'
   }
-  return true
+  const startRaw = eventStart ?? null
+  if (startRaw != null && startRaw !== '') {
+    const s = new Date(startRaw).getTime()
+    if (!Number.isNaN(s) && t < s) return 'upcoming'
+  }
+  return 'live'
 }
 
 export function isBannerActiveFlag(banner) {
@@ -49,13 +59,11 @@ export function isBannerActiveFlag(banner) {
 
 export function isBannerShownInCarousel(banner, now = new Date()) {
   if (!isBannerActiveFlag(banner)) return false
-  const es = banner.eventStart ?? banner.event_start
   const ee = banner.eventEnd ?? banner.event_end
-  if (!isNowInEventWindow(es, ee, now)) return false
+  if (!isBannerEventNotExpired(ee, now)) return false
   const useTimer = Boolean(banner.useTimer ?? banner.eventTimer ?? banner.event_timer)
   if (!useTimer) return true
-  const start =
-    banner.startTime ?? banner.dailyStart ?? banner.daily_start ?? ''
+  const start = banner.startTime ?? banner.dailyStart ?? banner.daily_start ?? ''
   const end = banner.endTime ?? banner.dailyEnd ?? banner.daily_end ?? ''
   return isNowInDailyWindow(start, end, now)
 }

@@ -29,7 +29,8 @@ function fullImageUrl(row, req) {
 
 /**
  * GET /api/banners — runtime shape for public clients.
- * Includes enabled + schedule fields; apps apply daily event_timer windows in device-local time.
+ * Server filters active + not past event_end only. Apps own pre-start COMING SOON,
+ * LIVE NOW, countdown, daily event_timer, and enabled/tap gating.
  */
 export function bannerToPublicResponse(row, req) {
   if (!row) return null
