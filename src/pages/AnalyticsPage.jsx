@@ -183,7 +183,8 @@ function AnalyticsPage() {
   const topLocations = useMemo(
     () =>
       (Array.isArray(locations) ? locations : []).slice(0, 8).map((r) => ({
-        country: String(r.country || 'Unknown'),
+        countryCode: r.countryCode ?? '',
+        country: String(r.country || r.countryName || 'Unknown'),
         users: Number(r.users) || 0,
       })),
     [locations],
@@ -319,12 +320,12 @@ function AnalyticsPage() {
               ) : (
                 topLocations.map((row) => (
                   <li
-                    key={`${row.country}-${row.users}`}
+                    key={row.countryCode || row.country || row.users}
                     className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2"
                   >
                     <span className="text-sm text-slate-200">{row.country}</span>
                     <span className="text-sm font-semibold tabular-nums text-cyan-200">
-                      {row.users.toLocaleString('en-TZ')}
+                      {row.users === 1 ? '1 User' : `${row.users.toLocaleString('en-TZ')} Users`}
                     </span>
                   </li>
                 ))

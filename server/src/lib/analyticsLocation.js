@@ -253,6 +253,49 @@ export function sanitizeStoredLocationDisplay(raw) {
   return UNKNOWN_LOCATION
 }
 
+/** Extract ISO 3166-1 alpha-2 from stored `live_sessions.country` labels. */
+export function parseCountryCodeFromStoredLabel(raw) {
+  const s = tidy(String(raw ?? ''))
+  if (!s || /^unknown\b/i.test(s)) return ''
+  const bullet = /^([A-Za-z]{2})\s*[•·]\s*(.+)$/u.exec(s)
+  if (bullet) return bullet[1].toUpperCase()
+  const isoOnly = /^([A-Za-z]{2})$/u.exec(s)
+  if (isoOnly) return isoOnly[1].toUpperCase()
+  const lead = /^([A-Za-z]{2})\b/u.exec(s)
+  if (lead) return lead[1].toUpperCase()
+  return countryNameToIsoCode(s) || ''
+}
+
+/** Readable country name for ISO code (falls back to code). */
+export function countryNameForCode(code) {
+  const c = String(code || '').slice(0, 2).toUpperCase()
+  if (!/^[A-Z]{2}$/.test(c)) return UNKNOWN_LOCATION
+  return COUNTRY_NAME[c] || c
+}
+
+/**
+ * Roll city/region rows up to country for dashboard widgets.
+ * Returns `{ countryCode, countryName, users, country }` sorted by users desc.
+ * `country` is `CC — Name` for backward-compatible consumers.
+ */
+export function aggregateLocationsByCountryCode(rows) {
+  const cityMerged = mergeLocationBucketsByNormalizedLabel(rows)
+  const acc = new Map()
+  for (const { country, users } of cityMerged) {
+    const code = parseCountryCodeFromStoredLabel(country)
+    const key = code || '__UNKNOWN__'
+    acc.set(key, (acc.get(key) || 0) + users)
+  }
+  return [...acc.entries()]
+    .map(([key, users]) => {
+      const countryCode = key === '__UNKNOWN__' ? '' : key
+      const countryName = countryNameForCode(countryCode)
+      const country = countryCode ? `${countryCode} — ${countryName}` : countryName
+      return { countryCode, countryName, users, country }
+    })
+    .sort((a, b) => b.users - a.users || String(a.countryName).localeCompare(String(b.countryName)))
+}
+
 /** Merge COUNT buckets that share the same full normalized CC • place label. */
 export function mergeLocationBucketsByNormalizedLabel(rows) {
   const acc = new Map()

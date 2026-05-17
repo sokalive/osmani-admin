@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { MapPin } from 'lucide-react'
+import { aggregateLocationsByCountryCode } from '../../server/src/lib/analyticsLocation.js'
 
 /** Regional-indicator pair → flag emoji (ISO 3166-1 alpha-2). */
 function flagEmoji(countryCode) {
@@ -14,77 +15,25 @@ function flagEmoji(countryCode) {
   }
 }
 
-const UNKNOWN = 'Unknown Location'
-
-/**
- * API rows use `{ country, users }` where `country` is a normalized label such as `TZ • Dar es Salaam`.
- */
-function parseCountryPlaceLine(rawLabel) {
-  const raw = String(rawLabel ?? '').trim() || UNKNOWN
-  const bullet = /^([A-Za-z]{2})\s*[•·]\s*(.+)$/u.exec(raw)
-  if (bullet) {
-    const countryCode = bullet[1].toUpperCase()
-    const place = bullet[2].trim() || UNKNOWN
-    return {
-      countryCode,
-      displayLine: `${countryCode} • ${place}`,
-    }
-  }
-  const isoOnly = /^([A-Za-z]{2})$/u.exec(raw)
-  if (isoOnly) {
-    const countryCode = isoOnly[1].toUpperCase()
-    return {
-      countryCode,
-      displayLine: `${countryCode} • ${UNKNOWN}`,
-    }
-  }
-  const leadIso = /^([A-Za-z]{2})\b/u.exec(raw)
-  if (leadIso) {
-    const countryCode = leadIso[1].toUpperCase()
-    const rest = raw.slice(2).replace(/^\s*[•·\-|]\s*/u, '').trim()
-    const place = rest && rest !== countryCode ? rest : UNKNOWN
-    return {
-      countryCode,
-      displayLine: `${countryCode} • ${place}`,
-    }
-  }
-  return {
-    countryCode: '',
-    displayLine: raw,
-  }
-}
-
 function userCountLabel(n) {
   const count = Math.max(0, Math.floor(Number(n) || 0))
   if (count <= 0) return ''
-  if (count === 1) return '1 user'
-  return `${count} users`
+  if (count === 1) return '1 User'
+  return `${count} Users`
 }
 
-function normalizeLocationRows(locations) {
-  if (!Array.isArray(locations)) return []
-  return locations
-    .map((row) => {
-      const raw = String(row?.country ?? '').trim() || UNKNOWN
-      const count = Math.max(0, Math.floor(Number(row?.users) || 0))
-      const { countryCode, displayLine } = parseCountryPlaceLine(raw)
-      return {
-        /** Full bucket label from API — unique per region/city row (not only ISO). */
-        key: raw,
-        countryCode,
-        displayLine,
-        count,
-      }
-    })
-    .filter((row) => row.count > 0)
-    .sort((a, b) => b.count - a.count || String(a.displayLine).localeCompare(String(b.displayLine)))
+function normalizeAggregatedRows(locations) {
+  const aggregated = aggregateLocationsByCountryCode(
+    Array.isArray(locations) ? locations : [],
+  )
+  return aggregated.filter((row) => row.users > 0)
 }
 
 /**
  * Same footprint as other `.dashboard-card` tiles — header fixed, list scrolls inside.
  */
 function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
-  const rows = useMemo(() => normalizeLocationRows(locations), [locations])
+  const rows = useMemo(() => normalizeAggregatedRows(locations), [locations])
 
   return (
     <article
@@ -99,27 +48,35 @@ function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
       </div>
 
       <div className="card-content">
-        <ul className="live-locations-list">
-          {rows.map((row) => (
-            <li key={row.key} className="live-location-row">
-              <span className="flex min-w-0 flex-1 items-center gap-2.5">
-                <span
-                  className="inline-flex shrink-0 items-center justify-center leading-none"
-                  style={{ fontSize: '18px' }}
-                  aria-hidden
-                >
-                  {flagEmoji(row.countryCode)}
-                </span>
-                <span className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-[#FFFFFF]">
-                  {row.displayLine}
-                </span>
-              </span>
-              <span className="shrink-0 text-[14px] font-medium tabular-nums text-[#BFC7D5]">
-                {userCountLabel(row.count)}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {rows.length === 0 ? (
+          <p className="py-2 text-sm text-slate-500">No active location data yet.</p>
+        ) : (
+          <ul className="live-locations-list">
+            {rows.map((row) => {
+              const code = row.countryCode || '—'
+              const name = row.countryName || 'Unknown Location'
+              return (
+                <li key={row.countryCode || row.countryName} className="live-location-row">
+                  <span className="live-location-primary">
+                    <span
+                      className="inline-flex shrink-0 items-center justify-center leading-none"
+                      style={{ fontSize: '18px' }}
+                      aria-hidden
+                    >
+                      {flagEmoji(row.countryCode)}
+                    </span>
+                    <span className="live-location-code">{code}</span>
+                    <span className="live-location-sep" aria-hidden>
+                      —
+                    </span>
+                    <span className="live-location-name">{name}</span>
+                  </span>
+                  <span className="live-location-count">{userCountLabel(row.users)}</span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </div>
     </article>
   )

@@ -9,7 +9,10 @@ import {
   startLivePresenceJanitor,
 } from '../lib/livePresence.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
-import { mergeLocationBucketsByNormalizedLabel, normalizeLocationPayload } from '../lib/analyticsLocation.js'
+import {
+  aggregateLocationsByCountryCode,
+  normalizeLocationPayload,
+} from '../lib/analyticsLocation.js'
 
 export const analyticsRouter = Router()
 
@@ -221,7 +224,7 @@ analyticsRouter.get('/locations', async (_req, res) => {
        ORDER BY users DESC`,
       [LIVE_WINDOW_INTERVAL],
     )
-    res.json(mergeLocationBucketsByNormalizedLabel(rows))
+    res.json(aggregateLocationsByCountryCode(rows))
   } catch (e) {
     console.error('[analytics/locations]', e)
     res.status(200).json([])
