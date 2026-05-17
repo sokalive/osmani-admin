@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, GripVertical, Pencil, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Copy, GripVertical, Pencil, Trash2 } from 'lucide-react'
 import ToggleSwitch from './ToggleSwitch'
 
 function ChannelRow({
@@ -7,8 +7,10 @@ function ChannelRow({
   onToggleSelected,
   onToggleAccess,
   onEdit,
+  onDuplicate,
   onDelete,
   justAdded = false,
+  duplicateDisabled = false,
   reorderDisabled = false,
   dragChannelId,
   onDragStart,
@@ -174,6 +176,15 @@ function ChannelRow({
             aria-label={`Edit ${channel.name}`}
           >
             <Pencil className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onDuplicate}
+            disabled={duplicateDisabled}
+            className="rounded-xl p-2.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={`Duplicate ${channel.name}`}
+          >
+            <Copy className="h-4 w-4" />
           </button>
           <button
             type="button"

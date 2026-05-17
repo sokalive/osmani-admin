@@ -134,6 +134,11 @@ export function deleteChannel(id) {
   return adminApiDelete(`/channels/${encodeURIComponent(id)}`)
 }
 
+/** Clone channel fields to a new row (new id, fresh timestamps, name suffixed with " (Copy)"). */
+export function duplicateChannel(id) {
+  return adminApiPost(`/channels/${encodeURIComponent(id)}/duplicate`, {})
+}
+
 /** Global app modes (Free / Emergency / Maintenance) — GET/PUT /api/settings */
 export const getAppGlobalSettings = () => adminApiGet('/settings')
 export const putAppGlobalSettings = (body) => adminApiPut('/settings', body)

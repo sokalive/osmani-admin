@@ -8,6 +8,7 @@ import { useToast } from '../context/ToastContext.jsx'
 import {
   addChannelFormData,
   deleteChannel,
+  duplicateChannel,
   getChannels,
   postChannelsReorder,
   putAppGlobalSettings,
@@ -52,6 +53,8 @@ function ChannelsPage() {
   const [modesSaving, setModesSaving] = useState(false)
   const [dragChannelId, setDragChannelId] = useState(null)
   const [reorderBusy, setReorderBusy] = useState(false)
+  const [duplicateBusyId, setDuplicateBusyId] = useState(null)
+  const [highlightChannelId, setHighlightChannelId] = useState(null)
 
   const isFreeMode = appModes.free_mode === true
   const isEmergencyMode = appModes.emergency_mode === true
@@ -217,6 +220,26 @@ function ChannelsPage() {
     })
   }
 
+  async function handleDuplicate(channel) {
+    if (!channel?.id || duplicateBusyId) return
+    setDuplicateBusyId(channel.id)
+    try {
+      const created = await duplicateChannel(channel.id)
+      await loadChannels()
+      const ui = uiFromApiRow(created)
+      setAddModalOpen(false)
+      setEditingChannel(ui)
+      setHighlightChannelId(ui.id)
+      window.setTimeout(() => setHighlightChannelId(null), 4000)
+      showToast('success', `Channel duplicated — edit “${ui.name}” and save when ready.`)
+    } catch (e) {
+      showToast('error', e?.message || 'Could not duplicate channel')
+      await loadChannels()
+    } finally {
+      setDuplicateBusyId(null)
+    }
+  }
+
   async function handleDelete(id) {
     try {
       await deleteChannel(id)
@@ -368,14 +391,17 @@ function ChannelsPage() {
                       key={channel.id}
                       channel={channel}
                       selected={selectedIds.has(channel.id)}
+                      justAdded={highlightChannelId === channel.id}
                       onToggleSelected={() => toggleRow(channel.id)}
                       onToggleAccess={(next) => handleToggleAccess(channel.id, next)}
                       onEdit={() => {
                         setAddModalOpen(false)
                         setEditingChannel(channel)
                       }}
+                      onDuplicate={() => void handleDuplicate(channel)}
+                      duplicateDisabled={duplicateBusyId != null}
                       onDelete={() => handleDelete(channel.id)}
-                      reorderDisabled={reorderDisabled}
+                      reorderDisabled={reorderDisabled || duplicateBusyId != null}
                       dragChannelId={dragChannelId}
                       canMoveUp={globalIndex > 0}
                       canMoveDown={globalIndex >= 0 && globalIndex < sortedChannels.length - 1}

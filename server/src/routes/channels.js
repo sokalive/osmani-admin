@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Router } from 'express'
 import {
+  buildDuplicateChannelRecord,
   channelToResponse,
   mergeChannelRecord,
   migrateStoredChannel,
@@ -106,6 +107,41 @@ channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) 
     res.status(201).json(createdBody)
   } catch (e) {
     console.error('[channels] POST / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+channelsRouter.post('/:id/duplicate', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10)
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid id' })
+    }
+    const existingRow = await getChannelById(id)
+    if (!existingRow) {
+      return res.status(404).json({ error: 'Channel not found' })
+    }
+    const nextId = await getNextChannelId()
+    const sortOrder = await getNextChannelSortOrder()
+    const now = new Date().toISOString()
+    const created = buildDuplicateChannelRecord(existingRow, {
+      id: nextId,
+      sortOrder,
+      nowIso: now,
+    })
+    if (!created.name || !created.url) {
+      return res.status(400).json({ error: 'Source channel is missing required name or stream URL' })
+    }
+    await insertChannel(created)
+    liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('duplicated', created.id))
+    void triggerServerHealthBroadcast().catch((err) => {
+      console.error('[channels] health refresh after duplicate failed:', err)
+    })
+    const body = channelToResponse(created, req)
+    logChannelStreamDiagWrite(body, { scope: 'channels.POST_duplicate_response', sourceId: id })
+    res.status(201).json(body)
+  } catch (e) {
+    console.error('[channels] POST /:id/duplicate failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

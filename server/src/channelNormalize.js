@@ -173,6 +173,41 @@ export function parseChannelInput(body, file, existing = null) {
   }
 }
 
+/** Display name for a duplicated channel (avoids repeated " (Copy)" suffixes). */
+export function duplicateChannelDisplayName(name) {
+  const base = String(name ?? '').trim() || 'Channel'
+  if (/\s*\(copy\)\s*$/i.test(base)) return base
+  return `${base} (Copy)`
+}
+
+/**
+ * Clone editable channel fields for duplicate; new id/timestamps/sort order applied by caller.
+ * Does not copy analytics, sessions, or primary key.
+ */
+export function buildDuplicateChannelRecord(sourceRow, { id, sortOrder, nowIso }) {
+  const src = migrateStoredChannel(sourceRow)
+  const parsed = {
+    name: duplicateChannelDisplayName(src.name),
+    url: src.url,
+    category: src.category,
+    bottomTab: src.bottomTab,
+    thumbnail: src.thumbnail ?? null,
+    isLive: Boolean(src.isLive),
+    isHD: Boolean(src.isHD),
+    isActive: Boolean(src.isActive),
+    showInApp: Boolean(src.showInApp),
+    accessType: src.accessType === 'premium' ? 'premium' : 'free',
+    backupStream1: src.backupStream1 ?? '',
+    backupStream2: src.backupStream2 ?? '',
+    origin: src.origin ?? '',
+    referer: src.referer ?? '',
+    userAgent: src.userAgent ?? '',
+    playerType: normalizePlayerType(src.playerType),
+    sortOrder: Number(sortOrder) || 0,
+  }
+  return mergeChannelRecord(null, parsed, id, nowIso)
+}
+
 export function mergeChannelRecord(existing, parsed, id, nowIso) {
   const base = existing ? migrateStoredChannel(existing) : {}
   return {
