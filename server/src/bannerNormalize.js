@@ -1,4 +1,5 @@
 import { resolveThumbnailForApi } from './channelNormalize.js'
+import { normalizeRuntimePosition } from './lib/bannerRuntimePosition.js'
 
 /** Normalize PostgreSQL TIME / strings to HH:mm for API clients. */
 export function formatTimeForApi(t) {
@@ -43,6 +44,7 @@ export function bannerToPublicResponse(row, req) {
   const updatedAt = formatTsForApi(row.updated_at) ?? createdAt
   const startTime = formatTimeForApi(row.daily_start)
   const endTime = formatTimeForApi(row.daily_end)
+  const runtimePosition = normalizeRuntimePosition(row.runtime_position)
 
   return {
     id: Number(row.id),
@@ -82,6 +84,8 @@ export function bannerToPublicResponse(row, req) {
     daily_end: endTime,
     dailyEnd: endTime,
     endTime,
+    runtime_position: runtimePosition,
+    runtimePosition,
     created_at: createdAt,
     createdAt,
     updated_at: updatedAt,
@@ -104,6 +108,7 @@ export function bannerToResponse(row, req) {
   const createdIso = ca instanceof Date ? ca.toISOString() : formatTsForApi(ca)
   const updatedIso =
     (ua instanceof Date ? ua.toISOString() : formatTsForApi(ua)) ?? createdIso
+  const runtimePosition = normalizeRuntimePosition(row.runtime_position)
 
   return {
     id: Number(row.id),
@@ -146,6 +151,8 @@ export function bannerToResponse(row, req) {
     event_end: eventEnd,
     redirect_channel_id: rid,
     sort_order: sortOrder,
+    runtime_position: runtimePosition,
+    runtimePosition,
     created_at: createdIso,
     updated_at: updatedIso,
   }

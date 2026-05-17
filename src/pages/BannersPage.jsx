@@ -47,6 +47,19 @@ function bannerPayloadForApi(b, overrides = {}) {
     useTimer,
     startTime: useTimer ? (m.startTime ?? m.dailyStart ?? '09:00') : '',
     endTime: useTimer ? (m.endTime ?? m.dailyEnd ?? '17:00') : '',
+    runtimePosition: (() => {
+      const raw = m.runtimePosition ?? m.runtime_position ?? 'center'
+      const v = String(raw).trim().toLowerCase().replace(/-/g, '_')
+      const allowed = [
+        'center',
+        'bottom_center',
+        'bottom_left',
+        'bottom_right',
+        'top_left',
+        'top_right',
+      ]
+      return allowed.includes(v) ? v : 'center'
+    })(),
   }
 }
 

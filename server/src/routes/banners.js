@@ -3,6 +3,10 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import { bannerToPublicResponse, bannerToResponse } from '../bannerNormalize.js'
+import {
+  DEFAULT_RUNTIME_POSITION,
+  parseRuntimePositionFromBody,
+} from '../lib/bannerRuntimePosition.js'
 import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
@@ -86,6 +90,7 @@ function parseBadgeColor(v) {
 
 function parseBannerFields(req) {
   const b = req.body || {}
+  const runtimeParsed = parseRuntimePositionFromBody(b)
   const useTimer = parseBool(b.event_timer ?? b.eventTimer ?? b.useTimer, false)
   const daily_start = useTimer ? parseTimeToPg(b.daily_start ?? b.dailyStart ?? b.startTime) : null
   const daily_end = useTimer ? parseTimeToPg(b.daily_end ?? b.dailyEnd ?? b.endTime) : null
@@ -108,11 +113,21 @@ function parseBannerFields(req) {
     event_timer: useTimer,
     daily_start,
     daily_end,
+    runtime_position: runtimeParsed.error
+      ? DEFAULT_RUNTIME_POSITION
+      : runtimeParsed.value,
+    _runtimePositionError: runtimeParsed.error ?? null,
   }
+}
+
+function bannerFieldsForStore(fields) {
+  const { _runtimePositionError: _ignored, ...rest } = fields
+  return rest
 }
 
 function validateBannerFields(fields) {
   const errors = []
+  if (fields._runtimePositionError) errors.push(fields._runtimePositionError)
   if (!fields.title) errors.push('title is required')
   if (fields.enable_countdown && !fields.event_start) {
     errors.push('event_start is required when enable_countdown is true')
@@ -230,7 +245,7 @@ bannersRouter.post('/', requireAdminPanelAccess, maybeUploadBanner, async (req, 
     }
 
     const inserted = await bannerStore.insertBanner({
-      ...fields,
+      ...bannerFieldsForStore(fields),
       image: imagePath,
     })
     const full = await bannerStore.getBannerById(inserted.id)
@@ -298,7 +313,7 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
     }
 
     const updated = await bannerStore.updateBanner(id, {
-      ...fields,
+      ...bannerFieldsForStore(fields),
       image: imagePath,
     })
     if (!updated) {

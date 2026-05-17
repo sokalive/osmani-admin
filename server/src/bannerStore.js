@@ -20,7 +20,7 @@ const SELECT_BASE = `
          b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
          b.enable_countdown, b.event_start, b.event_end,
          b.redirect_channel_id, b.sort_order, b.event_timer, b.daily_start, b.daily_end,
-         b.created_at, b.updated_at,
+         b.runtime_position, b.created_at, b.updated_at,
          c.name AS redirect_channel_name
   FROM banners b
   LEFT JOIN channels c ON c.id = b.redirect_channel_id
@@ -32,7 +32,7 @@ const SELECT_PUBLIC = `
          b.active, b.enabled, b.badge, b.badge_enabled, b.badge_color, b.badge_blink, b.badge_priority,
          b.enable_countdown, b.event_start, b.event_end,
          b.redirect_channel_id, b.sort_order, b.event_timer, b.daily_start, b.daily_end,
-         b.created_at, b.updated_at
+         b.runtime_position, b.created_at, b.updated_at
   FROM banners b
 `
 
@@ -83,8 +83,8 @@ export async function insertBanner(payload) {
        badge_enabled, badge_color, badge_blink, badge_priority,
        enable_countdown, event_start, event_end,
        redirect_channel_id, sort_order,
-       event_timer, daily_start, daily_end
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::timestamptz,$13::timestamptz,$14,$15,$16,$17::time,$18::time)
+       event_timer, daily_start, daily_end, runtime_position
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::timestamptz,$13::timestamptz,$14,$15,$16,$17::time,$18::time,$19)
      RETURNING id`,
     [
       payload.title,
@@ -105,6 +105,7 @@ export async function insertBanner(payload) {
       payload.event_timer,
       payload.daily_start,
       payload.daily_end,
+      payload.runtime_position,
     ],
   )
   return rows[0]
@@ -119,7 +120,7 @@ export async function updateBanner(id, payload) {
        badge_enabled = $8, badge_color = $9, badge_blink = $10, badge_priority = $11,
        enable_countdown = $12, event_start = $13::timestamptz, event_end = $14::timestamptz,
        redirect_channel_id = $15, sort_order = $16, event_timer = $17,
-       daily_start = $18::time, daily_end = $19::time,
+       daily_start = $18::time, daily_end = $19::time, runtime_position = $20,
        updated_at = now()
      WHERE id = $1
      RETURNING id`,
@@ -143,6 +144,7 @@ export async function updateBanner(id, payload) {
       payload.event_timer,
       payload.daily_start,
       payload.daily_end,
+      payload.runtime_position,
     ],
   )
   return rows[0] ?? null

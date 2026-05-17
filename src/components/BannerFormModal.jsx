@@ -57,6 +57,27 @@ function datetimeLocalToIso(local) {
   return d.toISOString()
 }
 
+const RUNTIME_OVERLAY_POSITIONS = [
+  { value: 'center', label: 'Center' },
+  { value: 'bottom_center', label: 'Bottom Center' },
+  { value: 'bottom_left', label: 'Bottom Left' },
+  { value: 'bottom_right', label: 'Bottom Right' },
+  { value: 'top_left', label: 'Top Left' },
+  { value: 'top_right', label: 'Top Right' },
+]
+
+const DEFAULT_RUNTIME_OVERLAY_POSITION = 'center'
+
+function normalizeRuntimeOverlayPosition(value) {
+  const raw = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+  const allowed = RUNTIME_OVERLAY_POSITIONS.map((o) => o.value)
+  if (!raw || !allowed.includes(raw)) return DEFAULT_RUNTIME_OVERLAY_POSITION
+  return raw
+}
+
 function emptyForm() {
   return {
     title: '',
@@ -76,6 +97,7 @@ function emptyForm() {
     useTimer: false,
     startTime: '09:00',
     endTime: '17:00',
+    runtimePosition: DEFAULT_RUNTIME_OVERLAY_POSITION,
   }
 }
 
@@ -107,6 +129,9 @@ function bannerToForm(banner) {
     useTimer: Boolean(banner.useTimer),
     startTime: typeof banner.startTime === 'string' && banner.startTime ? banner.startTime : '09:00',
     endTime: typeof banner.endTime === 'string' && banner.endTime ? banner.endTime : '17:00',
+    runtimePosition: normalizeRuntimeOverlayPosition(
+      banner.runtimePosition ?? banner.runtime_position,
+    ),
   }
 }
 
@@ -353,6 +378,7 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
       useTimer: form.useTimer,
       startTime: form.useTimer ? form.startTime.trim() : '',
       endTime: form.useTimer ? form.endTime.trim() : '',
+      runtimePosition: normalizeRuntimeOverlayPosition(form.runtimePosition),
     }
     if (isEdit && banner?.id) {
       payload.id = banner.id
@@ -652,6 +678,32 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                       onChange={(next) => setForm((f) => ({ ...f, enableCountdown: next }))}
                       aria-label="Countdown enabled"
                     />
+                  </div>
+
+                  <div>
+                    <label htmlFor={`${formId}-runtime-position`} className={labelClassName()}>
+                      Runtime overlay position
+                    </label>
+                    <select
+                      id={`${formId}-runtime-position`}
+                      value={form.runtimePosition}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          runtimePosition: normalizeRuntimeOverlayPosition(e.target.value),
+                        }))
+                      }
+                      className={inputClassName()}
+                    >
+                      {RUNTIME_OVERLAY_POSITIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1.5 text-[11px] text-slate-500">
+                      Where timer/status pills appear on the banner image in the app.
+                    </p>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">

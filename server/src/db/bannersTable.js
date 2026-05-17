@@ -47,4 +47,7 @@ export async function ensureBannersTable(client) {
   await client.query(`
     ALTER TABLE banners ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
   `)
+  await client.query(`
+    ALTER TABLE banners ADD COLUMN IF NOT EXISTS runtime_position TEXT DEFAULT 'center';
+  `)
 }
