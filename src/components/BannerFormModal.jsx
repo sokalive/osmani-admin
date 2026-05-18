@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
+import BannerRuntimeOverlayPreview from './BannerRuntimeOverlayPreview'
 import ToggleSwitch from './ToggleSwitch'
 import { getChannels } from '../lib/api'
 import {
@@ -135,20 +136,6 @@ function bannerToForm(banner) {
   }
 }
 
-function formatCountdown(ms) {
-  if (ms <= 0) return '0s'
-  const s = Math.floor(ms / 1000)
-  const d = Math.floor(s / 86400)
-  const h = Math.floor((s % 86400) / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const sec = s % 60
-  const parts = []
-  if (d) parts.push(`${d}d`)
-  if (d || h) parts.push(`${h}h`)
-  parts.push(`${m}m ${sec}s`)
-  return parts.join(' ')
-}
-
 /**
  * Shared Add / Edit banner form — matches Channel modal chrome (dark + amber).
  */
@@ -263,27 +250,6 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
     }
     reader.readAsDataURL(file)
   }
-
-  const countdownPreviewText = useMemo(() => {
-    if (!form.enableCountdown) return null
-    const startIso = datetimeLocalToIso(form.eventStartLocal)
-    const endIso = datetimeLocalToIso(form.eventEndLocal)
-    const now = clock
-    if (startIso) {
-      const t0 = new Date(startIso).getTime()
-      if (!Number.isNaN(t0) && now < t0) {
-        return `Starts in ${formatCountdown(t0 - now)}`
-      }
-    }
-    if (endIso) {
-      const t1 = new Date(endIso).getTime()
-      if (!Number.isNaN(t1) && now < t1) {
-        return `Ends in ${formatCountdown(t1 - now)}`
-      }
-    }
-    if (startIso || endIso) return 'Event window (preview)'
-    return 'Set event times for countdown'
-  }, [form.enableCountdown, form.eventStartLocal, form.eventEndLocal, clock])
 
   function handleSubmit(e) {
     e.preventDefault()
@@ -418,7 +384,7 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
   const previewBadgeVisible = form.badgeEnabled && form.badge.trim().length > 0
   const previewImageSrc =
     imageDataUrl ||
-    (typeof imagePreview === 'string' && !imagePreview.startsWith('blob:') ? imagePreview : null) ||
+    (typeof imagePreview === 'string' ? imagePreview : null) ||
     (isEdit && banner?.image ? banner.image : null)
 
   if (!isOpen) return null
@@ -540,11 +506,6 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                     >
                       {form.badge.trim()}
                     </span>
-                  ) : null}
-                  {form.enableCountdown && countdownPreviewText ? (
-                    <div className="absolute bottom-2 left-2 right-2 rounded-lg bg-black/55 px-2 py-1.5 text-center text-[11px] font-semibold text-amber-100 ring-1 ring-amber-400/30">
-                      {countdownPreviewText}
-                    </div>
                   ) : null}
                 </div>
               </div>
@@ -715,6 +676,21 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                     <p className="mt-1.5 text-[11px] text-slate-500">
                       Where timer/status pills appear on the banner image in the app.
                     </p>
+                    <div className="mt-4">
+                      <BannerRuntimeOverlayPreview
+                        imageSrc={previewImageSrc}
+                        runtimePosition={form.runtimePosition}
+                        useTimer={form.useTimer}
+                        startTime={form.startTime}
+                        endTime={form.endTime}
+                        enableCountdown={form.enableCountdown}
+                        eventStartIso={eventStartIso}
+                        eventEndIso={eventEndIso}
+                        clock={clock}
+                        timerWindowNow={timerWindowNow}
+                        eventPhase={eventPhase}
+                      />
+                    </div>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
