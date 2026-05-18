@@ -379,6 +379,13 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
       startTime: form.useTimer ? form.startTime.trim() : '',
       endTime: form.useTimer ? form.endTime.trim() : '',
       runtimePosition: normalizeRuntimeOverlayPosition(form.runtimePosition),
+      runtime_position: normalizeRuntimeOverlayPosition(form.runtimePosition),
+    }
+    if (import.meta.env.DEV) {
+      console.info('[banner-save] form submit', {
+        runtimePosition: payload.runtimePosition,
+        runtime_position: payload.runtime_position,
+      })
     }
     if (isEdit && banner?.id) {
       payload.id = banner.id
@@ -687,12 +694,16 @@ function BannerFormModal({ variant, isOpen, banner, onClose, onSubmit }) {
                     <select
                       id={`${formId}-runtime-position`}
                       value={form.runtimePosition}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const next = normalizeRuntimeOverlayPosition(e.target.value)
+                        if (import.meta.env.DEV) {
+                          console.info('[banner-save] overlay position select', next)
+                        }
                         setForm((f) => ({
                           ...f,
-                          runtimePosition: normalizeRuntimeOverlayPosition(e.target.value),
+                          runtimePosition: next,
                         }))
-                      }
+                      }}
                       className={inputClassName()}
                     >
                       {RUNTIME_OVERLAY_POSITIONS.map((opt) => (

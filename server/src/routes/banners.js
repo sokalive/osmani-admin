@@ -125,6 +125,11 @@ function bannerFieldsForStore(fields) {
   return rest
 }
 
+function logRuntimePositionDebug(scope, data) {
+  if (process.env.BANNER_RUNTIME_POSITION_DEBUG !== '1') return
+  console.info(`[banners][runtime_position] ${scope}`, data)
+}
+
 function validateBannerFields(fields) {
   const errors = []
   if (fields._runtimePositionError) errors.push(fields._runtimePositionError)
@@ -217,7 +222,12 @@ bannersRouter.get('/manage', requireAdminPanelAccess, async (req, res) => {
 
 bannersRouter.post('/', requireAdminPanelAccess, maybeUploadBanner, async (req, res) => {
   try {
+    logRuntimePositionDebug('POST body', {
+      runtime_position: req.body?.runtime_position,
+      runtimePosition: req.body?.runtimePosition,
+    })
     const fields = parseBannerFields(req)
+    logRuntimePositionDebug('POST parsed', { runtime_position: fields.runtime_position })
     const vErrs = validateBannerFields(fields)
     if (vErrs.length) {
       if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
@@ -249,13 +259,19 @@ bannersRouter.post('/', requireAdminPanelAccess, maybeUploadBanner, async (req, 
       image: imagePath,
     })
     const full = await bannerStore.getBannerById(inserted.id)
+    logRuntimePositionDebug('POST DB row', { id: inserted.id, runtime_position: full?.runtime_position })
     liveSyncBus.publish('config.banners_changed', {
       topics: ['config'],
       action: 'created',
       bannerId: inserted.id,
       synced_at: new Date().toISOString(),
     })
-    res.status(201).json(bannerToResponse(full, req))
+    const responseBody = bannerToResponse(full, req)
+    logRuntimePositionDebug('POST API response', {
+      id: responseBody?.id,
+      runtime_position: responseBody?.runtime_position,
+    })
+    res.status(201).json(responseBody)
   } catch (e) {
     console.error('[banners] POST / failed:', e)
     if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
@@ -276,7 +292,13 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
       return res.status(404).json({ error: 'Banner not found' })
     }
 
+    logRuntimePositionDebug('PUT body', {
+      id,
+      runtime_position: req.body?.runtime_position,
+      runtimePosition: req.body?.runtimePosition,
+    })
     const fields = parseBannerFields(req)
+    logRuntimePositionDebug('PUT parsed', { id, runtime_position: fields.runtime_position })
     const vErrs = validateBannerFields(fields)
     if (vErrs.length) {
       if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
@@ -321,13 +343,20 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
       return res.status(404).json({ error: 'Banner not found' })
     }
     const full = await bannerStore.getBannerById(id)
+    logRuntimePositionDebug('PUT DB row', { id, runtime_position: full?.runtime_position })
     liveSyncBus.publish('config.banners_changed', {
       topics: ['config'],
       action: 'updated',
       bannerId: id,
       synced_at: new Date().toISOString(),
     })
-    res.json(bannerToResponse(full, req))
+    const responseBody = bannerToResponse(full, req)
+    logRuntimePositionDebug('PUT API response', {
+      id: responseBody?.id,
+      runtime_position: responseBody?.runtime_position,
+      runtimePosition: responseBody?.runtimePosition,
+    })
+    res.json(responseBody)
   } catch (e) {
     console.error('[banners] PUT /:id failed:', e)
     if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)

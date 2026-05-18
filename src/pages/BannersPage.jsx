@@ -5,6 +5,7 @@ import BannerFormModal from '../components/BannerFormModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deleteBanner, getBannersManage, postBanner, putBanner, syncStreamUrl } from '../lib/api'
+import { bannerSaveBody } from '../lib/bannerSaveBody'
 import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
@@ -15,51 +16,6 @@ function normalizeBanner(b) {
   return {
     ...b,
     createdAt: b.createdAt ? new Date(b.createdAt) : new Date(0),
-  }
-}
-
-/** Full body for PUT so omitted fields are not reset to defaults on the server. */
-function bannerPayloadForApi(b, overrides = {}) {
-  const m = { ...b, ...overrides }
-  const useTimer = Boolean(m.useTimer ?? m.eventTimer)
-  const sortOrder = Number(m.sortOrder ?? m.sort_order) || 0
-  return {
-    title: m.title ?? '',
-    description: m.description ?? '',
-    image: m.image ?? '',
-    badge: m.badge ?? '',
-    badgeEnabled: m.badgeEnabled ?? m.badge_enabled ?? true,
-    badgeColor: (m.badgeColor ?? m.badge_color ?? '#FBBF24').trim() || '#FBBF24',
-    badgeBlink: Boolean(m.badgeBlink ?? m.badge_blink),
-    badgePriority: Number(m.badgePriority ?? m.badge_priority) || 0,
-    enableCountdown: Boolean(m.enableCountdown ?? m.enable_countdown),
-    eventStart: m.eventStart ?? m.event_start ?? null,
-    eventEnd: m.eventEnd ?? m.event_end ?? null,
-    redirectChannelId: (() => {
-      const v = m.redirectChannelId ?? m.redirect_channel_id
-      if (v === '' || v == null) return null
-      const n = Number(v)
-      return Number.isFinite(n) ? n : null
-    })(),
-    sortOrder,
-    isActive: m.isActive !== false && m.is_active !== false,
-    isEnabled: m.isEnabled !== false && m.enabled !== false,
-    useTimer,
-    startTime: useTimer ? (m.startTime ?? m.dailyStart ?? '09:00') : '',
-    endTime: useTimer ? (m.endTime ?? m.dailyEnd ?? '17:00') : '',
-    runtimePosition: (() => {
-      const raw = m.runtimePosition ?? m.runtime_position ?? 'center'
-      const v = String(raw).trim().toLowerCase().replace(/-/g, '_')
-      const allowed = [
-        'center',
-        'bottom_center',
-        'bottom_left',
-        'bottom_right',
-        'top_left',
-        'top_right',
-      ]
-      return allowed.includes(v) ? v : 'center'
-    })(),
   }
 }
 
@@ -135,7 +91,7 @@ function BannersPage() {
     async (ordered) => {
       try {
         await Promise.all(
-          ordered.map((b, i) => putBanner(b.id, bannerPayloadForApi(b, { sortOrder: i }))),
+          ordered.map((b, i) => putBanner(b.id, bannerSaveBody(b, { sortOrder: i }))),
         )
         await loadBanners()
         showToast('success', 'Banner order saved.')
@@ -174,10 +130,7 @@ function BannersPage() {
     try {
       const rest = { ...payload }
       delete rest.id
-      await postBanner({
-        ...rest,
-        createdAt: new Date().toISOString(),
-      })
+      await postBanner(bannerSaveBody(rest))
       await loadBanners()
       setAddOpen(false)
       showToast('success', 'Banner created.')
@@ -190,14 +143,15 @@ function BannersPage() {
     try {
       const { id, ...rest } = payload
       if (!id) return
-      await putBanner(id, {
-        ...rest,
-        createdAt: editingBanner?.createdAt
-          ? editingBanner.createdAt instanceof Date
-            ? editingBanner.createdAt.toISOString()
-            : editingBanner.createdAt
-          : new Date().toISOString(),
-      })
+      const saveBody = bannerSaveBody({ ...editingBanner, ...rest })
+      if (import.meta.env.DEV) {
+        console.info('[banner-save] edit submit form.runtimePosition', rest.runtimePosition)
+        console.info('[banner-save] edit submit saveBody', {
+          runtime_position: saveBody.runtime_position,
+          runtimePosition: saveBody.runtimePosition,
+        })
+      }
+      await putBanner(id, saveBody)
       await loadBanners()
       setEditingBanner(null)
       showToast('success', 'Banner updated.')

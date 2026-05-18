@@ -1,4 +1,5 @@
 import { getAdminDeviceFingerprintRaw } from './adminDeviceFingerprint'
+import { bannerSaveBody } from './bannerSaveBody.js'
 
 const API_BASE_ENV = String(
   import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
@@ -151,8 +152,28 @@ export const getPublicRuntimeAppModes = () => apiGet('/runtime/app-modes')
 export const getBanners = () => apiGet('/banners')
 /** Full list for admin CMS. */
 export const getBannersManage = () => adminApiGet('/banners/manage')
-export const postBanner = (body) => adminApiPost('/banners', body)
-export const putBanner = (id, body) => adminApiPut(`/banners/${encodeURIComponent(id)}`, body)
+
+export function postBanner(body) {
+  const payload = bannerSaveBody(body)
+  if (import.meta.env?.DEV) {
+    console.info('[banner-save] POST /banners payload', {
+      runtime_position: payload.runtime_position,
+      runtimePosition: payload.runtimePosition,
+    })
+  }
+  return adminApiPost('/banners', payload)
+}
+
+export function putBanner(id, body) {
+  const payload = bannerSaveBody(body)
+  if (import.meta.env?.DEV) {
+    console.info('[banner-save] PUT /banners/' + id, {
+      runtime_position: payload.runtime_position,
+      runtimePosition: payload.runtimePosition,
+    })
+  }
+  return adminApiPut(`/banners/${encodeURIComponent(id)}`, payload)
+}
 export const deleteBanner = (id) => adminApiDelete(`/banners/${encodeURIComponent(id)}`)
 
 /** --- Plans --- (GET public for Android checkout; mutations require admin session/token) */
