@@ -174,6 +174,12 @@ export function putBanner(id, body) {
   }
   return adminApiPut(`/banners/${encodeURIComponent(id)}`, payload)
 }
+
+/** Drag-reorder: updates sort_order only (does not touch runtime_position). */
+export function postBannersReorder(orders) {
+  return adminApiPost('/banners/reorder', { orders })
+}
+
 export const deleteBanner = (id) => adminApiDelete(`/banners/${encodeURIComponent(id)}`)
 
 /** --- Plans --- (GET public for Android checkout; mutations require admin session/token) */

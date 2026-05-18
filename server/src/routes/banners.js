@@ -202,9 +202,57 @@ async function unlinkUploadIfAny(imagePath) {
 bannersRouter.get('/', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersPublic()
+    res.setHeader('Cache-Control', 'no-store')
     res.json(rows.map((r) => bannerToPublicResponse(r, req)))
   } catch (e) {
     console.error('[banners] GET / failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+/**
+ * Temporary debug: compare PostgreSQL runtime_position vs API serializers.
+ * GET /api/banners/debug/runtime-position?id=10
+ * GET /api/banners/debug/runtime-position?title=Orhan
+ */
+bannersRouter.get('/debug/runtime-position', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const idRaw = req.query?.id
+    const id =
+      idRaw != null && String(idRaw).trim() !== ''
+        ? Number.parseInt(String(idRaw), 10)
+        : null
+    const titlePattern =
+      req.query?.title != null && String(req.query.title).trim() !== ''
+        ? String(req.query.title).trim()
+        : null
+    const rows = await bannerStore.queryBannersRuntimePositionDebug({
+      id: Number.isFinite(id) ? id : null,
+      titlePattern,
+    })
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({
+      ok: true,
+      queried_at: new Date().toISOString(),
+      banners: rows.map((row) => {
+        const manage = bannerToResponse(row, req)
+        const pub = bannerToPublicResponse(row, req)
+        return {
+          id: Number(row.id),
+          title: row.title ?? '',
+          active: Boolean(row.active),
+          sort_order: Number(row.sort_order) || 0,
+          db_runtime_position: row.runtime_position ?? null,
+          api_manage_runtime_position: manage?.runtime_position ?? null,
+          api_public_runtime_position: pub?.runtime_position ?? null,
+          db_matches_public_api:
+            String(row.runtime_position ?? '').trim().toLowerCase() ===
+            String(pub?.runtime_position ?? '').trim().toLowerCase(),
+        }
+      }),
+    })
+  } catch (e) {
+    console.error('[banners] GET /debug/runtime-position failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
@@ -216,6 +264,26 @@ bannersRouter.get('/manage', requireAdminPanelAccess, async (req, res) => {
     res.json(rows.map((r) => bannerToResponse(r, req)))
   } catch (e) {
     console.error('[banners] GET /manage failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+bannersRouter.post('/reorder', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const orders = Array.isArray(body.orders) ? body.orders : []
+    if (orders.length === 0) {
+      return res.status(400).json({ error: 'orders array required' })
+    }
+    const updated = await bannerStore.reorderBanners(orders)
+    liveSyncBus.publish('config.banners_changed', {
+      topics: ['config'],
+      action: 'reordered',
+      synced_at: new Date().toISOString(),
+    })
+    res.json({ ok: true, updated })
+  } catch (e) {
+    console.error('[banners] POST /reorder failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
@@ -356,6 +424,13 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
       runtime_position: responseBody?.runtime_position,
       runtimePosition: responseBody?.runtimePosition,
     })
+    if (process.env.BANNER_RUNTIME_POSITION_DEBUG === '1') {
+      responseBody._runtime_position_debug = {
+        db_runtime_position: full?.runtime_position ?? null,
+        parsed_runtime_position: fields.runtime_position,
+        api_runtime_position: responseBody.runtime_position,
+      }
+    }
     res.json(responseBody)
   } catch (e) {
     console.error('[banners] PUT /:id failed:', e)

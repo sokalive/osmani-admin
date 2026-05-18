@@ -155,3 +155,58 @@ export async function deleteBannerById(id) {
   if (!pool) throw new Error('DATABASE_URL is required.')
   await pool.query('DELETE FROM banners WHERE id = $1', [Number(id)])
 }
+
+/** Update sort_order only — avoids clobbering other columns during drag-reorder. */
+export async function reorderBanners(orders) {
+  const pool = getPool()
+  if (!pool) throw new Error('DATABASE_URL is required.')
+  const list = Array.isArray(orders) ? orders : []
+  if (list.length === 0) return 0
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    let n = 0
+    for (const item of list) {
+      const id = Number(item?.id)
+      const sortOrder = Number(item?.sortOrder ?? item?.sort_order)
+      if (!Number.isFinite(id) || !Number.isFinite(sortOrder)) continue
+      await client.query(
+        `UPDATE banners SET sort_order = $2, updated_at = now() WHERE id = $1`,
+        [id, sortOrder],
+      )
+      n += 1
+    }
+    await client.query('COMMIT')
+    return n
+  } catch (e) {
+    await client.query('ROLLBACK')
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
+/** Raw DB rows for runtime_position debug (no joins). */
+export async function queryBannersRuntimePositionDebug({ id, titlePattern } = {}) {
+  const pool = getPool()
+  if (!pool) throw new Error('DATABASE_URL is required.')
+  const params = []
+  const clauses = []
+  if (id != null && Number.isFinite(Number(id))) {
+    params.push(Number(id))
+    clauses.push(`id = $${params.length}`)
+  }
+  if (titlePattern) {
+    params.push(`%${titlePattern}%`)
+    clauses.push(`title ILIKE $${params.length}`)
+  }
+  const where =
+    clauses.length > 0
+      ? clauses.join(' AND ')
+      : `(title ILIKE '%Orhan%' OR title ILIKE '%Ottoman%')`
+  const { rows } = await pool.query(
+    `SELECT id, title, runtime_position, active, sort_order FROM banners WHERE ${where} ORDER BY id`,
+    params,
+  )
+  return rows
+}

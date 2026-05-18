@@ -4,7 +4,14 @@ import { GripVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 import BannerFormModal from '../components/BannerFormModal'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { deleteBanner, getBannersManage, postBanner, putBanner, syncStreamUrl } from '../lib/api'
+import {
+  deleteBanner,
+  getBannersManage,
+  postBanner,
+  postBannersReorder,
+  putBanner,
+  syncStreamUrl,
+} from '../lib/api'
 import { bannerSaveBody } from '../lib/bannerSaveBody'
 import {
   canBannerReceiveInteractions,
@@ -90,9 +97,11 @@ function BannersPage() {
   const persistSortOrder = useCallback(
     async (ordered) => {
       try {
-        await Promise.all(
-          ordered.map((b, i) => putBanner(b.id, bannerSaveBody(b, { sortOrder: i }))),
-        )
+        const orders = ordered.map((b, i) => ({
+          id: b.id,
+          sortOrder: i,
+        }))
+        await postBannersReorder(orders)
         await loadBanners()
         showToast('success', 'Banner order saved.')
       } catch (e) {
