@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
+import { getWhatsAppSettingsPublicPayload } from './realtimeSettings.js'
 
 export const liveSyncRouter = Router()
 
@@ -46,6 +47,19 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
         sendRuntimeModesPair(payload, 'init')
       } catch (e) {
         console.error('[sync/stream] app_modes init failed:', e)
+      }
+      try {
+        const wa = await getWhatsAppSettingsPublicPayload()
+        if (wa) {
+          send('whatsapp_settings_changed', {
+            topics: ['config'],
+            enabled: wa.enabled,
+            url: wa.url,
+            synced_at: new Date().toISOString(),
+          })
+        }
+      } catch (e) {
+        console.error('[sync/stream] whatsapp_settings init failed:', e)
       }
     })()
   }

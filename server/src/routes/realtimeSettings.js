@@ -163,6 +163,13 @@ async function loadWhatsAppSettings(pool) {
   }
 }
 
+/** Public read payload for production APK + SSE stream init. */
+export async function getWhatsAppSettingsPublicPayload() {
+  const pool = getPool()
+  if (!pool) return null
+  return loadWhatsAppSettings(pool)
+}
+
 async function saveWhatsAppSettings(pool, body) {
   const enabled = Boolean(body.enabled)
   const normalized = normalizeWhatsAppUrl(body.url)
@@ -481,7 +488,8 @@ export async function triggerServerHealthBroadcast(force = true) {
   return payload
 }
 
-realtimeSettingsRouter.get('/whatsapp-settings', requireAdminPanelAccess, async (_req, res) => {
+/** Public read for production APK; admin PUT remains protected. */
+realtimeSettingsRouter.get('/whatsapp-settings', async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
