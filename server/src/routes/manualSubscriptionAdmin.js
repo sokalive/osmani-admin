@@ -9,8 +9,6 @@ import { adminSecurityPinFromBody, verifyAdminSecurityPin } from '../lib/adminSe
 export const manualSubscriptionAdminRouter = Router()
 manualSubscriptionAdminRouter.use(requireAdminPanelAccess)
 
-const ALLOWED_DURATIONS = new Set([1, 7, 30, 90])
-
 /** Hourly rolling window per client IP */
 const rateBucket = new Map()
 /** Setup-pin attempts per IP (separate from grant limiter) */
@@ -372,10 +370,12 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
 
     const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
     const durationDays = Number(body.duration_days ?? body.durationDays)
-    if (!deviceId || !ALLOWED_DURATIONS.has(durationDays)) {
+    const allowed = await billing.getManualGrantAllowedDurationDays()
+    if (!deviceId || !allowed.has(durationDays)) {
+      const list = [...allowed].sort((a, b) => a - b).join(', ')
       return res.status(400).json({
         ok: false,
-        error: 'device_id and duration_days are required (duration_days: 1 | 7 | 30 | 90)',
+        error: `device_id and duration_days are required (duration_days: ${list})`,
       })
     }
 

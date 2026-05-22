@@ -9,6 +9,7 @@ import {
   deleteOfferCode,
   getManualSubscriptionHistory,
   getOfferCodesHistory,
+  getPlans,
   postManualSubscriptionBlock,
   postManualSubscriptionBulkBlock,
   postManualSubscriptionBulkUnblock,
@@ -23,13 +24,11 @@ import {
   postOfferCodeUnblock,
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
-
-const DURATIONS = [
-  { days: 1, label: 'Siku 1' },
-  { days: 7, label: 'Siku 7' },
-  { days: 30, label: 'Siku 30' },
-  { days: 90, label: 'Siku 90' },
-]
+import {
+  filterSelectableSubscriptionPlans,
+  formatManualGrantPlanLabel,
+  planDurationDays,
+} from '../lib/subscriptionPlanOptions'
 
 function inputClass() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
@@ -81,7 +80,9 @@ function ManualSubscriptionPage() {
   const { showToast } = useToast()
   const [tab, setTab] = useState('grant')
   const [deviceId, setDeviceId] = useState('')
-  const [durationDays, setDurationDays] = useState(7)
+  const [plans, setPlans] = useState([])
+  const [plansLoading, setPlansLoading] = useState(true)
+  const [selectedPlanId, setSelectedPlanId] = useState('')
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [flash, setFlash] = useState(null)
@@ -90,7 +91,7 @@ function ManualSubscriptionPage() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyBusyId, setHistoryBusyId] = useState(null)
 
-  const [offerDurationDays, setOfferDurationDays] = useState(7)
+  const [offerSelectedPlanId, setOfferSelectedPlanId] = useState('')
   const [offerPin, setOfferPin] = useState('')
   const [generatedOfferCode, setGeneratedOfferCode] = useState('')
   const [offerBusy, setOfferBusy] = useState(false)
@@ -103,6 +104,46 @@ function ManualSubscriptionPage() {
   const [bulkPinExec, setBulkPinExec] = useState(null)
   const [bulkPinBusy, setBulkPinBusy] = useState(false)
   const [bulkPinError, setBulkPinError] = useState('')
+
+  const selectablePlans = useMemo(() => filterSelectableSubscriptionPlans(plans), [plans])
+
+  const selectedPlan = useMemo(
+    () => selectablePlans.find((p) => String(p.id) === String(selectedPlanId)) ?? null,
+    [selectablePlans, selectedPlanId],
+  )
+
+  const offerSelectedPlan = useMemo(
+    () => selectablePlans.find((p) => String(p.id) === String(offerSelectedPlanId)) ?? null,
+    [selectablePlans, offerSelectedPlanId],
+  )
+
+  const loadPlans = useCallback(async () => {
+    setPlansLoading(true)
+    try {
+      const rows = await getPlans()
+      const list = filterSelectableSubscriptionPlans(Array.isArray(rows) ? rows : [])
+      setPlans(list)
+      setSelectedPlanId((prev) => {
+        if (prev && list.some((p) => String(p.id) === String(prev))) return prev
+        return list[0] ? String(list[0].id) : ''
+      })
+      setOfferSelectedPlanId((prev) => {
+        if (prev && list.some((p) => String(p.id) === String(prev))) return prev
+        return list[0] ? String(list[0].id) : ''
+      })
+    } catch (err) {
+      showToast('error', err?.message || 'Mipango haikuweza kupakiwa')
+      setPlans([])
+      setSelectedPlanId('')
+      setOfferSelectedPlanId('')
+    } finally {
+      setPlansLoading(false)
+    }
+  }, [showToast])
+
+  useEffect(() => {
+    void loadPlans()
+  }, [loadPlans])
 
   useEffect(() => {
     if (tab !== 'history') setHistSelected(new Set())
@@ -152,10 +193,15 @@ function ManualSubscriptionPage() {
       showToast('error', 'Ingiza PIN')
       return
     }
+    const days = planDurationDays(offerSelectedPlan)
+    if (!days || !offerSelectedPlan) {
+      showToast('error', 'Chagua kifurushi')
+      return
+    }
     setOfferBusy(true)
     try {
       const out = await postOfferCodeGenerate({
-        durationDays: offerDurationDays,
+        durationDays: days,
         pin: offerPin.trim(),
       })
       setGeneratedOfferCode(String(out.code ?? ''))
@@ -174,10 +220,15 @@ function ManualSubscriptionPage() {
       setGeneratedOfferCode('')
       return
     }
+    const days = planDurationDays(offerSelectedPlan)
+    if (!days || !offerSelectedPlan) {
+      showToast('error', 'Chagua kifurushi')
+      return
+    }
     setOfferBusy(true)
     try {
       const out = await postOfferCodeGenerate({
-        durationDays: offerDurationDays,
+        durationDays: days,
         pin: offerPin.trim(),
       })
       setGeneratedOfferCode(String(out.code ?? ''))
@@ -262,11 +313,16 @@ function ManualSubscriptionPage() {
       showToast('error', 'Ingiza PIN kabla ya kuweka kifurushi')
       return
     }
+    const days = planDurationDays(selectedPlan)
+    if (!days || !selectedPlan) {
+      showToast('error', 'Chagua kifurushi')
+      return
+    }
     setBusy(true)
     try {
       const out = await postManualSubscriptionGrant({
         deviceId: d,
-        durationDays,
+        durationDays: days,
         pin: pin.trim(),
       })
       setFlash({
@@ -386,7 +442,7 @@ function ManualSubscriptionPage() {
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-400/90">Admin</p>
               <h1 className="text-2xl font-bold text-white sm:text-3xl">Toa Kifurushi</h1>
-              <p className="mt-1 text-sm text-slate-400">Manual subscription · Device ID + muda</p>
+              <p className="mt-1 text-sm text-slate-400">Manual subscription · Device ID + kifurushi kutoka mipango</p>
             </div>
           </div>
         </header>
@@ -432,20 +488,27 @@ function ManualSubscriptionPage() {
               </div>
 
               <div>
-                <label htmlFor="ms-duration" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Muda wa kifurushi
+                <label htmlFor="ms-plan" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Kifurushi
                 </label>
                 <select
-                  id="ms-duration"
+                  id="ms-plan"
                   className={selectClass()}
-                  value={durationDays}
-                  onChange={(e) => setDurationDays(Number(e.target.value))}
+                  value={selectedPlanId}
+                  onChange={(e) => setSelectedPlanId(e.target.value)}
+                  disabled={plansLoading || selectablePlans.length === 0}
                 >
-                  {DURATIONS.map((o) => (
-                    <option key={o.days} value={o.days}>
-                      {o.label}
-                    </option>
-                  ))}
+                  {plansLoading ? (
+                    <option value="">Inapakia mipango…</option>
+                  ) : selectablePlans.length === 0 ? (
+                    <option value="">Hakuna mipango hai</option>
+                  ) : (
+                    selectablePlans.map((p) => (
+                      <option key={p.id} value={String(p.id)}>
+                        {formatManualGrantPlanLabel(p)}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
 
@@ -468,7 +531,7 @@ function ManualSubscriptionPage() {
 
               <button
                 type="submit"
-                disabled={busy}
+                disabled={busy || plansLoading || !selectedPlan}
                 className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-transform hover:scale-[1.01] disabled:opacity-60 sm:w-auto sm:min-w-[200px] sm:px-8"
               >
                 {busy ? 'Inaweka…' : 'Weka Kifurushi'}
@@ -723,22 +786,29 @@ function ManualSubscriptionPage() {
               >
                 <div>
                   <label
-                    htmlFor="oc-duration"
+                    htmlFor="oc-plan"
                     className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400"
                   >
-                    Muda wa kifurushi
+                    Kifurushi
                   </label>
                   <select
-                    id="oc-duration"
+                    id="oc-plan"
                     className={selectClass()}
-                    value={offerDurationDays}
-                    onChange={(e) => setOfferDurationDays(Number(e.target.value))}
+                    value={offerSelectedPlanId}
+                    onChange={(e) => setOfferSelectedPlanId(e.target.value)}
+                    disabled={plansLoading || selectablePlans.length === 0}
                   >
-                    {DURATIONS.map((o) => (
-                      <option key={o.days} value={o.days}>
-                        {o.label}
-                      </option>
-                    ))}
+                    {plansLoading ? (
+                      <option value="">Inapakia mipango…</option>
+                    ) : selectablePlans.length === 0 ? (
+                      <option value="">Hakuna mipango hai</option>
+                    ) : (
+                      selectablePlans.map((p) => (
+                        <option key={p.id} value={String(p.id)}>
+                          {formatManualGrantPlanLabel(p)}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
                 <div>
@@ -762,7 +832,7 @@ function ManualSubscriptionPage() {
                 <div className="flex flex-wrap gap-3">
                   <button
                     type="submit"
-                    disabled={offerBusy}
+                    disabled={offerBusy || plansLoading || !offerSelectedPlan}
                     className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-6 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] disabled:opacity-60"
                   >
                     {offerBusy ? 'Inatengeneza…' : 'TENGENEZA CODE'}

@@ -16,8 +16,6 @@ function publishOfferCodesSync(action, extra = {}) {
   })
 }
 
-const ALLOWED_DURATIONS = new Set([1, 7, 30, 90])
-
 offerCodesAdminRouter.post('/generate', async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
@@ -29,10 +27,12 @@ offerCodesAdminRouter.post('/generate', async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Invalid PIN' })
     }
     const durationDays = Number(body.duration_days ?? body.durationDays)
-    if (!ALLOWED_DURATIONS.has(durationDays)) {
+    const allowed = await billing.getManualGrantAllowedDurationDays()
+    if (!allowed.has(durationDays)) {
+      const list = [...allowed].sort((a, b) => a - b).join(', ')
       return res.status(400).json({
         ok: false,
-        error: 'duration_days must be one of 1, 7, 30, 90',
+        error: `duration_days must be one of: ${list}`,
       })
     }
     const row = await billing.insertOfferCodeRow({ durationDays, createdBy: 'admin' })

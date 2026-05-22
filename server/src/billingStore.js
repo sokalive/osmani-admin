@@ -612,7 +612,21 @@ export async function touchLivePresence({ deviceId, country = null, channelId = 
   return { deviceId: d, country: safeCountry, channelId: safeChannel }
 }
 
-const MANUAL_GRANT_DURATION_DAYS = new Set([1, 7, 30, 90])
+/** Legacy durations for older manual grants / offer codes. */
+const MANUAL_GRANT_LEGACY_DURATION_DAYS = [1, 7, 30, 90]
+
+/**
+ * Allowed manual-grant / offer-code durations: legacy set ∪ active duration-based plan lengths.
+ * Keeps admin aligned with GET /api/plans and subscription verify catalog.
+ */
+export async function getManualGrantAllowedDurationDays() {
+  const rows = await listPlansWithSubscriberCounts().catch(() => [])
+  const fromPlans = rows
+    .filter((p) => p.is_active && p.expiry_type !== 'fixed')
+    .map((p) => Math.max(1, Math.floor(Number(p.duration_days) || 0)))
+    .filter((n) => Number.isFinite(n) && n >= 1)
+  return new Set([...MANUAL_GRANT_LEGACY_DURATION_DAYS, ...fromPlans])
+}
 
 /**
  * Admin-only manual subscription extension using same stacking math as payments.
@@ -622,8 +636,10 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   const q = dbQuery(client)
   const d = String(deviceId ?? '').trim()
   const days = Number(durationDays)
-  if (!d || !MANUAL_GRANT_DURATION_DAYS.has(days)) {
-    throw new Error('Invalid device_id or duration_days (allowed: 1, 7, 30, 90)')
+  const allowed = await getManualGrantAllowedDurationDays()
+  if (!d || !allowed.has(days)) {
+    const list = [...allowed].sort((a, b) => a - b).join(', ')
+    throw new Error(`Invalid device_id or duration_days (allowed: ${list})`)
   }
 
   const ins = await q(
@@ -1323,7 +1339,6 @@ export async function updateCheckoutPaymentProvider(paymentProvider) {
 
 // --- Offer codes (admin-generated; redeem uses manual grant + popup flow) ---
 
-const OFFER_CODE_DURATIONS = MANUAL_GRANT_DURATION_DAYS
 
 export function normalizeOfferCode(raw) {
   const s = String(raw ?? '').replace(/\D/g, '')
@@ -1400,8 +1415,10 @@ export async function resetOfferCodeDeviceAttempts(deviceId) {
 export async function insertOfferCodeRow({ durationDays, createdBy = 'admin' }) {
   const pool = requirePool()
   const days = Number(durationDays)
-  if (!OFFER_CODE_DURATIONS.has(days)) {
-    throw new Error('Invalid duration_days (allowed: 1, 7, 30, 90)')
+  const allowed = await getManualGrantAllowedDurationDays()
+  if (!allowed.has(days)) {
+    const list = [...allowed].sort((a, b) => a - b).join(', ')
+    throw new Error(`Invalid duration_days (allowed: ${list})`)
   }
   const shelfDays = Math.min(
     3650,
@@ -1538,10 +1555,6 @@ export async function redeemOfferCodeForDevice(deviceId, rawCode) {
     }
 
     const durationDays = Number(oc.duration_days)
-    if (!OFFER_CODE_DURATIONS.has(durationDays)) {
-      await client.query('ROLLBACK')
-      return { ok: false, error: 'Code configuration is invalid' }
-    }
 
     const grant = await grantManualDeviceSubscription(d, durationDays, client)
 
