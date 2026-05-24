@@ -7,6 +7,7 @@ import {
   DEFAULT_RUNTIME_POSITION,
   parseRuntimePositionFromBody,
 } from '../lib/bannerRuntimePosition.js'
+import { enrichBannersListForViewer } from '../lib/bannerViewerSerializer.js'
 import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
@@ -202,8 +203,11 @@ async function unlinkUploadIfAny(imagePath) {
 bannersRouter.get('/', async (req, res) => {
   try {
     const rows = await bannerStore.listBannersPublic()
+    const payload = enrichBannersListForViewer(
+      rows.map((r) => bannerToPublicResponse(r, req)).filter(Boolean),
+    )
     res.setHeader('Cache-Control', 'no-store')
-    res.json(rows.map((r) => bannerToPublicResponse(r, req)))
+    res.json(payload)
   } catch (e) {
     console.error('[banners] GET / failed:', e)
     res.status(500).json({ error: String(e.message || e) })
