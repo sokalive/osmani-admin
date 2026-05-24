@@ -69,6 +69,41 @@ export async function ensureBillingTables(client) {
   `)
 
   await client.query(`
+    INSERT INTO app_settings (key, value)
+    VALUES
+      ('trial_watch_enabled', 'false'),
+      ('trial_watch_minutes', '30'),
+      ('trial_preview_seconds', '120'),
+      ('trial_preview_after_enabled', 'true')
+    ON CONFLICT (key) DO NOTHING;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS device_trial_entitlements (
+      device_id TEXT PRIMARY KEY,
+      fingerprint_hash TEXT NOT NULL DEFAULT '',
+      install_instance_id TEXT NOT NULL DEFAULT '',
+      trial_started_at TIMESTAMPTZ,
+      trial_ended_at TIMESTAMPTZ,
+      preview_after_started_at TIMESTAMPTZ,
+      trial_seconds_consumed INTEGER NOT NULL DEFAULT 0,
+      preview_seconds_consumed INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_trial_fingerprint_idx
+    ON device_trial_entitlements (fingerprint_hash)
+    WHERE fingerprint_hash <> '';
+  `)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS device_trial_fingerprint_consumed_uidx
+    ON device_trial_entitlements (fingerprint_hash)
+    WHERE fingerprint_hash <> '' AND trial_started_at IS NOT NULL;
+  `)
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS app_installs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       device_id TEXT NOT NULL DEFAULT '',

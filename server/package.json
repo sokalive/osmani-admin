@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "migrate:transfer-status-checks": "node src/db/migrateTransferStatusChecks.js",
-    "migrate-uploads": "node scripts/migrate-uploads.mjs"
+    "migrate-uploads": "node scripts/migrate-uploads.mjs",
+    "test:subscription-stacking": "node scripts/test-subscription-stacking.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",

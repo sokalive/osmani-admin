@@ -144,6 +144,10 @@ export function duplicateChannel(id) {
 export const getAppGlobalSettings = () => adminApiGet('/settings')
 export const putAppGlobalSettings = (body) => adminApiPut('/settings', body)
 
+export const getTrialWatchSettings = () => adminApiGet('/settings/trial-watch')
+export const putTrialWatchSettings = (body) => adminApiPut('/settings/trial-watch', body)
+export const getRuntimeTrialWatchSettings = () => apiGet('/runtime/trial-watch')
+
 /** Shared DB-backed modes (no auth). Keeps admin UI + runtimes aligned across multi-instance hosts. */
 export const getPublicRuntimeAppModes = () => apiGet('/runtime/app-modes')
 

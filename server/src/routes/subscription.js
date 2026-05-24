@@ -5,6 +5,8 @@ import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
+import { getDeviceTrialWatchStatus } from '../lib/trialWatchStore.js'
+import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
 
 export const subscriptionRouter = Router()
 
@@ -190,7 +192,7 @@ function appModesForVerify(modesPayload) {
   }
 }
 
-function derivePlaybackGate(pub, modesPayload, securityPolicy = null) {
+function derivePlaybackGate(pub, modesPayload, securityPolicy = null, trialStatus = null) {
   const modes = appModesForVerify(modesPayload).app_modes
   if (modes.emergency_mode) {
     return { playbackAllowed: false, playbackGateReason: 'emergency_mode', limitedPlayback: false }
@@ -210,6 +212,9 @@ function derivePlaybackGate(pub, modesPayload, securityPolicy = null) {
   } else if (modes.free_mode) {
     baseAllowed = true
     baseReason = 'free_mode'
+  } else if (trialStatus?.playbackAllowed === true) {
+    baseAllowed = true
+    baseReason = String(trialStatus.playbackGateReason || 'trial_watch_active')
   }
 
   const sec = securityPolicy && typeof securityPolicy === 'object' ? securityPolicy : null
@@ -280,7 +285,8 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const securityPolicy = await import('../lib/deviceSecurityStore.js')
     .then((m) => m.getPlaybackSecurityPolicy(d))
     .catch(() => null)
-  const playbackGate = derivePlaybackGate(pub, modesPayload, securityPolicy)
+  const trialStatus = await getDeviceTrialWatchStatus(d, fp).catch(() => null)
+  const playbackGate = derivePlaybackGate(pub, modesPayload, securityPolicy, trialStatus)
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
     console.log('[subscription_verify_debug]', {
@@ -317,10 +323,25 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         }
       : null
 
+  const trialWatchSettings = await loadTrialWatchSettings().catch(() => ({
+    enabled: false,
+    trialMinutes: 30,
+    previewSeconds: 120,
+    previewAfterEnabled: true,
+  }))
+  const trialWatchPublic = trialWatchSettingsToPublicPayload(
+    trialWatchSettings,
+    modesPayload?.v ?? liveSyncBus.snapshot().configVersion,
+  )
+
   const withGift = {
     ...normalized,
     ...runtimeModes,
     manualGift,
+    trial_watch: trialStatus,
+    trialWatch: trialStatus,
+    trial_watch_settings: trialWatchPublic,
+    trialWatchSettings: trialWatchPublic,
     playbackAllowed: playbackGate.playbackAllowed,
     playbackGateReason: playbackGate.playbackGateReason,
     limitedPlayback: playbackGate.limitedPlayback === true,
@@ -590,6 +611,21 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   }
   void writeAppModesEvent('init')
 
+  const writeTrialWatchEvent = async (reason) => {
+    try {
+      const settings = await loadTrialWatchSettings()
+      const snap = liveSyncBus.snapshot()
+      const body = JSON.stringify({
+        ...trialWatchSettingsToPublicPayload(settings, snap.configVersion),
+        reason,
+      })
+      res.write(`event: trial_watch_settings\ndata: ${body}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] trial_watch_settings push failed:', e)
+    }
+  }
+  void writeTrialWatchEvent('init')
+
   const modeSyncHandler = (packet) => {
     const modes = packet?.payload?.modes
     if (!modes || typeof modes !== 'object') return
@@ -610,10 +646,26 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       console.error('[subscription-stream] immediate modes push failed:', e)
     }
   }
+  const trialSyncHandler = (packet) => {
+    const tw = packet?.payload?.trial_watch
+    if (!tw || typeof tw !== 'object') return
+    try {
+      const body = JSON.stringify({
+        ...tw,
+        reason: String(packet.event || 'trial_watch'),
+      })
+      res.write(`event: trial_watch_settings\ndata: ${body}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] trial_watch immediate push failed:', e)
+    }
+  }
+
   liveSyncBus.on('sync', modeSyncHandler)
+  liveSyncBus.on('sync', trialSyncHandler)
 
   const modePoll = setInterval(() => {
     void writeAppModesEvent('poll')
+    void writeTrialWatchEvent('poll')
   }, MODE_SSE_POLL_MS)
 
   const handler = async (payload) => {
@@ -638,6 +690,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     clearInterval(modePoll)
     deviceSubscriptionBus.off('update', handler)
     liveSyncBus.off('sync', modeSyncHandler)
+    liveSyncBus.off('sync', trialSyncHandler)
     try {
       res.end()
     } catch (e) {

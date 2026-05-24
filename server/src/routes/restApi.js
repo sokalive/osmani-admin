@@ -31,6 +31,8 @@ import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { notificationsRouter } from './notifications.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { runtimePublicRouter } from './runtimePublic.js'
+import { trialWatchSettingsRouter } from './trialWatchSettings.js'
+import { trialWatchRouter } from './trialWatch.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { getPool } from '../db/pool.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
@@ -248,6 +250,8 @@ restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings/sonicpesa', sonicpesaSettingsRouter)
 restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
+restApi.use('/settings/trial-watch', trialWatchSettingsRouter)
+restApi.use('/trial-watch', trialWatchRouter)
 restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
 restApi.use(notificationsRouter)

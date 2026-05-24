@@ -6,6 +6,7 @@ import BannersPage from './pages/BannersPage'
 import ChannelsPage from './pages/ChannelsPage'
 import DashboardPage from './pages/DashboardPage'
 import DeviceControlPage from './pages/DeviceControlPage'
+import TrialWatchPage from './pages/TrialWatchPage'
 import NotificationsPage from './pages/NotificationsPage'
 import PaymentProvidersPage from './pages/PaymentProvidersPage'
 import PlansPage from './pages/PlansPage'
@@ -46,6 +47,7 @@ export const dashboardRouteElements = [
   <Route key="server-health" path="server-health" element={<ServerHealthPage />} />,
   <Route key="popup-settings" path="popup-settings" element={<PopupSettingsPage />} />,
   <Route key="device-control" path="device-control" element={<DeviceControlPage />} />,
+  <Route key="trial-watch" path="trial-watch" element={<TrialWatchPage />} />,
   <Route key="security" path="security" element={<SecurityDashboardPage />} />,
   <Route
     key="security-alerts"

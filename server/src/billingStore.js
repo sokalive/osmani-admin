@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { computeStackedExpiryIso } from './lib/subscriptionStacking.js'
 import { tryRecordAppInstall } from './lib/installAnalytics.js'
 import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
@@ -440,45 +441,17 @@ export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, dur
   if (!d) throw new Error('computeDeviceSubscriptionExpiryAfterPurchase: deviceId required')
   const days = Math.max(1, Number(durationDays) || 30)
   const { rows } = await q(
-    `WITH cur AS (
-       SELECT expires_at FROM device_subscriptions WHERE device_id = $1 LIMIT 1
-     ),
-     anchor AS (
-       SELECT
-         (SELECT expires_at FROM cur) AS previous_expires_at,
-         CASE
-           WHEN EXISTS (SELECT 1 FROM cur WHERE expires_at > now())
-           THEN (SELECT expires_at FROM cur)
-           ELSE now()
-         END AS anchor_at
-     ),
-     raw AS (
-       SELECT
-         anchor.previous_expires_at,
-         anchor.anchor_at,
-         (anchor.anchor_at + ($2::bigint * interval '24 hours'))::timestamptz AS computed_expires_at
-       FROM anchor
-     )
-     SELECT
-       raw.previous_expires_at,
-       raw.anchor_at,
-       CASE
-         WHEN raw.previous_expires_at IS NOT NULL AND raw.previous_expires_at > now()
-         THEN GREATEST(raw.computed_expires_at, raw.previous_expires_at)
-         ELSE raw.computed_expires_at
-       END AS expires_at
-     FROM raw`,
-    [d, days],
+    `SELECT expires_at FROM device_subscriptions WHERE device_id = $1 LIMIT 1`,
+    [d],
   )
-  const row = rows[0]
-  if (!row?.expires_at) throw new Error('computeDeviceSubscriptionExpiryAfterPurchase: no result')
-  const toIso = (v) =>
-    v == null ? null : v instanceof Date ? v.toISOString() : String(v)
+  const prev = rows[0]?.expires_at ?? null
+  const stack = computeStackedExpiryIso(prev, days)
   return {
-    expiresAt: toIso(row.expires_at),
-    previousExpiresAt: toIso(row.previous_expires_at),
-    anchorAt: toIso(row.anchor_at),
-    purchasedDurationDays: days,
+    expiresAt: stack.expiresAt,
+    previousExpiresAt: stack.previousExpiresAt,
+    anchorAt: stack.anchorAt,
+    purchasedDurationDays: stack.purchasedDurationDays,
+    stacked: stack.stacked,
   }
 }
 
@@ -965,9 +938,12 @@ export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expire
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at)
        VALUES ($1, 'active', $2::timestamptz, now(), $3, now())
        ON CONFLICT (device_id) DO UPDATE SET
-         status = EXCLUDED.status,
-         expires_at = EXCLUDED.expires_at,
-         started_at = EXCLUDED.started_at,
+         status = 'active',
+         expires_at = GREATEST(device_subscriptions.expires_at, EXCLUDED.expires_at),
+         started_at = CASE
+           WHEN device_subscriptions.expires_at > now() THEN device_subscriptions.started_at
+           ELSE now()
+         END,
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now()`,
       [d, expiresAt, oid],

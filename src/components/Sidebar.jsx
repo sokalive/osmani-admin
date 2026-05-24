@@ -3,6 +3,7 @@ import {
   BarChart3,
   Bell,
   Building2,
+  Clock,
   CreditCard,
   Download,
   KeyRound,
@@ -43,6 +44,7 @@ const menuItems = [
   { id: 'server-health', label: 'Server Health', icon: Server, path: '/server-health' },
   { id: 'popup', label: 'Popup Settings', icon: PanelTopOpen, path: '/popup-settings' },
   { id: 'device', label: 'Device Control', icon: TabletSmartphone, path: '/device-control' },
+  { id: 'trial-watch', label: 'Trial Watch', icon: Clock, path: '/trial-watch' },
   { id: 'security', label: 'Security Center', icon: ShieldAlert, path: '/security' },
   { id: 'transfer', label: 'Transfer Codes', icon: KeyRound, path: '/transfer-codes' },
 ]
