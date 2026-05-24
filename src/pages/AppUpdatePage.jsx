@@ -8,6 +8,7 @@ import {
   getAppUpdateSettings,
   getUpdateCheck,
   postAppUpdateApkUpload,
+  postAppUpdateParsePlayStore,
   putAppUpdateSettings,
   syncStreamUrl,
 } from '../lib/api'
@@ -116,6 +117,28 @@ function readOnlyInputClass() {
   return `${inputClass()} cursor-not-allowed opacity-90`
 }
 
+function isLikelyPlayStoreUrl(value) {
+  const s = String(value ?? '').trim()
+  if (!s) return false
+  if (s.includes('play.google.com')) return true
+  return /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/i.test(s)
+}
+
+function applyUploadResultToDraft(prev, result) {
+  if (!result || typeof result !== 'object') return prev
+  return {
+    ...prev,
+    source: 'apk',
+    apkUrl: String(result.apkUrl ?? prev.apkUrl ?? '').trim(),
+    sha256: String(result.sha256 ?? prev.sha256 ?? '').trim(),
+    versionCode: Number(result.versionCode) || prev.versionCode,
+    versionName: String(result.versionName ?? prev.versionName ?? '').trim(),
+    packageName: String(result.packageName ?? prev.packageName ?? '').trim(),
+    updateTitle: String(result.updateTitle ?? prev.updateTitle ?? '').trim(),
+    updateMessage: String(result.updateMessage ?? prev.updateMessage ?? '').trim(),
+  }
+}
+
 function runtimeTimeLabel(value) {
   if (!value) return 'Not available'
   const date = new Date(value)
@@ -176,6 +199,10 @@ function AppUpdatePage() {
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadError, setUploadError] = useState(null)
+  const [versionManualOverride, setVersionManualOverride] = useState(false)
+  const [playStoreLoading, setPlayStoreLoading] = useState(false)
+  const [playStoreError, setPlayStoreError] = useState(null)
+  const playStoreParseRef = useRef(0)
   const apkInputRef = useRef(null)
 
   function clearApkUploadUi() {
@@ -228,6 +255,57 @@ function AppUpdatePage() {
     return () => es.close()
   }, [load])
 
+  function showFlash(type, message) {
+    setFlash({ type, message })
+    window.setTimeout(() => setFlash(null), 4000)
+  }
+
+  const fetchPlayStoreMetadata = useCallback(
+    async (url) => {
+      const trimmed = String(url ?? '').trim()
+      if (!isLikelyPlayStoreUrl(trimmed)) return
+      const requestId = ++playStoreParseRef.current
+      setPlayStoreLoading(true)
+      setPlayStoreError(null)
+      try {
+        const result = await postAppUpdateParsePlayStore(trimmed, { persist: true })
+        if (requestId !== playStoreParseRef.current) return
+        setDraft((d) => ({
+          ...d,
+          source: 'play',
+          playstoreUrl: String(result.playstoreUrl ?? trimmed).trim(),
+          versionName: String(result.versionName ?? d.versionName ?? '').trim(),
+          packageName: String(result.packageName ?? result.packageId ?? d.packageName ?? '').trim(),
+          updateTitle: String(result.updateTitle ?? result.title ?? d.updateTitle ?? '').trim(),
+          updateMessage: String(result.updateMessage ?? d.updateMessage ?? '').trim(),
+        }))
+        await load()
+        const versionLabel = result.versionName
+          ? `v${result.versionName}`
+          : '(version not listed on Play Store — use APK upload for versionCode)'
+        showFlash('success', `Play Store: ${result.title || result.packageId} ${versionLabel}`)
+      } catch (err) {
+        if (requestId !== playStoreParseRef.current) return
+        const message = err?.message || 'Could not fetch Play Store listing'
+        setPlayStoreError(message)
+        showToast('error', message)
+      } finally {
+        if (requestId === playStoreParseRef.current) setPlayStoreLoading(false)
+      }
+    },
+    [load, showToast], // showFlash is stable (setState only)
+  )
+
+  useEffect(() => {
+    const url = draft.playstoreUrl.trim()
+    if (!url || url === savedSnapshot.playstoreUrl.trim()) return
+    if (!isLikelyPlayStoreUrl(url)) return
+    const timer = window.setTimeout(() => {
+      void fetchPlayStoreMetadata(url)
+    }, 800)
+    return () => window.clearTimeout(timer)
+  }, [draft.playstoreUrl, savedSnapshot.playstoreUrl, fetchPlayStoreMetadata])
+
   const draftDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(savedSnapshot),
     [draft, savedSnapshot],
@@ -249,11 +327,6 @@ function AppUpdatePage() {
     if (code > 0) return String(code)
     return '—'
   }, [draft.versionCode, draft.versionName])
-
-  function showFlash(type, message) {
-    setFlash({ type, message })
-    window.setTimeout(() => setFlash(null), 4000)
-  }
 
   async function handleSave(e) {
     e.preventDefault()
@@ -305,8 +378,13 @@ function AppUpdatePage() {
         onProgress: (pct) => setUploadProgress(pct),
       })
       setUploadProgress(100)
-      showFlash('success', `APK v${result?.versionCode ?? ''} uploaded and linked.`)
+      setVersionManualOverride(false)
+      setDraft((d) => applyUploadResultToDraft(d, result))
       await load()
+      showFlash(
+        'success',
+        `APK v${result?.versionName ?? result?.versionCode ?? ''} uploaded — version, hash, and URL saved automatically.`,
+      )
     } catch (err) {
       const message = err?.message || 'APK upload failed'
       setUploadError(message)
@@ -421,12 +499,26 @@ function AppUpdatePage() {
                 />
               </div>
 
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-slate-500">
+                  Version fields are filled from APK upload or Play Store URL
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setVersionManualOverride((v) => !v)}
+                  className="text-xs font-semibold text-[#f5c842] hover:text-[#f5b301]"
+                >
+                  {versionManualOverride ? 'Lock to auto-detected' : 'Edit version manually'}
+                </button>
+              </div>
+
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <label className={labelClass()}>Version Code</label>
                   <input
                     type="number"
                     min={0}
+                    readOnly={!versionManualOverride}
                     value={draft.versionCode || ''}
                     onChange={(e) =>
                       setDraft((d) => ({
@@ -434,29 +526,36 @@ function AppUpdatePage() {
                         versionCode: Math.max(0, Math.trunc(Number(e.target.value) || 0)),
                       }))
                     }
-                    className={inputClass()}
-                    placeholder="13"
+                    className={versionManualOverride ? inputClass() : readOnlyInputClass()}
+                    placeholder="Auto from APK"
                   />
                   <p className="mt-1.5 text-xs text-slate-500">
-                    Must increase when uploading a new APK (current: {savedSnapshot.versionCode || 0})
+                    Latest saved: {savedSnapshot.versionCode || 0}
+                    {draft.versionCode > 0 ? ` · draft: ${draft.versionCode}` : ''}
                   </p>
                 </div>
                 <div>
                   <label className={labelClass()}>Version Name</label>
                   <input
+                    readOnly={!versionManualOverride}
                     value={draft.versionName}
                     onChange={(e) => setDraft((d) => ({ ...d, versionName: e.target.value }))}
-                    className={inputClass()}
-                    placeholder="1.2.0"
+                    className={versionManualOverride ? inputClass() : readOnlyInputClass()}
+                    placeholder="Auto from APK or Play Store"
                   />
                 </div>
               </div>
 
-              {draft.packageName ? (
-                <p className="text-xs text-slate-500">
-                  Package: <span className="font-mono text-slate-300">{draft.packageName}</span>
-                </p>
-              ) : null}
+              <div>
+                <label className={labelClass()}>Package Name</label>
+                <input
+                  readOnly={!versionManualOverride}
+                  value={draft.packageName}
+                  onChange={(e) => setDraft((d) => ({ ...d, packageName: e.target.value }))}
+                  className={`${versionManualOverride ? inputClass() : readOnlyInputClass()} font-mono text-xs`}
+                  placeholder="com.example.app"
+                />
+              </div>
             </section>
 
             <section className={`${cardClass()} space-y-5`}>
@@ -549,10 +648,30 @@ function AppUpdatePage() {
                 <label className={labelClass()}>Play Store URL</label>
                 <input
                   value={draft.playstoreUrl}
-                  onChange={(e) => setDraft((d) => ({ ...d, playstoreUrl: e.target.value }))}
+                  onChange={(e) => {
+                    setPlayStoreError(null)
+                    setDraft((d) => ({ ...d, playstoreUrl: e.target.value }))
+                  }}
+                  onBlur={(e) => {
+                    const url = e.target.value.trim()
+                    if (url && url !== savedSnapshot.playstoreUrl.trim() && isLikelyPlayStoreUrl(url)) {
+                      void fetchPlayStoreMetadata(url)
+                    }
+                  }}
                   className={inputClass()}
                   placeholder="https://play.google.com/store/apps/details?id=..."
                 />
+                <p className="mt-1.5 text-xs text-slate-500">
+                  Paste a Play Store link to auto-fill app title, package id, and latest version name
+                </p>
+                {playStoreLoading ? (
+                  <p className="mt-2 text-xs text-[#f5c842]">Fetching Play Store listing…</p>
+                ) : null}
+                {playStoreError ? (
+                  <p className="mt-2 text-xs text-red-400" role="alert">
+                    {playStoreError}
+                  </p>
+                ) : null}
               </div>
             </section>
 

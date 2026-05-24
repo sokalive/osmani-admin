@@ -5,6 +5,7 @@ import { Router } from 'express'
 import { getPool } from '../db/pool.js'
 import { parseApkMetadata } from '../lib/apkMetadata.js'
 import { APK_UPLOADS_DIR, uploadApkFile } from '../lib/apkUploadMulter.js'
+import { fetchPlayStoreMetadata, parsePlayStorePackageId } from '../lib/playStoreMetadata.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
@@ -508,6 +509,13 @@ appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess,
           })
         }
 
+        const prevTitle = text(rowsBefore[UPDATE_KEYS.title])
+        const prevMessage = text(rowsBefore[UPDATE_KEYS.message])
+        const autoTitle = prevTitle || `Update v${meta.versionName}`
+        const autoMessage =
+          prevMessage ||
+          `A new version (${meta.versionName}) is available. Please update to continue.`
+
         const next = {
           ...rowsBefore,
           [UPDATE_KEYS.apkUrl]: apkUrl,
@@ -516,6 +524,8 @@ appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess,
           [UPDATE_KEYS.versionName]: meta.versionName,
           [UPDATE_KEYS.packageName]: meta.packageName,
           [UPDATE_KEYS.source]: 'apk',
+          [UPDATE_KEYS.title]: autoTitle,
+          [UPDATE_KEYS.message]: autoMessage,
         }
         await writeSettingsMap(pool, {
           [UPDATE_KEYS.apkUrl]: apkUrl,
@@ -524,6 +534,8 @@ appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess,
           [UPDATE_KEYS.versionName]: meta.versionName,
           [UPDATE_KEYS.packageName]: meta.packageName,
           [UPDATE_KEYS.source]: 'apk',
+          [UPDATE_KEYS.title]: autoTitle,
+          [UPDATE_KEYS.message]: autoMessage,
         })
 
         const decisionData = toPublicConfig(next, 'upload-apk')
@@ -552,6 +564,7 @@ appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess,
           playstoreUrl: stored.playstoreUrl,
           updateTitle: stored.updateTitle,
           updateMessage: stored.updateMessage,
+          saved: true,
         })
       } catch (e) {
         console.error('[settings/app-update/upload-apk]', e)
@@ -567,6 +580,79 @@ appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess,
       }
     })()
   })
+})
+
+appUpdateRouter.post('/settings/app-update/parse-playstore', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })
+
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const rawUrl = text(body.url ?? body.playstoreUrl ?? body.playStoreUrl, 4000)
+    const persist = body.persist !== false
+
+    const packageId = parsePlayStorePackageId(rawUrl)
+    if (!packageId) {
+      return res.status(400).json({ ok: false, error: 'Invalid Google Play Store URL or package id' })
+    }
+
+    const meta = await fetchPlayStoreMetadata(rawUrl)
+    const playstoreUrl = meta.playstoreUrl
+    const playCheck = validateHttpsUrl(playstoreUrl)
+    if (!playCheck.ok) {
+      return res.status(400).json({ ok: false, error: playCheck.error || 'Invalid Play Store URL' })
+    }
+
+    const rowsBefore = await loadRowsByKey(pool)
+    const prevTitle = text(rowsBefore[UPDATE_KEYS.title])
+    const updateTitle = meta.title || prevTitle
+    const updateMessage = text(rowsBefore[UPDATE_KEYS.message])
+
+    if (persist) {
+      await writeSettingsMap(pool, {
+        [UPDATE_KEYS.playstoreUrl]: playCheck.value,
+        [UPDATE_KEYS.versionName]: text(meta.versionName, 64),
+        [UPDATE_KEYS.packageName]: text(meta.packageId, 256),
+        [UPDATE_KEYS.title]: text(updateTitle, 256),
+        [UPDATE_KEYS.message]: updateMessage,
+        [UPDATE_KEYS.source]: 'play',
+      })
+
+      const next = {
+        ...rowsBefore,
+        [UPDATE_KEYS.playstoreUrl]: playCheck.value,
+        [UPDATE_KEYS.versionName]: text(meta.versionName, 64),
+        [UPDATE_KEYS.packageName]: text(meta.packageId, 256),
+        [UPDATE_KEYS.title]: text(updateTitle, 256),
+        [UPDATE_KEYS.source]: 'play',
+      }
+      const decisionData = toPublicConfig(next, 'parse-playstore')
+      liveSyncBus.publish('config.app_update_changed', {
+        topics: ['config'],
+        action: 'playstore_parsed',
+        updateDecision: decisionData.decision,
+        synced_at: new Date().toISOString(),
+      })
+    }
+
+    const stored = persist ? toPublicConfig(await loadRowsByKey(pool), 'parse-playstore:stored') : null
+
+    return res.json({
+      ok: true,
+      packageId: meta.packageId,
+      packageName: meta.packageId,
+      title: meta.title,
+      versionName: meta.versionName,
+      playstoreUrl: playCheck.value,
+      persisted: persist,
+      updateTitle: persist ? stored?.updateTitle : updateTitle,
+      updateMessage: persist ? stored?.updateMessage : updateMessage,
+      source: persist ? normalizeUiSource(stored?.source) : 'play',
+    })
+  } catch (e) {
+    console.error('[settings/app-update/parse-playstore]', e)
+    return res.status(400).json({ ok: false, error: String(e.message || e) })
+  }
 })
 
 appUpdateRouter.get('/update-check', async (_req, res) => {

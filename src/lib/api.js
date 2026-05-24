@@ -826,6 +826,10 @@ export const getAppUpdateSettings = () => adminApiGet('/settings/app-update')
 export const putAppUpdateSettings = (body) => adminApiPut('/settings/app-update', body)
 export const getUpdateCheck = () => apiGet('/update-check')
 
+/** Fetch title, versionName, and package id from a Google Play Store listing URL. */
+export const postAppUpdateParsePlayStore = (url, { persist = true } = {}) =>
+  adminApiPost('/settings/app-update/parse-playstore', { url, persist })
+
 /**
  * Upload APK to server storage (multipart). Reports upload progress 0–100 via onProgress.
  */
