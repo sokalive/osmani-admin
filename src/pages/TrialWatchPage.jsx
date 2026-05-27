@@ -66,6 +66,7 @@ export default function TrialWatchPage() {
     const es = new EventSource(syncStreamUrl(['config']))
     const onChanged = () => void load()
     es.addEventListener('config.trial_watch_changed', onChanged)
+    es.addEventListener('trial_watch_settings', onChanged)
     return () => es.close()
   }, [load])
 
@@ -190,7 +191,9 @@ export default function TrialWatchPage() {
                   <code className="text-amber-200/90">POST /api/trial-watch/heartbeat</code> — consume
                   trial/preview seconds
                 </li>
-                <li>SSE event <code className="text-amber-200/90">trial_watch_settings</code> on
+                <li>
+                  SSE events <code className="text-amber-200/90">trial_watch_settings</code> and{' '}
+                  <code className="text-amber-200/90">config.trial_watch_changed</code> on sync +
                   subscription-stream
                 </li>
               </ul>

@@ -252,6 +252,7 @@ function AppUpdatePage() {
       void load()
     }
     es.addEventListener('config.app_update_changed', onChanged)
+    es.addEventListener('app_update_settings', onChanged)
     return () => es.close()
   }, [load])
 
@@ -720,7 +721,10 @@ function AppUpdatePage() {
                   Canonical Runtime Payload
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Mirrors live <code className="text-slate-400">GET /api/update-check</code> for runtime clients.
+                  Mirrors live{' '}
+                  <code className="text-slate-400">GET /api/update-check</code> and{' '}
+                  <code className="text-slate-400">GET /api/runtime/app-update</code>; SSE event{' '}
+                  <code className="text-slate-400">app_update_settings</code> on subscription-stream.
                 </p>
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

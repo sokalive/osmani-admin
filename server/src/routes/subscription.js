@@ -7,6 +7,7 @@ import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 import { getDeviceTrialWatchStatus } from '../lib/trialWatchStore.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
+import { loadAppUpdatePublicPayload } from './appUpdate.js'
 
 export const subscriptionRouter = Router()
 
@@ -626,6 +627,20 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   }
   void writeTrialWatchEvent('init')
 
+  const writeAppUpdateEvent = async (reason) => {
+    try {
+      const snap = liveSyncBus.snapshot()
+      const body = JSON.stringify({
+        ...(await loadAppUpdatePublicPayload(snap.configVersion)),
+        reason,
+      })
+      res.write(`event: app_update_settings\ndata: ${body}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] app_update_settings push failed:', e)
+    }
+  }
+  void writeAppUpdateEvent('init')
+
   const modeSyncHandler = (packet) => {
     const modes = packet?.payload?.modes
     if (!modes || typeof modes !== 'object') return
@@ -659,13 +674,28 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       console.error('[subscription-stream] trial_watch immediate push failed:', e)
     }
   }
+  const appUpdateSyncHandler = (packet) => {
+    const au = packet?.payload?.app_update
+    if (!au || typeof au !== 'object') return
+    try {
+      const body = JSON.stringify({
+        ...au,
+        reason: String(packet.event || 'app_update'),
+      })
+      res.write(`event: app_update_settings\ndata: ${body}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] app_update immediate push failed:', e)
+    }
+  }
 
   liveSyncBus.on('sync', modeSyncHandler)
   liveSyncBus.on('sync', trialSyncHandler)
+  liveSyncBus.on('sync', appUpdateSyncHandler)
 
   const modePoll = setInterval(() => {
     void writeAppModesEvent('poll')
     void writeTrialWatchEvent('poll')
+    void writeAppUpdateEvent('poll')
   }, MODE_SSE_POLL_MS)
 
   const handler = async (payload) => {
@@ -691,6 +721,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     deviceSubscriptionBus.off('update', handler)
     liveSyncBus.off('sync', modeSyncHandler)
     liveSyncBus.off('sync', trialSyncHandler)
+    liveSyncBus.off('sync', appUpdateSyncHandler)
     try {
       res.end()
     } catch (e) {

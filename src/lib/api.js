@@ -148,6 +148,9 @@ export const getTrialWatchSettings = () => adminApiGet('/settings/trial-watch')
 export const putTrialWatchSettings = (body) => adminApiPut('/settings/trial-watch', body)
 export const getRuntimeTrialWatchSettings = () => apiGet('/runtime/trial-watch')
 
+/** Public OTA app-update flags (installer soft/force/auto-download, APK URL/hash). */
+export const getRuntimeAppUpdateSettings = () => apiGet('/runtime/app-update')
+
 /** Shared DB-backed modes (no auth). Keeps admin UI + runtimes aligned across multi-instance hosts. */
 export const getPublicRuntimeAppModes = () => apiGet('/runtime/app-modes')
 

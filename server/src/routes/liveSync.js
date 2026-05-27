@@ -3,6 +3,7 @@ import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 import { getWhatsAppSettingsPublicPayload } from './realtimeSettings.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
+import { loadAppUpdatePublicPayload } from './appUpdate.js'
 
 export const liveSyncRouter = Router()
 
@@ -72,6 +73,13 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
       } catch (e) {
         console.error('[sync/stream] trial_watch init failed:', e)
       }
+      try {
+        const snap = liveSyncBus.snapshot()
+        const appUpdate = await loadAppUpdatePublicPayload(snap.configVersion)
+        send('app_update_settings', { ...appUpdate, reason: 'init' })
+      } catch (e) {
+        console.error('[sync/stream] app_update init failed:', e)
+      }
     })()
   }
 
@@ -94,6 +102,10 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
     const tw = packet?.payload?.trial_watch
     if (topics.includes('config') && tw && typeof tw === 'object') {
       send('trial_watch_settings', { ...tw, reason: String(packet.event || 'sync') })
+    }
+    const au = packet?.payload?.app_update
+    if (topics.includes('config') && au && typeof au === 'object') {
+      send('app_update_settings', { ...au, reason: String(packet.event || 'sync') })
     }
     send(packet.event || 'sync', packet)
   }

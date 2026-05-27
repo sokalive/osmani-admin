@@ -174,6 +174,51 @@ function toPublicConfig(rowsByKey, tag = 'decision') {
   }
 }
 
+/** Public OTA payload (same fields as GET /update-check) for runtime + SSE. */
+export function appUpdateToOtaPayload(data, configVersion = 0) {
+  const d = data && typeof data === 'object' ? data : {}
+  return {
+    ok: true,
+    v: Number(configVersion) || 0,
+    decision: String(d.decision ?? 'NONE').toUpperCase(),
+    source: normalizeSource(d.source),
+    apk_url: text(d.apk_url ?? d.apkUrl, 4000),
+    apk_sha256: isValidSha256(d.apk_sha256 ?? d.sha256) ? normalizeHash(d.apk_sha256 ?? d.sha256) : '',
+    playstore_url: text(d.playstore_url ?? d.playstoreUrl, 4000),
+    auto_download: d.auto_download === true || d.autoDownload === true,
+    server_time: String(d.server_time ?? new Date().toISOString()),
+    notice: text(d.notice, 4000),
+    update_title: text(d.update_title ?? d.updateTitle, 256),
+    update_message: text(d.update_message ?? d.updateMessage, 4000),
+    version_code: parseVersionCode(d.version_code ?? d.versionCode),
+    version_name: text(d.version_name ?? d.versionName, 64),
+    package_name: text(d.package_name ?? d.packageName, 256),
+  }
+}
+
+export async function loadAppUpdatePublicPayload(configVersion) {
+  const pool = getPool()
+  if (!pool) {
+    return appUpdateToOtaPayload(toPublicConfig({ ...DEFAULTS }, 'no-db'), configVersion)
+  }
+  const data = toPublicConfig(await loadRowsByKey(pool), 'runtime')
+  return appUpdateToOtaPayload(data, configVersion)
+}
+
+function publishAppUpdateChanged(action, decisionData, extra = {}) {
+  const snap = liveSyncBus.snapshot()
+  const app_update = appUpdateToOtaPayload(decisionData, snap.configVersion)
+  liveSyncBus.publish('config.app_update_changed', {
+    topics: ['config'],
+    action,
+    app_update,
+    updateDecision: decisionData.decision,
+    synced_at: new Date().toISOString(),
+    ...extra,
+  })
+  return app_update
+}
+
 async function ensureAppSettingsTable(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS app_settings (
@@ -395,12 +440,7 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
     console.info('[app-update] db write result:', JSON.stringify({ keys: Object.keys(next), writes }))
 
     const decisionData = toPublicConfig(next, 'settings:put')
-    liveSyncBus.publish('config.app_update_changed', {
-      topics: ['config'],
-      action: 'updated',
-      updateDecision: decisionData.decision,
-      synced_at: new Date().toISOString(),
-    })
+    publishAppUpdateChanged('updated', decisionData)
     void recordSystemNotificationEvent('config.app_update_changed', {
       updateDecision: decisionData.decision,
       source: decisionData.source,
@@ -539,13 +579,7 @@ appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess,
         })
 
         const decisionData = toPublicConfig(next, 'upload-apk')
-        liveSyncBus.publish('config.app_update_changed', {
-          topics: ['config'],
-          action: 'apk_uploaded',
-          updateDecision: decisionData.decision,
-          versionCode: meta.versionCode,
-          synced_at: new Date().toISOString(),
-        })
+        publishAppUpdateChanged('apk_uploaded', decisionData, { versionCode: meta.versionCode })
 
         const stored = toPublicConfig(await loadRowsByKey(pool), 'upload-apk:stored')
         return res.json({
@@ -627,12 +661,7 @@ appUpdateRouter.post('/settings/app-update/parse-playstore', requireAdminPanelAc
         [UPDATE_KEYS.source]: 'play',
       }
       const decisionData = toPublicConfig(next, 'parse-playstore')
-      liveSyncBus.publish('config.app_update_changed', {
-        topics: ['config'],
-        action: 'playstore_parsed',
-        updateDecision: decisionData.decision,
-        synced_at: new Date().toISOString(),
-      })
+      publishAppUpdateChanged('playstore_parsed', decisionData)
     }
 
     const stored = persist ? toPublicConfig(await loadRowsByKey(pool), 'parse-playstore:stored') : null
