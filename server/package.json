@@ -9,7 +9,8 @@
     "migrate:transfer-status-checks": "node src/db/migrateTransferStatusChecks.js",
     "migrate-uploads": "node scripts/migrate-uploads.mjs",
     "test:subscription-stacking": "node scripts/test-subscription-stacking.mjs",
-    "verify:app-update-v17": "node scripts/verify-app-update-playstore-v17.mjs"
+    "verify:app-update-v17": "node scripts/verify-app-update-playstore-v17.mjs",
+    "verify:banner-payload": "node scripts/verify-banner-admin-payload.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",

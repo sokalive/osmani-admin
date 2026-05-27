@@ -9,13 +9,17 @@ function debugLog(label, data) {
 }
 
 /**
- * Canonical JSON body for POST/PUT /api/banners — always includes runtime_position + runtimePosition.
+ * Canonical JSON body for POST/PUT /api/banners.
+ * Matches mobile GET /api/banners fields: title, description, event_timer, redirect_channel_id,
+ * daily_start/end, runtime_position (overlay mode).
  */
 export function bannerSaveBody(b, overrides = {}) {
   const m = { ...b, ...overrides }
-  const useTimer = Boolean(m.useTimer ?? m.eventTimer)
+  const useTimer = Boolean(m.useTimer ?? m.eventTimer ?? m.event_timer)
   const sortOrder = Number(m.sortOrder ?? m.sort_order) || 0
   const runtime = normalizeRuntimePosition(m.runtimePosition ?? m.runtime_position)
+  const dailyStart = useTimer ? (m.startTime ?? m.dailyStart ?? m.daily_start ?? '09:00') : ''
+  const dailyEnd = useTimer ? (m.endTime ?? m.dailyEnd ?? m.daily_end ?? '17:00') : ''
 
   const body = {
     title: m.title ?? '',
@@ -39,8 +43,12 @@ export function bannerSaveBody(b, overrides = {}) {
     isActive: m.isActive !== false && m.is_active !== false && m.active !== false,
     isEnabled: m.isEnabled !== false && m.enabled !== false,
     useTimer,
-    startTime: useTimer ? (m.startTime ?? m.dailyStart ?? m.daily_start ?? '09:00') : '',
-    endTime: useTimer ? (m.endTime ?? m.dailyEnd ?? m.daily_end ?? '17:00') : '',
+    event_timer: useTimer,
+    eventTimer: useTimer,
+    startTime: dailyStart,
+    endTime: dailyEnd,
+    daily_start: dailyStart,
+    daily_end: dailyEnd,
     runtimePosition: runtime,
     runtime_position: runtime,
   }

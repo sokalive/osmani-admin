@@ -127,9 +127,16 @@ function bannerToForm(banner) {
     sortOrder: Number.isFinite(Number(banner.sortOrder)) ? Number(banner.sortOrder) : 0,
     isActive: banner.isActive !== false,
     isEnabled: banner.isEnabled !== false,
-    useTimer: Boolean(banner.useTimer),
-    startTime: typeof banner.startTime === 'string' && banner.startTime ? banner.startTime : '09:00',
-    endTime: typeof banner.endTime === 'string' && banner.endTime ? banner.endTime : '17:00',
+    useTimer: Boolean(banner.useTimer ?? banner.eventTimer ?? banner.event_timer),
+    startTime: (() => {
+      const t =
+        banner.startTime ?? banner.dailyStart ?? banner.daily_start ?? ''
+      return typeof t === 'string' && t.trim() ? t.trim() : '09:00'
+    })(),
+    endTime: (() => {
+      const t = banner.endTime ?? banner.dailyEnd ?? banner.daily_end ?? ''
+      return typeof t === 'string' && t.trim() ? t.trim() : '17:00'
+    })(),
     runtimePosition: normalizeRuntimeOverlayPosition(
       banner.runtimePosition ?? banner.runtime_position,
     ),
