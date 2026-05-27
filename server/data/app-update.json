@@ -1,8 +1,14 @@
 {
-  "softUpdate": true,
+  "softUpdate": false,
   "forceUpdate": false,
-  "autoDownload": true,
-  "source": "inapp",
-  "apkUrl": "https://cdn.osmani.tv/releases/osmani-latest.apk",
-  "sha256": ""
+  "autoDownload": false,
+  "source": "play",
+  "apkUrl": "",
+  "sha256": "",
+  "playstoreUrl": "https://play.google.com/store/apps/details?id=com.burudanitv.app",
+  "updateTitle": "Osmani APP",
+  "updateMessage": "",
+  "versionCode": 17,
+  "versionName": "1.7.0",
+  "packageName": "com.burudanitv.app"
 }

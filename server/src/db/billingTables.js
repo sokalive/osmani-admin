@@ -51,12 +51,46 @@ export async function ensureBillingTables(client) {
       ('update_soft', 'false'),
       ('update_force', 'false'),
       ('update_auto_download', 'false'),
-      ('update_source', 'inapp'),
+      ('update_source', 'play'),
       ('update_apk_url', ''),
       ('update_apk_hash', ''),
-      ('update_playstore_url', '')
+      ('update_playstore_url', ''),
+      ('update_version_code', '17'),
+      ('update_version_name', '1.7.0'),
+      ('update_package_name', 'com.burudanitv.app')
     ON CONFLICT (key) DO NOTHING;
   `)
+
+  /** Align runtime/admin with current Play Store production (v17 / 1.7.0). */
+  const playStoreVersion = await client.query(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ('update_version_code', '17', now())
+     ON CONFLICT (key) DO UPDATE
+       SET value = '17', updated_at = now()
+     WHERE app_settings.value IS DISTINCT FROM '17'
+     RETURNING key`,
+  )
+  if (playStoreVersion.rowCount > 0) {
+    console.log('[startup-migration] update_version_code => 17 (Play Store production)')
+  }
+  for (const [key, value] of [
+    ['update_version_name', '1.7.0'],
+    ['update_package_name', 'com.burudanitv.app'],
+    ['update_source', 'play'],
+  ]) {
+    const r = await client.query(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE
+         SET value = EXCLUDED.value, updated_at = now()
+       WHERE app_settings.value IS DISTINCT FROM EXCLUDED.value
+       RETURNING key`,
+      [key, value],
+    )
+    if (r.rowCount > 0) {
+      console.log(`[startup-migration] ${key} => ${value}`)
+    }
+  }
 
   await client.query(`
     INSERT INTO app_settings (key, value)
