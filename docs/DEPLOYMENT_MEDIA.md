@@ -31,7 +31,13 @@ On Render, the container filesystem is **ephemeral** unless you write under a **
 
 ## Cache / CDN
 
-`/uploads/*` responses use `Cache-Control: public, max-age=0, must-revalidate` and **ETag** support so clients revalidate after new uploads. Missing files return **plain text** `Not found`, not the JSON API 404 body.
+When **`BUNNY_CDN_BASE_URL`** is set (see [CDN_STATIC_ASSETS.md](./CDN_STATIC_ASSETS.md)):
+
+- Public APIs return `https://*.b-cdn.net/uploads/...` for images.
+- Legacy `GET /uploads/*` image requests **302** to Bunny (APKs excluded).
+- Origin cache uses long `max-age` for immutable filenames.
+
+When Bunny is **not** configured, `/uploads/*` uses `Cache-Control: public, max-age=0, must-revalidate` and **ETag** support. Missing files return **plain text** `Not found`, not the JSON API 404 body.
 
 ## Migrate / restore files
 

@@ -6,6 +6,7 @@ import { getPool } from '../db/pool.js'
 import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+import { resolvePublicAssetUrl } from '../lib/cdnAssets.js'
 import { UPLOADS_DIR, uploadPaymentProviderLogo } from '../multerUpload.js'
 
 export const PAYMENT_PROVIDERS_FILE = 'payment-providers.json'
@@ -24,14 +25,6 @@ function parseBool(v, defaultVal = true) {
   return defaultVal
 }
 
-function baseUrlFromReq(req) {
-  const fromEnv = String(process.env.BASE_URL || '').trim()
-  if (fromEnv) return fromEnv.replace(/\/$/, '')
-  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
-  const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0]
-  return `${proto}://${host}`.replace(/\/$/, '')
-}
-
 function normalizeLogoPath(v) {
   const s = String(v || '').trim()
   if (!s) return ''
@@ -43,8 +36,7 @@ function normalizeLogoPath(v) {
 function logoUrlFromPath(logoPath, req) {
   const p = normalizeLogoPath(logoPath)
   if (!p) return ''
-  if (p.startsWith('http://') || p.startsWith('https://')) return p
-  return `${baseUrlFromReq(req)}${p}`
+  return resolvePublicAssetUrl(p, req) || ''
 }
 
 function normalizeRow(row, req) {

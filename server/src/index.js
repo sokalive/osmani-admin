@@ -1,5 +1,13 @@
 import cors from 'cors'
 import express from 'express'
+import path from 'node:path'
+import {
+  getCdnHealthSnapshot,
+  getStaticUploadCacheMaxAgeSec,
+  isCdnEnabled,
+  isOriginOnlyUploadPath,
+  resolvePublicAssetUrl,
+} from './lib/cdnAssets.js'
 import {
   assertUploadStorageReady,
   getMediaHealthSnapshot,
@@ -50,16 +58,43 @@ app.options('*', cors(corsOptions))
 
 app.use(express.json({ limit: '4mb' }))
 
+const staticUploadMaxAgeMs = getStaticUploadCacheMaxAgeSec() * 1000
+
+/** Legacy direct hits to Render /uploads/* → Bunny when configured (APKs stay on origin). */
+app.use('/uploads', (req, res, next) => {
+  if (!isCdnEnabled()) return next()
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+  const rel = `/uploads${req.path}`.replace(/\/+/g, '/')
+  if (isOriginOnlyUploadPath(rel)) return next()
+  const cdnUrl = resolvePublicAssetUrl(rel, req)
+  const originUrl = resolvePublicAssetUrl(rel, req, { forceOrigin: true })
+  if (cdnUrl && originUrl && cdnUrl !== originUrl) {
+    res.setHeader('Cache-Control', 'no-store')
+    res.setHeader('Link', `<${originUrl}>; rel="alternate"`)
+    return res.redirect(302, cdnUrl)
+  }
+  return next()
+})
+
 app.use(
   '/uploads',
   express.static(UPLOADS_DIR, {
     index: false,
     etag: true,
     lastModified: true,
-    maxAge: 0,
-    setHeaders(res) {
-      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate')
+    maxAge: staticUploadMaxAgeMs,
+    setHeaders(res, filePath) {
       res.setHeader('X-Content-Type-Options', 'nosniff')
+      const normalized = String(filePath || '').replace(/\\/g, '/')
+      if (normalized.includes('/apks/') || isOriginOnlyUploadPath(`/uploads/apks/${path.basename(normalized)}`)) {
+        res.setHeader('Cache-Control', 'private, no-cache, must-revalidate')
+        return
+      }
+      if (staticUploadMaxAgeMs > 0) {
+        res.setHeader('Cache-Control', `public, max-age=${getStaticUploadCacheMaxAgeSec()}, immutable`)
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate')
+      }
     },
   }),
 )
@@ -84,6 +119,7 @@ app.get('/', (req, res) => {
 
 app.get('/api/health/media', async (req, res) => {
   const snap = await getMediaHealthSnapshot()
+  const cdn = getCdnHealthSnapshot()
   const body = {
     ok: snap.ok,
     uploadsDir: snap.uploadsDir,
@@ -94,6 +130,7 @@ app.get('/api/health/media', async (req, res) => {
     sampleReadOk: snap.sampleReadOk,
     staticRouteOk: true,
     staticPath: '/uploads',
+    cdn,
     error: snap.error,
   }
   if (!snap.ok) {
@@ -119,6 +156,12 @@ async function main() {
   try {
     assertUploadStorageReady()
     logUploadStorageDiagnostics()
+    const cdnHealth = getCdnHealthSnapshot()
+    console.log(
+      cdnHealth.cdnEnabled
+        ? `[cdn] Bunny enabled → ${cdnHealth.cdnBaseUrl} (origin fallback ${cdnHealth.originBaseUrl})`
+        : '[cdn] Bunny not configured — static images served from API origin (set BUNNY_CDN_BASE_URL)',
+    )
     await ensureAllApiDataFiles()
 
     const server = app.listen(PORT, () => {

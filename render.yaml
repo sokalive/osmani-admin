@@ -47,6 +47,11 @@ services:
         value: /var/render/media
       - key: NODE_VERSION
         value: "20"
+      # Set in Render dashboard to your Bunny pull zone (e.g. https://osmani-media.b-cdn.net)
+      - key: BUNNY_CDN_BASE_URL
+        sync: false
+      - key: BASE_URL
+        sync: false
     disk:
       name: media-uploads
       mountPath: /var/render/media

@@ -5,12 +5,11 @@ import { getPool } from '../db/pool.js'
 import { liveSyncBus } from './liveSyncBus.js'
 import { UPLOADS_DIR, ensureUploadsDir } from '../multerUpload.js'
 import { isOneSignalConfigured, sendOneSignalNotification } from './oneSignalPush.js'
+import { resolvePublicAssetUrl } from './cdnAssets.js'
 import {
   fetchOneSignalMessageStats,
   normalizeOneSignalStatsPayload,
 } from './oneSignalStats.js'
-
-const DEFAULT_PUBLIC_BASE = 'https://osmani-admin-api.onrender.com'
 const ONESIGNAL_STATS_STALE_MS = Math.max(
   15_000,
   Number(process.env.ONESIGNAL_STATS_STALE_MS) || 45_000,
@@ -20,18 +19,10 @@ const ONESIGNAL_STATS_SYNC_LIMIT = Math.min(
   Math.max(1, Number(process.env.ONESIGNAL_STATS_SYNC_LIMIT) || 12),
 )
 
-function resolvePublicBaseUrl() {
-  return String(process.env.BASE_URL ?? '').trim().replace(/\/$/, '') || DEFAULT_PUBLIC_BASE
-}
-
 /** Public HTTPS URL for a stored `/uploads/...` path (OneSignal requires HTTPS for images). */
-export function absoluteUrlForStoredPath(relativePath) {
-  const rel = String(relativePath ?? '').trim()
-  if (!rel) return ''
-  if (rel.startsWith('http://') || rel.startsWith('https://')) return rel
-  const base = resolvePublicBaseUrl()
-  if (rel.startsWith('/')) return `${base}${rel}`
-  return `${base}/${rel.replace(/^\/+/, '')}`
+export function absoluteUrlForStoredPath(relativePath, req = null) {
+  const resolved = resolvePublicAssetUrl(relativePath, req)
+  return resolved != null ? String(resolved) : ''
 }
 
 /** Public HTTPS URL suitable for OneSignal rich push (big_picture / ios_attachments). */
@@ -151,7 +142,14 @@ function shouldBeActive(status, explicit) {
   return status !== 'cancelled' && status !== 'archived'
 }
 
-function toApiNotification(row) {
+function resolveNotificationImageForApi(imageField, req) {
+  const raw = text(imageField, 600_000)
+  if (!raw) return ''
+  if (raw.startsWith('data:')) return raw
+  return resolvePublicAssetUrl(raw, req) || raw
+}
+
+function toApiNotification(row, req = null) {
   if (!row) return null
   const p = sanitizePayload(row.payload)
   return {
@@ -159,7 +157,7 @@ function toApiNotification(row) {
     kind: text(row.kind, 32) || 'admin',
     title: text(row.title, 200),
     message: text(row.message, 4000),
-    image: text(row.image, 600_000),
+    image: resolveNotificationImageForApi(row.image, req),
     targetAudience: text(row.target_audience, 32) || 'all',
     targetType: text(row.target_type, 512) || 'osmani://home',
     status: text(row.status, 32) || 'draft',
@@ -412,7 +410,7 @@ function normalizeAdminNotificationInput(body, existing = null) {
   }
 }
 
-export async function listNotificationsAdmin() {
+export async function listNotificationsAdmin(req = null) {
   await flushDueNotifications()
   await syncStaleOneSignalStats()
   const pool = requirePool()
@@ -421,10 +419,10 @@ export async function listNotificationsAdmin() {
      FROM notifications
      ORDER BY COALESCE(sent_at, schedule_at, created_at) DESC, created_at DESC`
   )
-  return rows.map(toApiNotification)
+  return rows.map((row) => toApiNotification(row, req))
 }
 
-export async function listRuntimeNotifications({ audience = 'all' } = {}) {
+export async function listRuntimeNotifications({ audience = 'all' } = {}, req = null) {
   await flushDueNotifications()
   const pool = requirePool()
   const normalizedAudience = asAudience(audience, 'all')
@@ -439,10 +437,10 @@ export async function listRuntimeNotifications({ audience = 'all' } = {}) {
      LIMIT 50`,
     [normalizedAudience],
   )
-  return rows.map(toApiNotification)
+  return rows.map((row) => toApiNotification(row, req))
 }
 
-export async function createAdminNotification(body, actor = 'Admin') {
+export async function createAdminNotification(body, actor = 'Admin', req = null) {
   const next = normalizeAdminNotificationInput(body, null)
   if (!next.title) throw new Error('title is required')
   if (!next.message) throw new Error('message is required')
@@ -512,10 +510,10 @@ export async function createAdminNotification(body, actor = 'Admin') {
   if (next.status === 'sent' && mergedPayload.onesignal_id) {
     scheduleOneSignalStatsRefresh(rows[0]?.id)
   }
-  return toApiNotification(rows[0])
+  return toApiNotification(rows[0], req)
 }
 
-export async function updateNotificationById(id, body, actor = 'Admin') {
+export async function updateNotificationById(id, body, actor = 'Admin', req = null) {
   const pool = requirePool()
   const existingRes = await pool.query(`SELECT * FROM notifications WHERE id = $1`, [String(id)])
   const existing = existingRes.rows[0]
@@ -567,7 +565,7 @@ export async function updateNotificationById(id, body, actor = 'Admin') {
     ],
   )
   publishNotificationsChanged({ action: 'updated', notificationId: rows[0]?.id })
-  return toApiNotification(rows[0])
+  return toApiNotification(rows[0], req)
 }
 
 export async function deleteNotificationById(id) {

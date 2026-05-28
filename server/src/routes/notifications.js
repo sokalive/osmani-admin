@@ -19,7 +19,7 @@ export const notificationsRouter = Router()
 notificationsRouter.get('/notifications/runtime', async (req, res) => {
   try {
     const audience = String(req.query.audience ?? 'all').trim().toLowerCase()
-    const notifications = await listRuntimeNotifications({ audience })
+    const notifications = await listRuntimeNotifications({ audience }, req)
     const snapshot = liveSyncBus.snapshot()
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.setHeader('Pragma', 'no-cache')
@@ -38,7 +38,7 @@ notificationsRouter.get('/notifications/runtime', async (req, res) => {
 
 notificationsRouter.get('/notifications', requireAdminPanelAccess, async (_req, res) => {
   try {
-    const rows = await listNotificationsAdmin()
+    const rows = await listNotificationsAdmin(req)
     res.json(rows)
   } catch (e) {
     console.error('[notifications] GET failed:', e)
@@ -65,7 +65,7 @@ notificationsRouter.get('/notifications/onesignal-diagnostics', requireAdminPane
 
 notificationsRouter.post('/notifications', requireAdminPanelAccess, async (req, res) => {
   try {
-    const created = await createAdminNotification(req.body, req.adminAuth?.email || 'Admin')
+    const created = await createAdminNotification(req.body, req.adminAuth?.email || 'Admin', req)
     res.status(201).json(created)
   } catch (e) {
     const message = String(e.message || e)
@@ -85,6 +85,7 @@ notificationsRouter.put('/notifications/:id', requireAdminPanelAccess, async (re
       req.params.id,
       req.body,
       req.adminAuth?.email || 'Admin',
+      req,
     )
     if (!updated) {
       return res.status(404).json({ error: 'Notification not found' })

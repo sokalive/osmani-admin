@@ -4,6 +4,7 @@ import {
   parseVisibleTabsFromBottomTabField,
   serializeVisibleTabs,
 } from './lib/channelTabs.js'
+import { resolvePublicAssetUrl } from './lib/cdnAssets.js'
 import { buildPublicStreamProxyUrl, PROXY_MOUNT_STREAM } from './routes/streamProxy.js'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
@@ -237,32 +238,12 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
   }
 }
 
-const DEFAULT_PUBLIC_BASE = 'https://osmani-admin-api.onrender.com'
-
 /**
- * Absolute thumbnail URL for API clients (DB stores `/uploads/...`).
- * Uses `process.env.BASE_URL` when set, else {@link DEFAULT_PUBLIC_BASE}.
+ * Absolute thumbnail/banner image URL for API clients (DB stores `/uploads/...`).
+ * When `BUNNY_CDN_BASE_URL` is set, static images are served from Bunny; legacy Render URLs are rewritten.
  */
 export function resolveThumbnailForApi(thumbnail, req) {
-  if (thumbnail == null) return null
-  const rel = String(thumbnail).trim()
-  if (rel === '') return null
-  if (rel.startsWith('http://') || rel.startsWith('https://')) return rel
-
-  const baseUrl = (process.env.BASE_URL || DEFAULT_PUBLIC_BASE).replace(/\/$/, '')
-
-  if (rel.startsWith('/uploads')) {
-    return `${baseUrl}${rel}`
-  }
-
-  const host = req ? `${req.protocol}://${req.get('host') || ''}`.replace(/\/$/, '') : ''
-  if (rel.startsWith('/') && host) {
-    return `${host}${rel}`
-  }
-  if (rel.startsWith('/')) {
-    return `${baseUrl}${rel}`
-  }
-  return `${baseUrl}/${rel.replace(/^\/+/, '')}`
+  return resolvePublicAssetUrl(thumbnail, req)
 }
 
 /** Public API shape (+ legacy aliases for older clients) */

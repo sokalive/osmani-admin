@@ -10,7 +10,8 @@
     "migrate-uploads": "node scripts/migrate-uploads.mjs",
     "test:subscription-stacking": "node scripts/test-subscription-stacking.mjs",
     "verify:app-update-v17": "node scripts/verify-app-update-playstore-v17.mjs",
-    "verify:banner-payload": "node scripts/verify-banner-admin-payload.mjs"
+    "verify:banner-payload": "node scripts/verify-banner-admin-payload.mjs",
+    "verify:cdn-assets": "node scripts/verify-cdn-asset-urls.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",
