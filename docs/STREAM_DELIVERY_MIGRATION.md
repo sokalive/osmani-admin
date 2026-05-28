@@ -32,13 +32,16 @@ DIRECT_STREAM_SIGNING_SECRET=<32+ chars in Render dashboard>
 DIRECT_STREAM_TOKEN_TTL_SEC=120          # manifest entry token
 STREAM_SEGMENT_TOKEN_TTL_SEC=600         # per-segment Bunny URL token
 
-# Segment offload (Step 3) — default safe: proxy
-STREAM_SEGMENT_DELIVERY=proxy            # proxy | bunny | hybrid
-STREAM_SEGMENT_FORCE_PROXY=0             # 1 = always rewrite to stream-proxy
+# Segment offload (Step 3) — default: bunny + selective proxy for protected providers
+STREAM_SEGMENT_DELIVERY=bunny            # proxy | bunny | hybrid
+STREAM_SEGMENT_FORCE_PROXY=0             # 1 = global rollback (avoid in prod)
+STREAM_SEGMENT_SELECTIVE_ROUTING=1       # 1 = ycn/tokenized → proxy, others → Bunny
+STREAM_SEGMENT_PROTECTED_HOSTS=          # extra comma-separated host suffixes
+STREAM_SEGMENT_PUBLIC_HOSTS=             # force Bunny (e.g. akamaized.net)
 BUNNY_STREAM_CDN_BASE_URL=               # defaults to BUNNY_CDN_BASE_URL if set
 BUNNY_STREAM_SEGMENT_PATH=hls/seg        # public path on Bunny zone
 BUNNY_SEGMENT_CACHE_MAX_AGE_SEC=86400    # origin Cache-Control for .ts/.m4s
-STREAM_SEGMENT_ROLLOUT_PERCENT=0         # hybrid mode: 0–100
+STREAM_SEGMENT_ROLLOUT_PERCENT=100       # hybrid mode: 0–100
 STREAM_SEGMENT_ROLLOUT_SALT=osmani-seg-v1
 
 # Optional: restrict origin-pull to Bunny (edge rule sends header)
@@ -51,6 +54,21 @@ DIRECT_STREAM_CUTOVER_ENABLED=0
 DIRECT_STREAM_ROLLOUT_PERCENT=0
 DIRECT_STREAM_ROLLOUT_CHANNEL_IDS=
 ```
+
+## Selective segment routing (protected providers)
+
+Default when `STREAM_SEGMENT_DELIVERY=bunny` and `STREAM_SEGMENT_SELECTIVE_ROUTING=1`:
+
+| Provider type | Example | Segment URL in manifest |
+|---------------|---------|-------------------------|
+| **Public / CDN HLS** | `cdn.example.com/*.ts` | `https://osmanitv.b-cdn.net/hls/seg?tok=…` |
+| **Protected (referer/token)** | `ycn-redirect.com`, `lanexa.online`, `?t=&e=` | `https://api…/stream-proxy?url=…` |
+
+Auto-detected protected suffixes: `ycn-redirect.com`, `lanexa.online`, `netvidra.online`, `netstack.online`, plus `STREAM_SEGMENT_PROTECTED_HOSTS`.
+
+**Do not** set `STREAM_SEGMENT_FORCE_PROXY=1` for ycn issues — selective routing keeps most traffic on Bunny.
+
+Metrics: `GET /api/health/stream-delivery` → `metrics.segment_routes_by_provider` (per-host bunny vs proxy counts).
 
 ## Bunny pull zone configuration
 

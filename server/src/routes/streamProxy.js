@@ -163,7 +163,11 @@ export async function runStreamProxyRequest(req, res, opts) {
     const body = await upstreamRes.text()
     const rewriteCtx =
       opts?.manifestRewriteUrlBuilder ||
-      resolveManifestRewriteUrlBuilder(req, { channelId: opts?.channelId })
+      resolveManifestRewriteUrlBuilder(req, {
+        channelId: opts?.channelId,
+        channelHeaders: upstreamHeaders,
+        rootUpstreamUrl: opts?.rootUpstreamUrl || parsed.toString(),
+      })
     const { text: rewrittenCore, rewriteCount } = rewriteManifest(
       body,
       finalUrl,
@@ -183,6 +187,7 @@ export async function runStreamProxyRequest(req, res, opts) {
       final_url: finalUrl,
       rewritten_url_count: rewriteCount,
       segment_delivery: rewriteCtx.segmentDelivery,
+      segment_route_stats: rewriteCtx.getRouteStats?.() || null,
       output_bytes: Buffer.byteLength(text, 'utf8'),
       has_extm3u: text.includes('#EXTM3U'),
     })

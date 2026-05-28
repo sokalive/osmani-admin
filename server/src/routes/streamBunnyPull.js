@@ -105,7 +105,8 @@ export async function runBunnyOriginSegmentFetch(req, res) {
     const rewriteCtx = resolveManifestRewriteUrlBuilder(req, {
       channelId,
       sessionId,
-      useBunny: true,
+      channelHeaders: upstreamHeaders,
+      rootUpstreamUrl: upstreamUrl,
     })
     const { text, rewriteCount } = rewriteManifest(body, finalUrl, upstreamHeaders, (absolute, hdr) =>
       rewriteCtx.buildTargetUrl(absolute, hdr),

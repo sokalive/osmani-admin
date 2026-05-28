@@ -17,12 +17,18 @@ streamDirectRouter.get('/stream-direct', async (req, res) => {
   const { upstreamUrl, referer, origin, userAgent, channelId } = verified.payload
   res.setHeader('X-Stream-Delivery', 'direct')
   res.setHeader('X-Stream-Channel-Id', channelId || '')
-  const manifestRewriteUrlBuilder = resolveManifestRewriteUrlBuilder(req, { channelId })
+  const channelHeaders = { referer, origin, userAgent }
+  const manifestRewriteUrlBuilder = resolveManifestRewriteUrlBuilder(req, {
+    channelId,
+    channelHeaders,
+    rootUpstreamUrl: upstreamUrl,
+  })
   return runStreamProxyRequest(req, res, {
     sourceUrl: upstreamUrl,
-    upstreamHeaders: { referer, origin, userAgent },
+    upstreamHeaders: channelHeaders,
     mountPath: 'stream-direct',
     channelId,
+    rootUpstreamUrl: upstreamUrl,
     manifestRewriteUrlBuilder,
   })
 })

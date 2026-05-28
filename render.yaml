@@ -69,13 +69,18 @@ services:
       - key: DIRECT_STREAM_SIGNING_SECRET
         sync: false
       - key: STREAM_SEGMENT_DELIVERY
-        value: proxy
+        value: bunny
       - key: STREAM_SEGMENT_FORCE_PROXY
+        value: "0"
+      - key: STREAM_SEGMENT_SELECTIVE_ROUTING
         value: "1"
       - key: BUNNY_STREAM_CDN_BASE_URL
         sync: false
       - key: STREAM_SEGMENT_TOKEN_TTL_SEC
         value: "600"
+      # Comma-separated host suffixes (auto-detect also includes ycn-redirect.com, lanexa.online, etc.)
+      - key: STREAM_SEGMENT_PROTECTED_HOSTS
+        sync: false
     disk:
       name: media-uploads
       mountPath: /var/render/media

@@ -14,7 +14,8 @@
     "verify:cdn-assets": "node scripts/verify-cdn-asset-urls.mjs",
     "verify:apk-update-cdn": "node scripts/verify-apk-update-cdn.mjs",
     "verify:api-cache": "node scripts/verify-api-cache.mjs",
-    "verify:stream-delivery": "node scripts/verify-stream-delivery.mjs"
+    "verify:stream-delivery": "node scripts/verify-stream-delivery.mjs",
+    "verify:selective-segment-routing": "node scripts/verify-selective-segment-routing.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",

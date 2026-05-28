@@ -31,6 +31,9 @@ const counters = {
   client_segment_proxy_fallback: 0,
 }
 
+/** @type {Map<string, { bunny: number, proxy: number }>} */
+const segmentRoutesByProvider = new Map()
+
 function inc(key, n = 1) {
   if (!Object.prototype.hasOwnProperty.call(counters, key)) return
   counters[key] += n
@@ -75,6 +78,22 @@ export function recordSegmentUrlIssued(kind) {
 
 export function recordSegmentDeliveryMode(_mode) {
   /* reserved for future per-mode gauges */
+}
+
+export function recordSegmentProviderRoute(providerHost, route) {
+  const host = String(providerHost || 'unknown').toLowerCase() || 'unknown'
+  const key = route === 'bunny' ? 'bunny' : 'proxy'
+  const row = segmentRoutesByProvider.get(host) || { bunny: 0, proxy: 0 }
+  row[key] += 1
+  segmentRoutesByProvider.set(host, row)
+}
+
+export function getSegmentRoutesByProviderSnapshot() {
+  const out = {}
+  for (const [host, counts] of segmentRoutesByProvider) {
+    out[host] = { ...counts, total: counts.bunny + counts.proxy }
+  }
+  return out
 }
 
 export function recordBunnyOriginFetch(outcome) {
@@ -122,9 +141,11 @@ export function getStreamDeliveryMetricsSnapshot() {
       counters.client_segment_cdn_ok +
       counters.client_segment_cdn_fail +
       counters.client_segment_proxy_fallback,
+    segment_routes_by_provider: getSegmentRoutesByProviderSnapshot(),
   }
 }
 
 export function resetStreamDeliveryMetrics() {
   for (const k of Object.keys(counters)) counters[k] = 0
+  segmentRoutesByProvider.clear()
 }

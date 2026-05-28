@@ -1,6 +1,5 @@
 /**
- * HLS segment delivery via Bunny CDN (signed URLs) with proxy rollback.
- * Clients fetch segments from Bunny; Bunny origin-pull hits /hls/seg on cache miss only.
+ * HLS segment delivery via Bunny CDN (signed URLs) with selective proxy for protected providers.
  */
 import crypto from 'node:crypto'
 import {
@@ -10,7 +9,14 @@ import {
 } from './directStreamSigning.js'
 import { buildProxyUrl, PROXY_MOUNT_STREAM } from './streamManifestRewrite.js'
 import {
+  extractUrlHost,
+  getProtectedProviderConfig,
+  isProtectedSegmentTarget,
+  isSelectiveSegmentRoutingEnabled,
+} from './streamProtectedProviders.js'
+import {
   recordSegmentDeliveryMode,
+  recordSegmentProviderRoute,
   recordSegmentUrlIssued,
 } from './streamDeliveryMetrics.js'
 
@@ -24,8 +30,8 @@ function envTruthy(name, defaultVal = false) {
 }
 
 export function getStreamSegmentDeliveryMode() {
-  const raw = String(process.env.STREAM_SEGMENT_DELIVERY || 'proxy').trim().toLowerCase()
-  return STREAM_SEGMENT_MODES.includes(raw) ? raw : 'proxy'
+  const raw = String(process.env.STREAM_SEGMENT_DELIVERY || 'bunny').trim().toLowerCase()
+  return STREAM_SEGMENT_MODES.includes(raw) ? raw : 'bunny'
 }
 
 export function isStreamSegmentForceProxy() {
@@ -50,7 +56,7 @@ export function isBunnySegmentDeliveryConfigured() {
 
 export function getStreamSegmentRolloutPercent() {
   const n = Number(process.env.STREAM_SEGMENT_ROLLOUT_PERCENT)
-  if (!Number.isFinite(n)) return 0
+  if (!Number.isFinite(n)) return 100
   return Math.min(100, Math.max(0, Math.floor(n)))
 }
 
@@ -82,6 +88,22 @@ export function shouldDeliverSegmentsViaBunny(ctx = {}) {
   return bucketEligibleForBunnySegment(ctx.sessionId, ctx.channelId)
 }
 
+/**
+ * Per-segment route: bunny (default) or proxy (protected providers).
+ * @returns {'bunny'|'proxy'}
+ */
+export function resolveSegmentRoute(absoluteTarget, hdr = {}, ctx = {}) {
+  if (isStreamSegmentForceProxy() || !shouldDeliverSegmentsViaBunny(ctx)) return 'proxy'
+  if (!isSelectiveSegmentRoutingEnabled()) return 'bunny'
+
+  const protectedCtx = {
+    rootUpstreamUrl: ctx.rootUpstreamUrl,
+    channelReferer: ctx.channelReferer || hdr.referer,
+  }
+  if (isProtectedSegmentTarget(absoluteTarget, hdr, protectedCtx)) return 'proxy'
+  return 'bunny'
+}
+
 export function createManifestRewriteSession(channelId) {
   const cid = channelId != null ? String(channelId) : ''
   return crypto.randomBytes(12).toString('base64url')
@@ -100,53 +122,77 @@ export function buildSignedBunnySegmentUrl(absoluteTarget, hdr, meta = {}) {
   const cdn = getBunnyStreamCdnBaseUrl()
   if (!cdn) return ''
   const path = getBunnySegmentPublicPath()
-  recordSegmentUrlIssued('bunny')
   return `${cdn}/${path}?tok=${encodeURIComponent(signed.token)}`
 }
 
 /**
- * URL builder for rewriteManifest: Bunny CDN when enabled, else stream-proxy.
  * @param {import('express').Request} req
- * @param {{ channelId?: string, sessionId?: string, useBunny?: boolean }} ctx
+ * @param {{ channelId?: string, sessionId?: string, useBunny?: boolean, channelHeaders?: object, rootUpstreamUrl?: string }} ctx
  */
 export function createManifestSegmentUrlBuilder(req, ctx = {}) {
-  const useBunny =
-    ctx.useBunny !== undefined ? Boolean(ctx.useBunny) : shouldDeliverSegmentsViaBunny(ctx)
   const channelId = ctx.channelId
   const sessionId = ctx.sessionId || createManifestRewriteSession(channelId)
+  const rootUpstreamUrl = ctx.rootUpstreamUrl || ''
+  const channelReferer = ctx.channelHeaders?.referer || ''
+  const bunnyGloballyEnabled =
+    ctx.useBunny !== undefined ? Boolean(ctx.useBunny) : shouldDeliverSegmentsViaBunny(ctx)
+  const routeCtx = { channelId, sessionId, rootUpstreamUrl, channelReferer }
+
+  const stats = { bunny: 0, proxy: 0 }
 
   return {
     sessionId,
-    segmentDelivery: useBunny ? 'bunny' : 'proxy',
+    segmentDelivery: bunnyGloballyEnabled && isSelectiveSegmentRoutingEnabled() ? 'selective' : bunnyGloballyEnabled ? 'bunny' : 'proxy',
     buildTargetUrl(absoluteTarget, hdr) {
-      if (useBunny) {
-        const bunny = buildSignedBunnySegmentUrl(absoluteTarget, hdr, { channelId, sessionId })
-        if (bunny) return bunny
-        recordSegmentUrlIssued('proxy_fallback')
+      const route = bunnyGloballyEnabled ? resolveSegmentRoute(absoluteTarget, hdr, routeCtx) : 'proxy'
+      const host = extractUrlHost(absoluteTarget) || 'unknown'
+
+      if (route === 'proxy') {
+        recordSegmentUrlIssued('proxy')
+        recordSegmentProviderRoute(host, 'proxy')
+        stats.proxy += 1
+        return buildProxyUrl(req, absoluteTarget, hdr, PROXY_MOUNT_STREAM)
       }
-      recordSegmentUrlIssued('proxy')
+
+      const bunny = buildSignedBunnySegmentUrl(absoluteTarget, hdr, { channelId, sessionId })
+      if (bunny) {
+        recordSegmentUrlIssued('bunny')
+        recordSegmentProviderRoute(host, 'bunny')
+        stats.bunny += 1
+        return bunny
+      }
+
+      recordSegmentUrlIssued('proxy_fallback')
+      recordSegmentProviderRoute(host, 'proxy')
+      stats.proxy += 1
       return buildProxyUrl(req, absoluteTarget, hdr, PROXY_MOUNT_STREAM)
     },
+    getRouteStats: () => ({ ...stats }),
   }
 }
 
 export function resolveManifestRewriteUrlBuilder(req, ctx = {}) {
-  if (!shouldDeliverSegmentsViaBunny(ctx) && getStreamSegmentDeliveryMode() === 'proxy') {
-    return createManifestSegmentUrlBuilder(req, { ...ctx, useBunny: false })
-  }
-  return createManifestSegmentUrlBuilder(req, ctx)
+  const headers = ctx.channelHeaders || {}
+  return createManifestSegmentUrlBuilder(req, {
+    ...ctx,
+    channelHeaders: headers,
+    useBunny: shouldDeliverSegmentsViaBunny(ctx),
+  })
 }
 
 export function getStreamSegmentDeliveryHealth() {
   const mode = getStreamSegmentDeliveryMode()
   const forceProxy = isStreamSegmentForceProxy()
   const bunnyConfigured = isBunnySegmentDeliveryConfigured()
+  const selective = isSelectiveSegmentRoutingEnabled()
   const active =
     !forceProxy && mode !== 'proxy' && bunnyConfigured && (mode === 'bunny' || getStreamSegmentRolloutPercent() > 0)
 
   return {
     stream_segment_delivery: mode,
     stream_segment_force_proxy: forceProxy,
+    selective_routing_enabled: selective,
+    protected_providers: getProtectedProviderConfig(),
     bunny_stream_cdn_configured: bunnyConfigured,
     bunny_stream_cdn_base: getBunnyStreamCdnBaseUrl() || null,
     bunny_segment_public_path: getBunnySegmentPublicPath(),
@@ -154,7 +200,9 @@ export function getStreamSegmentDeliveryHealth() {
     segment_rollout_percent: getStreamSegmentRolloutPercent(),
     production_segment_offload_active: active,
     client_path: active
-      ? 'Player → Bunny CDN → /hls/seg origin-pull on miss → upstream'
+      ? selective
+        ? 'Public HLS → Bunny /hls/seg; protected providers (ycn-redirect, tokenized) → stream-proxy per segment'
+        : 'Player → Bunny CDN → /hls/seg origin-pull on miss → upstream'
       : 'Player → Render stream-proxy (rollback / not enabled)',
     origin_pull_route: `/${getBunnySegmentPublicPath()}`,
   }
