@@ -4,9 +4,16 @@
 import assert from 'node:assert/strict'
 import {
   createDirectStreamToken,
+  createStreamSegmentToken,
   verifyDirectStreamToken,
+  verifyStreamSegmentToken,
   buildSignedDirectStreamPlaybackUrl,
 } from '../src/lib/directStreamSigning.js'
+import {
+  buildSignedBunnySegmentUrl,
+  getStreamSegmentDeliveryMode,
+  shouldDeliverSegmentsViaBunny,
+} from '../src/lib/streamSegmentDelivery.js'
 import {
   buildChannelStreamDelivery,
   getStreamDeliveryHealthSnapshot,
@@ -84,5 +91,36 @@ assert.ok(rollback.playbackUrl.includes('/stream-proxy'))
 
 const health = getStreamDeliveryHealthSnapshot()
 assert.equal(health.cutover_enabled, true)
+
+process.env.BUNNY_STREAM_CDN_BASE_URL = 'https://osmanitv.b-cdn.net'
+process.env.STREAM_SEGMENT_DELIVERY = 'bunny'
+process.env.STREAM_SEGMENT_FORCE_PROXY = '0'
+assert.equal(getStreamSegmentDeliveryMode(), 'bunny')
+assert.equal(shouldDeliverSegmentsViaBunny({ channelId: '42', sessionId: 'sess-a' }), true)
+
+const segTok = createStreamSegmentToken({
+  upstreamUrl: 'https://example-cdn.com/live/chan/seg0001.ts',
+  referer: 'https://provider.example/',
+  channelId: '42',
+  sessionId: 'sess-a',
+})
+assert.equal(segTok.ok, true)
+const segVerified = verifyStreamSegmentToken(segTok.token)
+assert.equal(segVerified.ok, true)
+assert.equal(segVerified.payload.sessionId, 'sess-a')
+
+const bunnyUrl = buildSignedBunnySegmentUrl(
+  'https://example-cdn.com/live/chan/seg0001.ts',
+  { referer: 'https://provider.example/' },
+  { channelId: '42', sessionId: 'sess-a' },
+)
+assert.ok(bunnyUrl.startsWith('https://osmanitv.b-cdn.net/'))
+assert.ok(bunnyUrl.includes('tok='))
+
+const manifestOnly = verifyDirectStreamToken(segTok.token)
+assert.equal(manifestOnly.ok, false)
+
+process.env.STREAM_SEGMENT_FORCE_PROXY = '1'
+assert.equal(shouldDeliverSegmentsViaBunny({ channelId: '42', sessionId: 'sess-a' }), false)
 
 console.log('verify-stream-delivery: OK')

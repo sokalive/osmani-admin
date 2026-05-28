@@ -18,6 +18,17 @@ const counters = {
   token_not_configured: 0,
   token_other: 0,
   client_fallback_reported: 0,
+  segment_urls_bunny: 0,
+  segment_urls_proxy: 0,
+  segment_urls_proxy_fallback: 0,
+  bunny_origin_fetch_ok: 0,
+  bunny_origin_fetch_upstream_error: 0,
+  bunny_origin_fetch_fetch_error: 0,
+  bunny_origin_fetch_token_invalid: 0,
+  bunny_origin_fetch_origin_auth_denied: 0,
+  client_segment_cdn_ok: 0,
+  client_segment_cdn_fail: 0,
+  client_segment_proxy_fallback: 0,
 }
 
 function inc(key, n = 1) {
@@ -56,6 +67,31 @@ export function recordClientFallbackReported() {
   inc('client_fallback_reported')
 }
 
+export function recordSegmentUrlIssued(kind) {
+  if (kind === 'bunny') inc('segment_urls_bunny')
+  else if (kind === 'proxy_fallback') inc('segment_urls_proxy_fallback')
+  else inc('segment_urls_proxy')
+}
+
+export function recordSegmentDeliveryMode(_mode) {
+  /* reserved for future per-mode gauges */
+}
+
+export function recordBunnyOriginFetch(outcome) {
+  if (outcome === 'ok') inc('bunny_origin_fetch_ok')
+  else if (outcome === 'upstream_error') inc('bunny_origin_fetch_upstream_error')
+  else if (outcome === 'fetch_error') inc('bunny_origin_fetch_fetch_error')
+  else if (outcome === 'token_invalid') inc('bunny_origin_fetch_token_invalid')
+  else if (outcome === 'origin_auth_denied') inc('bunny_origin_fetch_origin_auth_denied')
+}
+
+export function recordClientSegmentReport(outcome) {
+  const o = String(outcome || '').toLowerCase()
+  if (o === 'cdn_ok' || o === 'bunny_ok') inc('client_segment_cdn_ok')
+  else if (o === 'cdn_fail' || o === 'bunny_fail') inc('client_segment_cdn_fail')
+  else if (o === 'proxy_fallback' || o === 'fallback_proxy') inc('client_segment_proxy_fallback')
+}
+
 export function getStreamDeliveryMetricsSnapshot() {
   const token_failures =
     counters.token_invalid_signature +
@@ -64,12 +100,28 @@ export function getStreamDeliveryMetricsSnapshot() {
     counters.token_not_configured +
     counters.token_other
 
+  const bunny_origin_failures =
+    counters.bunny_origin_fetch_upstream_error +
+    counters.bunny_origin_fetch_fetch_error +
+    counters.bunny_origin_fetch_token_invalid +
+    counters.bunny_origin_fetch_origin_auth_denied
+
   return {
     ...counters,
     token_failures_total: token_failures,
     direct_success_total: counters.direct_manifest_ok,
     direct_failure_total: counters.direct_upstream_error + counters.direct_fetch_error,
     proxy_fallback_reports: counters.client_fallback_reported,
+    segment_urls_total:
+      counters.segment_urls_bunny +
+      counters.segment_urls_proxy +
+      counters.segment_urls_proxy_fallback,
+    bunny_origin_success_total: counters.bunny_origin_fetch_ok,
+    bunny_origin_failure_total: bunny_origin_failures,
+    client_segment_reports_total:
+      counters.client_segment_cdn_ok +
+      counters.client_segment_cdn_fail +
+      counters.client_segment_proxy_fallback,
   }
 }
 

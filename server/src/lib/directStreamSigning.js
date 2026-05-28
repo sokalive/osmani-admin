@@ -8,6 +8,11 @@ const DEFAULT_TOKEN_TTL_SEC = Math.min(
   Math.max(30, Number(process.env.DIRECT_STREAM_TOKEN_TTL_SEC) || 120),
 )
 
+const DEFAULT_SEGMENT_TOKEN_TTL_SEC = Math.min(
+  3600,
+  Math.max(60, Number(process.env.STREAM_SEGMENT_TOKEN_TTL_SEC) || 600),
+)
+
 function base64UrlEncode(buf) {
   return Buffer.from(buf)
     .toString('base64')
@@ -39,6 +44,10 @@ export function isDirectStreamSigningConfigured() {
 
 export function getDirectStreamTokenTtlSec() {
   return DEFAULT_TOKEN_TTL_SEC
+}
+
+export function getStreamSegmentTokenTtlSec() {
+  return DEFAULT_SEGMENT_TOKEN_TTL_SEC
 }
 
 function parseUpstreamUrl(raw) {
@@ -90,20 +99,45 @@ export function createDirectStreamToken(input) {
  * @returns {{ ok: true, payload: object } | { ok: false, error: string, status: number }}
  */
 export function verifyDirectStreamToken(token) {
+  const verified = verifySignedTokenBody(token, null)
+  if (!verified.ok) return verified
+  if (verified.payload.tokenType === 'seg') {
+    const err = { ok: false, error: 'Manifest token required', status: 400 }
+    recordTokenValidationFailure(err.error)
+    return err
+  }
+  return verified
+}
+
+export function resolveStreamDirectBaseUrl(req) {
+  const fromEnv = String(process.env.DIRECT_STREAM_BASE_URL || process.env.BASE_URL || '').trim()
+  if (fromEnv) return fromEnv.replace(/\/+$/, '')
+  if (req) {
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
+    const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim()
+    if (host) return `${proto}://${host}`.replace(/\/+$/, '')
+  }
+  return ''
+}
+
+/**
+ * Signed playback entrypoint (validates token server-side; not raw upstream in API).
+ */
+function verifySignedTokenBody(raw, expectedType) {
   if (!isDirectStreamSigningConfigured()) {
     const err = { ok: false, error: 'Signing not configured', status: 503 }
     recordTokenValidationFailure(err.error)
     return err
   }
-  const raw = String(token || '').trim()
-  const dot = raw.lastIndexOf('.')
+  const token = String(raw || '').trim()
+  const dot = token.lastIndexOf('.')
   if (dot <= 0) {
     const err = { ok: false, error: 'Malformed token', status: 400 }
     recordTokenValidationFailure(err.error)
     return err
   }
-  const body = raw.slice(0, dot)
-  const sig = raw.slice(dot + 1)
+  const body = token.slice(0, dot)
+  const sig = token.slice(dot + 1)
   const expected = crypto.createHmac('sha256', signingSecret()).update(body).digest('base64url')
   const sigBuf = Buffer.from(sig)
   const expBuf = Buffer.from(expected)
@@ -120,7 +154,14 @@ export function verifyDirectStreamToken(token) {
     recordTokenValidationFailure(err.error)
     return err
   }
-  if (!payload || payload.v !== 1 || !payload.u) {
+  const tokenType = payload.t || 'man'
+  if (expectedType && tokenType !== expectedType) {
+    const err = { ok: false, error: 'Invalid token type', status: 400 }
+    recordTokenValidationFailure(err.error)
+    return err
+  }
+  const version = Number(payload.v)
+  if (!payload || (version !== 1 && version !== 2) || !payload.u) {
     const err = { ok: false, error: 'Unsupported token version', status: 400 }
     recordTokenValidationFailure(err.error)
     return err
@@ -145,25 +186,50 @@ export function verifyDirectStreamToken(token) {
       origin: String(payload.o || ''),
       userAgent: String(payload.ua || ''),
       channelId: String(payload.cid || ''),
+      sessionId: String(payload.sid || ''),
       exp,
+      tokenType,
+      version,
     },
   }
 }
 
-export function resolveStreamDirectBaseUrl(req) {
-  const fromEnv = String(process.env.DIRECT_STREAM_BASE_URL || process.env.BASE_URL || '').trim()
-  if (fromEnv) return fromEnv.replace(/\/+$/, '')
-  if (req) {
-    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
-    const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim()
-    if (host) return `${proto}://${host}`.replace(/\/+$/, '')
+/**
+ * HLS segment token (v2, type seg) — used in Bunny CDN URLs; never exposes raw upstream in manifest.
+ */
+export function createStreamSegmentToken(input) {
+  if (!isDirectStreamSigningConfigured()) {
+    return { ok: false, error: 'Direct stream signing is not configured' }
   }
-  return ''
+  const upstreamUrl = parseUpstreamUrl(input?.upstreamUrl)
+  if (!upstreamUrl) {
+    return { ok: false, error: 'Invalid upstream URL' }
+  }
+  const ttlSec = Math.min(
+    3600,
+    Math.max(60, Number(input?.ttlSec) || DEFAULT_SEGMENT_TOKEN_TTL_SEC),
+  )
+  const exp = Math.floor(Date.now() / 1000) + ttlSec
+  const payload = {
+    v: 2,
+    t: 'seg',
+    u: upstreamUrl,
+    r: String(input?.referer || '').trim(),
+    o: String(input?.origin || '').trim(),
+    ua: String(input?.userAgent || '').trim(),
+    cid: input?.channelId != null ? String(input.channelId) : '',
+    sid: String(input?.sessionId || '').trim(),
+    exp,
+  }
+  const body = base64UrlEncode(JSON.stringify(payload))
+  const sig = crypto.createHmac('sha256', signingSecret()).update(body).digest('base64url')
+  return { ok: true, token: `${body}.${sig}`, exp, ttlSec }
 }
 
-/**
- * Signed playback entrypoint (validates token server-side; not raw upstream in API).
- */
+export function verifyStreamSegmentToken(token) {
+  return verifySignedTokenBody(token, 'seg')
+}
+
 export function buildSignedDirectStreamPlaybackUrl(req, upstreamUrl, hdr = {}, meta = {}) {
   const signed = createDirectStreamToken({
     upstreamUrl,

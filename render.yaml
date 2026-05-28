@@ -68,6 +68,14 @@ services:
         value: "0"
       - key: DIRECT_STREAM_SIGNING_SECRET
         sync: false
+      - key: STREAM_SEGMENT_DELIVERY
+        value: proxy
+      - key: STREAM_SEGMENT_FORCE_PROXY
+        value: "1"
+      - key: BUNNY_STREAM_CDN_BASE_URL
+        sync: false
+      - key: STREAM_SEGMENT_TOKEN_TTL_SEC
+        value: "600"
     disk:
       name: media-uploads
       mountPath: /var/render/media

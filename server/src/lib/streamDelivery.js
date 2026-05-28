@@ -1,7 +1,8 @@
 /**
  * Stream delivery strategy with controlled rollout (Phase 4 Step 2).
  */
-import { buildPublicStreamProxyUrl, PROXY_MOUNT_STREAM } from '../routes/streamProxy.js'
+import { buildPublicStreamProxyUrl, PROXY_MOUNT_STREAM } from '../lib/streamManifestRewrite.js'
+import { getStreamSegmentDeliveryHealth } from './streamSegmentDelivery.js'
 import {
   buildSignedDirectStreamPlaybackUrl,
   getDirectStreamTokenTtlSec,
@@ -167,6 +168,7 @@ export function getStreamDeliveryHealthSnapshot() {
   const cutoverEnabled = isDirectStreamCutoverEnabled()
   const rollout = getRolloutHealthSnapshot()
   const metrics = getStreamDeliveryMetricsSnapshot()
+  const segments = getStreamSegmentDeliveryHealth()
 
   return {
     ok: signingEnabled ? signingConfigured : true,
@@ -179,18 +181,25 @@ export function getStreamDeliveryHealthSnapshot() {
     production_cutover_active: cutoverEnabled && !forceProxy,
     expose_direct_stream_url_in_api: shouldExposeDirectStreamUrlInApi(),
     rollout,
+    segments,
     metrics,
     routes: {
       proxy: `/${PROXY_MOUNT_STREAM}`,
       direct: `/${STREAM_DIRECT_MOUNT}`,
+      bunny_segment_origin: `/${segments.origin_pull_route}`,
     },
-    hls_note:
-      'stream-direct validates token on manifest; segment URLs in playlist use stream-proxy for stable HLS until Bunny edge rewrite.',
+    hls_note: segments.production_segment_offload_active
+      ? 'Manifest via stream-direct (token); HLS segments via signed Bunny CDN URLs; Render origin-pull on Bunny cache miss only.'
+      : 'Segment offload inactive — set STREAM_SEGMENT_DELIVERY=bunny, BUNNY_STREAM_CDN_BASE_URL, and rollout percent.',
     notes: forceProxy
       ? 'playbackUrl is proxy-only (STREAM_PLAYBACK_FORCE_PROXY=1).'
       : !cutoverEnabled
         ? 'Cutover disabled — set DIRECT_STREAM_CUTOVER_ENABLED=1 and rollout allowlist/percent to begin.'
         : 'Controlled rollout may set playbackUrl to signed stream-direct for eligible channels.',
+    rollback: {
+      playback_proxy: 'STREAM_PLAYBACK_FORCE_PROXY=1',
+      segment_proxy: 'STREAM_SEGMENT_FORCE_PROXY=1 or STREAM_SEGMENT_DELIVERY=proxy',
+    },
   }
 }
 

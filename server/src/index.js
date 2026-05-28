@@ -16,6 +16,7 @@ import { wireApiCacheInvalidation } from './lib/apiCacheInvalidation.js'
 import { getStreamDeliveryHealthSnapshot } from './lib/streamDelivery.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
 import { streamDeliveryReportRouter } from './routes/streamDeliveryReport.js'
+import { streamBunnyPullRouter } from './routes/streamBunnyPull.js'
 import { streamDirectRouter } from './routes/streamDirect.js'
 import { streamProxyRouter } from './routes/streamProxy.js'
 
@@ -151,6 +152,7 @@ app.get('/api/health/stream-delivery', (_req, res) => {
 // --- API ROUTES ---
 app.use(streamProxyRouter)
 app.use(streamDirectRouter)
+app.use(streamBunnyPullRouter)
 app.use('/api', streamDeliveryReportRouter)
 app.use('/api', restApi)
 
