@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import {
   extractUploadPath,
   getCdnBaseUrl,
+  isBunnyCdnOriginPullRequest,
   isCdnEnabled,
   isHostedApkPath,
   resolveHostedApkDownloadUrl,
@@ -47,5 +48,11 @@ const apkFallback = resolveHostedApkDownloadUrl('/uploads/apks/x.apk', null)
 assert.equal(apkFallback, `${ORIGIN}/uploads/apks/x.apk`)
 
 assert.equal(extractUploadPath('https://osmani-admin-api.onrender.com/uploads/foo.webp'), '/uploads/foo.webp')
+
+assert.equal(
+  isBunnyCdnOriginPullRequest({ headers: { 'user-agent': 'BunnyCDN/1.0' } }),
+  true,
+)
+assert.equal(isBunnyCdnOriginPullRequest({ headers: { 'user-agent': 'Mozilla/5.0' } }), false)
 
 console.log('verify-cdn-asset-urls: OK')

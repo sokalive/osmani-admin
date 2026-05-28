@@ -4,7 +4,6 @@ import {
   getCdnHealthSnapshot,
   getStaticUploadCacheMaxAgeSec,
   isCdnEnabled,
-  resolvePublicAssetUrl,
 } from './lib/cdnAssets.js'
 import {
   assertUploadStorageReady,
@@ -63,20 +62,10 @@ app.use(express.json({ limit: '4mb' }))
 
 const staticUploadMaxAgeMs = getStaticUploadCacheMaxAgeSec() * 1000
 
-/** Legacy direct hits to Render /uploads/* → Bunny when configured (images + APKs). */
-app.use('/uploads', (req, res, next) => {
-  if (!isCdnEnabled()) return next()
-  if (req.method !== 'GET' && req.method !== 'HEAD') return next()
-  const rel = `/uploads${req.path}`.replace(/\/+/g, '/')
-  const cdnUrl = resolvePublicAssetUrl(rel, req)
-  const originUrl = resolvePublicAssetUrl(rel, req, { forceOrigin: true })
-  if (cdnUrl && originUrl && cdnUrl !== originUrl) {
-    res.setHeader('Cache-Control', 'no-store')
-    res.setHeader('Link', `<${originUrl}>; rel="alternate"`)
-    return res.redirect(302, cdnUrl)
-  }
-  return next()
-})
+/**
+ * /uploads served from disk for Bunny origin-pull (200 + bytes).
+ * Do not 302 to b-cdn.net here — that caused a CDN redirect loop (API already returns Bunny URLs).
+ */
 
 app.use(
   '/uploads',

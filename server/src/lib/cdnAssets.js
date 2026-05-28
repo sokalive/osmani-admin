@@ -47,6 +47,21 @@ export function isBunnyCdnHost(hostname) {
 }
 
 /**
+ * True when the request is Bunny CDN origin-pull (not a browser/client).
+ * Origin must return file bytes with 200 — a 302 back to b-cdn.net causes a redirect loop.
+ */
+export function isBunnyCdnOriginPullRequest(req) {
+  if (!req?.headers) return false
+  const h = req.headers
+  if (h['cdn-pullzone'] || h['pull-zone'] || h['x-bunny-pull']) return true
+  const via = String(h.via || '').toLowerCase()
+  if (via.includes('bunny')) return true
+  const ua = String(h['user-agent'] || '').toLowerCase()
+  if (ua.includes('bunnycdn') || ua.includes('bunny-cdn')) return true
+  return false
+}
+
+/**
  * Public CDN base (e.g. https://your-zone.b-cdn.net). Empty when not configured.
  */
 export function getCdnBaseUrl() {

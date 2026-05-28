@@ -32,7 +32,9 @@ Upload/admin flows still write files to `UPLOAD_DIR/apks/` on the API disk; only
 ## Backward compatibility
 
 - DB may still hold legacy `https://osmani-admin-api.onrender.com/uploads/apks/...` — rewritten to Bunny on read.
-- Direct `GET https://api.../uploads/...` returns **302** to Bunny when configured, with `Link: <origin>` alternate.
+- Direct `GET https://api.../uploads/...` from browsers returns **302** to Bunny when configured.
+- **Bunny origin-pull** must receive **200 + file bytes** from the API (no redirect to b-cdn.net) — otherwise CDN URLs loop with 302.
+- After fixing a redirect loop, **purge the Bunny pull zone cache** for `/uploads/*`.
 - Play Store URLs are unchanged.
 - If `BUNNY_CDN_BASE_URL` is unset, behavior matches pre-CDN (Render origin only).
 
