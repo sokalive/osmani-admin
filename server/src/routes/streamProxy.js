@@ -141,9 +141,16 @@ function logTokenDiagnostics(urlStr, status) {
   })
 }
 
-async function runStreamProxy(req, res, mountPath) {
+/**
+ * Shared proxy runner for /stream-proxy and token-gated /stream-direct.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @param {{ sourceUrl: string, upstreamHeaders: { referer?: string, origin?: string, userAgent?: string }, mountPath: string }} opts
+ */
+export async function runStreamProxyRequest(req, res, opts) {
   const startedAt = Date.now()
-  const sourceUrl = String(req.query.url || '').trim()
+  const mountPath = String(opts?.mountPath || PROXY_MOUNT_STREAM)
+  const sourceUrl = String(opts?.sourceUrl || '').trim()
   if (!sourceUrl) {
     return res.status(400).json({ error: 'url query param is required' })
   }
@@ -155,7 +162,11 @@ async function runStreamProxy(req, res, mountPath) {
     return res.status(400).json({ error: 'url must be absolute http(s)' })
   }
 
-  const upstreamHeaders = extractUpstreamHeaders(req)
+  const upstreamHeaders = {
+    referer: String(opts?.upstreamHeaders?.referer || '').trim(),
+    origin: String(opts?.upstreamHeaders?.origin || '').trim(),
+    userAgent: String(opts?.upstreamHeaders?.userAgent || '').trim() || DEFAULT_UA,
+  }
   const headers = {
     'User-Agent': upstreamHeaders.userAgent,
     Accept: String(req.headers.accept || '*/*'),
@@ -248,6 +259,12 @@ async function runStreamProxy(req, res, mountPath) {
     res.destroy(e)
   })
   return nodeStream.pipe(res)
+}
+
+async function runStreamProxy(req, res, mountPath) {
+  const sourceUrl = String(req.query.url || '').trim()
+  const upstreamHeaders = extractUpstreamHeaders(req)
+  return runStreamProxyRequest(req, res, { sourceUrl, upstreamHeaders, mountPath })
 }
 
 streamProxyRouter.get(`/${PROXY_MOUNT_STREAM}`, (req, res) => runStreamProxy(req, res, PROXY_MOUNT_STREAM))

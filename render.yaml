@@ -56,6 +56,14 @@ services:
         value: "0"
       - key: PG_POOL_MAX
         value: "8"
+      - key: STREAM_DELIVERY_MODE
+        value: hybrid
+      - key: DIRECT_STREAM_SIGNING_ENABLED
+        value: "1"
+      - key: STREAM_PLAYBACK_FORCE_PROXY
+        value: "1"
+      - key: DIRECT_STREAM_SIGNING_SECRET
+        sync: false
     disk:
       name: media-uploads
       mountPath: /var/render/media

@@ -1,0 +1,164 @@
+import crypto from 'node:crypto'
+
+export const STREAM_DIRECT_MOUNT = 'stream-direct'
+
+const DEFAULT_TOKEN_TTL_SEC = Math.min(
+  900,
+  Math.max(30, Number(process.env.DIRECT_STREAM_TOKEN_TTL_SEC) || 120),
+)
+
+function base64UrlEncode(buf) {
+  return Buffer.from(buf)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')
+}
+
+function base64UrlDecode(str) {
+  const pad = '='.repeat((4 - (String(str).length % 4)) % 4)
+  const b64 = String(str).replace(/-/g, '+').replace(/_/g, '/') + pad
+  return Buffer.from(b64, 'base64')
+}
+
+function signingSecret() {
+  return String(
+    process.env.DIRECT_STREAM_SIGNING_SECRET || process.env.STREAM_SIGNING_SECRET || '',
+  ).trim()
+}
+
+export function isDirectStreamSigningEnabled() {
+  const raw = String(process.env.DIRECT_STREAM_SIGNING_ENABLED ?? '0').trim().toLowerCase()
+  return ['1', 'true', 'yes', 'on'].includes(raw)
+}
+
+export function isDirectStreamSigningConfigured() {
+  return isDirectStreamSigningEnabled() && signingSecret().length >= 16
+}
+
+export function getDirectStreamTokenTtlSec() {
+  return DEFAULT_TOKEN_TTL_SEC
+}
+
+function parseUpstreamUrl(raw) {
+  const u = String(raw || '').trim()
+  if (!u) return null
+  try {
+    const parsed = new URL(u)
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * @param {object} input
+ * @param {string} input.upstreamUrl
+ * @param {string} [input.referer]
+ * @param {string} [input.origin]
+ * @param {string} [input.userAgent]
+ * @param {string|number} [input.channelId]
+ * @param {number} [input.ttlSec]
+ */
+export function createDirectStreamToken(input) {
+  if (!isDirectStreamSigningConfigured()) {
+    return { ok: false, error: 'Direct stream signing is not configured' }
+  }
+  const upstreamUrl = parseUpstreamUrl(input?.upstreamUrl)
+  if (!upstreamUrl) {
+    return { ok: false, error: 'Invalid upstream URL' }
+  }
+  const ttlSec = Math.min(900, Math.max(30, Number(input?.ttlSec) || DEFAULT_TOKEN_TTL_SEC))
+  const exp = Math.floor(Date.now() / 1000) + ttlSec
+  const payload = {
+    v: 1,
+    u: upstreamUrl,
+    r: String(input?.referer || '').trim(),
+    o: String(input?.origin || '').trim(),
+    ua: String(input?.userAgent || '').trim(),
+    cid: input?.channelId != null ? String(input.channelId) : '',
+    exp,
+  }
+  const body = base64UrlEncode(JSON.stringify(payload))
+  const sig = crypto.createHmac('sha256', signingSecret()).update(body).digest('base64url')
+  return { ok: true, token: `${body}.${sig}`, exp, ttlSec }
+}
+
+/**
+ * @returns {{ ok: true, payload: object } | { ok: false, error: string, status: number }}
+ */
+export function verifyDirectStreamToken(token) {
+  if (!isDirectStreamSigningConfigured()) {
+    return { ok: false, error: 'Signing not configured', status: 503 }
+  }
+  const raw = String(token || '').trim()
+  const dot = raw.lastIndexOf('.')
+  if (dot <= 0) {
+    return { ok: false, error: 'Malformed token', status: 400 }
+  }
+  const body = raw.slice(0, dot)
+  const sig = raw.slice(dot + 1)
+  const expected = crypto.createHmac('sha256', signingSecret()).update(body).digest('base64url')
+  const sigBuf = Buffer.from(sig)
+  const expBuf = Buffer.from(expected)
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return { ok: false, error: 'Invalid signature', status: 403 }
+  }
+  let payload
+  try {
+    payload = JSON.parse(base64UrlDecode(body).toString('utf8'))
+  } catch {
+    return { ok: false, error: 'Invalid token payload', status: 400 }
+  }
+  if (!payload || payload.v !== 1 || !payload.u) {
+    return { ok: false, error: 'Unsupported token version', status: 400 }
+  }
+  const exp = Number(payload.exp)
+  if (!Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) {
+    return { ok: false, error: 'Token expired', status: 403 }
+  }
+  const upstreamUrl = parseUpstreamUrl(payload.u)
+  if (!upstreamUrl) {
+    return { ok: false, error: 'Invalid upstream in token', status: 400 }
+  }
+  return {
+    ok: true,
+    payload: {
+      upstreamUrl,
+      referer: String(payload.r || ''),
+      origin: String(payload.o || ''),
+      userAgent: String(payload.ua || ''),
+      channelId: String(payload.cid || ''),
+      exp,
+    },
+  }
+}
+
+export function resolveStreamDirectBaseUrl(req) {
+  const fromEnv = String(process.env.DIRECT_STREAM_BASE_URL || process.env.BASE_URL || '').trim()
+  if (fromEnv) return fromEnv.replace(/\/+$/, '')
+  if (req) {
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
+    const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim()
+    if (host) return `${proto}://${host}`.replace(/\/+$/, '')
+  }
+  return ''
+}
+
+/**
+ * Signed playback entrypoint (validates token server-side; not raw upstream in API).
+ */
+export function buildSignedDirectStreamPlaybackUrl(req, upstreamUrl, hdr = {}, meta = {}) {
+  const signed = createDirectStreamToken({
+    upstreamUrl,
+    referer: hdr.referer,
+    origin: hdr.origin,
+    userAgent: hdr.userAgent,
+    channelId: meta.channelId,
+  })
+  if (!signed.ok) return ''
+  const base = resolveStreamDirectBaseUrl(req)
+  if (!base) return ''
+  return `${base}/${STREAM_DIRECT_MOUNT}?token=${encodeURIComponent(signed.token)}`
+}

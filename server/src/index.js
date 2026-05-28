@@ -13,7 +13,9 @@ import {
   UPLOADS_DIR,
 } from './multerUpload.js'
 import { wireApiCacheInvalidation } from './lib/apiCacheInvalidation.js'
+import { getStreamDeliveryHealthSnapshot } from './lib/streamDelivery.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
+import { streamDirectRouter } from './routes/streamDirect.js'
 import { streamProxyRouter } from './routes/streamProxy.js'
 
 const app = express()
@@ -136,8 +138,18 @@ app.get('/api/health/media', async (req, res) => {
   return res.json(body)
 })
 
+app.get('/api/health/stream-delivery', (_req, res) => {
+  const snap = getStreamDeliveryHealthSnapshot()
+  res.setHeader('Cache-Control', 'no-store')
+  if (!snap.ok) {
+    return res.status(503).json(snap)
+  }
+  return res.json(snap)
+})
+
 // --- API ROUTES ---
 app.use(streamProxyRouter)
+app.use(streamDirectRouter)
 app.use('/api', restApi)
 
 // --- 404 HANDLER (skip /uploads — handled above) ---

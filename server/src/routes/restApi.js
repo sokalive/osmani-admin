@@ -61,6 +61,7 @@ restApi.get('/', (_req, res) => {
     endpoints: [
       '/health',
       '/health/media',
+      '/health/stream-delivery',
       '/users',
       '/channels',
       '/banners',

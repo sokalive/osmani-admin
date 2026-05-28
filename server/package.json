@@ -13,7 +13,8 @@
     "verify:banner-payload": "node scripts/verify-banner-admin-payload.mjs",
     "verify:cdn-assets": "node scripts/verify-cdn-asset-urls.mjs",
     "verify:apk-update-cdn": "node scripts/verify-apk-update-cdn.mjs",
-    "verify:api-cache": "node scripts/verify-api-cache.mjs"
+    "verify:api-cache": "node scripts/verify-api-cache.mjs",
+    "verify:stream-delivery": "node scripts/verify-stream-delivery.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",

@@ -5,7 +5,7 @@ import {
   serializeVisibleTabs,
 } from './lib/channelTabs.js'
 import { resolvePublicAssetUrl } from './lib/cdnAssets.js'
-import { buildPublicStreamProxyUrl, PROXY_MOUNT_STREAM } from './routes/streamProxy.js'
+import { buildChannelStreamDelivery } from './lib/streamDelivery.js'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
 
@@ -257,30 +257,15 @@ export function channelToResponse(c, req) {
 
   const isActive = Boolean(m.isActive)
   const showInApp = Boolean(m.showInApp)
-  const proxyPrimary = buildPublicStreamProxyUrl(req, m.url, {
-    referer: m.referer,
-    origin: m.origin,
-    userAgent: m.userAgent,
-  })
-  const proxyBackup1 = buildPublicStreamProxyUrl(req, m.backupStream1, {
-    referer: m.referer,
-    origin: m.origin,
-    userAgent: m.userAgent,
-  })
-  const proxyBackup2 = buildPublicStreamProxyUrl(req, m.backupStream2, {
-    referer: m.referer,
-    origin: m.origin,
-    userAgent: m.userAgent,
-  })
-  const playbackUrl = proxyPrimary || m.url
-  const backupPlayback1 = proxyBackup1 || (m.backupStream1 ?? '')
-  const backupPlayback2 = proxyBackup2 || (m.backupStream2 ?? '')
+  const delivery = buildChannelStreamDelivery(req, m)
 
   return {
     id: m.id,
     name: m.name,
     url: m.url,
-    playbackUrl,
+    playbackUrl: delivery.playbackUrl,
+    direct_stream_url: delivery.direct_stream_url,
+    stream_delivery_mode: delivery.stream_delivery_mode,
     thumbnail: thumbFull,
     isLive: Boolean(m.isLive),
     isHD: Boolean(m.isHD),
@@ -293,23 +278,16 @@ export function channelToResponse(c, req) {
     bottomTab: bottomTabCsv,
     backupStream1: m.backupStream1 ?? '',
     backupStream2: m.backupStream2 ?? '',
-    backupPlayback1,
-    backupPlayback2,
+    backupPlayback1: delivery.backupPlayback1,
+    backupPlayback2: delivery.backupPlayback2,
+    direct_stream_url_backup1: delivery.direct_stream_url_backup1,
+    direct_stream_url_backup2: delivery.direct_stream_url_backup2,
     origin: m.origin ?? '',
     referer: m.referer ?? '',
     userAgent: m.userAgent ?? '',
     playerType: normalizePlayerType(m.playerType),
-    deliveryPath: `/${PROXY_MOUNT_STREAM}`,
-    streamProxy: {
-      route: `/${PROXY_MOUNT_STREAM}`,
-      primaryUrl: proxyPrimary,
-      backupUrls: [proxyBackup1, proxyBackup2].filter(Boolean),
-      headers: {
-        origin: m.origin ?? '',
-        referer: m.referer ?? '',
-        userAgent: m.userAgent ?? '',
-      },
-    },
+    deliveryPath: delivery.streamProxy.route,
+    streamProxy: delivery.streamProxy,
     bottomTabsDisplay: bottomTabCsv,
     visibleTabs,
     sortOrder: Number(m.sortOrder) || 0,
