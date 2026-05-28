@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { recordTokenValidationFailure } from './streamDeliveryMetrics.js'
+import { normalizeUpstreamHeaders } from './streamUpstreamHeaders.js'
 
 export const STREAM_DIRECT_MOUNT = 'stream-direct'
 
@@ -79,14 +80,22 @@ export function createDirectStreamToken(input) {
   if (!upstreamUrl) {
     return { ok: false, error: 'Invalid upstream URL' }
   }
+  const hdr = normalizeUpstreamHeaders(
+    {
+      referer: input?.referer,
+      origin: input?.origin,
+      userAgent: input?.userAgent,
+    },
+    upstreamUrl,
+  )
   const ttlSec = Math.min(900, Math.max(30, Number(input?.ttlSec) || DEFAULT_TOKEN_TTL_SEC))
   const exp = Math.floor(Date.now() / 1000) + ttlSec
   const payload = {
     v: 1,
     u: upstreamUrl,
-    r: String(input?.referer || '').trim(),
-    o: String(input?.origin || '').trim(),
-    ua: String(input?.userAgent || '').trim(),
+    r: hdr.referer,
+    o: hdr.origin,
+    ua: hdr.userAgent,
     cid: input?.channelId != null ? String(input.channelId) : '',
     exp,
   }
@@ -178,13 +187,21 @@ function verifySignedTokenBody(raw, expectedType) {
     recordTokenValidationFailure(err.error)
     return err
   }
+  const hdr = normalizeUpstreamHeaders(
+    {
+      referer: payload.r,
+      origin: payload.o,
+      userAgent: payload.ua,
+    },
+    upstreamUrl,
+  )
   return {
     ok: true,
     payload: {
       upstreamUrl,
-      referer: String(payload.r || ''),
-      origin: String(payload.o || ''),
-      userAgent: String(payload.ua || ''),
+      referer: hdr.referer,
+      origin: hdr.origin,
+      userAgent: hdr.userAgent,
       channelId: String(payload.cid || ''),
       sessionId: String(payload.sid || ''),
       exp,
@@ -205,6 +222,14 @@ export function createStreamSegmentToken(input) {
   if (!upstreamUrl) {
     return { ok: false, error: 'Invalid upstream URL' }
   }
+  const hdr = normalizeUpstreamHeaders(
+    {
+      referer: input?.referer,
+      origin: input?.origin,
+      userAgent: input?.userAgent,
+    },
+    upstreamUrl,
+  )
   const ttlSec = Math.min(
     3600,
     Math.max(60, Number(input?.ttlSec) || DEFAULT_SEGMENT_TOKEN_TTL_SEC),
@@ -214,9 +239,9 @@ export function createStreamSegmentToken(input) {
     v: 2,
     t: 'seg',
     u: upstreamUrl,
-    r: String(input?.referer || '').trim(),
-    o: String(input?.origin || '').trim(),
-    ua: String(input?.userAgent || '').trim(),
+    r: hdr.referer,
+    o: hdr.origin,
+    ua: hdr.userAgent,
     cid: input?.channelId != null ? String(input.channelId) : '',
     sid: String(input?.sessionId || '').trim(),
     exp,

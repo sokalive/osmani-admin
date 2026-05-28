@@ -8,6 +8,11 @@ import {
   resolveManifestRewriteUrlBuilder,
   verifyBunnyOriginRequest,
 } from '../lib/streamSegmentDelivery.js'
+import {
+  buildUpstreamFetchHeaders,
+  isHlsManifestResponse,
+  normalizeUpstreamHeaders,
+} from '../lib/streamUpstreamHeaders.js'
 import { recordBunnyOriginFetch } from '../lib/streamDeliveryMetrics.js'
 
 export const streamBunnyPullRouter = Router()
@@ -22,13 +27,6 @@ function parseMaybeUrl(raw) {
   } catch {
     return null
   }
-}
-
-function isManifest(urlStr, contentType) {
-  const ct = String(contentType || '').toLowerCase()
-  if (ct.includes('application/vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) return true
-  const u = parseMaybeUrl(urlStr)
-  return Boolean(u && u.pathname.toLowerCase().endsWith('.m3u8'))
 }
 
 /**
@@ -56,18 +54,20 @@ export async function runBunnyOriginSegmentFetch(req, res) {
     return res.status(400).json({ error: 'Invalid upstream URL' })
   }
 
-  const headers = {
-    'User-Agent': userAgent || DEFAULT_UA,
-    Accept: String(req.headers.accept || '*/*'),
-    'Accept-Encoding': 'identity',
-  }
-  if (referer) headers.Referer = referer
-  if (origin) headers.Origin = origin
-  if (req.headers.range) headers.Range = String(req.headers.range)
+  const upstreamHeaders = normalizeUpstreamHeaders(
+    { referer, origin, userAgent: userAgent || DEFAULT_UA },
+    parsed.toString(),
+  )
+  const { headers } = buildUpstreamFetchHeaders(upstreamHeaders, {
+    upstreamUrl: parsed.toString(),
+    clientAccept: req.headers.accept,
+    range: req.headers.range,
+    manifest: parsed.pathname.toLowerCase().endsWith('.m3u8'),
+  })
 
   let upstreamRes
   try {
-    upstreamRes = await fetch(parsed.toString(), {
+    upstreamRes = await fetch(parsed.href, {
       method: 'GET',
       redirect: 'follow',
       headers,
@@ -99,9 +99,16 @@ export async function runBunnyOriginSegmentFetch(req, res) {
 
   const finalUrl = String(upstreamRes.url || parsed.toString())
 
-  if (isManifest(finalUrl, contentType)) {
+  const manifestCandidate =
+    String(contentType).toLowerCase().includes('mpegurl') ||
+    parsed.pathname.toLowerCase().endsWith('.m3u8')
+
+  if (manifestCandidate) {
     const body = await upstreamRes.text()
-    const upstreamHeaders = { referer, origin, userAgent }
+    if (!isHlsManifestResponse(finalUrl, contentType, body)) {
+      recordBunnyOriginFetch('upstream_error')
+      return res.status(502).json({ error: 'upstream response is not a valid HLS manifest' })
+    }
     const rewriteCtx = resolveManifestRewriteUrlBuilder(req, {
       channelId,
       sessionId,

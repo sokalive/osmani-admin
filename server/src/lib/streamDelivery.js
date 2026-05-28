@@ -3,6 +3,7 @@
  */
 import { buildPublicStreamProxyUrl, PROXY_MOUNT_STREAM } from '../lib/streamManifestRewrite.js'
 import { getStreamSegmentDeliveryHealth } from './streamSegmentDelivery.js'
+import { normalizeUpstreamHeaders } from './streamUpstreamHeaders.js'
 import {
   buildSignedDirectStreamPlaybackUrl,
   getDirectStreamTokenTtlSec,
@@ -43,11 +44,15 @@ export function shouldExposeDirectStreamUrlInApi() {
 }
 
 function streamHeaders(channel) {
-  return {
-    referer: String(channel?.referer || '').trim(),
-    origin: String(channel?.origin || '').trim(),
-    userAgent: String(channel?.userAgent || '').trim(),
-  }
+  const upstream = String(channel?.upstreamUrl || channel?.url || '').trim()
+  return normalizeUpstreamHeaders(
+    {
+      referer: channel?.referer,
+      origin: channel?.origin,
+      userAgent: channel?.userAgent,
+    },
+    upstream,
+  )
 }
 
 function buildProxyPlayback(req, upstreamUrl, hdr) {

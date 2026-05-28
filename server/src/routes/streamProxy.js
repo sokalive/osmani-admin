@@ -7,6 +7,11 @@ import {
   rewriteManifest,
 } from '../lib/streamManifestRewrite.js'
 import { resolveManifestRewriteUrlBuilder } from '../lib/streamSegmentDelivery.js'
+import {
+  buildUpstreamFetchHeaders,
+  isHlsManifestResponse,
+  normalizeUpstreamHeaders,
+} from '../lib/streamUpstreamHeaders.js'
 
 export { PROXY_MOUNT_STREAM, buildPublicStreamProxyUrl } from '../lib/streamManifestRewrite.js'
 
@@ -28,18 +33,13 @@ function parseMaybeUrl(raw) {
   }
 }
 
-function extractUpstreamHeaders(req) {
-  const referer = String(req.query.referer || req.query.ref || '').trim()
-  const origin = String(req.query.origin || '').trim()
-  const userAgent = String(req.query.userAgent || req.query.ua || '').trim() || DEFAULT_UA
-  return { referer, origin, userAgent }
-}
-
-function isManifest(urlStr, contentType) {
-  const ct = String(contentType || '').toLowerCase()
-  if (ct.includes('application/vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) return true
-  const u = parseMaybeUrl(urlStr)
-  return Boolean(u && u.pathname.toLowerCase().endsWith('.m3u8'))
+function extractUpstreamHeaders(req, sourceUrl) {
+  const raw = {
+    referer: String(req.query.referer || req.query.ref || '').trim(),
+    origin: String(req.query.origin || '').trim(),
+    userAgent: String(req.query.userAgent || req.query.ua || '').trim() || DEFAULT_UA,
+  }
+  return normalizeUpstreamHeaders(raw, sourceUrl)
 }
 
 function logProxyDiagnostics(payload) {
@@ -104,23 +104,24 @@ export async function runStreamProxyRequest(req, res, opts) {
     return res.status(400).json({ error: 'url must be absolute http(s)' })
   }
 
-  const upstreamHeaders = {
-    referer: String(opts?.upstreamHeaders?.referer || '').trim(),
-    origin: String(opts?.upstreamHeaders?.origin || '').trim(),
-    userAgent: String(opts?.upstreamHeaders?.userAgent || '').trim() || DEFAULT_UA,
-  }
-  const headers = {
-    'User-Agent': upstreamHeaders.userAgent,
-    Accept: String(req.headers.accept || '*/*'),
-    'Accept-Encoding': 'identity',
-  }
-  if (upstreamHeaders.referer) headers.Referer = upstreamHeaders.referer
-  if (upstreamHeaders.origin) headers.Origin = upstreamHeaders.origin
-  if (req.headers.range) headers.Range = String(req.headers.range)
+  const upstreamHeaders = normalizeUpstreamHeaders(
+    {
+      referer: opts?.upstreamHeaders?.referer,
+      origin: opts?.upstreamHeaders?.origin,
+      userAgent: opts?.upstreamHeaders?.userAgent || DEFAULT_UA,
+    },
+    parsed.toString(),
+  )
+  const { headers } = buildUpstreamFetchHeaders(upstreamHeaders, {
+    upstreamUrl: parsed.toString(),
+    clientAccept: req.headers.accept,
+    range: req.headers.range,
+    manifest: true,
+  })
 
   let upstreamRes
   try {
-    upstreamRes = await fetch(parsed.toString(), {
+    upstreamRes = await fetch(parsed.href, {
       method: 'GET',
       redirect: 'follow',
       headers,
@@ -153,50 +154,93 @@ export async function runStreamProxyRequest(req, res, opts) {
   logTokenDiagnostics(finalUrl, status)
 
   if (!upstreamRes.ok) {
+    const errBody = await upstreamRes.text().catch(() => '')
     if (isDirectEntry) recordDirectRequest('upstream_error')
     else recordProxyRequest('upstream_error')
-    const bodyText = await upstreamRes.text().catch(() => '')
-    return res.status(upstreamRes.status).send(bodyText || `Upstream error (${upstreamRes.status})`)
-  }
-
-  if (isManifest(finalUrl, contentType)) {
-    const body = await upstreamRes.text()
-    const rewriteCtx =
-      opts?.manifestRewriteUrlBuilder ||
-      resolveManifestRewriteUrlBuilder(req, {
-        channelId: opts?.channelId,
-        channelHeaders: upstreamHeaders,
-        rootUpstreamUrl: opts?.rootUpstreamUrl || parsed.toString(),
-      })
-    const { text: rewrittenCore, rewriteCount } = rewriteManifest(
-      body,
-      finalUrl,
-      upstreamHeaders,
-      (absolute, hdr) => rewriteCtx.buildTargetUrl(absolute, hdr),
-    )
-    const text = appendManifestSessionHint(
-      rewrittenCore,
-      rewriteCtx.sessionId,
-      rewriteCtx.segmentDelivery,
-      null,
-    )
     logProxyDiagnostics({
-      scope: 'manifest_rewrite',
+      scope: 'upstream_error',
       mount: mountPath,
       source_url: parsed.toString(),
       final_url: finalUrl,
-      rewritten_url_count: rewriteCount,
-      segment_delivery: rewriteCtx.segmentDelivery,
-      segment_route_stats: rewriteCtx.getRouteStats?.() || null,
-      output_bytes: Buffer.byteLength(text, 'utf8'),
-      has_extm3u: text.includes('#EXTM3U'),
+      status,
+      upstream_headers: upstreamHeaders,
+      body_preview: errBody.slice(0, 120),
     })
-    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
-    res.setHeader('Cache-Control', 'no-store')
-    res.setHeader('X-Stream-Segment-Delivery', rewriteCtx.segmentDelivery)
-    if (isDirectEntry) recordDirectRequest('manifest_ok')
-    else recordProxyRequest('manifest_ok')
-    return res.status(200).send(text)
+    return res.status(upstreamRes.status).send(errBody || `Upstream error (${upstreamRes.status})`)
+  }
+
+  const manifestCandidate =
+    String(contentType).toLowerCase().includes('mpegurl') ||
+    parsed.pathname.toLowerCase().endsWith('.m3u8')
+
+  if (manifestCandidate) {
+    const bodyText = await upstreamRes.text().catch(() => '')
+    if (isHlsManifestResponse(finalUrl, contentType, bodyText)) {
+      try {
+        const rewriteCtx =
+          opts?.manifestRewriteUrlBuilder ||
+          resolveManifestRewriteUrlBuilder(req, {
+            channelId: opts?.channelId,
+            channelHeaders: upstreamHeaders,
+            rootUpstreamUrl: opts?.rootUpstreamUrl || parsed.toString(),
+          })
+        const { text: rewrittenCore, rewriteCount } = rewriteManifest(
+          bodyText,
+          finalUrl,
+          upstreamHeaders,
+          (absolute, hdr) => rewriteCtx.buildTargetUrl(absolute, hdr),
+        )
+        const text = appendManifestSessionHint(
+          rewrittenCore,
+          rewriteCtx.sessionId,
+          rewriteCtx.segmentDelivery,
+          null,
+        )
+        logProxyDiagnostics({
+          scope: 'manifest_rewrite',
+          mount: mountPath,
+          source_url: parsed.toString(),
+          final_url: finalUrl,
+          rewritten_url_count: rewriteCount,
+          segment_delivery: rewriteCtx.segmentDelivery,
+          segment_route_stats: rewriteCtx.getRouteStats?.() || null,
+          upstream_headers_normalized: upstreamHeaders,
+          output_bytes: Buffer.byteLength(text, 'utf8'),
+          has_extm3u: text.includes('#EXTM3U'),
+        })
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-store')
+        res.setHeader('X-Stream-Segment-Delivery', rewriteCtx.segmentDelivery)
+        if (isDirectEntry) recordDirectRequest('manifest_ok')
+        else recordProxyRequest('manifest_ok')
+        return res.status(200).send(text)
+      } catch (e) {
+        logProxyDiagnostics({
+          scope: 'manifest_rewrite_error',
+          mount: mountPath,
+          source_url: parsed.toString(),
+          error: String(e.message || e),
+        })
+        return res.status(502).json({ error: 'manifest rewrite failed', details: String(e.message || e) })
+      }
+    }
+
+    if (parsed.pathname.toLowerCase().endsWith('.m3u8')) {
+      logProxyDiagnostics({
+        scope: 'upstream_not_manifest',
+        mount: mountPath,
+        source_url: parsed.toString(),
+        status,
+        content_type: contentType,
+        body_preview: bodyText.slice(0, 120),
+        upstream_headers: upstreamHeaders,
+      })
+      return res.status(502).json({
+        error: 'upstream response is not a valid HLS manifest',
+        status,
+        content_type: contentType,
+      })
+    }
   }
 
   if (isDirectEntry) recordDirectRequest('segment_passthrough')
@@ -234,7 +278,7 @@ export async function runStreamProxyRequest(req, res, opts) {
 
 async function runStreamProxy(req, res, mountPath) {
   const sourceUrl = String(req.query.url || '').trim()
-  const upstreamHeaders = extractUpstreamHeaders(req)
+  const upstreamHeaders = extractUpstreamHeaders(req, sourceUrl)
   return runStreamProxyRequest(req, res, { sourceUrl, upstreamHeaders, mountPath })
 }
 

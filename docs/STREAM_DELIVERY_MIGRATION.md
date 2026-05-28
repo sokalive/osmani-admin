@@ -66,6 +66,16 @@ Default when `STREAM_SEGMENT_DELIVERY=bunny` and `STREAM_SEGMENT_SELECTIVE_ROUTI
 
 Auto-detected protected suffixes: `ycn-redirect.com`, `lanexa.online`, `netvidra.online`, `netstack.online`, plus `STREAM_SEGMENT_PROTECTED_HOSTS`.
 
+### ycn / Bein header fix
+
+Channel DB may store `origin` as `application/vnd.apple.mpegurl` (MIME type). That is **not** a valid HTTP `Origin` header and causes upstream 403/HTML responses. The API now normalizes before every upstream fetch:
+
+- `Origin` → `https://het140c.ycn-redirect.com` (from referer/upstream host)
+- `Referer` → inferred from upstream host when missing
+- `User-Agent` → Exo-style Android UA for protected streams (override with `STREAM_YCN_USER_AGENT`)
+
+Invalid HTML responses are no longer treated as HLS manifests (fixes false 500s during rewrite).
+
 **Do not** set `STREAM_SEGMENT_FORCE_PROXY=1` for ycn issues — selective routing keeps most traffic on Bunny.
 
 Metrics: `GET /api/health/stream-delivery` → `metrics.segment_routes_by_provider` (per-host bunny vs proxy counts).
