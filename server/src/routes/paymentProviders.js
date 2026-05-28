@@ -7,6 +7,7 @@ import { ensureJsonFile, readJson, writeJsonAtomic } from '../lib/jsonFile.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { resolvePublicAssetUrl } from '../lib/cdnAssets.js'
+import { apiResponseCacheNamespace } from '../middleware/apiResponseCache.js'
 import { UPLOADS_DIR, uploadPaymentProviderLogo } from '../multerUpload.js'
 
 export const PAYMENT_PROVIDERS_FILE = 'payment-providers.json'
@@ -158,15 +159,19 @@ function maybeUpload(req, res, next) {
   return next()
 }
 
-paymentProvidersRouter.get('/payment-providers', async (req, res) => {
-  try {
-    const all = await listProviders(req)
-    res.json(all.filter((p) => p.active))
-  } catch (e) {
-    console.error('[payment-providers] GET public failed:', e)
-    res.status(500).json({ error: String(e.message || e) })
-  }
-})
+paymentProvidersRouter.get(
+  '/payment-providers',
+  apiResponseCacheNamespace('payment-providers'),
+  async (req, res) => {
+    try {
+      const all = await listProviders(req)
+      res.json(all.filter((p) => p.active))
+    } catch (e) {
+      console.error('[payment-providers] GET public failed:', e)
+      res.status(500).json({ error: String(e.message || e) })
+    }
+  },
+)
 
 paymentProvidersRouter.get('/settings/payment-providers', async (req, res) => {
   try {

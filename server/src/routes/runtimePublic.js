@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
+import { apiResponseCacheNamespace } from '../middleware/apiResponseCache.js'
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 
@@ -24,7 +25,7 @@ runtimePublicRouter.get('/trial-watch', async (_req, res) => {
   }
 })
 
-runtimePublicRouter.get('/app-modes', async (_req, res) => {
+runtimePublicRouter.get('/app-modes', apiResponseCacheNamespace('runtime-app-modes'), async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.setHeader('Pragma', 'no-cache')

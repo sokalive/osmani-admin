@@ -12,6 +12,7 @@ import {
   logUploadStorageDiagnostics,
   UPLOADS_DIR,
 } from './multerUpload.js'
+import { wireApiCacheInvalidation } from './lib/apiCacheInvalidation.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
 import { streamProxyRouter } from './routes/streamProxy.js'
 
@@ -150,6 +151,7 @@ app.use((req, res) => {
 // --- START SERVER ---
 async function main() {
   try {
+    wireApiCacheInvalidation()
     assertUploadStorageReady()
     logUploadStorageDiagnostics()
     const cdnHealth = getCdnHealthSnapshot()

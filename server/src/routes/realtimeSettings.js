@@ -3,6 +3,7 @@ import { readChannels } from '../store.js'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
+import { apiResponseCacheNamespace } from '../middleware/apiResponseCache.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const realtimeSettingsRouter = Router()
@@ -488,8 +489,36 @@ export async function triggerServerHealthBroadcast(force = true) {
   return payload
 }
 
+/** Aggregated public settings (WhatsApp + popup) for clients that prefer one poll. */
+realtimeSettingsRouter.get('/settings/public', apiResponseCacheNamespace('settings-public'), async (_req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ error: 'Database not configured' })
+    const [whatsapp, popup] = await Promise.all([loadWhatsAppSettings(pool), loadPopupSettings(pool)])
+    const mode = popup.mode
+    const popupPayload = {
+      mode,
+      title: popup.title,
+      greeting: popup.greeting,
+      introduction: '',
+      bullets: popup.bullet_points,
+      disclaimer: popup.disclaimer,
+      bullet_points: popup.bullet_points,
+    }
+    if (mode === 'show_once') popupPayload.mode = 'once'
+    if (mode === 'always_show') popupPayload.mode = 'always'
+    return res.json({ whatsapp, popup: popupPayload })
+  } catch (e) {
+    console.error('[settings/public] GET', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
 /** Public read for production APK; admin PUT remains protected. */
-realtimeSettingsRouter.get('/whatsapp-settings', async (_req, res) => {
+realtimeSettingsRouter.get(
+  '/whatsapp-settings',
+  apiResponseCacheNamespace('whatsapp-settings'),
+  async (_req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -499,7 +528,8 @@ realtimeSettingsRouter.get('/whatsapp-settings', async (_req, res) => {
     console.error('[whatsapp-settings] GET', e)
     return res.status(500).json({ error: String(e.message || e) })
   }
-})
+},
+)
 
 realtimeSettingsRouter.put('/whatsapp-settings', requireAdminPanelAccess, async (req, res) => {
   try {
@@ -515,7 +545,10 @@ realtimeSettingsRouter.put('/whatsapp-settings', requireAdminPanelAccess, async 
   }
 })
 
-realtimeSettingsRouter.get('/settings/whatsapp', async (req, res) => {
+realtimeSettingsRouter.get(
+  '/settings/whatsapp',
+  apiResponseCacheNamespace('settings-whatsapp'),
+  async (req, res) => {
   const send = (payload) =>
     res.json({
       link: payload.url,
@@ -531,7 +564,8 @@ realtimeSettingsRouter.get('/settings/whatsapp', async (req, res) => {
     console.error('[settings/whatsapp] GET', e)
     return res.status(500).json({ error: String(e.message || e) })
   }
-})
+},
+)
 
 realtimeSettingsRouter.put('/settings/whatsapp', requireAdminPanelAccess, async (req, res) => {
   try {
@@ -581,7 +615,10 @@ realtimeSettingsRouter.put('/popup-settings', requireAdminPanelAccess, async (re
   }
 })
 
-realtimeSettingsRouter.get('/settings/popup', async (req, res) => {
+realtimeSettingsRouter.get(
+  '/settings/popup',
+  apiResponseCacheNamespace('settings-popup'),
+  async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
@@ -603,7 +640,8 @@ realtimeSettingsRouter.get('/settings/popup', async (req, res) => {
     console.error('[settings/popup] GET', e)
     return res.status(500).json({ error: String(e.message || e) })
   }
-})
+},
+)
 
 realtimeSettingsRouter.put('/settings/popup', requireAdminPanelAccess, async (req, res) => {
   try {

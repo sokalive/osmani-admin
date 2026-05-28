@@ -12,7 +12,8 @@
     "verify:app-update-v17": "node scripts/verify-app-update-playstore-v17.mjs",
     "verify:banner-payload": "node scripts/verify-banner-admin-payload.mjs",
     "verify:cdn-assets": "node scripts/verify-cdn-asset-urls.mjs",
-    "verify:apk-update-cdn": "node scripts/verify-apk-update-cdn.mjs"
+    "verify:apk-update-cdn": "node scripts/verify-apk-update-cdn.mjs",
+    "verify:api-cache": "node scripts/verify-api-cache.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",

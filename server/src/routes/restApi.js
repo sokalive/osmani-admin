@@ -35,6 +35,7 @@ import { trialWatchSettingsRouter } from './trialWatchSettings.js'
 import { trialWatchRouter } from './trialWatch.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { getPool } from '../db/pool.js'
+import { getApiCacheStats } from '../lib/apiResponseCache.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
 
 const FILES = {
@@ -63,6 +64,7 @@ restApi.get('/', (_req, res) => {
       '/users',
       '/channels',
       '/banners',
+      '/settings/public',
       '/settings',
       '/settings/zenopay',
       '/settings/sonicpesa',
@@ -177,12 +179,19 @@ restApi.get('/', (_req, res) => {
 
 restApi.get('/health', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
-  res.json({
+  const body = {
     ok: true,
     service: 'osmani-admin-api',
     time: new Date().toISOString(),
     commit: getServerGitCommit(),
-  })
+  }
+  if (
+    String(process.env.API_CACHE_DEBUG || '').trim() === '1' ||
+    String(process.env.NODE_ENV || '').toLowerCase() !== 'production'
+  ) {
+    body.api_cache = getApiCacheStats()
+  }
+  res.json(body)
 })
 
 /** Admin-only: DB fingerprint + sample rows to verify read/write same Postgres as UI. */

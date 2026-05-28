@@ -27,6 +27,7 @@ import {
   logChannelStreamDiagList,
   logChannelStreamDiagWrite,
 } from '../lib/channelStreamDiagnostics.js'
+import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
 import { triggerServerHealthBroadcast } from './realtimeSettings.js'
 
 export const channelsRouter = Router()
@@ -60,7 +61,7 @@ function maybeUpload(req, res, next) {
   return next()
 }
 
-channelsRouter.get('/', async (req, res) => {
+channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
   const t0 = Date.now()
   try {
     const list = await readChannels()

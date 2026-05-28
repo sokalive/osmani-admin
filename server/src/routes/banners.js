@@ -12,6 +12,7 @@ import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const bannersRouter = Router()
@@ -200,7 +201,7 @@ async function unlinkUploadIfAny(imagePath) {
 }
 
 /** Public: spec visibility + shape only (DB rows, no demo fallbacks). */
-bannersRouter.get('/', async (req, res) => {
+bannersRouter.get('/', apiResponseCacheExact('banners'), async (req, res) => {
   try {
     const rows = await bannerStore.listBannersPublic()
     const payload = enrichBannersListForViewer(

@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { planRowToApi } from '../billingNormalize.js'
 import * as billing from '../billingStore.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const plansRouter = Router()
@@ -36,7 +37,7 @@ function parsePlanBody(body) {
   }
 }
 
-plansRouter.get('/', async (_req, res) => {
+plansRouter.get('/', apiResponseCacheExact('plans'), async (_req, res) => {
   try {
     const rows = await billing.listPlansWithSubscriberCounts()
     res.json(rows.map(planRowToApi))
