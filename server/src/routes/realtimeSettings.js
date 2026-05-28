@@ -33,9 +33,14 @@ const DEFAULTS = {
 const HEALTH_CACHE_TTL_MS = Math.max(5000, Number(process.env.SERVER_HEALTH_CACHE_MS) || 20000)
 const HEALTH_PROBE_TIMEOUT_MS = Math.max(1500, Number(process.env.SERVER_HEALTH_PROBE_TIMEOUT_MS) || 4500)
 const HEALTH_BACKGROUND_INTERVAL_MS = Math.max(
-  10000,
-  Number(process.env.SERVER_HEALTH_BROADCAST_INTERVAL_MS) || 30000,
+  30_000,
+  Number(process.env.SERVER_HEALTH_BROADCAST_INTERVAL_MS) || 60_000,
 )
+
+function serverHealthBackgroundEnabled() {
+  const raw = String(process.env.SERVER_HEALTH_BACKGROUND_ENABLED ?? '0').trim().toLowerCase()
+  return ['1', 'true', 'yes', 'on'].includes(raw)
+}
 const MEDIA_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) ExoPlayerLib/2.19.1'
 
@@ -690,9 +695,17 @@ realtimeSettingsRouter.get('/server-health', requireAdminPanelAccess, async (_re
   }
 })
 
-setInterval(() => {
-  void triggerServerHealthBroadcast(true)
-    .catch((e) => {
+if (serverHealthBackgroundEnabled()) {
+  console.info(
+    `[SERVER_HEALTH] background probes enabled (every ${HEALTH_BACKGROUND_INTERVAL_MS}ms)`,
+  )
+  setInterval(() => {
+    void triggerServerHealthBroadcast(true).catch((e) => {
       console.error('[SERVER_HEALTH] background refresh failed:', e)
     })
-}, HEALTH_BACKGROUND_INTERVAL_MS)
+  }, HEALTH_BACKGROUND_INTERVAL_MS)
+} else {
+  console.info(
+    '[SERVER_HEALTH] background probes disabled — probes run on GET /api/server-health and channel changes only',
+  )
+}

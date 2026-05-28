@@ -30,8 +30,8 @@ services:
         value: no-cache, no-store, must-revalidate
 
   # Node API — persistent media uploads (attach disk + set UPLOAD_DIR to mountPath).
-  # If you already have this service on Render, Blueprint merges by name; align UPLOAD_DIR with disk mountPath.
-  # Persistent disks require a paid instance type (not free).
+  # Sizing: Starter is the minimum plan that supports persistent disks (cannot downgrade to Free).
+  # See docs/RENDER_SIZING.md. Keep instance count at 1 unless Metrics justify scaling up.
   - type: web
     name: osmani-admin-api
     runtime: node
@@ -52,6 +52,10 @@ services:
         sync: false
       - key: BASE_URL
         sync: false
+      - key: SERVER_HEALTH_BACKGROUND_ENABLED
+        value: "0"
+      - key: PG_POOL_MAX
+        value: "8"
     disk:
       name: media-uploads
       mountPath: /var/render/media
