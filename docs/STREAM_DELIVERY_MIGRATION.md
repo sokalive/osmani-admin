@@ -72,7 +72,7 @@ Channel DB may store `origin` as `application/vnd.apple.mpegurl` (MIME type). Th
 
 - `Origin` → `https://het140c.ycn-redirect.com` (from referer/upstream host)
 - `Referer` → inferred from upstream host when missing
-- `User-Agent` → Exo-style Android UA for protected streams (override with `STREAM_YCN_USER_AGENT`)
+- `User-Agent` → **desktop Chrome** for server-side ycn fetch (`STREAM_YCN_UPSTREAM_USER_AGENT`). Cloudflare blocks Exo/Android mobile UA from datacenter IPs; Exo on the phone only talks to our proxy.
 
 Invalid HTML responses are no longer treated as HLS manifests (fixes false 500s during rewrite).
 

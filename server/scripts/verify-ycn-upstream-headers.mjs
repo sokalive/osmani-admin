@@ -16,8 +16,15 @@ const bad = normalizeUpstreamHeaders(
 assert.equal(bad.origin, 'https://het140c.ycn-redirect.com')
 assert.ok(!bad.origin.includes('mpegurl'))
 assert.equal(bad.referer, 'https://het140c.ycn-redirect.com')
-assert.ok(bad.userAgent.includes('Android'))
+assert.ok(/Windows NT/i.test(bad.userAgent), 'ycn upstream must use desktop UA not Exo/mobile')
+assert.ok(!/ExoPlayerLib/i.test(bad.userAgent))
 assert.equal(bad.protectedUpstream, true)
+
+const fromExoChannel = normalizeUpstreamHeaders(
+  { referer: 'https://het140c.ycn-redirect.com', origin: '', userAgent: 'ExoPlayerLib/2.19.1' },
+  ycnUrl,
+)
+assert.ok(/Windows NT/i.test(fromExoChannel.userAgent))
 
 const publicUrl = 'https://cdn.example.com/live/chunk.ts'
 const pub = normalizeUpstreamHeaders(

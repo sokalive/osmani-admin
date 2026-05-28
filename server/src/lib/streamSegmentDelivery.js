@@ -14,11 +14,13 @@ import {
   isProtectedSegmentTarget,
   isSelectiveSegmentRoutingEnabled,
 } from './streamProtectedProviders.js'
+import { getYcnUpstreamHeaderProfile } from './streamUpstreamHeaders.js'
 import {
   recordSegmentDeliveryMode,
   recordSegmentProviderRoute,
   recordSegmentUrlIssued,
 } from './streamDeliveryMetrics.js'
+import { normalizeUpstreamHeaders } from './streamUpstreamHeaders.js'
 
 export const STREAM_SEGMENT_MODES = Object.freeze(['proxy', 'bunny', 'hybrid'])
 export const BUNNY_SEGMENT_PUBLIC_PATH = 'hls/seg'
@@ -151,7 +153,8 @@ export function createManifestSegmentUrlBuilder(req, ctx = {}) {
         recordSegmentUrlIssued('proxy')
         recordSegmentProviderRoute(host, 'proxy')
         stats.proxy += 1
-        return buildProxyUrl(req, absoluteTarget, hdr, PROXY_MOUNT_STREAM)
+        const proxyHdr = normalizeUpstreamHeaders(hdr, absoluteTarget)
+        return buildProxyUrl(req, absoluteTarget, proxyHdr, PROXY_MOUNT_STREAM)
       }
 
       const bunny = buildSignedBunnySegmentUrl(absoluteTarget, hdr, { channelId, sessionId })
@@ -165,7 +168,8 @@ export function createManifestSegmentUrlBuilder(req, ctx = {}) {
       recordSegmentUrlIssued('proxy_fallback')
       recordSegmentProviderRoute(host, 'proxy')
       stats.proxy += 1
-      return buildProxyUrl(req, absoluteTarget, hdr, PROXY_MOUNT_STREAM)
+      const proxyHdr = normalizeUpstreamHeaders(hdr, absoluteTarget)
+      return buildProxyUrl(req, absoluteTarget, proxyHdr, PROXY_MOUNT_STREAM)
     },
     getRouteStats: () => ({ ...stats }),
   }
@@ -205,6 +209,7 @@ export function getStreamSegmentDeliveryHealth() {
         : 'Player → Bunny CDN → /hls/seg origin-pull on miss → upstream'
       : 'Player → Render stream-proxy (rollback / not enabled)',
     origin_pull_route: `/${getBunnySegmentPublicPath()}`,
+    ycn_upstream_profile: getYcnUpstreamHeaderProfile(),
   }
 }
 

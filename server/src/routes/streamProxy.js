@@ -142,15 +142,16 @@ export async function runStreamProxyRequest(req, res, opts) {
   const finalUrl = String(upstreamRes.url || parsed.toString())
   const status = Number(upstreamRes.status)
   const contentType = upstreamRes.headers.get('content-type') || 'application/octet-stream'
-  logProxyDiagnostics({
-    scope: 'request',
-    mount: mountPath,
-    source_url: parsed.toString(),
-    final_url: finalUrl,
-    status,
-    upstream_headers: upstreamHeaders,
-    elapsed_ms: Date.now() - startedAt,
-  })
+    logProxyDiagnostics({
+      scope: 'request',
+      mount: mountPath,
+      source_url: parsed.toString(),
+      final_url: finalUrl,
+      status,
+      upstream_headers: upstreamHeaders,
+      upstream_fetch_headers: headers,
+      elapsed_ms: Date.now() - startedAt,
+    })
   logTokenDiagnostics(finalUrl, status)
 
   if (!upstreamRes.ok) {

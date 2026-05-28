@@ -1,12 +1,18 @@
 /**
  * Normalize referer / origin / user-agent for upstream HLS fetches (ycn-redirect, Exo, etc.).
- * DB often stores origin as MIME type "application/vnd.apple.mpegurl" — invalid for Origin header.
+ *
+ * ycn / Cloudflare parity note (audited 2026-05-28):
+ * - Desktop Chrome UA + Referer → 200 #EXTM3U from server/datacenter IPs
+ * - Android Mobile / ExoPlayerLib UA → 403 Cloudflare HTML block
+ * Exo on device talks to our proxy; upstream fetch should mimic desktop browser, not Exo UA.
  */
 import { extractUrlHost, isProtectedSegmentTarget } from './streamProtectedProviders.js'
 
-const EXO_MOBILE_UA =
-  process.env.STREAM_EXO_USER_AGENT ||
-  'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
+/** Upstream fetch UA for ycn/protected providers (NOT the Exo client UA). */
+const YCN_UPSTREAM_UA =
+  process.env.STREAM_YCN_UPSTREAM_USER_AGENT ||
+  process.env.STREAM_YCN_USER_AGENT ||
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
 const DEFAULT_PROXY_UA =
   process.env.STREAM_PROXY_USER_AGENT ||
@@ -51,6 +57,30 @@ function isMimeTypeOrigin(value) {
   return s.includes('mpegurl') || s.includes('octet-stream') || s === '*/*'
 }
 
+function isBlockedMobileOrExoUa(ua) {
+  const s = String(ua || '')
+  return (
+    /ExoPlayerLib/i.test(s) ||
+    /Android.*Mobile Safari/i.test(s) ||
+    (/Android/i.test(s) && /Mobile/i.test(s) && !/Windows NT/i.test(s))
+  )
+}
+
+/**
+ * UA sent to ycn upstream. Desktop browser fingerprint; Exo only hits our API.
+ */
+export function pickYcnUpstreamUserAgent(channelUa) {
+  const custom = String(
+    process.env.STREAM_YCN_UPSTREAM_USER_AGENT || process.env.STREAM_YCN_USER_AGENT || '',
+  ).trim()
+  if (custom) return custom
+  const ua = String(channelUa || '').trim()
+  if (ua && /Windows NT/i.test(ua) && !/ExoPlayerLib/i.test(ua)) {
+    return ua
+  }
+  return YCN_UPSTREAM_UA
+}
+
 /**
  * @param {{ referer?: string, origin?: string, userAgent?: string }} hdr
  * @param {string} [upstreamUrl]
@@ -67,17 +97,11 @@ export function normalizeUpstreamHeaders(hdr = {}, upstreamUrl = '') {
 
   if (protectedUpstream) {
     referer = inferYcnReferer(upstream, referer)
+    userAgent = pickYcnUpstreamUserAgent(userAgent)
   }
 
   if (!isHttpOrigin(origin) || isMimeTypeOrigin(origin)) {
     origin = originFromUrl(referer) || originFromUrl(upstream) || ''
-  }
-
-  if (protectedUpstream) {
-    const ycnUa = String(process.env.STREAM_YCN_USER_AGENT || '').trim() || EXO_MOBILE_UA
-    if (!String(hdr.userAgent || '').trim() || /Windows NT 10\.0/i.test(userAgent)) {
-      userAgent = ycnUa
-    }
   }
 
   return { referer, origin, userAgent, protectedUpstream }
@@ -85,18 +109,22 @@ export function normalizeUpstreamHeaders(hdr = {}, upstreamUrl = '') {
 
 /**
  * Headers for node fetch() to upstream CDN/provider.
- * @param {{ referer?: string, origin?: string, userAgent?: string }} hdr — already normalized
- * @param {{ clientAccept?: string, range?: string, manifest?: boolean }} [opts]
+ * @param {{ referer?: string, origin?: string, userAgent?: string }} hdr
+ * @param {{ clientAccept?: string, range?: string, manifest?: boolean, upstreamUrl?: string }} [opts]
  */
 export function buildUpstreamFetchHeaders(hdr, opts = {}) {
   const normalized = normalizeUpstreamHeaders(hdr, opts.upstreamUrl || '')
   const headers = {
     'User-Agent': normalized.userAgent,
-    Accept: opts.manifest
-      ? 'application/vnd.apple.mpegurl,application/x-mpegurl,*/*'
-      : String(opts.clientAccept || '*/*'),
+    Accept: normalized.protectedUpstream
+      ? '*/*'
+      : opts.manifest
+        ? 'application/vnd.apple.mpegurl,application/x-mpegurl,*/*'
+        : String(opts.clientAccept || '*/*'),
     'Accept-Encoding': 'identity',
-    'Accept-Language': 'en-US,en;q=0.9',
+  }
+  if (!normalized.protectedUpstream) {
+    headers['Accept-Language'] = 'en-US,en;q=0.9'
   }
   if (normalized.referer) headers.Referer = normalized.referer
   if (normalized.origin && isHttpOrigin(normalized.origin)) {
@@ -126,4 +154,11 @@ export function isHlsManifestResponse(finalUrl, contentType, bodyText) {
     /* ignore */
   }
   return false
+}
+
+export function getYcnUpstreamHeaderProfile() {
+  return {
+    upstream_user_agent: YCN_UPSTREAM_UA,
+    note: 'Exo on phone uses proxy URLs; ycn sees desktop Chrome from server egress',
+  }
 }
