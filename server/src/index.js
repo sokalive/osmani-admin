@@ -153,6 +153,35 @@ app.use((req, res) => {
   })
 })
 
+app.use((err, req, res, _next) => {
+  const path = String(req.originalUrl || req.url || '')
+  const isStream =
+    path.includes('/stream-direct') || path.includes('/stream-proxy') || path.includes('/hls/seg')
+  console.error(
+    '[express-error]',
+    JSON.stringify({
+      path,
+      method: req.method,
+      message: String(err?.message || err),
+      stack: String(err?.stack || '')
+        .split('\n')
+        .slice(0, 10)
+        .join('\n'),
+      stream_route: isStream,
+    }),
+  )
+  if (res.headersSent) {
+    return res.destroy(err)
+  }
+  if (isStream) {
+    return res.status(502).json({
+      error: 'stream handler failed',
+      details: String(err?.message || err),
+    })
+  }
+  return res.status(500).json({ error: 'Internal server error' })
+})
+
 // --- START SERVER ---
 async function main() {
   try {

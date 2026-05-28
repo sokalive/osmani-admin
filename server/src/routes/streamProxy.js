@@ -88,6 +88,24 @@ function appendManifestSessionHint(text, sessionId, segmentDelivery, tokenExpSec
  * @param {import('express').Response} res
  * @param {{ sourceUrl: string, upstreamHeaders: { referer?: string, origin?: string, userAgent?: string }, mountPath: string, channelId?: string, manifestRewriteUrlBuilder?: ReturnType<typeof resolveManifestRewriteUrlBuilder> }} opts
  */
+function respondUpstreamNotManifest(res, mountPath, parsed, finalUrl, status, contentType, bodyPreview, upstreamHeaders) {
+  logProxyDiagnostics({
+    scope: 'upstream_not_manifest',
+    mount: mountPath,
+    source_url: parsed.toString(),
+    final_url: finalUrl,
+    status,
+    content_type: contentType,
+    body_preview: bodyPreview,
+    upstream_headers: upstreamHeaders,
+  })
+  return res.status(502).json({
+    error: 'upstream response is not a valid HLS manifest',
+    status,
+    content_type: contentType,
+  })
+}
+
 export async function runStreamProxyRequest(req, res, opts) {
   const startedAt = Date.now()
   const mountPath = String(opts?.mountPath || PROXY_MOUNT_STREAM)
@@ -103,6 +121,41 @@ export async function runStreamProxyRequest(req, res, opts) {
   if (!parsed || !['http:', 'https:'].includes(parsed.protocol)) {
     return res.status(400).json({ error: 'url must be absolute http(s)' })
   }
+
+  try {
+    return await runStreamProxyRequestInner(req, res, opts, {
+      startedAt,
+      mountPath,
+      isDirectEntry,
+      sourceUrl,
+      parsed,
+    })
+  } catch (e) {
+    const errMsg = String(e?.message || e)
+    const stack = String(e?.stack || '').split('\n').slice(0, 8).join('\n')
+    if (isDirectEntry) recordDirectRequest('runtime_error')
+    else recordProxyRequest('runtime_error')
+    logProxyDiagnostics({
+      scope: 'runtime_error',
+      mount: mountPath,
+      source_url: parsed.toString(),
+      error: errMsg,
+      stack,
+      elapsed_ms: Date.now() - startedAt,
+    })
+    if (!res.headersSent) {
+      return res.status(502).json({
+        error: 'stream proxy runtime error',
+        details: errMsg,
+      })
+    }
+    res.destroy(e)
+  }
+}
+
+async function runStreamProxyRequestInner(req, res, opts, ctx) {
+  const { startedAt, mountPath, isDirectEntry, parsed } = ctx
+  const sourceUrl = ctx.sourceUrl
 
   const upstreamHeaders = normalizeUpstreamHeaders(
     {
@@ -142,7 +195,7 @@ export async function runStreamProxyRequest(req, res, opts) {
   const finalUrl = String(upstreamRes.url || parsed.toString())
   const status = Number(upstreamRes.status)
   const contentType = upstreamRes.headers.get('content-type') || 'application/octet-stream'
-    logProxyDiagnostics({
+  logProxyDiagnostics({
       scope: 'request',
       mount: mountPath,
       source_url: parsed.toString(),
@@ -226,22 +279,16 @@ export async function runStreamProxyRequest(req, res, opts) {
       }
     }
 
-    if (parsed.pathname.toLowerCase().endsWith('.m3u8')) {
-      logProxyDiagnostics({
-        scope: 'upstream_not_manifest',
-        mount: mountPath,
-        source_url: parsed.toString(),
-        status,
-        content_type: contentType,
-        body_preview: bodyText.slice(0, 120),
-        upstream_headers: upstreamHeaders,
-      })
-      return res.status(502).json({
-        error: 'upstream response is not a valid HLS manifest',
-        status,
-        content_type: contentType,
-      })
-    }
+    return respondUpstreamNotManifest(
+      res,
+      mountPath,
+      parsed,
+      finalUrl,
+      status,
+      contentType,
+      bodyText.slice(0, 120),
+      upstreamHeaders,
+    )
   }
 
   if (isDirectEntry) recordDirectRequest('segment_passthrough')
@@ -263,7 +310,25 @@ export async function runStreamProxyRequest(req, res, opts) {
   }
 
   if (!upstreamRes.body) return res.end()
-  const nodeStream = Readable.fromWeb(upstreamRes.body)
+  let nodeStream
+  try {
+    nodeStream = Readable.fromWeb(upstreamRes.body)
+  } catch (e) {
+    logProxyDiagnostics({
+      scope: 'stream_body_locked',
+      mount: mountPath,
+      source_url: parsed.toString(),
+      final_url: finalUrl,
+      error: String(e.message || e),
+    })
+    if (!res.headersSent) {
+      return res.status(502).json({
+        error: 'upstream response body unavailable',
+        details: String(e.message || e),
+      })
+    }
+    return
+  }
   nodeStream.on('error', (e) => {
     logProxyDiagnostics({
       scope: 'stream_error',
@@ -277,11 +342,17 @@ export async function runStreamProxyRequest(req, res, opts) {
   return nodeStream.pipe(res)
 }
 
+function wrapAsyncRoute(handler) {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res)).catch(next)
+  }
+}
+
 async function runStreamProxy(req, res, mountPath) {
   const sourceUrl = String(req.query.url || '').trim()
   const upstreamHeaders = extractUpstreamHeaders(req, sourceUrl)
   return runStreamProxyRequest(req, res, { sourceUrl, upstreamHeaders, mountPath })
 }
 
-streamProxyRouter.get(`/${PROXY_MOUNT_STREAM}`, (req, res) => runStreamProxy(req, res, PROXY_MOUNT_STREAM))
-streamProxyRouter.get(`/${PROXY_MOUNT_TEST}`, (req, res) => runStreamProxy(req, res, PROXY_MOUNT_TEST))
+streamProxyRouter.get(`/${PROXY_MOUNT_STREAM}`, wrapAsyncRoute((req, res) => runStreamProxy(req, res, PROXY_MOUNT_STREAM)))
+streamProxyRouter.get(`/${PROXY_MOUNT_TEST}`, wrapAsyncRoute((req, res) => runStreamProxy(req, res, PROXY_MOUNT_TEST)))

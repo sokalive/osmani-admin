@@ -8,6 +8,7 @@ const BUILTIN_PROTECTED_HOST_SUFFIXES = [
   'lanexa.online',
   'netvidra.online',
   'netstack.online',
+  'loadcore.online',
 ]
 
 /** Host suffixes always treated as public CDN (force Bunny when enabled). */
@@ -96,13 +97,25 @@ export function isProtectedSegmentTarget(absoluteUrl, hdr = {}, ctx = {}) {
     if (hostMatchesAnySuffix(host, hostSuffixes()) || host === rootHost) {
       return pathLooksTokenized(absoluteUrl)
     }
+    if (
+      pathLooksTokenized(absoluteUrl) &&
+      hostMatchesAnySuffix(rootHost, hostSuffixes()) &&
+      host.endsWith('.online') &&
+      !hostMatchesAnySuffix(host, publicHostSuffixes())
+    ) {
+      return true
+    }
   }
 
   const channelReferer = String(ctx.channelReferer || hdr.referer || '').trim()
   if (channelReferer && urlHasAuthQuery(absoluteUrl)) return true
 
   if (channelReferer && hostMatchesAnySuffix(extractUrlHost(channelReferer), hostSuffixes())) {
-    if (hostMatchesAnySuffix(host, hostSuffixes()) && pathLooksTokenized(absoluteUrl)) {
+    if (
+      pathLooksTokenized(absoluteUrl) &&
+      (hostMatchesAnySuffix(host, hostSuffixes()) ||
+        (host.endsWith('.online') && !hostMatchesAnySuffix(host, publicHostSuffixes())))
+    ) {
       return true
     }
   }

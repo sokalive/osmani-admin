@@ -142,9 +142,7 @@ export function isHlsManifestResponse(finalUrl, contentType, bodyText) {
   if (ct.includes('text/html')) return false
   const body = String(bodyText || '').trimStart()
   if (body.startsWith('#EXTM3U')) return true
-  if (ct.includes('application/vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) {
-    return true
-  }
+  if (body.startsWith('<') || body.startsWith('{')) return false
   try {
     const u = new URL(String(finalUrl || ''))
     if (u.pathname.toLowerCase().endsWith('.m3u8') && body.startsWith('#')) {
@@ -152,6 +150,9 @@ export function isHlsManifestResponse(finalUrl, contentType, bodyText) {
     }
   } catch {
     /* ignore */
+  }
+  if (ct.includes('application/vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')) {
+    return body.startsWith('#') && body.includes('#EXT')
   }
   return false
 }

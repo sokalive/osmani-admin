@@ -26,10 +26,12 @@ const ycnMaster =
   'http://het103b.ycn-redirect.com/live/918454578001/index.m3u8?t=abc&e=9999999999'
 const ycnSeg =
   'http://h24.lanexa.online/2203124/58.js?918454578001/8203'
+const ycnLoadcoreSeg = 'http://h24.loadcore.online/2203124/58.js?918454578001/9973'
 const publicSeg = 'https://cdn.example.com/live/chunk00001.ts'
 
 assert.equal(isProtectedSegmentTarget(ycnMaster, { referer: 'https://het140c.ycn-redirect.com' }), true)
 assert.equal(isProtectedSegmentTarget(ycnSeg, {}, { rootUpstreamUrl: ycnMaster }), true)
+assert.equal(isProtectedSegmentTarget(ycnLoadcoreSeg, {}, { rootUpstreamUrl: ycnMaster }), true)
 assert.equal(isProtectedSegmentTarget(publicSeg, {}), false)
 
 assert.equal(
@@ -47,9 +49,14 @@ const builder = createManifestSegmentUrlBuilder(mockReq, {
 })
 
 const proxyUrl = builder.buildTargetUrl(ycnSeg, { referer: 'https://het140c.ycn-redirect.com' })
+const loadcoreProxyUrl = builder.buildTargetUrl(ycnLoadcoreSeg, {
+  referer: 'https://het140c.ycn-redirect.com',
+})
 const bunnyUrl = builder.buildTargetUrl(publicSeg, {})
 
 assert.ok(proxyUrl.includes('/stream-proxy?'), `expected proxy, got ${proxyUrl}`)
+assert.ok(loadcoreProxyUrl.includes('/stream-proxy?'), `expected proxy for loadcore, got ${loadcoreProxyUrl}`)
+assert.ok(!loadcoreProxyUrl.includes('b-cdn.net'), 'loadcore must not use Bunny')
 assert.ok(bunnyUrl.includes('osmanitv.b-cdn.net/hls/seg'), `expected bunny, got ${bunnyUrl}`)
 
 const metrics = getStreamDeliveryMetricsSnapshot()

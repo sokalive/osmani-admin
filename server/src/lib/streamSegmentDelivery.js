@@ -146,8 +146,27 @@ export function createManifestSegmentUrlBuilder(req, ctx = {}) {
     sessionId,
     segmentDelivery: bunnyGloballyEnabled && isSelectiveSegmentRoutingEnabled() ? 'selective' : bunnyGloballyEnabled ? 'bunny' : 'proxy',
     buildTargetUrl(absoluteTarget, hdr) {
-      const route = bunnyGloballyEnabled ? resolveSegmentRoute(absoluteTarget, hdr, routeCtx) : 'proxy'
+      let route = bunnyGloballyEnabled ? resolveSegmentRoute(absoluteTarget, hdr, routeCtx) : 'proxy'
       const host = extractUrlHost(absoluteTarget) || 'unknown'
+      const protectedCtx = {
+        rootUpstreamUrl: routeCtx.rootUpstreamUrl,
+        channelReferer: routeCtx.channelReferer || hdr.referer,
+      }
+      if (route === 'bunny' && isProtectedSegmentTarget(absoluteTarget, hdr, protectedCtx)) {
+        console.log(
+          '[stream-segment]',
+          JSON.stringify({
+            scope: 'bunny_misroute',
+            host,
+            channel_id: channelId,
+            session_id: sessionId,
+            root_upstream_host: extractUrlHost(routeCtx.rootUpstreamUrl),
+            segment_url: String(absoluteTarget || '').slice(0, 200),
+            action: 'force_proxy',
+          }),
+        )
+        route = 'proxy'
+      }
 
       if (route === 'proxy') {
         recordSegmentUrlIssued('proxy')

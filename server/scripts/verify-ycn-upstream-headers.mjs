@@ -35,6 +35,10 @@ assert.equal(pub.origin, 'https://cdn.example.com')
 assert.equal(pub.protectedUpstream, false)
 
 assert.equal(isHlsManifestResponse('http://x/y.m3u8', 'text/html', '<!DOCTYPE html>'), false)
+assert.equal(
+  isHlsManifestResponse('http://x/y.js', 'application/vnd.apple.mpegurl', '<!DOCTYPE html>'),
+  false,
+)
 assert.equal(isHlsManifestResponse('http://x/y.m3u8', 'text/plain', '#EXTM3U\n#EXTINF:1,\n'), true)
 
 console.log('verify-ycn-upstream-headers: OK')

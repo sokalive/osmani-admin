@@ -174,7 +174,26 @@ export async function runBunnyOriginSegmentFetch(req, res) {
   )
 
   if (!upstreamRes.body) return res.end()
-  const nodeStream = Readable.fromWeb(upstreamRes.body)
+  let nodeStream
+  try {
+    nodeStream = Readable.fromWeb(upstreamRes.body)
+  } catch (e) {
+    console.log(
+      '[stream-bunny-origin]',
+      JSON.stringify({
+        scope: 'stream_body_locked',
+        upstream_host: parsed.host,
+        error: String(e.message || e),
+      }),
+    )
+    if (!res.headersSent) {
+      return res.status(502).json({
+        error: 'upstream response body unavailable',
+        details: String(e.message || e),
+      })
+    }
+    return
+  }
   nodeStream.on('error', (e) => {
     console.log(
       '[stream-bunny-origin]',
@@ -189,5 +208,11 @@ export async function runBunnyOriginSegmentFetch(req, res) {
   return nodeStream.pipe(res)
 }
 
+function wrapAsyncRoute(handler) {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res)).catch(next)
+  }
+}
+
 const segmentPath = getBunnySegmentPublicPath()
-streamBunnyPullRouter.get(`/${segmentPath}`, (req, res) => runBunnyOriginSegmentFetch(req, res))
+streamBunnyPullRouter.get(`/${segmentPath}`, wrapAsyncRoute((req, res) => runBunnyOriginSegmentFetch(req, res)))
