@@ -62,6 +62,10 @@ services:
         value: "1"
       - key: STREAM_PLAYBACK_FORCE_PROXY
         value: "1"
+      - key: DIRECT_STREAM_CUTOVER_ENABLED
+        value: "0"
+      - key: DIRECT_STREAM_ROLLOUT_PERCENT
+        value: "0"
       - key: DIRECT_STREAM_SIGNING_SECRET
         sync: false
     disk:

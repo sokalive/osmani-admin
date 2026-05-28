@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { recordTokenValidationFailure } from './streamDeliveryMetrics.js'
 
 export const STREAM_DIRECT_MOUNT = 'stream-direct'
 
@@ -90,12 +91,16 @@ export function createDirectStreamToken(input) {
  */
 export function verifyDirectStreamToken(token) {
   if (!isDirectStreamSigningConfigured()) {
-    return { ok: false, error: 'Signing not configured', status: 503 }
+    const err = { ok: false, error: 'Signing not configured', status: 503 }
+    recordTokenValidationFailure(err.error)
+    return err
   }
   const raw = String(token || '').trim()
   const dot = raw.lastIndexOf('.')
   if (dot <= 0) {
-    return { ok: false, error: 'Malformed token', status: 400 }
+    const err = { ok: false, error: 'Malformed token', status: 400 }
+    recordTokenValidationFailure(err.error)
+    return err
   }
   const body = raw.slice(0, dot)
   const sig = raw.slice(dot + 1)
@@ -103,24 +108,34 @@ export function verifyDirectStreamToken(token) {
   const sigBuf = Buffer.from(sig)
   const expBuf = Buffer.from(expected)
   if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-    return { ok: false, error: 'Invalid signature', status: 403 }
+    const err = { ok: false, error: 'Invalid signature', status: 403 }
+    recordTokenValidationFailure(err.error)
+    return err
   }
   let payload
   try {
     payload = JSON.parse(base64UrlDecode(body).toString('utf8'))
   } catch {
-    return { ok: false, error: 'Invalid token payload', status: 400 }
+    const err = { ok: false, error: 'Invalid token payload', status: 400 }
+    recordTokenValidationFailure(err.error)
+    return err
   }
   if (!payload || payload.v !== 1 || !payload.u) {
-    return { ok: false, error: 'Unsupported token version', status: 400 }
+    const err = { ok: false, error: 'Unsupported token version', status: 400 }
+    recordTokenValidationFailure(err.error)
+    return err
   }
   const exp = Number(payload.exp)
   if (!Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) {
-    return { ok: false, error: 'Token expired', status: 403 }
+    const err = { ok: false, error: 'Token expired', status: 403 }
+    recordTokenValidationFailure(err.error)
+    return err
   }
   const upstreamUrl = parseUpstreamUrl(payload.u)
   if (!upstreamUrl) {
-    return { ok: false, error: 'Invalid upstream in token', status: 400 }
+    const err = { ok: false, error: 'Invalid upstream in token', status: 400 }
+    recordTokenValidationFailure(err.error)
+    return err
   }
   return {
     ok: true,

@@ -62,6 +62,8 @@ restApi.get('/', (_req, res) => {
       '/health',
       '/health/media',
       '/health/stream-delivery',
+      '/stream-delivery/fallback',
+      '/stream-delivery/report-fallback',
       '/users',
       '/channels',
       '/banners',

@@ -1,78 +1,129 @@
 # Stream delivery migration (Phase 4)
 
-Foundation for moving HLS playback off Render `stream-proxy` toward signed direct / CDN paths **without** changing current client behavior.
+Controlled migration from Render `stream-proxy` to signed **stream-direct** entry with proxy fallback and rollout guardrails.
 
-## Current state (Step 1)
+## Architecture (Step 2)
 
-| Item | Behavior |
-|------|----------|
-| `playbackUrl` | **Still Render proxy** (`STREAM_PLAYBACK_FORCE_PROXY=1` default) |
-| `stream-proxy` | Unchanged fallback for all existing apps |
-| `direct_stream_url` | Additive API field (signed `/stream-direct?token=…`) when signing is configured |
-| `stream_delivery_mode` | Global mode from env: `proxy` \| `direct` \| `hybrid` |
-| Production cutover | **Not enabled** |
+| Layer | Route | Role |
+|-------|-------|------|
+| **Playback entry (rolled out)** | `GET /stream-direct?token=…` | HMAC-validated manifest fetch |
+| **HLS segments** | `GET /stream-proxy?url=…` | Rewritten segment URLs (stable today) |
+| **Fallback** | `proxy_playback_url` in API | Always available on each channel |
+
+Future: Bunny pull zone for segments (Step 3+).
 
 ## Environment
 
 ```bash
+# Foundation
 STREAM_DELIVERY_MODE=hybrid
 DIRECT_STREAM_SIGNING_ENABLED=1
-DIRECT_STREAM_SIGNING_SECRET=<min 16 chars — set in Render dashboard only>
-STREAM_PLAYBACK_FORCE_PROXY=1          # default; keep 1 until cutover plan
+DIRECT_STREAM_SIGNING_SECRET=<32+ chars in Render dashboard>
 DIRECT_STREAM_TOKEN_TTL_SEC=120
-# Optional: DIRECT_STREAM_BASE_URL=https://osmani-admin-api.onrender.com
+
+# Cutover guardrails (default safe)
+STREAM_PLAYBACK_FORCE_PROXY=1              # 1 = all playbackUrl stay proxy (rollback)
+DIRECT_STREAM_CUTOVER_ENABLED=0            # 1 = allow rollout rules below
+DIRECT_STREAM_ROLLOUT_PERCENT=0            # 0–100 when no allowlist
+DIRECT_STREAM_ROLLOUT_CHANNEL_IDS=         # e.g. 12,45,99 (test channels)
+DIRECT_STREAM_ROLLOUT_SALT=osmani-v1       # stable percent hashing
 ```
+
+## Controlled cutover process
+
+### Phase A — Test allowlist only
+
+```bash
+STREAM_PLAYBACK_FORCE_PROXY=0
+DIRECT_STREAM_CUTOVER_ENABLED=1
+DIRECT_STREAM_ROLLOUT_CHANNEL_IDS=12,34    # 1–3 test channels
+DIRECT_STREAM_ROLLOUT_PERCENT=0
+```
+
+Redeploy → only listed channels get `playbackUrl` = signed `stream-direct`. Others stay proxy.
+
+Verify:
+
+```bash
+curl -s https://<api>/api/health/stream-delivery | jq .rollout,.metrics
+curl -s https://<api>/api/channels | jq '.[] | select(.id==12) | {playbackUrl,proxy_playback_url,stream_delivery_effective}'
+```
+
+Play channel 12 in app; confirm playback. On failure, app should use `proxy_playback_url` (future app) or manual test proxy URL.
+
+### Phase B — Percentage rollout
+
+```bash
+DIRECT_STREAM_ROLLOUT_CHANNEL_IDS=
+DIRECT_STREAM_ROLLOUT_PERCENT=10          # then 25, 50, 100
+```
+
+Same channel id always gets same decision (hash bucket).
+
+### Phase C — Full cutover (optional)
+
+```bash
+DIRECT_STREAM_ROLLOUT_PERCENT=100
+# or STREAM_DELIVERY_MODE=direct
+```
+
+Keep `/stream-proxy` live for fallback and legacy clients.
 
 ## API fields (additive)
 
-On each channel from `GET /api/channels`:
-
-- `playbackUrl` — unchanged semantics (proxy URL today)
-- `direct_stream_url` — signed short-TTL entry URL (null if signing off/unconfigured)
-- `stream_delivery_mode` — `hybrid` / `proxy` / `direct`
-- `direct_stream_url_backup1` / `direct_stream_url_backup2` — backups
-- `streamProxy` — extended with `directRoute`, `directPrimaryUrl`, `playbackSource`
-
-Older clients ignore new fields.
-
-## Routes
-
-| Route | Purpose |
+| Field | Meaning |
 |-------|---------|
-| `GET /stream-proxy?url=…` | Existing proxy (fallback + current playback) |
-| `GET /stream-direct?token=…` | HMAC-validated; same fetch/rewrite engine as proxy |
+| `playbackUrl` | Active URL (proxy or direct per rollout) |
+| `proxy_playback_url` | Always Render proxy (fallback) |
+| `direct_stream_url` | Signed direct entry |
+| `stream_delivery_effective` | `direct` \| `proxy` |
+| `direct_stream_rollout` | Channel included in rollout |
+| `streamProxy.playbackFallbackUrl` | Same as proxy URL |
 
-## Health
+## Instant rollback
 
-`GET /api/health/stream-delivery` — mode, signing status, cutover flags, routes.
+Any one (fastest first):
 
-## Modes
+1. `STREAM_PLAYBACK_FORCE_PROXY=1` → redeploy  
+2. `DIRECT_STREAM_CUTOVER_ENABLED=0` → redeploy  
+3. `DIRECT_STREAM_ROLLOUT_PERCENT=0` and clear allowlist  
 
-| Mode | API `direct_stream_url` | `playbackUrl` (with force proxy) |
-|------|-------------------------|----------------------------------|
-| `proxy` | hidden | proxy |
-| `hybrid` | exposed when signing on | proxy |
-| `direct` | exposed when signing on | proxy (until `STREAM_PLAYBACK_FORCE_PROXY=0`) |
+No DB migration. Old APKs keep using `playbackUrl` (returns proxy again).
 
-## Future cutover (not Step 1)
+## Diagnostics
 
-1. Configure Bunny (or other) pull zone for stream origins where applicable.
-2. Load-test `direct_stream_url` with staging app build.
-3. Set `STREAM_PLAYBACK_FORCE_PROXY=0` and/or app prefers `direct_stream_url`.
-4. Monitor Render proxy bandwidth drop; keep proxy for legacy app versions.
+`GET /api/health/stream-delivery` includes:
 
-## Rollback
+- `rollout` — percent, allowlist, cutover flags  
+- `metrics` — direct/proxy success, token failures, client fallback reports  
 
-1. Set `DIRECT_STREAM_SIGNING_ENABLED=0` **or** remove `DIRECT_STREAM_SIGNING_SECRET`.
-2. Ensure `STREAM_PLAYBACK_FORCE_PROXY=1`.
-3. Redeploy — `direct_stream_url` becomes null; clients use `playbackUrl` only.
+Optional client report (future app builds):
 
-No DB migration. No APK required for rollback.
+`POST /api/stream-delivery/fallback` — increments `client_fallback_reported`.
+
+## Token safety
+
+- TTL default **120s** (`DIRECT_STREAM_TOKEN_TTL_SEC`)  
+- Expired/invalid tokens → 403/400 + metric counters  
+- Upstream URL never returned unsigned in API  
+
+## Premium / analytics / SSE
+
+Unchanged: subscription, device, analytics, admin SSE, payment routes.
 
 ## Verify
 
 ```bash
 cd server
 npm run verify:stream-delivery
-curl -s https://<api>/api/health/stream-delivery | jq
 ```
+
+## Bandwidth estimate (when rollout enabled)
+
+| Stage | Render egress impact |
+|-------|----------------------|
+| Allowlist only (few channels) | Small reduction on manifest path |
+| 50% rollout | ~25–40% of stream-proxy **manifest** traffic moves to stream-direct entry; **segments still proxy** until Bunny |
+| 100% + future Bunny segments | **Large** reduction (majority of bytes leave Render) |
+
+Today’s Step 2 shifts **playbackUrl** and manifest auth to stream-direct; segment bytes still hit stream-proxy until CDN edge migration.

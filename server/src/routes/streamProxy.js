@@ -1,5 +1,6 @@
 import { Readable } from 'node:stream'
 import { Router } from 'express'
+import { recordDirectRequest, recordProxyRequest } from '../lib/streamDeliveryMetrics.js'
 
 export const streamProxyRouter = Router()
 
@@ -145,11 +146,13 @@ function logTokenDiagnostics(urlStr, status) {
  * Shared proxy runner for /stream-proxy and token-gated /stream-direct.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @param {{ sourceUrl: string, upstreamHeaders: { referer?: string, origin?: string, userAgent?: string }, mountPath: string }} opts
+ * @param {{ sourceUrl: string, upstreamHeaders: { referer?: string, origin?: string, userAgent?: string }, mountPath: string, manifestRewriteMount?: string }} opts
  */
 export async function runStreamProxyRequest(req, res, opts) {
   const startedAt = Date.now()
   const mountPath = String(opts?.mountPath || PROXY_MOUNT_STREAM)
+  const manifestRewriteMount = String(opts?.manifestRewriteMount || mountPath)
+  const isDirectEntry = mountPath === 'stream-direct'
   const sourceUrl = String(opts?.sourceUrl || '').trim()
   if (!sourceUrl) {
     return res.status(400).json({ error: 'url query param is required' })
@@ -184,6 +187,8 @@ export async function runStreamProxyRequest(req, res, opts) {
       headers,
     })
   } catch (e) {
+    if (isDirectEntry) recordDirectRequest('fetch_error')
+    else recordProxyRequest('upstream_error')
     logProxyDiagnostics({
       scope: 'fetch_error',
       mount: mountPath,
@@ -209,13 +214,21 @@ export async function runStreamProxyRequest(req, res, opts) {
   logTokenDiagnostics(finalUrl, status)
 
   if (!upstreamRes.ok) {
+    if (isDirectEntry) recordDirectRequest('upstream_error')
+    else recordProxyRequest('upstream_error')
     const bodyText = await upstreamRes.text().catch(() => '')
     return res.status(upstreamRes.status).send(bodyText || `Upstream error (${upstreamRes.status})`)
   }
 
   if (isManifest(finalUrl, contentType)) {
     const body = await upstreamRes.text()
-    const { text, rewriteCount } = rewriteManifest(body, finalUrl, req, upstreamHeaders, mountPath)
+    const { text, rewriteCount } = rewriteManifest(
+      body,
+      finalUrl,
+      req,
+      upstreamHeaders,
+      manifestRewriteMount,
+    )
     logProxyDiagnostics({
       scope: 'manifest_rewrite',
       mount: mountPath,
@@ -227,9 +240,13 @@ export async function runStreamProxyRequest(req, res, opts) {
     })
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
     res.setHeader('Cache-Control', 'no-store')
+    if (isDirectEntry) recordDirectRequest('manifest_ok')
+    else recordProxyRequest('manifest_ok')
     return res.status(200).send(text)
   }
 
+  if (isDirectEntry) recordDirectRequest('manifest_ok')
+  else recordProxyRequest('manifest_ok')
   res.status(upstreamRes.status)
   const passthroughHeaders = [
     'content-type',

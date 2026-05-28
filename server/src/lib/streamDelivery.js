@@ -1,6 +1,5 @@
 /**
- * Stream delivery strategy (Phase 4 foundation).
- * Production playback remains on Render proxy until an explicit cutover flag is set.
+ * Stream delivery strategy with controlled rollout (Phase 4 Step 2).
  */
 import { buildPublicStreamProxyUrl, PROXY_MOUNT_STREAM } from '../routes/streamProxy.js'
 import {
@@ -10,8 +9,19 @@ import {
   isDirectStreamSigningEnabled,
   STREAM_DIRECT_MOUNT,
 } from './directStreamSigning.js'
+import { getStreamDeliveryMetricsSnapshot, recordPlaybackAssigned } from './streamDeliveryMetrics.js'
+import {
+  getDirectStreamRolloutAllowlist,
+  getDirectStreamRolloutPercent,
+  getRolloutHealthSnapshot,
+  isChannelEligibleForDirectPlayback,
+  isDirectStreamCutoverEnabled,
+  isStreamPlaybackForceProxy,
+} from './streamDeliveryRollout.js'
 
 export const STREAM_DELIVERY_MODES = Object.freeze(['proxy', 'direct', 'hybrid'])
+
+export { isStreamPlaybackForceProxy }
 
 function envTruthy(name, defaultVal = false) {
   const raw = process.env[name]
@@ -19,18 +29,9 @@ function envTruthy(name, defaultVal = false) {
   return ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase())
 }
 
-/** Global delivery mode from env (default hybrid). */
 export function getStreamDeliveryMode() {
   const raw = String(process.env.STREAM_DELIVERY_MODE || 'hybrid').trim().toLowerCase()
   return STREAM_DELIVERY_MODES.includes(raw) ? raw : 'hybrid'
-}
-
-/**
- * When true (default), `playbackUrl` always uses Render proxy even if mode is direct/hybrid.
- * Phase 4 Step 1 keeps this enabled — no production cutover.
- */
-export function isStreamPlaybackForceProxy() {
-  return envTruthy('STREAM_PLAYBACK_FORCE_PROXY', true)
 }
 
 export function shouldExposeDirectStreamUrlInApi() {
@@ -54,7 +55,6 @@ function buildProxyPlayback(req, upstreamUrl, hdr) {
 }
 
 /**
- * Resolve playback + optional direct URL for one stream source.
  * @param {import('express').Request|null} req
  * @param {{ channelId?: string|number, upstreamUrl?: string, referer?: string, origin?: string, userAgent?: string }} channel
  */
@@ -62,43 +62,49 @@ export function resolveStreamSourceDelivery(req, channel) {
   const hdr = streamHeaders(channel)
   const upstream = String(channel?.upstreamUrl || channel?.url || '').trim()
   const mode = getStreamDeliveryMode()
-  const forceProxy = isStreamPlaybackForceProxy()
+  const channelId = channel?.channelId ?? channel?.id
+  const rollout = isChannelEligibleForDirectPlayback(channelId)
 
   const proxyUrl = upstream ? buildProxyPlayback(req, upstream, hdr) : ''
 
   let directStreamUrl = ''
   if (shouldExposeDirectStreamUrlInApi() && upstream) {
-    directStreamUrl = buildSignedDirectStreamPlaybackUrl(req, upstream, hdr, {
-      channelId: channel?.channelId ?? channel?.id,
-    })
+    directStreamUrl = buildSignedDirectStreamPlaybackUrl(req, upstream, hdr, { channelId })
   }
 
+  const canPlayDirect = rollout.eligible && Boolean(directStreamUrl)
   let playbackUrl = proxyUrl
   let playbackSource = 'proxy'
+  let streamDeliveryEffective = 'proxy'
 
-  if (!forceProxy && mode === 'direct' && directStreamUrl) {
+  if (canPlayDirect) {
     playbackUrl = directStreamUrl
     playbackSource = 'direct'
-  } else if (!forceProxy && mode === 'hybrid' && directStreamUrl) {
-    // Future: prefer direct when health checks pass. Foundation: still proxy.
-    playbackUrl = proxyUrl
-    playbackSource = 'proxy'
+    streamDeliveryEffective = 'direct'
+    recordPlaybackAssigned('direct')
+  } else {
+    recordPlaybackAssigned('proxy')
   }
 
   return {
     mode,
     playbackUrl,
     playbackSource,
+    streamDeliveryEffective,
     directStreamUrl,
     proxyUrl,
+    proxyPlaybackUrl: proxyUrl,
     upstreamUrl: upstream,
     headers: hdr,
+    rolloutEligible: rollout.eligible,
+    rolloutReason: rollout.reason,
   }
 }
 
-/**
- * Channel-level delivery fields for GET /api/channels (additive + unchanged playback default).
- */
+function forceProxyNote(mode) {
+  return isStreamPlaybackForceProxy() || !isDirectStreamCutoverEnabled()
+}
+
 export function buildChannelStreamDelivery(req, channelRow) {
   const m = channelRow || {}
   const primary = resolveStreamSourceDelivery(req, {
@@ -125,9 +131,14 @@ export function buildChannelStreamDelivery(req, channelRow) {
 
   return {
     stream_delivery_mode: primary.mode,
+    stream_delivery_effective: primary.streamDeliveryEffective,
     direct_stream_url: primary.directStreamUrl || null,
     direct_stream_url_backup1: backup1.directStreamUrl || null,
     direct_stream_url_backup2: backup2.directStreamUrl || null,
+    proxy_playback_url: primary.proxyPlaybackUrl || null,
+    proxy_playback_url_backup1: backup1.proxyPlaybackUrl || null,
+    proxy_playback_url_backup2: backup2.proxyPlaybackUrl || null,
+    direct_stream_rollout: primary.rolloutEligible,
     playbackUrl: primary.playbackUrl,
     backupPlayback1: backup1.playbackUrl || (m.backupStream1 ?? ''),
     backupPlayback2: backup2.playbackUrl || (m.backupStream2 ?? ''),
@@ -142,6 +153,8 @@ export function buildChannelStreamDelivery(req, channelRow) {
       directRoute: `/${STREAM_DIRECT_MOUNT}`,
       directPrimaryUrl: primary.directStreamUrl || null,
       playbackSource: primary.playbackSource,
+      playbackFallbackUrl: primary.proxyPlaybackUrl || null,
+      rolloutReason: primary.rolloutReason,
     },
   }
 }
@@ -151,6 +164,10 @@ export function getStreamDeliveryHealthSnapshot() {
   const signingEnabled = isDirectStreamSigningEnabled()
   const signingConfigured = isDirectStreamSigningConfigured()
   const forceProxy = isStreamPlaybackForceProxy()
+  const cutoverEnabled = isDirectStreamCutoverEnabled()
+  const rollout = getRolloutHealthSnapshot()
+  const metrics = getStreamDeliveryMetricsSnapshot()
+
   return {
     ok: signingEnabled ? signingConfigured : true,
     stream_delivery_mode: mode,
@@ -158,14 +175,23 @@ export function getStreamDeliveryHealthSnapshot() {
     signing_configured: signingConfigured,
     token_ttl_sec: getDirectStreamTokenTtlSec(),
     playback_force_proxy: forceProxy,
-    production_cutover: !forceProxy && mode === 'direct',
+    cutover_enabled: cutoverEnabled,
+    production_cutover_active: cutoverEnabled && !forceProxy,
     expose_direct_stream_url_in_api: shouldExposeDirectStreamUrlInApi(),
+    rollout,
+    metrics,
     routes: {
       proxy: `/${PROXY_MOUNT_STREAM}`,
       direct: `/${STREAM_DIRECT_MOUNT}`,
     },
+    hls_note:
+      'stream-direct validates token on manifest; segment URLs in playlist use stream-proxy for stable HLS until Bunny edge rewrite.',
     notes: forceProxy
-      ? 'playbackUrl uses proxy; direct_stream_url is additive only (no cutover).'
-      : 'STREAM_PLAYBACK_FORCE_PROXY=0 — direct mode may set playbackUrl to signed direct route.',
+      ? 'playbackUrl is proxy-only (STREAM_PLAYBACK_FORCE_PROXY=1).'
+      : !cutoverEnabled
+        ? 'Cutover disabled — set DIRECT_STREAM_CUTOVER_ENABLED=1 and rollout allowlist/percent to begin.'
+        : 'Controlled rollout may set playbackUrl to signed stream-direct for eligible channels.',
   }
 }
+
+export { getDirectStreamRolloutPercent, getDirectStreamRolloutAllowlist, isDirectStreamCutoverEnabled }
