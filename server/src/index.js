@@ -1,11 +1,9 @@
 import cors from 'cors'
 import express from 'express'
-import path from 'node:path'
 import {
   getCdnHealthSnapshot,
   getStaticUploadCacheMaxAgeSec,
   isCdnEnabled,
-  isOriginOnlyUploadPath,
   resolvePublicAssetUrl,
 } from './lib/cdnAssets.js'
 import {
@@ -60,12 +58,11 @@ app.use(express.json({ limit: '4mb' }))
 
 const staticUploadMaxAgeMs = getStaticUploadCacheMaxAgeSec() * 1000
 
-/** Legacy direct hits to Render /uploads/* → Bunny when configured (APKs stay on origin). */
+/** Legacy direct hits to Render /uploads/* → Bunny when configured (images + APKs). */
 app.use('/uploads', (req, res, next) => {
   if (!isCdnEnabled()) return next()
   if (req.method !== 'GET' && req.method !== 'HEAD') return next()
   const rel = `/uploads${req.path}`.replace(/\/+/g, '/')
-  if (isOriginOnlyUploadPath(rel)) return next()
   const cdnUrl = resolvePublicAssetUrl(rel, req)
   const originUrl = resolvePublicAssetUrl(rel, req, { forceOrigin: true })
   if (cdnUrl && originUrl && cdnUrl !== originUrl) {
@@ -86,9 +83,8 @@ app.use(
     setHeaders(res, filePath) {
       res.setHeader('X-Content-Type-Options', 'nosniff')
       const normalized = String(filePath || '').replace(/\\/g, '/')
-      if (normalized.includes('/apks/') || isOriginOnlyUploadPath(`/uploads/apks/${path.basename(normalized)}`)) {
-        res.setHeader('Cache-Control', 'private, no-cache, must-revalidate')
-        return
+      if (normalized.includes('/apks/')) {
+        res.setHeader('Content-Type', 'application/vnd.android.package-archive')
       }
       if (staticUploadMaxAgeMs > 0) {
         res.setHeader('Cache-Control', `public, max-age=${getStaticUploadCacheMaxAgeSec()}, immutable`)

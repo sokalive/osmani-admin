@@ -1,11 +1,11 @@
-# Phase 2 — Static assets on Bunny CDN
+# Static assets + APK delivery on Bunny CDN
 
-Uploaded images stay on disk under `UPLOAD_DIR` and in the database as `/uploads/...` paths. **API responses** expose absolute **Bunny** URLs when `BUNNY_CDN_BASE_URL` is set.
+Uploaded files stay on disk under `UPLOAD_DIR` and in the database as `/uploads/...` paths or legacy Render absolute URLs. **API responses** expose absolute **Bunny** URLs when `BUNNY_CDN_BASE_URL` is set.
 
 ## Configure Bunny
 
 1. Create a **Pull Zone** in Bunny.net pointing at your API origin, e.g. `https://osmani-admin-api.onrender.com`.
-2. Enable **origin shield** / caching for `GET` on `/uploads/*`.
+2. Enable caching for `GET` on `/uploads/*` (images and APKs).
 3. Set on the **API** service (Render → Environment):
 
    ```bash
@@ -23,38 +23,41 @@ Uploaded images stay on disk under `UPLOAD_DIR` and in the database as `/uploads
 | Banner / promo images | `image`, `image_url`, `imageUrl` | `/uploads/<file>` |
 | Payment logos | `logoPath`, `logo`, `logoUrl` | `/uploads/<file>` |
 | Notification images | `image` | `/uploads/notif-*` |
-
-**Not migrated (OTA unchanged):** `/uploads/apks/*` — still served from `BASE_URL`.
+| **OTA APK downloads** | `apk_url`, `apkUrl` | `/uploads/apks/*.apk` |
 
 **Popup settings** are text-only (no images).
 
+Upload/admin flows still write files to `UPLOAD_DIR/apks/` on the API disk; only **download URLs** in API responses use Bunny.
+
 ## Backward compatibility
 
-- DB paths remain `/uploads/...`.
-- Legacy absolute URLs on `*.onrender.com` are rewritten to Bunny on read.
-- Direct `GET https://api.../uploads/foo.jpg` returns **302** to Bunny when configured, with `Link: <origin>` alternate.
-- If `BUNNY_CDN_BASE_URL` is unset, behavior matches pre–Phase 2 (Render origin only).
+- DB may still hold legacy `https://osmani-admin-api.onrender.com/uploads/apks/...` — rewritten to Bunny on read.
+- Direct `GET https://api.../uploads/...` returns **302** to Bunny when configured, with `Link: <origin>` alternate.
+- Play Store URLs are unchanged.
+- If `BUNNY_CDN_BASE_URL` is unset, behavior matches pre-CDN (Render origin only).
 
 ## Verification
 
 ```bash
 cd server
 npm run verify:cdn-assets
+npm run verify:apk-update-cdn
+# or: npm run verify:apk-update-cdn -- https://osmani-admin-api.onrender.com
+
 curl -s https://<api>/api/health/media | jq .cdn
-curl -sI https://<api>/uploads/<sample-image>.jpg   # expect 302 to b-cdn.net when CDN enabled
-curl -s https://<api>/api/channels | jq '.[0].thumbnailUrl'
-curl -s https://<api>/api/banners | jq '.[0].imageUrl'
+curl -sI https://<api>/uploads/apks/<file>.apk   # 302 → b-cdn.net when CDN enabled
+curl -s https://<api>/api/update-check | jq .apk_url
+curl -s https://<api>/api/runtime/app-update | jq .apk_url
 ```
 
 ## Bandwidth impact (estimate)
 
-Typical TV app traffic is dominated by **image bytes**, not JSON. After clients receive CDN URLs:
+| Traffic type | After CDN enabled |
+|--------------|-------------------|
+| Images (thumbnails, banners, logos) | Bunny edge (~0% Render egress) |
+| **APK downloads** | **Bunny edge** (~0% Render egress for APK bytes) |
+| API JSON / streams / webhooks | Render (unchanged) |
 
-| Traffic type | Before | After (CDN enabled) |
-|--------------|--------|---------------------|
-| Channel thumbnails | ~100% Render egress | ~0% Render (Bunny edge) |
-| Banners / logos / push images | Render | Bunny |
-| APK downloads | Render | Render (unchanged) |
-| API JSON | Render | Render (unchanged) |
+APK files are large (often 30–80+ MB each). Once OTA clients use `apk_url` from the API, **most remaining Render egress** from user downloads should shift to Bunny. Expect an additional **10–40%+ reduction** in total Render outbound (on top of image migration), depending on how often users download updates vs. browse images.
 
-**Rule of thumb:** if static images are ~70–90% of API egress, expect **~70–90% reduction** in Render bandwidth for media once the pull zone is warm and clients use returned CDN URLs. Measure in Render Metrics (outbound) vs Bunny dashboard after 24–48h.
+Measure: Render Metrics (outbound) vs Bunny bandwidth dashboard over 24–48h after deploy.

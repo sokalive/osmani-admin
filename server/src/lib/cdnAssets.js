@@ -1,8 +1,7 @@
 /**
- * Bunny CDN (b-cdn.net) URL resolution for static uploads.
- * DB and ingest keep `/uploads/...` paths; APIs emit absolute CDN URLs when configured.
- *
- * OTA APKs under `/uploads/apks/` stay on the API origin (BASE_URL) — unchanged behavior.
+ * Bunny CDN (b-cdn.net) URL resolution for static uploads (images + APKs).
+ * DB may store `/uploads/...` or legacy Render absolute URLs; APIs emit Bunny when configured.
+ * Files remain on disk at UPLOAD_DIR; Bunny pull zone origin = BASE_URL.
  */
 
 const DEFAULT_ORIGIN_BASE = 'https://osmani-admin-api.onrender.com'
@@ -12,7 +11,7 @@ const DEFAULT_STATIC_MAX_AGE_SEC = Math.max(
   Number(process.env.BUNNY_CDN_STATIC_MAX_AGE_SEC) || 31_536_000,
 )
 
-/** Hostnames that should be rewritten to the CDN on API read (legacy Render absolute URLs). */
+/** Hostnames rewritten to CDN on API read (legacy Render absolute URLs). */
 const BUILTIN_LEGACY_HOSTS = new Set([
   'osmani-admin-api.onrender.com',
   'osmani-admin-mpya.onrender.com',
@@ -43,7 +42,7 @@ function legacyOriginHosts() {
   return hosts
 }
 
-function isBunnyCdnHost(hostname) {
+export function isBunnyCdnHost(hostname) {
   return String(hostname || '').toLowerCase().endsWith('.b-cdn.net')
 }
 
@@ -65,9 +64,7 @@ export function isCdnEnabled() {
   return Boolean(getCdnBaseUrl())
 }
 
-/**
- * API origin used for fallbacks and APK hosting (Render).
- */
+/** API origin (Render) — Bunny pull zone origin + upload ingest target. */
 export function getOriginBaseUrl(req) {
   const fromEnv = trimSlash(process.env.BASE_URL || process.env.ASSET_ORIGIN_URL || '')
   if (fromEnv) return fromEnv
@@ -84,8 +81,12 @@ export function getStaticUploadCacheMaxAgeSec() {
   return DEFAULT_STATIC_MAX_AGE_SEC
 }
 
-/** APK / OTA binaries must not be moved to the image CDN layer. */
+/** @deprecated All /uploads/* including apks use CDN when enabled. */
 export function isOriginOnlyUploadPath(pathOrUrl) {
+  return false
+}
+
+export function isHostedApkPath(pathOrUrl) {
   const p = extractUploadPath(pathOrUrl) || String(pathOrUrl || '')
   return p.includes('/uploads/apks/')
 }
@@ -118,20 +119,28 @@ function buildAbsoluteUrl(base, pathname) {
 function rewriteLegacyAbsoluteUrl(absoluteUrl) {
   const uploadPath = extractUploadPath(absoluteUrl)
   if (!uploadPath) return absoluteUrl
-  if (isOriginOnlyUploadPath(uploadPath)) {
-    return buildAbsoluteUrl(getOriginBaseUrl(null), uploadPath)
-  }
   const cdn = getCdnBaseUrl()
   if (cdn) return buildAbsoluteUrl(cdn, uploadPath)
   return absoluteUrl
 }
 
 /**
- * Resolve a stored path or absolute URL for API clients and push notifications.
+ * OTA / app-update hosted APK URLs (`/uploads/apks/*` only). Play Store URLs pass through unchanged.
+ */
+export function resolveHostedApkDownloadUrl(value, req = null) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  if (!isHostedApkPath(raw)) return raw
+  const resolved = resolvePublicAssetUrl(raw, req)
+  return resolved != null ? String(resolved) : raw
+}
+
+/**
+ * Resolve a stored path or absolute URL for API clients.
  *
- * @param {string|null|undefined} value - `/uploads/...`, legacy Render URL, external https, etc.
+ * @param {string|null|undefined} value
  * @param {import('express').Request|null} [req]
- * @param {{ forceOrigin?: boolean }} [opts] - force API origin (APKs, health probes)
+ * @param {{ forceOrigin?: boolean }} [opts] - force API origin (internal probes only)
  */
 export function resolvePublicAssetUrl(value, req, opts = {}) {
   if (value == null) return null
@@ -142,20 +151,6 @@ export function resolvePublicAssetUrl(value, req, opts = {}) {
 
   const uploadPath = extractUploadPath(rel)
   const forceOrigin = Boolean(opts.forceOrigin)
-
-  if (uploadPath && isOriginOnlyUploadPath(uploadPath)) {
-    if (rel.startsWith('http://') || rel.startsWith('https://')) {
-      try {
-        const u = new URL(rel)
-        if (isBunnyCdnHost(u.hostname)) {
-          return buildAbsoluteUrl(getOriginBaseUrl(req), uploadPath)
-        }
-      } catch {
-        /* fall through */
-      }
-    }
-    return buildAbsoluteUrl(getOriginBaseUrl(req), uploadPath)
-  }
 
   if (rel.startsWith('http://') || rel.startsWith('https://')) {
     try {
@@ -184,9 +179,9 @@ export function resolvePublicAssetUrl(value, req, opts = {}) {
   }
 
   if (rel.startsWith('/uploads')) {
-    const path = rel.split('?')[0]
-    if (forceOrigin || !cdnBase) return buildAbsoluteUrl(originBase, path)
-    return buildAbsoluteUrl(cdnBase, path)
+    const pathOnly = rel.split('?')[0]
+    if (forceOrigin || !cdnBase) return buildAbsoluteUrl(originBase, pathOnly)
+    return buildAbsoluteUrl(cdnBase, pathOnly)
   }
 
   const host = req ? `${req.protocol}://${req.get('host') || ''}`.replace(/\/$/, '') : ''
@@ -207,12 +202,12 @@ export function getCdnHealthSnapshot() {
     cdnBaseUrl: cdnBase || null,
     originBaseUrl: originBase,
     staticMaxAgeSec: getStaticUploadCacheMaxAgeSec(),
-    originOnlyPaths: ['/uploads/apks/*'],
+    apkDeliveryViaCdn: Boolean(cdnBase),
     legacyOriginHosts: [...legacyOriginHosts()],
   }
 }
 
-/** Asset path prefixes migrated to Bunny when CDN is enabled. */
+/** Asset path prefixes served via Bunny when CDN is enabled. */
 export const MIGRATED_UPLOAD_PREFIXES = [
   '/uploads/*.jpg',
   '/uploads/*.jpeg',
@@ -221,8 +216,10 @@ export const MIGRATED_UPLOAD_PREFIXES = [
   '/uploads/*.webp',
   '/uploads/*.avif',
   '/uploads/notif-*',
-  'channel thumbnails (DB field: thumbnail)',
-  'banner images (DB field: image)',
-  'payment provider logos (DB field: logo_path)',
-  'notification images (DB field: image)',
+  '/uploads/apks/*.apk',
+  'channel thumbnails (thumbnail / thumbnailUrl)',
+  'banner images (image / image_url / imageUrl)',
+  'payment provider logos (logoUrl)',
+  'notification images (image)',
+  'OTA APK downloads (apk_url / apkUrl)',
 ]

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Router } from 'express'
 import { getPool } from '../db/pool.js'
+import { isBunnyCdnHost, resolveHostedApkDownloadUrl } from '../lib/cdnAssets.js'
 import { parseApkMetadata } from '../lib/apkMetadata.js'
 import { APK_UPLOADS_DIR, uploadApkFile } from '../lib/apkUploadMulter.js'
 import { fetchPlayStoreMetadata, parsePlayStorePackageId } from '../lib/playStoreMetadata.js'
@@ -93,7 +94,7 @@ function logDecisionContext(tag, ctx) {
   console.info(`[app-update] ${tag}:`, JSON.stringify(ctx))
 }
 
-function toPublicConfig(rowsByKey, tag = 'decision') {
+function toPublicConfig(rowsByKey, tag = 'decision', req = null) {
   const source = normalizeSource(rowsByKey[UPDATE_KEYS.source] ?? DEFAULTS[UPDATE_KEYS.source])
   const soft = asBool(rowsByKey[UPDATE_KEYS.soft] ?? DEFAULTS[UPDATE_KEYS.soft])
   const force = asBool(rowsByKey[UPDATE_KEYS.force] ?? DEFAULTS[UPDATE_KEYS.force])
@@ -109,8 +110,10 @@ function toPublicConfig(rowsByKey, tag = 'decision') {
   const versionName = text(rowsByKey[UPDATE_KEYS.versionName] ?? DEFAULTS[UPDATE_KEYS.versionName], 64)
   const packageName = text(rowsByKey[UPDATE_KEYS.packageName] ?? DEFAULTS[UPDATE_KEYS.packageName], 256)
   const hasAnyUrl = Boolean(apkUrlRaw || playstoreUrlRaw)
-  const apkUrl =
-    source === 'apk' ? pickFirstNonEmpty(apkUrlRaw, playstoreUrlRaw) : text(apkUrlRaw, 4000)
+  const apkUrl = resolveHostedApkDownloadUrl(
+    source === 'apk' ? pickFirstNonEmpty(apkUrlRaw, playstoreUrlRaw) : text(apkUrlRaw, 4000),
+    req,
+  )
   const playstoreUrl =
     source === 'play' ? pickFirstNonEmpty(playstoreUrlRaw, apkUrlRaw) : text(playstoreUrlRaw, 4000)
   const apkSha256 = isValidSha256(apkSha256Raw) ? apkSha256Raw : ''
@@ -182,7 +185,7 @@ export function appUpdateToOtaPayload(data, configVersion = 0) {
     v: Number(configVersion) || 0,
     decision: String(d.decision ?? 'NONE').toUpperCase(),
     source: normalizeSource(d.source),
-    apk_url: text(d.apk_url ?? d.apkUrl, 4000),
+    apk_url: resolveHostedApkDownloadUrl(text(d.apk_url ?? d.apkUrl, 4000)),
     apk_sha256: isValidSha256(d.apk_sha256 ?? d.sha256) ? normalizeHash(d.apk_sha256 ?? d.sha256) : '',
     playstore_url: text(d.playstore_url ?? d.playstoreUrl, 4000),
     auto_download: d.auto_download === true || d.autoDownload === true,
@@ -292,7 +295,11 @@ function validateApkUrl(value) {
   try {
     const parsed = new URL(u)
     if (parsed.pathname.includes('/uploads/apks/')) {
-      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      if (
+        parsed.protocol === 'https:' ||
+        parsed.protocol === 'http:' ||
+        isBunnyCdnHost(parsed.hostname)
+      ) {
         return { ok: true, value: parsed.toString() }
       }
       return { ok: false, error: 'Invalid hosted APK URL' }
@@ -309,22 +316,10 @@ function parseVersionCode(value) {
   return Math.trunc(n)
 }
 
-function resolvePublicOrigin(req) {
-  const env = String(process.env.BASE_URL || process.env.PUBLIC_BASE_URL || '').trim()
-  if (env) return env.replace(/\/+$/, '')
-  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
-    .split(',')[0]
-    .trim()
-  const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').trim()
-  if (!host) return ''
-  return `${proto}://${host}`.replace(/\/+$/, '')
-}
-
-function hostedApkPublicUrl(origin, filename) {
-  const base = String(origin ?? '').replace(/\/+$/, '')
+function hostedApkPublicUrl(req, filename) {
   const name = path.basename(String(filename ?? ''))
-  if (!base || !name) return ''
-  return `${base}/uploads/apks/${encodeURIComponent(name)}`
+  if (!name) return ''
+  return resolveHostedApkDownloadUrl(`/uploads/apks/${name}`, req)
 }
 
 async function sha256File(filePath) {
@@ -414,7 +409,7 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       [UPDATE_KEYS.force]: String(Boolean(body.forceUpdate)),
       [UPDATE_KEYS.autoDownload]: String(Boolean(body.autoDownload)),
       [UPDATE_KEYS.source]: normalizedSource,
-      [UPDATE_KEYS.apkUrl]: apkCheck.ok ? apkCheck.value : '',
+      [UPDATE_KEYS.apkUrl]: apkCheck.ok ? resolveHostedApkDownloadUrl(apkCheck.value, req) || apkCheck.value : '',
       [UPDATE_KEYS.apkHash]: isValidSha256(rawHash) ? rawHash : '',
       [UPDATE_KEYS.playstoreUrl]: playCheck.ok ? playCheck.value : '',
       [UPDATE_KEYS.title]: text(body.updateTitle ?? body.title, 256),
@@ -540,12 +535,11 @@ appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess,
         stagedPath = finalPath
 
         const sha256 = await sha256File(finalPath)
-        const origin = resolvePublicOrigin(req)
-        const apkUrl = hostedApkPublicUrl(origin, finalFilename)
+        const apkUrl = hostedApkPublicUrl(req, finalFilename)
         if (!apkUrl) {
           return res.status(500).json({
             ok: false,
-            error: 'Could not build public APK URL (set BASE_URL on the server)',
+            error: 'Could not build public APK URL (set BASE_URL and/or BUNNY_CDN_BASE_URL on the server)',
           })
         }
 
@@ -684,11 +678,11 @@ appUpdateRouter.post('/settings/app-update/parse-playstore', requireAdminPanelAc
   }
 })
 
-appUpdateRouter.get('/update-check', async (_req, res) => {
+appUpdateRouter.get('/update-check', async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const data = toPublicConfig(await loadRowsByKey(pool), 'update-check:get')
+    const data = toPublicConfig(await loadRowsByKey(pool), 'update-check:get', req)
     return res.json({
       decision: data.decision,
       source: data.source,
@@ -710,11 +704,11 @@ appUpdateRouter.get('/update-check', async (_req, res) => {
   }
 })
 
-appUpdateRouter.post('/update-check', async (_req, res) => {
+appUpdateRouter.post('/update-check', async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const data = toPublicConfig(await loadRowsByKey(pool), 'update-check:post')
+    const data = toPublicConfig(await loadRowsByKey(pool), 'update-check:post', req)
     return res.json({
       decision: data.decision,
       source: data.source,
