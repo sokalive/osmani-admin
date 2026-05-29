@@ -137,6 +137,10 @@ function DeviceDetailModal({ device, loading, onClose, onAction }) {
               <p className="text-2xl font-bold text-white">{device.risk_score}</p>
               <LevelBadge level={device.security_level} />
             </div>
+            <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3 sm:col-span-2">
+              <p className="text-[10px] uppercase text-slate-500">Phone number</p>
+              <p className="mt-1 text-sm font-medium text-white">{device.phone_user || device.phone || '—'}</p>
+            </div>
               <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
                 <p className="text-[10px] uppercase text-slate-500">Status</p>
                 <p className="text-sm font-medium text-slate-200">{device.status}</p>
@@ -411,8 +415,8 @@ function SecurityDashboardPage() {
             </div>
             <h1 className="mt-1 text-2xl font-bold text-white sm:text-3xl">Security Center</h1>
             <p className="mt-1 text-sm text-slate-400">
-              Runtime integrity reports, risk scoring, and admin overrides. Rooted devices are never
-              auto-banned without your action.
+              Strict enforcement: any root, emulator, clone, debugger, Frida, or tampered APK report
+              blocks playback immediately until you whitelist or reset the device.
             </p>
           </div>
           <button
@@ -468,22 +472,25 @@ function SecurityDashboardPage() {
           <div className="rounded-2xl border border-slate-700/50 bg-slate-950/50 p-4">
             <p className="text-xs font-semibold uppercase text-slate-500">Protection mode</p>
             <p className="mt-2 text-sm text-slate-400">
-              Manual = warnings only until you block. Automatic escalates by score (root alone stays
-              warning).
+              <strong className="text-cyan-200">Automatic</strong> = strict enforcement (any signal →
+              blocked). Manual = monitor only (no auto-block on new reports).
             </p>
             <div className="mt-4 flex gap-2">
-              {['manual', 'automatic'].map((m) => (
+              {[
+                { id: 'automatic', label: 'Strict (auto)' },
+                { id: 'manual', label: 'Monitor only' },
+              ].map(({ id, label }) => (
                 <button
-                  key={m}
+                  key={id}
                   type="button"
-                  onClick={() => saveProtectionMode(m)}
+                  onClick={() => saveProtectionMode(id)}
                   className={`flex-1 rounded-xl py-2 text-xs font-bold uppercase ${
-                    protectionMode === m
+                    protectionMode === id
                       ? 'bg-cyan-500/25 text-cyan-100 ring-1 ring-cyan-400/50'
                       : 'border border-slate-600 text-slate-400'
                   }`}
                 >
-                  {m}
+                  {label}
                 </button>
               ))}
             </div>
@@ -567,8 +574,8 @@ function SecurityDashboardPage() {
                         onChange={toggleAllDevices}
                       />
                     </th>
-                    <th className="p-3">Device</th>
-                    <th className="p-3">Phone</th>
+                    <th className="p-3">Device ID</th>
+                    <th className="p-3">Phone number</th>
                     <th className="p-3">App</th>
                     <th className="p-3">Risk</th>
                     <th className="p-3">Score</th>
@@ -597,10 +604,10 @@ function SecurityDashboardPage() {
                           onChange={() => toggleDevice(d.device_id)}
                         />
                       </td>
-                      <td className="max-w-[140px] truncate p-3 font-mono text-xs text-slate-300">
+                      <td className="max-w-[180px] p-3 font-mono text-xs text-cyan-100" title={d.device_id}>
                         {d.device_id}
                       </td>
-                      <td className="p-3 text-slate-400">{d.phone_user || '—'}</td>
+                      <td className="max-w-[120px] p-3 text-sm text-white">{d.phone_user || d.phone || '—'}</td>
                       <td className="p-3 text-slate-400">{d.app_version || '—'}</td>
                       <td className="p-3 text-slate-400">{d.risk_type || '—'}</td>
                       <td className="p-3 font-semibold text-white">{d.risk_score}</td>

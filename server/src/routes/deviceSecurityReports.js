@@ -10,6 +10,7 @@ import {
   getPlaybackSecurityPolicy,
   getRiskDevice,
   getSecurityStats,
+  hasDetectionSignals,
   ingestSecurityReport,
   listRiskDevices,
 } from '../lib/deviceSecurityStore.js'
@@ -46,6 +47,28 @@ function emitSync(event, payload) {
   })
 }
 
+function buildSecurityReportResponse(result, policy) {
+  const denied = policy?.deny_playback === true
+  const playbackAllowed = !denied
+  return {
+    ok: true,
+    device_id: result.device_id,
+    phone_user: result.phone_user || '',
+    phone: result.phone_user || '',
+    risk_score: result.risk_score,
+    security_level: result.security_level,
+    strict_enforcement: result.strict_enforcement === true,
+    security_blocked: denied,
+    playbackAllowed,
+    playback_allowed: playbackAllowed,
+    playbackGateReason: denied ? 'security_blocked' : null,
+    playback_gate_reason: denied ? 'security_blocked' : null,
+    enforcement: denied ? 'block' : 'none',
+    limitedPlayback: false,
+    limited_playback: false,
+  }
+}
+
 async function handleSecurityReport(req, res) {
   try {
     const pool = getPool()
@@ -54,44 +77,49 @@ async function handleSecurityReport(req, res) {
 
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const result = await ingestSecurityReport(b)
+    const policy = await getPlaybackSecurityPolicy(result.device_id)
+    const denied = policy?.deny_playback === true
 
-    if (result.is_new || result.level_changed) {
+    const shouldLog =
+      result.is_new ||
+      result.level_changed ||
+      result.detected_now ||
+      result.security_level === 'blocked'
+
+    if (shouldLog) {
       await logSecurityEvent(pool, {
         actor: result.device_id,
         eventType: result.is_new ? 'Security detection' : 'Security level changed',
-        status: 'warning',
-        detail: `score:${result.risk_score} level:${result.security_level}`,
+        status: result.security_level === 'blocked' ? 'blocked' : 'warning',
+        detail: `strict block device:${result.device_id} phone:${result.phone_user || '—'} score:${result.risk_score} level:${result.security_level}`,
         metadata: {
           kind: 'anti_tamper',
           device_id: result.device_id,
+          phone_user: result.phone_user || '',
           risk_score: result.risk_score,
           security_level: result.security_level,
+          security_blocked: denied,
           signals: result.signals,
+          strict_enforcement: true,
         },
       })
       emitSync('security_detection_new', {
         device_id: result.device_id,
+        phone_user: result.phone_user || '',
         risk_score: result.risk_score,
         security_level: result.security_level,
+        security_blocked: denied,
       })
       emitSync('security_alerts_changed', { device_id: result.device_id })
     }
 
     emitSync('security_device_changed', { device_id: result.device_id })
 
-    const policy = await getPlaybackSecurityPolicy(result.device_id)
+    if (denied || hasDetectionSignals({ score: result.risk_score, signals: result.signals })) {
+      deviceSubscriptionBus.emit('update', { deviceId: result.device_id })
+    }
 
-    res.json({
-      ok: true,
-      device_id: result.device_id,
-      risk_score: result.risk_score,
-      security_level: result.security_level,
-      enforcement: policy?.deny_playback
-        ? 'block'
-        : policy?.limited_playback
-          ? 'limit'
-          : 'none',
-    })
+    res.json(buildSecurityReportResponse(result, policy))
   } catch (e) {
     console.error('[runtime/security-report]', e)
     res.status(400).json({ ok: false, error: String(e.message || e) })

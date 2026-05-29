@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { getPool } from '../db/pool.js'
 
-/** User-specified weights; additive scoring. */
+/** Display-only weights; strict mode blocks on any signal regardless of score. */
 export const RISK_WEIGHTS = {
   root_detected: 3,
   rooted: 3,
@@ -23,16 +23,12 @@ export const RISK_WEIGHTS = {
 }
 
 const LEVELS = ['warning', 'limited', 'blocked', 'critical']
-const ADMIN_STATUSES = ['monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block']
+const ADMIN_OVERRIDE_STATUSES = ['whitelisted', 'temp_block', 'perm_block', 'allowed']
 
 function text(v, max = 256) {
   return String(v ?? '')
     .trim()
     .slice(0, max)
-}
-
-function bool(v) {
-  return v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true'
 }
 
 export async function ensureDeviceSecurityTables(pool) {
@@ -123,23 +119,80 @@ export function computeRiskFromSignals(signals) {
   return { score, signals: merged, risk_type: primary, flags }
 }
 
-/** Score tiers — root-only (+3) stays warning; no instant permaban. */
-export function levelFromScore(score, protectionMode = 'manual') {
-  const s = Number(score) || 0
-  if (s <= 0) return 'warning'
-  if (protectionMode === 'manual') return 'warning'
-  if (s >= 20) return 'critical'
-  if (s >= 15) return 'blocked'
-  if (s >= 10) return 'limited'
+/** True when any anti-tamper signal is present in this report. */
+export function hasDetectionSignals({ score, signals, flags }) {
+  if (Number(score) > 0) return true
+  if (Array.isArray(signals) && signals.length > 0) return true
+  return !!(
+    flags?.rooted ||
+    flags?.emulator ||
+    flags?.clone_detected ||
+    flags?.debugger ||
+    flags?.frida ||
+    flags?.tampered_apk
+  )
+}
+
+function rowHasStoredThreat(row) {
+  if (!row) return false
+  if (Number(row.risk_score) > 0) return true
+  return !!(
+    row.rooted ||
+    row.emulator ||
+    row.clone_detected ||
+    row.debugger ||
+    row.frida ||
+    row.tampered_apk
+  )
+}
+
+/**
+ * Strict enforcement: any detection → blocked; stays blocked until admin whitelist / unblock / reset.
+ * No warning-only or limited tiers for detections.
+ */
+export function resolveStrictSecurityLevel({ score, signals, flags, prev, adminStatus }) {
+  const status = String(adminStatus || 'monitoring')
+
+  if (status === 'whitelisted') {
+    return 'warning'
+  }
+  if (status === 'allowed') {
+    return 'warning'
+  }
+  if (status === 'temp_block' || status === 'perm_block') {
+    return 'blocked'
+  }
+
+  const detectedNow = hasDetectionSignals({ score, signals, flags })
+  const persistedAutoBlock =
+    prev &&
+    String(prev.security_level || '') === 'blocked' &&
+    status === 'monitoring' &&
+    rowHasStoredThreat(prev)
+
+  if (detectedNow || persistedAutoBlock) {
+    return 'blocked'
+  }
   return 'warning'
+}
+
+/** @deprecated Use resolveStrictSecurityLevel — kept for admin reset paths. */
+export function levelFromScore(score) {
+  return Number(score) > 0 ? 'blocked' : 'warning'
 }
 
 async function readProtectionMode(pool) {
   const { rows } = await pool.query(
     `SELECT value FROM app_settings WHERE key = 'security_protection_mode' LIMIT 1`,
   )
-  const v = String(rows[0]?.value ?? 'manual')
-  return v === 'automatic' ? 'automatic' : 'manual'
+  const v = String(rows[0]?.value ?? 'automatic')
+  return v === 'manual' ? 'manual' : 'automatic'
+}
+
+/** Strict enforcement is active when protection mode is automatic (default). */
+export async function isStrictEnforcementEnabled(pool) {
+  const mode = await readProtectionMode(pool)
+  return mode === 'automatic'
 }
 
 function rowToDevice(row, adminRow) {
@@ -157,6 +210,7 @@ function rowToDevice(row, adminRow) {
   return {
     device_id: String(row.device_id),
     phone_user: String(row.phone_user || ''),
+    phone: String(row.phone_user || ''),
     app_version: String(row.app_version || ''),
     risk_type: String(row.risk_type || ''),
     risk_score: Number(row.risk_score) || 0,
@@ -190,8 +244,6 @@ export async function ingestSecurityReport(payload) {
 
   const signals = Array.isArray(payload.signals) ? payload.signals : []
   const { score, signals: merged, risk_type, flags } = computeRiskFromSignals(signals)
-  const protectionMode = await readProtectionMode(pool)
-  const computedLevel = levelFromScore(score, protectionMode)
 
   const phone = text(payload.phone ?? payload.phone_user ?? payload.user, 64)
   const appVersion = text(
@@ -201,20 +253,31 @@ export async function ingestSecurityReport(payload) {
   const details = payload.details && typeof payload.details === 'object' ? payload.details : {}
 
   const { rows: existing } = await pool.query(
-    `SELECT device_id, admin_status, security_level, temp_block_until
+    `SELECT device_id, admin_status, security_level, temp_block_until,
+            risk_score, rooted, emulator, clone_detected, debugger, frida, tampered_apk
      FROM device_security_profiles WHERE device_id = $1`,
     [deviceId],
   )
   const prev = existing[0]
   const adminStatus = String(prev?.admin_status || 'monitoring')
-  const overrideStatuses = ['whitelisted', 'temp_block', 'perm_block', 'allowed']
-  let securityLevel = computedLevel
-  if (overrideStatuses.includes(adminStatus)) {
-    if (adminStatus === 'temp_block') securityLevel = 'blocked'
-    else if (adminStatus === 'perm_block') securityLevel = 'blocked'
-    else if (adminStatus === 'whitelisted') securityLevel = prev?.security_level || 'warning'
+
+  const strictEnabled = await isStrictEnforcementEnabled(pool)
+  let securityLevel = 'warning'
+  if (strictEnabled) {
+    securityLevel = resolveStrictSecurityLevel({
+      score,
+      signals: merged,
+      flags,
+      prev,
+      adminStatus,
+    })
+  } else if (ADMIN_OVERRIDE_STATUSES.includes(adminStatus)) {
+    if (adminStatus === 'temp_block' || adminStatus === 'perm_block') securityLevel = 'blocked'
+    else if (adminStatus === 'whitelisted') securityLevel = String(prev?.security_level || 'warning')
     else if (adminStatus === 'allowed') securityLevel = 'warning'
   }
+
+  const detectedNow = hasDetectionSignals({ score, signals: merged, flags })
 
   await pool.query(
     `INSERT INTO device_security_profiles (
@@ -260,7 +323,7 @@ export async function ingestSecurityReport(payload) {
       flags.tampered_apk,
       JSON.stringify(merged),
       securityLevel,
-      JSON.stringify({ ...details, last_report_at: new Date().toISOString() }),
+      JSON.stringify({ ...details, last_report_at: new Date().toISOString(), strict_enforcement: strictEnabled }),
     ],
   )
 
@@ -276,11 +339,15 @@ export async function ingestSecurityReport(payload) {
 
   return {
     device_id: deviceId,
+    phone_user: phone,
     risk_score: score,
     security_level: securityLevel,
     is_new: isNew,
     level_changed: levelChanged,
     signals: merged,
+    detected_now: detectedNow,
+    strict_enforcement: strictEnabled,
+    security_blocked: strictEnabled && securityLevel === 'blocked',
   }
 }
 
@@ -332,10 +399,34 @@ export async function getRiskDevice(deviceId) {
   return { ...device, block_reason: rows[0]?.block_reason ? String(rows[0].block_reason) : '' }
 }
 
+/** One-shot reconcile: devices with stored threats but warning/limited → blocked (strict mode). */
+export async function reconcileStrictSecurityLevels(pool) {
+  if (!(await isStrictEnforcementEnabled(pool))) return { updated: 0 }
+  const out = await pool.query(
+    `UPDATE device_security_profiles
+     SET security_level = 'blocked', updated_at = now()
+     WHERE admin_status = 'monitoring'
+       AND security_level IN ('warning', 'limited')
+       AND (
+         risk_score > 0
+         OR rooted = true
+         OR emulator = true
+         OR clone_detected = true
+         OR debugger = true
+         OR frida = true
+         OR tampered_apk = true
+       )`,
+  )
+  return { updated: Number(out.rowCount) || 0 }
+}
+
 export async function getSecurityStats() {
   const pool = getPool()
   if (!pool) return { byLevel: {}, total: 0, flagged24h: 0 }
   await ensureDeviceSecurityTables(pool)
+  await reconcileStrictSecurityLevels(pool).catch((e) => {
+    console.error('[security] reconcileStrictSecurityLevels failed:', e)
+  })
   const { rows } = await pool.query(
     `SELECT security_level, COUNT(*)::int AS n
      FROM device_security_profiles
@@ -362,6 +453,8 @@ export async function getPlaybackSecurityPolicy(deviceId) {
   if (!d) return null
   const { rows } = await pool.query(
     `SELECT dsp.security_level, dsp.admin_status, dsp.temp_block_until,
+            dsp.risk_score, dsp.rooted, dsp.emulator, dsp.clone_detected,
+            dsp.debugger, dsp.frida, dsp.tampered_apk,
             ad.whitelisted, ad.is_blocked
      FROM device_security_profiles dsp
      LEFT JOIN admin_devices ad ON ad.device_id = dsp.device_id
@@ -387,23 +480,30 @@ export async function getPlaybackSecurityPolicy(deviceId) {
   const adminBlocked = r.is_blocked === true
   const level = String(r.security_level || 'warning')
   const adminStatus = String(r.admin_status || 'monitoring')
-  let deny = adminBlocked || level === 'blocked' || level === 'critical'
-  let limited = level === 'limited'
+  const strictEnabled = await isStrictEnforcementEnabled(pool)
+  const hasThreat = rowHasStoredThreat(r)
+
+  let deny =
+    adminBlocked ||
+    level === 'blocked' ||
+    level === 'critical' ||
+    (strictEnabled && hasThreat && adminStatus === 'monitoring')
+
   if (adminStatus === 'temp_block') {
     const until = r.temp_block_until
     const t = until instanceof Date ? until : until ? new Date(until) : null
     if (t && !Number.isNaN(t.getTime()) && t.getTime() > Date.now()) deny = true
   }
-  if (whitelisted) {
+  if (whitelisted || adminStatus === 'allowed') {
     deny = false
-    limited = false
   }
+
   return {
     whitelisted,
     admin_blocked: adminBlocked,
     security_level: level,
-    limited_playback: limited && !whitelisted,
-    deny_playback: deny && !whitelisted,
+    limited_playback: false,
+    deny_playback: deny,
   }
 }
 
@@ -412,10 +512,10 @@ const ACTION_MAP = {
   whitelist: { admin_status: 'whitelisted', security_level: 'warning', clear_block: true, whitelist: true },
   remove_restriction: {
     admin_status: 'monitoring',
-    security_level: null,
+    security_level: 'warning',
     clear_block: true,
     whitelist: false,
-    reset_level_from_score: true,
+    clear_flags: true,
   },
   temporary_block: { admin_status: 'temp_block', security_level: 'blocked', temp_hours: 24 },
   permanent_block: { admin_status: 'perm_block', security_level: 'blocked', perm_block: true },
@@ -453,35 +553,23 @@ export async function applyDeviceSecurityAction(deviceId, action, opts = {}) {
         [d],
       )
     } else if (profile) {
-      let level = spec.security_level
-      if (spec.reset_level_from_score) {
-        const protectionMode = await readProtectionMode(client)
-        level = levelFromScore(Number(profile.risk_score) || 0, protectionMode)
-      }
-      if (level) {
-        await client.query(
-          `UPDATE device_security_profiles SET
-             admin_status = $2, security_level = $3,
-             temp_block_until = $4, updated_at = now()
-           WHERE device_id = $1`,
-          [
-            d,
-            spec.admin_status,
-            level,
-            spec.temp_hours
-              ? new Date(Date.now() + spec.temp_hours * 3600 * 1000).toISOString()
-              : spec.admin_status === 'temp_block'
-                ? new Date(Date.now() + 24 * 3600 * 1000).toISOString()
-                : null,
-          ],
-        )
-      } else {
-        await client.query(
-          `UPDATE device_security_profiles SET admin_status = $2, temp_block_until = NULL, updated_at = now()
-           WHERE device_id = $1`,
-          [d, spec.admin_status],
-        )
-      }
+      const level = spec.security_level || 'warning'
+      await client.query(
+        `UPDATE device_security_profiles SET
+           admin_status = $2, security_level = $3,
+           temp_block_until = $4, updated_at = now()
+         WHERE device_id = $1`,
+        [
+          d,
+          spec.admin_status,
+          level,
+          spec.temp_hours
+            ? new Date(Date.now() + spec.temp_hours * 3600 * 1000).toISOString()
+            : spec.admin_status === 'temp_block'
+              ? new Date(Date.now() + 24 * 3600 * 1000).toISOString()
+              : null,
+        ],
+      )
     } else {
       await client.query(
         `INSERT INTO device_security_profiles (device_id, admin_status, security_level, updated_at)

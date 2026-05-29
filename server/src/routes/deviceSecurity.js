@@ -229,7 +229,7 @@ async function ensureSecuritySettingsInfrastructure(pool) {
   `)
   await pool.query(`
     INSERT INTO app_settings (key, value)
-    VALUES ('security_protection_mode', 'manual')
+    VALUES ('security_protection_mode', 'automatic')
     ON CONFLICT (key) DO NOTHING;
   `)
 }

@@ -1,0 +1,109 @@
+/**
+ * Verifies strict security enforcement (automatic protection mode).
+ * Run: node scripts/verify-strict-security-enforcement.mjs
+ */
+import assert from 'node:assert/strict'
+import {
+  computeRiskFromSignals,
+  hasDetectionSignals,
+  resolveStrictSecurityLevel,
+  levelFromScore,
+} from '../src/lib/deviceSecurityStore.js'
+
+const rootOnly = computeRiskFromSignals([{ risk_type: 'root_detected' }])
+assert.equal(rootOnly.flags.rooted, true)
+assert.ok(rootOnly.score >= 3)
+
+const levelRoot = resolveStrictSecurityLevel({
+  score: rootOnly.score,
+  signals: rootOnly.signals,
+  flags: rootOnly.flags,
+  prev: null,
+  adminStatus: 'monitoring',
+})
+assert.equal(levelRoot, 'blocked', 'root must block immediately')
+
+const emu = resolveStrictSecurityLevel({
+  ...computeRiskFromSignals([{ risk_type: 'emulator_detected' }]),
+  prev: null,
+  adminStatus: 'monitoring',
+})
+assert.equal(emu, 'blocked', 'emulator must block')
+
+const frida = resolveStrictSecurityLevel({
+  ...computeRiskFromSignals([{ risk_type: 'frida_detected' }]),
+  prev: null,
+  adminStatus: 'monitoring',
+})
+assert.equal(frida, 'blocked', 'frida must block')
+
+const clone = resolveStrictSecurityLevel({
+  ...computeRiskFromSignals([{ risk_type: 'clone_detected' }]),
+  prev: null,
+  adminStatus: 'monitoring',
+})
+assert.equal(clone, 'blocked', 'clone must block')
+
+const dbg = resolveStrictSecurityLevel({
+  ...computeRiskFromSignals([{ risk_type: 'debugger_attached' }]),
+  prev: null,
+  adminStatus: 'monitoring',
+})
+assert.equal(dbg, 'blocked', 'debugger must block')
+
+const apk = resolveStrictSecurityLevel({
+  ...computeRiskFromSignals([{ risk_type: 'tampered_apk' }]),
+  prev: null,
+  adminStatus: 'monitoring',
+})
+assert.equal(apk, 'blocked', 'tampered apk must block')
+
+const clean = resolveStrictSecurityLevel({
+  score: 0,
+  signals: [],
+  flags: {
+    rooted: false,
+    emulator: false,
+    clone_detected: false,
+    debugger: false,
+    frida: false,
+    tampered_apk: false,
+  },
+  prev: null,
+  adminStatus: 'monitoring',
+})
+assert.equal(clean, 'warning', 'no signals = warning')
+
+const persisted = resolveStrictSecurityLevel({
+  score: 0,
+  signals: [],
+  flags: {
+    rooted: false,
+    emulator: false,
+    clone_detected: false,
+    debugger: false,
+    frida: false,
+    tampered_apk: false,
+  },
+  prev: {
+    security_level: 'blocked',
+    admin_status: 'monitoring',
+    risk_score: 3,
+    rooted: true,
+  },
+  adminStatus: 'monitoring',
+})
+assert.equal(persisted, 'blocked', 'stays blocked until admin clears')
+
+const whitelisted = resolveStrictSecurityLevel({
+  ...rootOnly,
+  prev: { security_level: 'blocked', admin_status: 'monitoring', risk_score: 3, rooted: true },
+  adminStatus: 'whitelisted',
+})
+assert.notEqual(whitelisted, 'blocked', 'whitelist bypasses block level')
+
+assert.equal(levelFromScore(99), 'blocked')
+assert.equal(levelFromScore(0), 'warning')
+assert.equal(hasDetectionSignals(rootOnly), true)
+
+console.log('verify-strict-security-enforcement: OK')
