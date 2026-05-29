@@ -36,7 +36,7 @@ notificationsRouter.get('/notifications/runtime', async (req, res) => {
   }
 })
 
-notificationsRouter.get('/notifications', requireAdminPanelAccess, async (_req, res) => {
+notificationsRouter.get('/notifications', requireAdminPanelAccess, async (req, res) => {
   try {
     const rows = await listNotificationsAdmin(req)
     res.json(rows)

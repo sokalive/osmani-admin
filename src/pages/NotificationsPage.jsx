@@ -57,9 +57,10 @@ function NotificationsPage() {
     try {
       const list = await getNotifications()
       setNotifications(Array.isArray(list) ? list : [])
+      return true
     } catch (e) {
       showToast('error', e?.message || 'Could not load notifications')
-      setNotifications([])
+      return false
     }
   }, [showToast])
 
@@ -178,6 +179,12 @@ function NotificationsPage() {
         sentAt: instant ? new Date().toISOString() : null,
         clicks: 0,
       })
+      if (created?.id) {
+        setNotifications((prev) => [
+          created,
+          ...prev.filter((row) => row.id !== created.id),
+        ])
+      }
       await loadNotifications()
       if (instant) {
         const r = created?.onesignalRecipients
