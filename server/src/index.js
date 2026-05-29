@@ -1,5 +1,6 @@
 import cors from 'cors'
 import express from 'express'
+import { isStreamPlaybackPath, streamPlaybackCors } from './middleware/streamCors.js'
 import {
   getCdnHealthSnapshot,
   getStaticUploadCacheMaxAgeSec,
@@ -55,8 +56,16 @@ const corsOptions = {
 }
 
 // --- MIDDLEWARE ---
-app.use(cors(corsOptions))
-app.options('*', cors(corsOptions))
+// Stream HLS: permissive CORS (APK sends Origin: null / exp:// / localhost). Admin/API: strict allowlist.
+const adminCors = cors(corsOptions)
+
+function applyCors(req, res, next) {
+  if (isStreamPlaybackPath(req)) return streamPlaybackCors(req, res, next)
+  return adminCors(req, res, next)
+}
+
+app.use(applyCors)
+app.options('*', applyCors)
 
 app.use(express.json({ limit: '4mb' }))
 
