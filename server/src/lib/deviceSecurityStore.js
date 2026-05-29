@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { resolvePaymentPhoneForDevice } from '../billingStore.js'
 import { getPool } from '../db/pool.js'
 
 /** Display-only weights; strict mode blocks on any signal regardless of score. */
@@ -207,12 +208,20 @@ function rowToDevice(row, adminRow) {
     const t = tempUntil instanceof Date ? tempUntil : new Date(tempUntil)
     if (!Number.isNaN(t.getTime()) && t.getTime() <= Date.now()) status = 'monitoring'
   }
+  const riskReason = String(row.risk_type || '')
+  const firstSeen =
+    row.first_seen_at instanceof Date ? row.first_seen_at.toISOString() : String(row.first_seen_at || '')
+  const lastSeen =
+    row.last_seen_at instanceof Date ? row.last_seen_at.toISOString() : String(row.last_seen_at || '')
+  const detectionTime = Number(row.risk_score) > 0 && firstSeen ? firstSeen : lastSeen
+
   return {
     device_id: String(row.device_id),
     phone_user: String(row.phone_user || ''),
     phone: String(row.phone_user || ''),
     app_version: String(row.app_version || ''),
-    risk_type: String(row.risk_type || ''),
+    risk_type: riskReason,
+    risk_reason: riskReason,
     risk_score: Number(row.risk_score) || 0,
     rooted: row.rooted === true,
     emulator: row.emulator === true,
@@ -220,8 +229,9 @@ function rowToDevice(row, adminRow) {
     debugger: row.debugger === true,
     frida: row.frida === true,
     tampered_apk: row.tampered_apk === true,
-    last_seen:
-      row.last_seen_at instanceof Date ? row.last_seen_at.toISOString() : String(row.last_seen_at || ''),
+    last_seen: lastSeen,
+    first_seen: firstSeen,
+    detection_time: detectionTime,
     status,
     security_level: String(row.security_level || 'warning'),
     admin_status: String(row.admin_status || 'monitoring'),
@@ -245,7 +255,7 @@ export async function ingestSecurityReport(payload) {
   const signals = Array.isArray(payload.signals) ? payload.signals : []
   const { score, signals: merged, risk_type, flags } = computeRiskFromSignals(signals)
 
-  const phone = text(payload.phone ?? payload.phone_user ?? payload.user, 64)
+  let phone = text(payload.phone ?? payload.phone_user ?? payload.user, 64)
   const appVersion = text(
     payload.app_version ?? payload.appVersion ?? payload.version_name,
     64,
@@ -253,12 +263,27 @@ export async function ingestSecurityReport(payload) {
   const details = payload.details && typeof payload.details === 'object' ? payload.details : {}
 
   const { rows: existing } = await pool.query(
-    `SELECT device_id, admin_status, security_level, temp_block_until,
+    `SELECT device_id, phone_user, admin_status, security_level, temp_block_until,
             risk_score, rooted, emulator, clone_detected, debugger, frida, tampered_apk
      FROM device_security_profiles WHERE device_id = $1`,
     [deviceId],
   )
   const prev = existing[0]
+
+  let phoneResolvedFrom = null
+  if (!phone) {
+    const resolved = await resolvePaymentPhoneForDevice(deviceId).catch((e) => {
+      console.error('[security] resolvePaymentPhoneForDevice failed:', e)
+      return { phone: '', source: null }
+    })
+    if (resolved.phone) {
+      phone = text(resolved.phone, 64)
+      phoneResolvedFrom = resolved.source
+    }
+  }
+  if (!phone && prev?.phone_user) {
+    phone = text(prev.phone_user, 64)
+  }
   const adminStatus = String(prev?.admin_status || 'monitoring')
 
   const strictEnabled = await isStrictEnforcementEnabled(pool)
@@ -323,7 +348,12 @@ export async function ingestSecurityReport(payload) {
       flags.tampered_apk,
       JSON.stringify(merged),
       securityLevel,
-      JSON.stringify({ ...details, last_report_at: new Date().toISOString(), strict_enforcement: strictEnabled }),
+      JSON.stringify({
+        ...details,
+        last_report_at: new Date().toISOString(),
+        strict_enforcement: strictEnabled,
+        ...(phoneResolvedFrom ? { phone_resolved_from: phoneResolvedFrom } : {}),
+      }),
     ],
   )
 
@@ -340,6 +370,7 @@ export async function ingestSecurityReport(payload) {
   return {
     device_id: deviceId,
     phone_user: phone,
+    phone_resolved_from: phoneResolvedFrom,
     risk_score: score,
     security_level: securityLevel,
     is_new: isNew,

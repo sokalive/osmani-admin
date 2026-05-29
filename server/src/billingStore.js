@@ -1069,6 +1069,124 @@ export async function getLatestCompletedTransactionForDevice(deviceId) {
   return rows[0] ?? null
 }
 
+function phoneFromTransactionRow(txn) {
+  if (!txn) return ''
+  const direct = String(txn.phone ?? '').trim()
+  if (direct) return direct
+  const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+  return String(raw.phoneNorm ?? raw.phone ?? raw.buyer_phone ?? '').trim()
+}
+
+/** E.164-style +255… when digits look like Tanzania mobile; otherwise trimmed raw. */
+export function formatPaymentPhoneForDisplay(phone) {
+  const p = String(phone ?? '').trim()
+  if (!p) return ''
+  const digits = normalizePhoneDigits(p)
+  if (/^255\d{9}$/.test(digits)) return `+${digits}`
+  if (p.startsWith('+')) return p.slice(0, 64)
+  return p.slice(0, 64)
+}
+
+const TXN_PHONE_NONEMPTY = `trim(coalesce(t.phone::text, '')) <> ''`
+
+/**
+ * Resolve payment phone for a device (security reports, admin).
+ * Priority: active subscription txn → latest completed payment → transfer-linked payment.
+ */
+export async function resolvePaymentPhoneForDevice(deviceId) {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return { phone: '', source: null }
+
+  const pool = requirePool()
+
+  const { rows: activeRows } = await pool.query(
+    `SELECT t.phone::text AS phone
+     FROM device_subscriptions ds
+     INNER JOIN transactions t ON t.order_id = ds.transaction_id
+     WHERE ds.device_id = $1
+       AND ds.status = 'active'
+       AND ds.expires_at > now()
+       AND ${TXN_PHONE_NONEMPTY}
+     ORDER BY ds.updated_at DESC NULLS LAST, t.created_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  if (activeRows[0]?.phone) {
+    return {
+      phone: formatPaymentPhoneForDisplay(activeRows[0].phone),
+      source: 'active_subscription',
+    }
+  }
+
+  const completedTxn = await getLatestCompletedTransactionForDevice(d)
+  const completedPhone = phoneFromTransactionRow(completedTxn)
+  if (completedPhone) {
+    return {
+      phone: formatPaymentPhoneForDisplay(completedPhone),
+      source: 'completed_payment',
+    }
+  }
+
+  const { rows: transferTargetRows } = await pool.query(
+    `SELECT t.phone::text AS phone
+     FROM device_transfers dt
+     INNER JOIN transactions t ON t.device_id = dt.source_device_id
+       AND t.status = 'completed'
+       AND t.plan_id IS NOT NULL
+       AND ${TXN_PHONE_NONEMPTY}
+     WHERE dt.status = 'completed'
+       AND dt.target_device_id = $1
+     ORDER BY COALESCE(dt.completed_at, dt.created_at) DESC
+     LIMIT 1`,
+    [d],
+  )
+  if (transferTargetRows[0]?.phone) {
+    return {
+      phone: formatPaymentPhoneForDisplay(transferTargetRows[0].phone),
+      source: 'device_transfer',
+    }
+  }
+
+  const { rows: transferSourceRows } = await pool.query(
+    `SELECT t.phone::text AS phone
+     FROM device_transfers dt
+     INNER JOIN transactions t ON t.device_id = dt.target_device_id
+       AND t.status = 'completed'
+       AND t.plan_id IS NOT NULL
+       AND ${TXN_PHONE_NONEMPTY}
+     WHERE dt.status = 'completed'
+       AND dt.source_device_id = $1
+     ORDER BY COALESCE(dt.completed_at, dt.created_at) DESC
+     LIMIT 1`,
+    [d],
+  )
+  if (transferSourceRows[0]?.phone) {
+    return {
+      phone: formatPaymentPhoneForDisplay(transferSourceRows[0].phone),
+      source: 'device_transfer',
+    }
+  }
+
+  const { rows: anyTxnRows } = await pool.query(
+    `SELECT phone::text AS phone
+     FROM transactions
+     WHERE device_id = $1
+       AND status = 'completed'
+       AND trim(coalesce(phone::text, '')) <> ''
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  if (anyTxnRows[0]?.phone) {
+    return {
+      phone: formatPaymentPhoneForDisplay(anyTxnRows[0].phone),
+      source: 'completed_payment',
+    }
+  }
+
+  return { phone: '', source: null }
+}
+
 /**
  * Amount/currency/duration for subscription verify (Account screen).
  * Uses latest completed txn, then resolves duration from plans via plan_id (same as activation),

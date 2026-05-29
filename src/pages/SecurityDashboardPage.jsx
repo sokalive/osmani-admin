@@ -141,10 +141,19 @@ function DeviceDetailModal({ device, loading, onClose, onAction }) {
               <p className="text-[10px] uppercase text-slate-500">Phone number</p>
               <p className="mt-1 text-sm font-medium text-white">{device.phone_user || device.phone || '—'}</p>
             </div>
+            <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[10px] uppercase text-slate-500">Risk reason</p>
+              <p className="text-sm font-medium text-slate-200">{device.risk_reason || device.risk_type || '—'}</p>
+            </div>
+            <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[10px] uppercase text-slate-500">Detection time</p>
+              <p className="text-sm font-medium text-slate-200">
+                {formatReadableDateTime(device.detection_time || device.first_seen || device.last_seen)}
+              </p>
+            </div>
               <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
                 <p className="text-[10px] uppercase text-slate-500">Status</p>
                 <p className="text-sm font-medium text-slate-200">{device.status}</p>
-                <p className="mt-1 text-xs text-slate-500">{device.risk_type || '—'}</p>
               </div>
           </div>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs sm:grid-cols-6">
@@ -576,8 +585,9 @@ function SecurityDashboardPage() {
                     </th>
                     <th className="p-3">Device ID</th>
                     <th className="p-3">Phone number</th>
+                    <th className="p-3">Risk reason</th>
+                    <th className="p-3">Detection time</th>
                     <th className="p-3">App</th>
-                    <th className="p-3">Risk</th>
                     <th className="p-3">Score</th>
                     <th className="p-3">Root</th>
                     <th className="p-3">Emu</th>
@@ -608,8 +618,11 @@ function SecurityDashboardPage() {
                         {d.device_id}
                       </td>
                       <td className="max-w-[120px] p-3 text-sm text-white">{d.phone_user || d.phone || '—'}</td>
+                      <td className="max-w-[140px] p-3 text-slate-300">{d.risk_reason || d.risk_type || '—'}</td>
+                      <td className="p-3 text-xs text-slate-400">
+                        {formatReadableDateTime(d.detection_time || d.first_seen || d.last_seen)}
+                      </td>
                       <td className="p-3 text-slate-400">{d.app_version || '—'}</td>
-                      <td className="p-3 text-slate-400">{d.risk_type || '—'}</td>
                       <td className="p-3 font-semibold text-white">{d.risk_score}</td>
                       <td className="p-3">
                         <FlagCell value={d.rooted} />
@@ -628,9 +641,6 @@ function SecurityDashboardPage() {
                       </td>
                       <td className="p-3">
                         <FlagCell value={d.tampered_apk} />
-                      </td>
-                      <td className="p-3 text-xs text-slate-500">
-                        {formatReadableDateTime(d.last_seen)}
                       </td>
                       <td className="p-3">
                         <LevelBadge level={d.security_level} />

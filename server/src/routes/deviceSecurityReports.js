@@ -55,6 +55,7 @@ function buildSecurityReportResponse(result, policy) {
     device_id: result.device_id,
     phone_user: result.phone_user || '',
     phone: result.phone_user || '',
+    phone_resolved_from: result.phone_resolved_from || null,
     risk_score: result.risk_score,
     security_level: result.security_level,
     strict_enforcement: result.strict_enforcement === true,
