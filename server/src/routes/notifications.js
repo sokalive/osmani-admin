@@ -6,12 +6,16 @@ import {
   flushDueNotifications,
   listNotificationsAdmin,
   listRuntimeNotifications,
+  resolveOneSignalPushImageUrl,
   syncStaleOneSignalStats,
   updateNotificationById,
 } from '../lib/runtimeNotifications.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { fetchOneSignalSubscriptionDiagnostics } from '../lib/oneSignalDiagnostics.js'
 import { isOneSignalConfigured } from '../lib/oneSignalPush.js'
+import { persistOptimizedNotificationImage } from '../lib/notificationImageOptimize.js'
+import { resolvePublicAssetUrl } from '../lib/cdnAssets.js'
+import { uploadNotificationImage } from '../multerUpload.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const notificationsRouter = Router()
@@ -62,6 +66,56 @@ notificationsRouter.get('/notifications/onesignal-diagnostics', requireAdminPane
     res.status(500).json({ error: String(e.message || e) })
   }
 })
+
+/** Optimize and store notification image (multipart field `image`). */
+notificationsRouter.post(
+  '/notifications/prepare-image',
+  requireAdminPanelAccess,
+  (req, res, next) => {
+    uploadNotificationImage.single('image')(req, res, (err) => {
+      if (err) {
+        const message =
+          err.code === 'LIMIT_FILE_SIZE'
+            ? 'Image file is too large'
+            : String(err.message || err)
+        return res.status(400).json({ ok: false, error: message })
+      }
+      next()
+    })
+  },
+  async (req, res) => {
+    try {
+      if (!req.file?.buffer?.length) {
+        return res.status(400).json({ ok: false, error: 'image file is required (JPG, JPEG, PNG or WEBP)' })
+      }
+      const persisted = await persistOptimizedNotificationImage(req.file.buffer, {
+        mime: req.file.mimetype,
+      })
+      const pushImageUrl = resolveOneSignalPushImageUrl(persisted.imageForDb, req)
+      const previewUrl = resolvePublicAssetUrl(persisted.imageForDb, req) || persisted.imageForDb
+      res.json({
+        ok: true,
+        image: persisted.imageForDb,
+        imageForDb: persisted.imageForDb,
+        previewUrl,
+        pushImageUrl: pushImageUrl || null,
+        pushReady: Boolean(pushImageUrl),
+        originalBytes: persisted.originalBytes,
+        compressedBytes: persisted.compressedBytes,
+        width: persisted.width,
+        height: persisted.height,
+        format: persisted.format,
+        savedPercent: persisted.savedPercent,
+        message: pushImageUrl
+          ? 'Image optimized and ready for push delivery'
+          : 'Image saved; push image requires HTTPS public URL (check BASE_URL / CDN)',
+      })
+    } catch (e) {
+      console.error('[notifications/prepare-image]', e)
+      res.status(400).json({ ok: false, error: String(e.message || e) })
+    }
+  },
+)
 
 notificationsRouter.post('/notifications', requireAdminPanelAccess, async (req, res) => {
   try {

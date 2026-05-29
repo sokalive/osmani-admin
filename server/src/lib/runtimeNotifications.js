@@ -1,15 +1,15 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import { randomBytes } from 'node:crypto'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from './liveSyncBus.js'
-import { UPLOADS_DIR, ensureUploadsDir } from '../multerUpload.js'
 import { isOneSignalConfigured, sendOneSignalNotification } from './oneSignalPush.js'
 import { resolvePublicAssetUrl } from './cdnAssets.js'
 import {
   fetchOneSignalMessageStats,
   normalizeOneSignalStatsPayload,
 } from './oneSignalStats.js'
+import {
+  parseNotificationImageDataUrl,
+  persistOptimizedNotificationImage,
+} from './notificationImageOptimize.js'
 const ONESIGNAL_STATS_STALE_MS = Math.max(
   15_000,
   Number(process.env.ONESIGNAL_STATS_STALE_MS) || 45_000,
@@ -54,24 +54,10 @@ export async function persistNotificationDataUrlImageIfNeeded(imageField) {
   const raw = String(imageField ?? '').trim()
   if (!raw) return ''
   if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('/uploads/')) return raw
-  const compact = raw.replace(/\s/g, '')
-  const m = /^data:image\/(png|jpeg|jpg|gif|webp);base64,(.+)$/i.exec(compact)
-  if (!m) return raw.startsWith('data:') ? '' : raw
-  const ext = m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase()
-  let buf
-  try {
-    buf = Buffer.from(m[2], 'base64')
-  } catch {
-    return ''
-  }
-  if (!buf.length || buf.length > 5 * 1024 * 1024) {
-    throw new Error('Notification image is invalid or exceeds 5 MB')
-  }
-  ensureUploadsDir()
-  const name = `notif-${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`
-  const full = path.join(UPLOADS_DIR, name)
-  await fs.writeFile(full, buf)
-  return `/uploads/${name}`
+  const parsed = parseNotificationImageDataUrl(raw)
+  if (!parsed) return raw.startsWith('data:') ? '' : raw
+  const { imageForDb } = await persistOptimizedNotificationImage(parsed.buf, { mime: parsed.mime })
+  return imageForDb
 }
 
 const ADMIN_NOTIFICATION_STATUSES = new Set(['draft', 'scheduled', 'sent', 'cancelled', 'archived'])

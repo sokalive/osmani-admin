@@ -786,6 +786,21 @@ export const getNotifications = () => adminApiGet('/notifications')
 export const getRuntimeNotifications = (audience = 'all') =>
   apiGet(`/notifications/runtime?audience=${encodeURIComponent(String(audience || 'all'))}`)
 export const postNotification = (body) => adminApiPost('/notifications', body)
+export async function prepareNotificationImage(file) {
+  const formData = new FormData()
+  formData.append('image', file)
+  const res = await fetch(joinPath('/notifications/prepare-image'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminPanelFormDataHeaders(),
+    body: formData,
+  })
+  const parsed = await parseJsonSafe(res)
+  if (!res.ok) {
+    throw new ApiError(msgFromBody(parsed, res.status), res.status, parsed)
+  }
+  return parsed
+}
 export const getOnesignalDiagnostics = () => adminApiGet('/notifications/onesignal-diagnostics')
 export const putNotification = (id, body) => adminApiPut(`/notifications/${encodeURIComponent(id)}`, body)
 export const deleteNotification = (id) => adminApiDelete(`/notifications/${encodeURIComponent(id)}`)

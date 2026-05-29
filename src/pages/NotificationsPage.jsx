@@ -4,11 +4,13 @@ import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import {
+  API_ORIGIN,
   deleteAllNotifications,
   deleteNotification,
   getNotifications,
   getOnesignalDiagnostics,
   postNotification,
+  prepareNotificationImage,
   putNotification,
   syncStreamUrl,
 } from '../lib/api'
@@ -29,6 +31,22 @@ function statNum(value) {
 function statPct(value) {
   if (value == null || Number.isNaN(Number(value))) return '—'
   return `${Number(value).toFixed(1)}%`
+}
+
+function formatBytes(bytes) {
+  if (bytes == null || Number.isNaN(Number(bytes))) return '—'
+  const n = Number(bytes)
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function notificationPreviewUrl(pathOrUrl) {
+  const raw = String(pathOrUrl || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('blob:') || raw.startsWith('data:'))
+    return raw
+  return `${API_ORIGIN}${raw.startsWith('/') ? raw : `/${raw}`}`
 }
 
 function StatBadge({ label, value, tone = 'slate' }) {
@@ -88,6 +106,8 @@ function NotificationsPage() {
   const [message, setMessage] = useState('')
   const [imagePreview, setImagePreview] = useState(null)
   const [imageData, setImageData] = useState('')
+  const [imageUpload, setImageUpload] = useState(null)
+  const [imagePreparing, setImagePreparing] = useState(false)
   const [targetType, setTargetType] = useState('osmani://home')
   const [scheduleDate, setScheduleDate] = useState('')
   const [scheduleTime, setScheduleTime] = useState('')
@@ -142,20 +162,47 @@ function NotificationsPage() {
 
   const valid = Object.keys(errors).length === 0
 
-  function handleImage(e) {
+  async function handleImage(e) {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > 450 * 1024) {
-      showFlash('error', 'Image must be under 450 KB.')
+    const mime = String(file.type || '').toLowerCase()
+    const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+    if (!allowed.includes(mime) && !/\.(jpe?g|png|webp)$/i.test(file.name || '')) {
+      showFlash('error', 'Use JPG, JPEG, PNG or WEBP.')
+      e.target.value = ''
       return
     }
     if (imagePreview?.startsWith('blob:')) URL.revokeObjectURL(imagePreview)
-    const reader = new FileReader()
-    reader.onload = () => {
-      setImageData(typeof reader.result === 'string' ? reader.result : '')
-      setImagePreview(typeof reader.result === 'string' ? reader.result : URL.createObjectURL(file))
+    setImagePreparing(true)
+    setImageUpload(null)
+    setImageData('')
+    setImagePreview(null)
+    try {
+      const out = await prepareNotificationImage(file)
+      if (!out?.ok) throw new Error(out?.error || 'Image upload failed')
+      const stored = out.imageForDb || out.image || ''
+      setImageData(stored)
+      setImagePreview(out.previewUrl || notificationPreviewUrl(stored))
+      setImageUpload({
+        originalBytes: out.originalBytes ?? file.size,
+        compressedBytes: out.compressedBytes,
+        width: out.width,
+        height: out.height,
+        format: out.format,
+        savedPercent: out.savedPercent,
+        pushReady: out.pushReady === true,
+        message: out.message || 'Image optimized and saved',
+      })
+      showFlash('success', out.message || 'Image ready for push.')
+    } catch (err) {
+      setImageData('')
+      setImagePreview(null)
+      setImageUpload({ error: err?.message || 'Upload failed' })
+      showFlash('error', err?.message || 'Image upload failed')
+      e.target.value = ''
+    } finally {
+      setImagePreparing(false)
     }
-    reader.readAsDataURL(file)
   }
 
   async function handleSend(e) {
@@ -202,6 +249,7 @@ function NotificationsPage() {
       setMessage('')
       setImageData('')
       setImagePreview(null)
+      setImageUpload(null)
       setTargetType('osmani://home')
       setScheduleDate('')
       setScheduleTime('')
@@ -397,10 +445,38 @@ function NotificationsPage() {
                 <span className={labelClass()}>Image (optional)</span>
                 <input
                   type="file"
-                  accept="image/*"
-                  onChange={handleImage}
-                  className="block w-full text-sm text-slate-400 file:mr-4 file:rounded-lg file:border-0 file:bg-amber-500/20 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-amber-200"
+                  accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                  disabled={imagePreparing || sending}
+                  onChange={(ev) => void handleImage(ev)}
+                  className="block w-full text-sm text-slate-400 file:mr-4 file:rounded-lg file:border-0 file:bg-amber-500/20 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-amber-200 disabled:opacity-50"
                 />
+                {imagePreparing ? (
+                  <p className="mt-2 text-xs text-amber-200/90">Compressing and uploading…</p>
+                ) : null}
+                {imageUpload && !imageUpload.error ? (
+                  <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3 text-xs text-slate-300">
+                    <p className="font-semibold text-emerald-200">Upload result</p>
+                    <p className="mt-1">
+                      Original: <span className="text-white">{formatBytes(imageUpload.originalBytes)}</span>
+                      {' → '}
+                      Compressed:{' '}
+                      <span className="text-white">{formatBytes(imageUpload.compressedBytes)}</span>
+                      {imageUpload.savedPercent != null ? (
+                        <span className="text-emerald-300/90"> ({imageUpload.savedPercent}% smaller)</span>
+                      ) : null}
+                    </p>
+                    <p className="mt-1 text-slate-400">
+                      {imageUpload.width && imageUpload.height
+                        ? `${imageUpload.width}×${imageUpload.height} ${String(imageUpload.format || '').toUpperCase()}`
+                        : null}
+                      {imageUpload.pushReady ? ' · Push image ready (HTTPS)' : ' · Saved (check CDN/HTTPS for push)'}
+                    </p>
+                    <p className="mt-1 text-slate-500">{imageUpload.message}</p>
+                  </div>
+                ) : null}
+                {imageUpload?.error ? (
+                  <p className="mt-2 text-xs text-red-400">{imageUpload.error}</p>
+                ) : null}
                 {imagePreview ? (
                   <img
                     src={imagePreview}
@@ -409,7 +485,8 @@ function NotificationsPage() {
                   />
                 ) : null}
                 <p className="mt-1 text-xs text-slate-500">
-                  Shown in push (Android/iOS) when the server can serve it over HTTPS.
+                  Large photos from phones are resized and compressed on the server (JPG, PNG, WEBP). Shown in push
+                  when served over HTTPS.
                 </p>
               </div>
               <div>
@@ -476,7 +553,7 @@ function NotificationsPage() {
             <div className="flex justify-end">
               <button
                 type="submit"
-                disabled={!valid || sending}
+                disabled={!valid || sending || imagePreparing}
                 className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-8 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-all enabled:hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {sending ? 'Working…' : 'Send notification'}

@@ -197,3 +197,25 @@ export const uploadPaymentProviderLogo = multer({
   fileFilter: paymentProviderLogoFilter,
   limits: { fileSize: 4 * 1024 * 1024 },
 })
+
+function notificationImageFilter(_req, file, cb) {
+  const mime = String(file?.mimetype || '').toLowerCase()
+  const allowed = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
+  if (!allowed.has(mime)) {
+    cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Only JPG, JPEG, PNG and WEBP are allowed'))
+    return
+  }
+  cb(null, true)
+}
+
+/** Admin notification image — field `image`, optimized server-side after upload */
+export const uploadNotificationImage = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: notificationImageFilter,
+  limits: {
+    fileSize: Math.max(
+      1024 * 1024,
+      Number(process.env.NOTIFICATION_IMAGE_MAX_INPUT_BYTES) || 15 * 1024 * 1024,
+    ),
+  },
+})
