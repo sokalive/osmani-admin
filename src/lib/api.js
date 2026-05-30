@@ -803,6 +803,8 @@ export async function prepareNotificationImage(file) {
 }
 export const getOnesignalDiagnostics = () => adminApiGet('/notifications/onesignal-diagnostics')
 export const putNotification = (id, body) => adminApiPut(`/notifications/${encodeURIComponent(id)}`, body)
+export const syncNotificationStats = (id) =>
+  adminApiPost(`/notifications/${encodeURIComponent(id)}/sync-stats`, {})
 export const deleteNotification = (id) => adminApiDelete(`/notifications/${encodeURIComponent(id)}`)
 export const deleteAllNotifications = () => adminApiRequest('/notifications/all', { method: 'DELETE' })
 

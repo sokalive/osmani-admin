@@ -6,6 +6,7 @@ import {
   flushDueNotifications,
   listNotificationsAdmin,
   listRuntimeNotifications,
+  refreshNotificationStatsAdmin,
   resolveOneSignalPushImageUrl,
   syncStaleOneSignalStats,
   updateNotificationById,
@@ -130,6 +131,19 @@ notificationsRouter.post('/notifications', requireAdminPanelAccess, async (req, 
         : 500
     console.error('[notifications] POST failed:', e)
     res.status(status).json({ error: message })
+  }
+})
+
+notificationsRouter.post('/notifications/:id/sync-stats', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const updated = await refreshNotificationStatsAdmin(req.params.id, req)
+    if (!updated) {
+      return res.status(404).json({ error: 'Notification not found' })
+    }
+    res.json(updated)
+  } catch (e) {
+    console.error('[notifications] sync-stats failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
   }
 })
 

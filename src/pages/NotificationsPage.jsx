@@ -12,6 +12,7 @@ import {
   postNotification,
   prepareNotificationImage,
   putNotification,
+  syncNotificationStats,
   syncStreamUrl,
 } from '../lib/api'
 
@@ -33,6 +34,57 @@ function statPct(value) {
   return `${Number(value).toFixed(1)}%`
 }
 
+/** OneSignal metric cell: number, pending, N/A, or explicit unavailable status. */
+function analyticsMetric(n, field, { pct = false } = {}) {
+  const raw = n?.[field]
+  if (raw != null && raw !== '' && !Number.isNaN(Number(raw))) {
+    return pct ? statPct(raw) : statNum(raw)
+  }
+  if (n?.kind === 'system') return 'N/A'
+  if (n?.status === 'scheduled') return '—'
+  if (n?.status === 'cancelled') return '—'
+  if (n?.onesignalStatsError) return 'Unavailable'
+  if (n?.status === 'sent' && n?.onesignalId && !n?.onesignalStatsSyncedAt) return 'Pending'
+  if (n?.status === 'sent' && n?.kind === 'admin' && !n?.onesignalId) return 'No push ID'
+  if (n?.status === 'sent' && n?.onesignalStatsSyncedAt) return pct ? '0.0%' : '0'
+  return '—'
+}
+
+function analyticsMetricTitle(n) {
+  if (n?.onesignalStatsError) return n.onesignalStatsError
+  if (n?.status === 'scheduled' && n?.scheduleAt) {
+    return `Scheduled for ${new Date(n.scheduleAt).toLocaleString()}`
+  }
+  if (n?.status === 'sent' && n?.onesignalId && !n?.onesignalStatsSyncedAt) {
+    return 'Waiting for first OneSignal analytics sync'
+  }
+  return undefined
+}
+
+function isoFromLocalDateTime(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return null
+  const at = new Date(`${dateStr}T${timeStr}:00`)
+  if (Number.isNaN(at.getTime())) return null
+  return at.toISOString()
+}
+
+function localDateFromIso(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function localTimeFromIso(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
 function formatBytes(bytes) {
   if (bytes == null || Number.isNaN(Number(bytes))) return '—'
   const n = Number(bytes)
@@ -49,7 +101,7 @@ function notificationPreviewUrl(pathOrUrl) {
   return `${API_ORIGIN}${raw.startsWith('/') ? raw : `/${raw}`}`
 }
 
-function StatBadge({ label, value, tone = 'slate' }) {
+function StatBadge({ label, value, tone = 'slate', title }) {
   const tones = {
     emerald: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-100',
     sky: 'border-sky-500/35 bg-sky-500/15 text-sky-100',
@@ -59,6 +111,7 @@ function StatBadge({ label, value, tone = 'slate' }) {
   }
   return (
     <span
+      title={title}
       className={`inline-flex min-w-[4.5rem] flex-col rounded-lg border px-2 py-1 text-center ring-1 ring-white/[0.03] ${tones[tone] || tones.slate}`}
     >
       <span className="text-[9px] font-bold uppercase tracking-wide opacity-80">{label}</span>
@@ -120,6 +173,11 @@ function NotificationsPage() {
   const [diagBusy, setDiagBusy] = useState(false)
   const [flash, setFlash] = useState(null)
   const [detailRow, setDetailRow] = useState(null)
+  const [refreshingStatsId, setRefreshingStatsId] = useState(null)
+  const [scheduleActionId, setScheduleActionId] = useState(null)
+  const [rescheduleRow, setRescheduleRow] = useState(null)
+  const [rescheduleDate, setRescheduleDate] = useState('')
+  const [rescheduleTime, setRescheduleTime] = useState('')
 
   const showFlash = useCallback((type, msg) => {
     setFlash({ type, message: msg })
@@ -128,12 +186,14 @@ function NotificationsPage() {
 
   const stats = useMemo(() => {
     const sentRows = notifications.filter((n) => n.status === 'sent')
+    const scheduledRows = notifications.filter((n) => n.status === 'scheduled')
     const sent = sentRows.length
+    const scheduled = scheduledRows.length
     const delivered = sentRows.reduce((s, n) => s + (Number(n.onesignalDelivered) || 0), 0)
     const clicked = sentRows.reduce((s, n) => s + (Number(n.onesignalClicked) || 0), 0)
     const failed = sentRows.reduce((s, n) => s + (Number(n.onesignalFailed) || 0), 0)
     const ctr = delivered > 0 ? Math.round((clicked / delivered) * 1000) / 10 : null
-    return { sent, delivered, clicked, failed, ctr }
+    return { sent, scheduled, delivered, clicked, failed, ctr }
   }, [notifications])
 
   useEffect(() => {
@@ -243,7 +303,10 @@ function NotificationsPage() {
             : 'Push sent to all users via OneSignal.',
         )
       } else {
-        showFlash('success', 'Notification scheduled; OneSignal will send at the chosen time.')
+        showFlash(
+          'success',
+          `Scheduled for ${new Date(iso).toLocaleString()}. The server will send the push at that time.`,
+        )
       }
       setTitle('')
       setMessage('')
@@ -320,6 +383,82 @@ function NotificationsPage() {
     }
   }
 
+  async function refreshAnalytics(id) {
+    setRefreshingStatsId(id)
+    try {
+      const updated = await syncNotificationStats(id)
+      if (updated?.id) {
+        setNotifications((prev) => prev.map((row) => (row.id === updated.id ? updated : row)))
+        if (detailRow?.id === updated.id) setDetailRow(updated)
+      }
+      await loadNotifications()
+      if (updated?.onesignalStatsError) {
+        showToast('error', updated.onesignalStatsError)
+      } else {
+        showFlash('success', 'Analytics refreshed from OneSignal.')
+      }
+    } catch (e) {
+      showToast('error', e?.message || 'Analytics refresh failed')
+    } finally {
+      setRefreshingStatsId(null)
+    }
+  }
+
+  async function cancelScheduled(n) {
+    if (!window.confirm(`Cancel scheduled notification "${n.title}"?`)) return
+    setScheduleActionId(n.id)
+    try {
+      await putNotification(n.id, {
+        ...n,
+        status: 'cancelled',
+        scheduleAt: null,
+        isActive: false,
+      })
+      await loadNotifications()
+      showFlash('success', 'Scheduled notification cancelled.')
+    } catch (e) {
+      showToast('error', e?.message || 'Cancel failed')
+    } finally {
+      setScheduleActionId(null)
+    }
+  }
+
+  function openReschedule(n) {
+    setRescheduleRow(n)
+    setRescheduleDate(localDateFromIso(n.scheduleAt))
+    setRescheduleTime(localTimeFromIso(n.scheduleAt))
+  }
+
+  async function submitReschedule(e) {
+    e.preventDefault()
+    if (!rescheduleRow) return
+    const iso = isoFromLocalDateTime(rescheduleDate, rescheduleTime)
+    if (!iso) {
+      showToast('error', 'Pick a valid date and time.')
+      return
+    }
+    if (new Date(iso).getTime() <= Date.now()) {
+      showToast('error', 'Schedule must be in the future.')
+      return
+    }
+    setScheduleActionId(rescheduleRow.id)
+    try {
+      await putNotification(rescheduleRow.id, {
+        ...rescheduleRow,
+        status: 'scheduled',
+        scheduleAt: iso,
+        sentAt: null,
+      })
+      await loadNotifications()
+      showFlash('success', `Rescheduled for ${new Date(iso).toLocaleString()}.`)
+      setRescheduleRow(null)
+    } catch (err) {
+      showToast('error', err?.message || 'Reschedule failed')
+    } finally {
+      setScheduleActionId(null)
+    }
+  }
+
   return (
     <>
       <Topbar />
@@ -377,13 +516,17 @@ function NotificationsPage() {
           ) : null}
         </header>
 
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <div className="rounded-2xl border border-violet-500/25 bg-violet-950/25 p-5 ring-1 ring-violet-500/15">
             <div className="flex items-center gap-2 text-violet-300">
               <Bell className="h-5 w-5" />
               <span className="text-[10px] font-semibold uppercase tracking-wide">Campaigns sent</span>
             </div>
             <p className="mt-3 text-4xl font-bold text-white">{stats.sent}</p>
+          </div>
+          <div className="rounded-2xl border border-amber-500/25 bg-amber-950/20 p-4 ring-1 ring-amber-500/15">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-300">Scheduled</span>
+            <p className="mt-2 text-3xl font-bold text-white">{stats.scheduled}</p>
           </div>
           <div className="rounded-2xl border border-emerald-500/25 bg-emerald-950/20 p-4 ring-1 ring-emerald-500/15">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-300">Delivered</span>
@@ -405,6 +548,27 @@ function NotificationsPage() {
             <p className="mt-2 text-3xl font-bold text-white">{stats.ctr != null ? statPct(stats.ctr) : '—'}</p>
           </div>
         </section>
+
+        {stats.scheduled > 0 ? (
+          <section className="rounded-2xl border border-amber-500/30 bg-amber-950/15 p-4 ring-1 ring-amber-500/10">
+            <h2 className="text-sm font-semibold text-amber-200">
+              {stats.scheduled} notification{stats.scheduled === 1 ? '' : 's'} queued
+            </h2>
+            <ul className="mt-2 space-y-1 text-xs text-slate-300">
+              {notifications
+                .filter((n) => n.status === 'scheduled')
+                .slice(0, 5)
+                .map((n) => (
+                  <li key={n.id} className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium text-white">{n.title}</span>
+                    <span className="text-amber-200/90">
+                      Sends {n.scheduleAt ? new Date(n.scheduleAt).toLocaleString() : '—'}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+          </section>
+        ) : null}
 
         <section className="rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
           <h2 className="text-lg font-semibold text-white">Send notification</h2>
@@ -546,6 +710,9 @@ function NotificationsPage() {
                   {touched && errors.schedule ? (
                     <p className="sm:col-span-2 text-xs text-red-400">{errors.schedule}</p>
                   ) : null}
+                  <p className="mt-2 text-xs text-slate-500">
+                    Server sends the push when the scheduled time arrives (checked every ~30 seconds).
+                  </p>
                 </div>
               ) : null}
             </div>
@@ -556,7 +723,7 @@ function NotificationsPage() {
                 disabled={!valid || sending || imagePreparing}
                 className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-8 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-all enabled:hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {sending ? 'Working…' : 'Send notification'}
+                {sending ? 'Working…' : instant ? 'Send notification' : 'Schedule notification'}
               </button>
             </div>
           </form>
@@ -606,19 +773,35 @@ function NotificationsPage() {
                         {n.message}
                       </td>
                       <td className="px-4 py-3">
-                        <StatBadge label="Del" value={statNum(n.onesignalDelivered)} tone="emerald" />
+                        <StatBadge
+                          label="Del"
+                          value={analyticsMetric(n, 'onesignalDelivered')}
+                          tone="emerald"
+                          title={analyticsMetricTitle(n)}
+                        />
                       </td>
                       <td className="px-4 py-3">
-                        <StatBadge label="Clk" value={statNum(n.onesignalClicked)} tone="sky" />
+                        <StatBadge
+                          label="Clk"
+                          value={analyticsMetric(n, 'onesignalClicked')}
+                          tone="sky"
+                          title={analyticsMetricTitle(n)}
+                        />
                       </td>
                       <td className="px-4 py-3">
-                        <StatBadge label="Fail" value={statNum(n.onesignalFailed)} tone="red" />
+                        <StatBadge
+                          label="Fail"
+                          value={analyticsMetric(n, 'onesignalFailed')}
+                          tone="red"
+                          title={analyticsMetricTitle(n)}
+                        />
                       </td>
                       <td className="px-4 py-3">
                         <StatBadge
                           label="CTR"
-                          value={n.onesignalCtr != null ? statPct(n.onesignalCtr) : '—'}
+                          value={analyticsMetric(n, 'onesignalCtr', { pct: true })}
                           tone="amber"
+                          title={analyticsMetricTitle(n)}
                         />
                       </td>
                       <td className="px-4 py-3">
@@ -626,13 +809,22 @@ function NotificationsPage() {
                           className={`inline-flex rounded-lg px-2 py-0.5 text-[11px] font-bold uppercase ring-1 ${
                             n.status === 'sent'
                               ? 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/40'
-                              : n.deliveryState === 'failed'
-                                ? 'bg-red-500/20 text-red-200 ring-red-400/40'
-                                : 'bg-amber-500/20 text-amber-200 ring-amber-400/40'
+                              : n.status === 'scheduled'
+                                ? 'bg-sky-500/20 text-sky-200 ring-sky-400/40'
+                                : n.status === 'cancelled'
+                                  ? 'bg-slate-600/30 text-slate-300 ring-slate-500/40'
+                                  : n.deliveryState === 'failed'
+                                    ? 'bg-red-500/20 text-red-200 ring-red-400/40'
+                                    : 'bg-amber-500/20 text-amber-200 ring-amber-400/40'
                           }`}
                         >
                           {n.deliveryState === 'failed' ? 'failed' : n.status}
                         </span>
+                        {n.status === 'scheduled' && n.scheduleAt ? (
+                          <p className="mt-1 text-[10px] text-sky-300/90">
+                            Due {new Date(n.scheduleAt).toLocaleString()}
+                          </p>
+                        ) : null}
                         {n.deliveryError ? (
                           <p
                             className="mt-1 max-w-[180px] truncate text-[10px] text-red-400/90"
@@ -643,21 +835,60 @@ function NotificationsPage() {
                         ) : null}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-slate-400">
-                        {n.onesignalSentAt
-                          ? new Date(n.onesignalSentAt).toLocaleString()
-                          : n.sentAt
-                            ? new Date(n.sentAt).toLocaleString()
-                            : n.scheduleAt
-                              ? `Due ${new Date(n.scheduleAt).toLocaleString()}`
-                              : new Date(n.createdAt).toLocaleString()}
+                        {n.status === 'scheduled' && n.scheduleAt ? (
+                          <>
+                            <span className="text-sky-300">Scheduled</span>
+                            <p className="mt-0.5">{new Date(n.scheduleAt).toLocaleString()}</p>
+                          </>
+                        ) : n.onesignalSentAt ? (
+                          new Date(n.onesignalSentAt).toLocaleString()
+                        ) : n.sentAt ? (
+                          new Date(n.sentAt).toLocaleString()
+                        ) : (
+                          new Date(n.createdAt).toLocaleString()
+                        )}
                         {n.onesignalStatsSyncedAt ? (
                           <p className="mt-0.5 text-[10px] text-slate-600" title={n.onesignalStatsSyncedAt}>
                             synced {new Date(n.onesignalStatsSyncedAt).toLocaleTimeString()}
+                          </p>
+                        ) : n.onesignalStatsError ? (
+                          <p className="mt-0.5 text-[10px] text-red-400/80" title={n.onesignalStatsError}>
+                            sync error
                           </p>
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="inline-flex flex-col items-end gap-1 sm:flex-row sm:items-center">
+                          {n.status === 'scheduled' ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={scheduleActionId === n.id}
+                                onClick={() => openReschedule(n)}
+                                className="rounded-lg border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-xs font-medium text-sky-200 hover:bg-sky-500/20 disabled:opacity-40"
+                              >
+                                Reschedule
+                              </button>
+                              <button
+                                type="button"
+                                disabled={scheduleActionId === n.id}
+                                onClick={() => void cancelScheduled(n)}
+                                className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-200 hover:bg-amber-500/20 disabled:opacity-40"
+                              >
+                                {scheduleActionId === n.id ? 'Working…' : 'Cancel'}
+                              </button>
+                            </>
+                          ) : null}
+                          {n.onesignalId || n.status === 'sent' ? (
+                            <button
+                              type="button"
+                              disabled={refreshingStatsId === n.id}
+                              onClick={() => void refreshAnalytics(n.id)}
+                              className="rounded-lg border border-slate-600 px-2 py-1 text-xs font-medium text-slate-300 hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-40"
+                            >
+                              {refreshingStatsId === n.id ? 'Refreshing…' : 'Refresh analytics'}
+                            </button>
+                          ) : null}
                           {n.onesignalId ? (
                             <button
                               type="button"
@@ -727,15 +958,39 @@ function NotificationsPage() {
                 </button>
               </div>
               <div className="mb-4 flex flex-wrap gap-2">
-                <StatBadge label="Delivered" value={statNum(detailRow.onesignalDelivered)} tone="emerald" />
-                <StatBadge label="Confirmed" value={statNum(detailRow.onesignalConfirmed)} tone="emerald" />
-                <StatBadge label="Clicked" value={statNum(detailRow.onesignalClicked)} tone="sky" />
-                <StatBadge label="Failed" value={statNum(detailRow.onesignalFailed)} tone="red" />
+                <StatBadge
+                  label="Delivered"
+                  value={analyticsMetric(detailRow, 'onesignalDelivered')}
+                  tone="emerald"
+                />
+                <StatBadge
+                  label="Confirmed"
+                  value={analyticsMetric(detailRow, 'onesignalConfirmed')}
+                  tone="emerald"
+                />
+                <StatBadge label="Clicked" value={analyticsMetric(detailRow, 'onesignalClicked')} tone="sky" />
+                <StatBadge label="Failed" value={analyticsMetric(detailRow, 'onesignalFailed')} tone="red" />
                 <StatBadge
                   label="CTR"
-                  value={detailRow.onesignalCtr != null ? statPct(detailRow.onesignalCtr) : '—'}
+                  value={analyticsMetric(detailRow, 'onesignalCtr', { pct: true })}
                   tone="amber"
                 />
+              </div>
+              {detailRow.onesignalStatsError ? (
+                <div className="mb-4 rounded-xl border border-red-500/35 bg-red-950/30 p-3 text-xs text-red-200">
+                  <p className="font-semibold uppercase tracking-wide text-red-300">Analytics sync error</p>
+                  <p className="mt-1">{detailRow.onesignalStatsError}</p>
+                </div>
+              ) : null}
+              <div className="mb-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={refreshingStatsId === detailRow.id}
+                  onClick={() => void refreshAnalytics(detailRow.id)}
+                  className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40"
+                >
+                  {refreshingStatsId === detailRow.id ? 'Refreshing…' : 'Refresh analytics'}
+                </button>
               </div>
               <dl className="space-y-2 text-xs text-slate-400">
                 <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
@@ -776,6 +1031,69 @@ function NotificationsPage() {
                 </div>
               </dl>
             </div>
+          </div>
+        ) : null}
+
+        {rescheduleRow ? (
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notif-reschedule-title"
+          >
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/75"
+              aria-label="Close"
+              onClick={() => setRescheduleRow(null)}
+            />
+            <form
+              onSubmit={submitReschedule}
+              className="relative z-10 w-full max-w-md rounded-2xl border border-slate-700/80 bg-slate-950 p-6 shadow-2xl ring-1 ring-white/10"
+            >
+              <h3 id="notif-reschedule-title" className="text-lg font-semibold text-white">
+                Reschedule notification
+              </h3>
+              <p className="mt-1 text-sm text-slate-400">{rescheduleRow.title}</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={labelClass()}>Date</label>
+                  <input
+                    type="date"
+                    value={rescheduleDate}
+                    onChange={(e) => setRescheduleDate(e.target.value)}
+                    className={inputClass()}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className={labelClass()}>Time</label>
+                  <input
+                    type="time"
+                    value={rescheduleTime}
+                    onChange={(e) => setRescheduleTime(e.target.value)}
+                    className={inputClass()}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRescheduleRow(null)}
+                  className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={scheduleActionId === rescheduleRow.id}
+                  className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-40"
+                >
+                  {scheduleActionId === rescheduleRow.id ? 'Saving…' : 'Save schedule'}
+                </button>
+              </div>
+            </form>
           </div>
         ) : null}
       </main>

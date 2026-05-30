@@ -179,6 +179,8 @@ function toApiNotification(row, req = null) {
     onesignalStatsSyncedAt:
       p.onesignal_stats_synced_at != null ? String(p.onesignal_stats_synced_at) : null,
     deliveryError: p.onesignal_error != null ? String(p.onesignal_error).slice(0, 500) : null,
+    onesignalStatsError:
+      p.onesignal_stats_error != null ? String(p.onesignal_stats_error).slice(0, 500) : null,
   }
 }
 
@@ -196,8 +198,9 @@ export async function syncOneSignalStatsForRow(row) {
   try {
     const raw = await fetchOneSignalMessageStats(messageId)
     const statsPatch = normalizeOneSignalStatsPayload(raw, basePayload)
+    const { onesignal_stats_error: _prevStatsErr, ...payloadWithoutStatsErr } = basePayload
     const merged = {
-      ...basePayload,
+      ...payloadWithoutStatsErr,
       ...statsPatch,
       onesignal_recipients:
         basePayload.onesignal_recipients ??
@@ -235,6 +238,17 @@ export async function syncOneSignalStatsById(notificationId) {
   ])
   if (!rows[0]) return null
   return syncOneSignalStatsForRow(rows[0])
+}
+
+/** Manual admin refresh: sync OneSignal stats for one row and return API shape. */
+export async function refreshNotificationStatsAdmin(notificationId, req = null) {
+  const pool = requirePool()
+  const id = String(notificationId)
+  const { rows } = await pool.query(`SELECT * FROM notifications WHERE id = $1 LIMIT 1`, [id])
+  if (!rows[0]) return null
+  await syncOneSignalStatsForRow(rows[0])
+  const { rows: updated } = await pool.query(`SELECT * FROM notifications WHERE id = $1 LIMIT 1`, [id])
+  return updated[0] ? toApiNotification(updated[0], req) : null
 }
 
 /** Refresh stats for recently sent pushes (stale or never synced). */

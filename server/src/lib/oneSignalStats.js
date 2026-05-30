@@ -19,10 +19,9 @@ export async function fetchOneSignalMessageStats(messageId) {
     throw new Error('OneSignal is not configured')
   }
 
+  // View Message API only — do not pass outcome_names (requires paid custom-outcome plan).
   const url = new URL(`${ONESIGNAL_API_BASE}/notifications/${encodeURIComponent(id)}`)
   url.searchParams.set('app_id', appId)
-  url.searchParams.append('outcome_names', 'os__click.count')
-  url.searchParams.append('outcome_names', 'os__confirmed_delivery.count')
 
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Key ${restKey}` },
