@@ -48,7 +48,7 @@ function formatOneSignalFailure(httpStatus, raw) {
  * Build the production broadcast body (no filters, aliases, or subscription lists).
  * @param {string} [imageUrl] - public HTTPS URL for rich push (Android big_picture, etc.)
  */
-export function buildProductionOneSignalBody({ appId, title, message, imageUrl }) {
+export function buildProductionOneSignalBody({ appId, title, message, imageUrl, data }) {
   const body = {
     app_id: appId,
     included_segments: [PRODUCTION_SEGMENT],
@@ -60,6 +60,14 @@ export function buildProductionOneSignalBody({ appId, title, message, imageUrl }
     body.big_picture = img
     body.chrome_web_image = img
     body.ios_attachments = { id1: img }
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const flat = {}
+    for (const [key, val] of Object.entries(data)) {
+      if (val == null) continue
+      flat[String(key).slice(0, 64)] = String(val).slice(0, 2048)
+    }
+    if (Object.keys(flat).length > 0) body.data = flat
   }
   return body
 }
@@ -89,6 +97,7 @@ export async function sendOneSignalNotification(opts, logMeta = {}) {
     title,
     message,
     imageUrl: opts.imageUrl,
+    data: opts.data,
   })
   const requestHeaders = {
     'Content-Type': 'application/json; charset=utf-8',

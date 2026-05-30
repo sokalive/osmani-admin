@@ -10,6 +10,18 @@ import {
   parseNotificationImageDataUrl,
   persistOptimizedNotificationImage,
 } from './notificationImageOptimize.js'
+import {
+  buildNotificationDestination,
+  destinationFromPayloadAndTargetType,
+  mergeDestinationIntoPayload,
+  oneSignalDataFromDestination,
+} from './notificationDestination.js'
+import {
+  computeNextScheduleAt,
+  isRecurringKind,
+  normalizeRecurrenceFields,
+  recurrenceKindLabel,
+} from './notificationRecurrence.js'
 const ONESIGNAL_STATS_STALE_MS = Math.max(
   15_000,
   Number(process.env.ONESIGNAL_STATS_STALE_MS) || 45_000,
@@ -138,6 +150,9 @@ function resolveNotificationImageForApi(imageField, req) {
 function toApiNotification(row, req = null) {
   if (!row) return null
   const p = sanitizePayload(row.payload)
+  const targetType = text(row.target_type, 512) || 'osmani://home'
+  const destination = destinationFromPayloadAndTargetType(p, targetType)
+  const recurrenceKind = text(row.recurrence_kind, 32) || 'once'
   return {
     id: String(row.id),
     kind: text(row.kind, 32) || 'admin',
@@ -145,7 +160,8 @@ function toApiNotification(row, req = null) {
     message: text(row.message, 4000),
     image: resolveNotificationImageForApi(row.image, req),
     targetAudience: text(row.target_audience, 32) || 'all',
-    targetType: text(row.target_type, 512) || 'osmani://home',
+    targetType,
+    destination,
     status: text(row.status, 32) || 'draft',
     deliveryState: text(row.delivery_state, 32) || 'pending',
     severity: text(row.severity, 32) || 'info',
@@ -155,6 +171,18 @@ function toApiNotification(row, req = null) {
     scheduleAt: row.schedule_at ? new Date(row.schedule_at).toISOString() : null,
     sentAt: row.sent_at ? new Date(row.sent_at).toISOString() : null,
     expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+    recurrenceKind,
+    recurrenceInterval:
+      row.recurrence_interval != null && row.recurrence_interval !== ''
+        ? Number(row.recurrence_interval)
+        : null,
+    recurrenceUntil: row.recurrence_until ? new Date(row.recurrence_until).toISOString() : null,
+    recurrenceAnchorAt: row.recurrence_anchor_at
+      ? new Date(row.recurrence_anchor_at).toISOString()
+      : null,
+    recurrenceParentId: row.recurrence_parent_id != null ? String(row.recurrence_parent_id) : null,
+    isRecurrenceTemplate: row.is_recurrence_template === true,
+    recurrenceLabel: recurrenceKindLabel(recurrenceKind, row.recurrence_interval),
     createdBy: text(row.created_by, 120) || 'system',
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
@@ -302,6 +330,87 @@ function publishNotificationsChanged(meta = {}) {
   })
 }
 
+async function deliverAdminNotificationPush(row, pushImageUrl, logSource) {
+  const basePayload = sanitizePayload(row.payload)
+  const destination = destinationFromPayloadAndTargetType(basePayload, row.target_type)
+  const pushData = oneSignalDataFromDestination(destination)
+  const result = await sendOneSignalNotification(
+    {
+      title: row.title,
+      message: row.message,
+      imageUrl: pushImageUrl,
+      data: pushData,
+    },
+    { source: logSource, notificationId: String(row.id) },
+  )
+  return {
+    ...basePayload,
+    onesignal_id: result.id,
+    onesignal_recipients: result.recipients,
+  }
+}
+
+async function insertSentNotificationInstance(pool, templateRow, sentPayload, sentAtIso) {
+  const { rows } = await pool.query(
+    `INSERT INTO notifications (
+       kind, title, message, image, target_audience, target_type, status, delivery_state,
+       severity, source_event, payload, clicks, is_active, schedule_at, sent_at, expires_at,
+       recurrence_kind, recurrence_interval, recurrence_until, recurrence_anchor_at,
+       recurrence_parent_id, is_recurrence_template, created_by, updated_at
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, 'sent', 'sent',
+       $7, $8, $9::jsonb, $10, true, NULL, $11::timestamptz, $12::timestamptz,
+       'once', NULL, NULL, NULL, $13::uuid, false, $14, now()
+     )
+     RETURNING *`,
+    [
+      templateRow.kind,
+      templateRow.title,
+      templateRow.message,
+      templateRow.image,
+      templateRow.target_audience,
+      templateRow.target_type,
+      templateRow.severity,
+      templateRow.source_event,
+      JSON.stringify(sentPayload),
+      Number(templateRow.clicks) || 0,
+      sentAtIso,
+      templateRow.expires_at,
+      templateRow.id,
+      templateRow.created_by,
+    ],
+  )
+  return rows[0]
+}
+
+async function advanceRecurrenceTemplate(pool, templateRow, firedAtIso) {
+  const kind = text(templateRow.recurrence_kind, 32) || 'once'
+  const nextAt = computeNextScheduleAt({
+    from: firedAtIso,
+    kind,
+    interval: templateRow.recurrence_interval,
+    anchorAt: templateRow.recurrence_anchor_at ?? templateRow.schedule_at,
+  })
+  const until = templateRow.recurrence_until ? new Date(templateRow.recurrence_until) : null
+  const nextDate = nextAt ? new Date(nextAt) : null
+  if (!nextAt || (until && nextDate && nextDate.getTime() > until.getTime())) {
+    await pool.query(
+      `UPDATE notifications
+       SET status = 'cancelled', is_active = false, updated_at = now()
+       WHERE id = $1`,
+      [String(templateRow.id)],
+    )
+    return null
+  }
+  await pool.query(
+    `UPDATE notifications
+     SET schedule_at = $2::timestamptz, delivery_state = 'pending', updated_at = now()
+     WHERE id = $1`,
+    [String(templateRow.id), nextAt],
+  )
+  return nextAt
+}
+
 export async function flushDueNotifications() {
   const pool = requirePool()
   const { rows } = await pool.query(
@@ -317,6 +426,8 @@ export async function flushDueNotifications() {
   for (const row of rows) {
     const id = String(row.id)
     let imagePath = String(row.image ?? '').trim()
+    const recurrenceKind = text(row.recurrence_kind, 32) || 'once'
+    const isRecurringTemplate = row.is_recurrence_template === true || isRecurringKind(recurrenceKind)
     try {
       if (!isOneSignalConfigured()) {
         const failPayload = {
@@ -335,38 +446,54 @@ export async function flushDueNotifications() {
       if (imageForDb && imageForDb !== imagePath) {
         imagePath = imageForDb
         await pool.query(`UPDATE notifications SET image = $2 WHERE id = $1`, [id, imagePath])
+        row.image = imagePath
       }
-      const result = await sendOneSignalNotification(
-        { title: row.title, message: row.message, imageUrl: pushImageUrl },
-        { source: 'notifications.flushDueNotifications', notificationId: id },
+      const sentPayload = await deliverAdminNotificationPush(
+        row,
+        pushImageUrl,
+        isRecurringTemplate
+          ? 'notifications.flushDueNotifications.recurring'
+          : 'notifications.flushDueNotifications',
       )
-      const newPayload = {
-        ...sanitizePayload(row.payload),
-        onesignal_id: result.id,
-        onesignal_recipients: result.recipients,
+      const sentAtIso = new Date().toISOString()
+
+      if (isRecurringTemplate) {
+        const sentRow = await insertSentNotificationInstance(pool, row, sentPayload, sentAtIso)
+        scheduleOneSignalStatsRefresh(sentRow.id)
+        await advanceRecurrenceTemplate(pool, row, sentAtIso)
+      } else {
+        await pool.query(
+          `UPDATE notifications
+           SET status = 'sent',
+               delivery_state = 'sent',
+               sent_at = COALESCE(sent_at, $2::timestamptz),
+               updated_at = now(),
+               payload = $3::jsonb
+           WHERE id = $1`,
+          [id, sentAtIso, JSON.stringify(sentPayload)],
+        )
+        scheduleOneSignalStatsRefresh(id)
       }
-      await pool.query(
-        `UPDATE notifications
-         SET status = 'sent',
-             delivery_state = 'sent',
-             sent_at = COALESCE(sent_at, now()),
-             updated_at = now(),
-             payload = $2::jsonb
-         WHERE id = $1`,
-        [id, JSON.stringify(newPayload)],
-      )
-      scheduleOneSignalStatsRefresh(id)
     } catch (e) {
       const failPayload = {
         ...sanitizePayload(row.payload),
         onesignal_error: String(e.message || e).slice(0, 2000),
       }
-      await pool.query(
-        `UPDATE notifications
-         SET delivery_state = 'failed', updated_at = now(), payload = $2::jsonb
-         WHERE id = $1`,
-        [id, JSON.stringify(failPayload)],
-      )
+      if (isRecurringTemplate) {
+        await pool.query(
+          `UPDATE notifications
+           SET delivery_state = 'failed', updated_at = now(), payload = $2::jsonb
+           WHERE id = $1`,
+          [id, JSON.stringify(failPayload)],
+        )
+      } else {
+        await pool.query(
+          `UPDATE notifications
+           SET delivery_state = 'failed', updated_at = now(), payload = $2::jsonb
+           WHERE id = $1`,
+          [id, JSON.stringify(failPayload)],
+        )
+      }
     }
   }
   if (rows.length > 0) {
@@ -386,13 +513,33 @@ function normalizeAdminNotificationInput(body, existing = null) {
     status === 'sent'
       ? asIsoOrNull(payload.sentAt ?? payload.sent_at ?? existing?.sent_at) || new Date().toISOString()
       : null
+
+  let destination
+  try {
+    destination = buildNotificationDestination(payload)
+  } catch (e) {
+    if (existing?.target_type) {
+      destination = destinationFromPayloadAndTargetType(
+        sanitizePayload(existing.payload),
+        existing.target_type,
+      )
+    } else {
+      throw e
+    }
+  }
+
+  const basePayload = sanitizePayload(payload.payload ?? existing?.payload)
+  const mergedPayload = mergeDestinationIntoPayload(basePayload, destination)
+  const recurrence = normalizeRecurrenceFields(payload, existing, { status })
+
   return {
     kind: asNotificationKind(payload.kind ?? existing?.kind, 'admin'),
     title: text(payload.title ?? existing?.title, 200),
     message: text(payload.message ?? existing?.message, 4000),
     image: sanitizeImage(payload.image ?? existing?.image),
     targetAudience: 'all',
-    targetType: text(payload.targetType ?? payload.target_type ?? existing?.target_type, 512) || 'osmani://home',
+    targetType: destination.deepLink,
+    destination,
     status,
     deliveryState: asDeliveryState(
       payload.deliveryState ?? payload.delivery_state ?? existing?.delivery_state,
@@ -400,13 +547,19 @@ function normalizeAdminNotificationInput(body, existing = null) {
     ),
     severity: asSeverity(payload.severity ?? existing?.severity, 'info'),
     sourceEvent: text(payload.sourceEvent ?? payload.source_event ?? existing?.source_event, 128),
-    payload: sanitizePayload(payload.payload ?? existing?.payload),
+    payload: mergedPayload,
     clicks: Math.max(0, Number(payload.clicks ?? existing?.clicks) || 0),
     isActive: shouldBeActive(status, payload.isActive ?? payload.is_active ?? existing?.is_active),
     scheduleAt,
     sentAt,
     expiresAt: asIsoOrNull(payload.expiresAt ?? payload.expires_at ?? existing?.expires_at),
     createdBy: text(payload.createdBy ?? payload.created_by ?? existing?.created_by, 120) || 'Admin',
+    recurrenceKind: recurrence.recurrenceKind,
+    recurrenceInterval: recurrence.recurrenceInterval,
+    recurrenceUntil: recurrence.recurrenceUntil,
+    recurrenceAnchorAt: recurrence.recurrenceAnchorAt ?? scheduleAt,
+    isRecurrenceTemplate: recurrence.isRecurrenceTemplate,
+    recurrenceParentId: existing?.recurrence_parent_id ?? null,
   }
 }
 
@@ -463,8 +616,14 @@ export async function createAdminNotification(body, actor = 'Admin', req = null)
         'OneSignal is not configured. Set ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY on the server, then retry.',
       )
     }
+    const pushData = oneSignalDataFromDestination(next.destination)
     const result = await sendOneSignalNotification(
-      { title: next.title, message: next.message, imageUrl: pushImageUrl },
+      {
+        title: next.title,
+        message: next.message,
+        imageUrl: pushImageUrl,
+        data: pushData,
+      },
       { source: 'notifications.createAdminNotification' },
     )
     mergedPayload = {
@@ -479,11 +638,12 @@ export async function createAdminNotification(body, actor = 'Admin', req = null)
     `INSERT INTO notifications (
        kind, title, message, image, target_audience, target_type, status, delivery_state,
        severity, source_event, payload, clicks, is_active, schedule_at, sent_at, expires_at,
-       created_by, updated_at
+       recurrence_kind, recurrence_interval, recurrence_until, recurrence_anchor_at,
+       recurrence_parent_id, is_recurrence_template, created_by, updated_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8,
        $9, $10, $11::jsonb, $12, $13, $14::timestamptz, $15::timestamptz, $16::timestamptz,
-       $17, now()
+       $17, $18, $19::timestamptz, $20::timestamptz, $21::uuid, $22, $23, now()
      )
      RETURNING *`,
     [
@@ -503,6 +663,12 @@ export async function createAdminNotification(body, actor = 'Admin', req = null)
       next.scheduleAt,
       next.sentAt,
       next.expiresAt,
+      next.recurrenceKind,
+      next.recurrenceInterval,
+      next.recurrenceUntil,
+      next.recurrenceAnchorAt,
+      next.recurrenceParentId,
+      next.isRecurrenceTemplate,
       text(actor, 120) || next.createdBy,
     ],
   )
@@ -539,7 +705,12 @@ export async function updateNotificationById(id, body, actor = 'Admin', req = nu
          schedule_at = $15::timestamptz,
          sent_at = $16::timestamptz,
          expires_at = $17::timestamptz,
-         created_by = $18,
+         recurrence_kind = $18,
+         recurrence_interval = $19,
+         recurrence_until = $20::timestamptz,
+         recurrence_anchor_at = $21::timestamptz,
+         is_recurrence_template = $22,
+         created_by = $23,
          updated_at = now()
      WHERE id = $1
      RETURNING *`,
@@ -561,6 +732,11 @@ export async function updateNotificationById(id, body, actor = 'Admin', req = nu
       next.scheduleAt,
       next.sentAt,
       next.expiresAt,
+      next.recurrenceKind,
+      next.recurrenceInterval,
+      next.recurrenceUntil,
+      next.recurrenceAnchorAt,
+      next.isRecurrenceTemplate,
       text(actor, 120) || next.createdBy,
     ],
   )

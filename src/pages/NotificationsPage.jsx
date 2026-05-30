@@ -7,6 +7,7 @@ import {
   API_ORIGIN,
   deleteAllNotifications,
   deleteNotification,
+  getChannels,
   getNotifications,
   getOnesignalDiagnostics,
   postNotification,
@@ -93,6 +94,24 @@ function formatBytes(bytes) {
   return `${(n / (1024 * 1024)).toFixed(2)} MB`
 }
 
+const RECURRENCE_OPTIONS = [
+  { value: 'once', label: 'Once' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'interval_minutes', label: 'Every X minutes' },
+  { value: 'interval_hours', label: 'Every X hours' },
+]
+
+function destinationSummary(n) {
+  const d = n?.destination
+  if (d?.type === 'channel') {
+    return d.channelName ? `Channel: ${d.channelName}` : `Channel #${d.channelId ?? '?'}`
+  }
+  if (d?.type === 'custom') return `Custom: ${d.deepLink || n?.targetType || '—'}`
+  return 'Home'
+}
+
 function notificationPreviewUrl(pathOrUrl) {
   const raw = String(pathOrUrl || '').trim()
   if (!raw) return ''
@@ -161,7 +180,15 @@ function NotificationsPage() {
   const [imageData, setImageData] = useState('')
   const [imageUpload, setImageUpload] = useState(null)
   const [imagePreparing, setImagePreparing] = useState(false)
-  const [targetType, setTargetType] = useState('osmani://home')
+  const [destinationType, setDestinationType] = useState('home')
+  const [selectedChannelId, setSelectedChannelId] = useState('')
+  const [customDeepLink, setCustomDeepLink] = useState('osmani://settings')
+  const [channels, setChannels] = useState([])
+  const [channelsLoading, setChannelsLoading] = useState(false)
+  const [recurrenceKind, setRecurrenceKind] = useState('once')
+  const [recurrenceInterval, setRecurrenceInterval] = useState('30')
+  const [recurrenceUntilDate, setRecurrenceUntilDate] = useState('')
+  const [recurrenceUntilTime, setRecurrenceUntilTime] = useState('')
   const [scheduleDate, setScheduleDate] = useState('')
   const [scheduleTime, setScheduleTime] = useState('')
   const [instant, setInstant] = useState(true)
@@ -183,6 +210,48 @@ function NotificationsPage() {
     setFlash({ type, message: msg })
     window.setTimeout(() => setFlash(null), 4500)
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setChannelsLoading(true)
+    getChannels()
+      .then((list) => {
+        if (!cancelled) setChannels(Array.isArray(list) ? list : [])
+      })
+      .catch(() => {
+        if (!cancelled) setChannels([])
+      })
+      .finally(() => {
+        if (!cancelled) setChannelsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (instant) setRecurrenceKind('once')
+  }, [instant])
+
+  const selectedChannel = useMemo(
+    () => channels.find((c) => String(c.id) === String(selectedChannelId)),
+    [channels, selectedChannelId],
+  )
+
+  const buildDestinationPayload = useCallback(() => {
+    const base = { type: destinationType }
+    if (destinationType === 'channel') {
+      return {
+        ...base,
+        channelId: Number(selectedChannelId),
+        channelName: selectedChannel?.name || '',
+      }
+    }
+    if (destinationType === 'custom') {
+      return { ...base, customDeepLink: customDeepLink.trim() }
+    }
+    return base
+  }, [destinationType, selectedChannelId, selectedChannel, customDeepLink])
 
   const stats = useMemo(() => {
     const sentRows = notifications.filter((n) => n.status === 'sent')
@@ -206,7 +275,8 @@ function NotificationsPage() {
     const e = {}
     if (!title.trim()) e.title = 'Title is required'
     if (!message.trim()) e.message = 'Message is required'
-    if (!targetType.trim()) e.targetType = 'Deep link is required'
+    if (destinationType === 'channel' && !selectedChannelId) e.channel = 'Select a channel'
+    if (destinationType === 'custom' && !customDeepLink.trim()) e.customDeepLink = 'Enter a deep link'
     if (!instant) {
       if (!scheduleDate) e.schedule = 'Pick a date'
       else if (!scheduleTime) e.schedule = 'Pick a time'
@@ -216,9 +286,26 @@ function NotificationsPage() {
         if (Number.isNaN(at.getTime())) e.schedule = 'Invalid schedule'
         else if (at.getTime() <= Date.now()) e.schedule = 'Schedule must be in the future'
       }
+      if (
+        (recurrenceKind === 'interval_minutes' || recurrenceKind === 'interval_hours') &&
+        (!recurrenceInterval || Number(recurrenceInterval) < 1)
+      ) {
+        e.recurrenceInterval = 'Interval must be at least 1'
+      }
     }
     return e
-  }, [title, message, targetType, instant, scheduleDate, scheduleTime])
+  }, [
+    title,
+    message,
+    destinationType,
+    selectedChannelId,
+    customDeepLink,
+    instant,
+    scheduleDate,
+    scheduleTime,
+    recurrenceKind,
+    recurrenceInterval,
+  ])
 
   const valid = Object.keys(errors).length === 0
 
@@ -275,15 +362,26 @@ function NotificationsPage() {
     setSending(true)
     try {
       const iso = instant ? null : `${scheduleDate}T${scheduleTime}:00`
+      const recurrenceUntil =
+        !instant && recurrenceUntilDate && recurrenceUntilTime
+          ? new Date(`${recurrenceUntilDate}T${recurrenceUntilTime}:00`).toISOString()
+          : null
       const created = await postNotification({
         title: title.trim(),
         message: message.trim(),
         image: imageData || '',
         targetAudience: 'all',
-        targetType: targetType.trim(),
+        destination: buildDestinationPayload(),
         scheduleAt: instant ? null : new Date(iso).toISOString(),
+        recurrenceAnchorAt: instant ? null : new Date(iso).toISOString(),
         status: instant ? 'sent' : 'scheduled',
         sentAt: instant ? new Date().toISOString() : null,
+        recurrenceKind: instant ? 'once' : recurrenceKind,
+        recurrenceInterval:
+          recurrenceKind === 'interval_minutes' || recurrenceKind === 'interval_hours'
+            ? Number(recurrenceInterval) || 1
+            : null,
+        recurrenceUntil,
         clicks: 0,
       })
       if (created?.id) {
@@ -303,9 +401,13 @@ function NotificationsPage() {
             : 'Push sent to all users via OneSignal.',
         )
       } else {
+        const recurLabel =
+          RECURRENCE_OPTIONS.find((o) => o.value === recurrenceKind)?.label || recurrenceKind
         showFlash(
           'success',
-          `Scheduled for ${new Date(iso).toLocaleString()}. The server will send the push at that time.`,
+          recurrenceKind === 'once'
+            ? `Scheduled for ${new Date(iso).toLocaleString()}. The server will send the push at that time.`
+            : `${recurLabel} schedule starting ${new Date(iso).toLocaleString()}.`,
         )
       }
       setTitle('')
@@ -313,7 +415,13 @@ function NotificationsPage() {
       setImageData('')
       setImagePreview(null)
       setImageUpload(null)
-      setTargetType('osmani://home')
+      setDestinationType('home')
+      setSelectedChannelId('')
+      setCustomDeepLink('osmani://settings')
+      setRecurrenceKind('once')
+      setRecurrenceInterval('30')
+      setRecurrenceUntilDate('')
+      setRecurrenceUntilTime('')
       setScheduleDate('')
       setScheduleTime('')
       setInstant(true)
@@ -447,6 +555,7 @@ function NotificationsPage() {
         ...rescheduleRow,
         status: 'scheduled',
         scheduleAt: iso,
+        recurrenceAnchorAt: iso,
         sentAt: null,
       })
       await loadNotifications()
@@ -562,7 +671,11 @@ function NotificationsPage() {
                   <li key={n.id} className="flex flex-wrap items-center justify-between gap-2">
                     <span className="font-medium text-white">{n.title}</span>
                     <span className="text-amber-200/90">
-                      Sends {n.scheduleAt ? new Date(n.scheduleAt).toLocaleString() : '—'}
+                      {n.isRecurrenceTemplate && n.recurrenceLabel
+                        ? `${n.recurrenceLabel} · next ${n.scheduleAt ? new Date(n.scheduleAt).toLocaleString() : '—'}`
+                        : n.scheduleAt
+                          ? `Sends ${new Date(n.scheduleAt).toLocaleString()}`
+                          : '—'}
                     </span>
                   </li>
                 ))}
@@ -653,27 +766,78 @@ function NotificationsPage() {
                   when served over HTTPS.
                 </p>
               </div>
-              <div>
-                <label className={labelClass()}>Audience</label>
-                <p className="rounded-xl border border-slate-600/50 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-200">
-                  All users
-                </p>
-                <p className="mt-1 text-xs text-slate-500">OneSignal segment: Total Subscriptions</p>
-              </div>
-              <div>
-                <label className={labelClass()} htmlFor="n-link">
-                  Deep link (in-app)
-                </label>
-                <input
-                  id="n-link"
-                  value={targetType}
-                  onChange={(e) => setTargetType(e.target.value)}
-                  className={inputClass()}
-                  placeholder="osmani://home"
-                />
-                {touched && errors.targetType ? (
-                  <p className="mt-1 text-xs text-red-400">{errors.targetType}</p>
+              <div className="lg:col-span-2">
+                <label className={labelClass()}>Destination</label>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {[
+                    { value: 'home', label: 'Home' },
+                    { value: 'channel', label: 'Channel' },
+                    { value: 'custom', label: 'Custom link' },
+                  ].map((opt) => (
+                    <label
+                      key={opt.value}
+                      className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 text-sm ${
+                        destinationType === opt.value
+                          ? 'border-amber-500/50 bg-amber-500/10 text-amber-100'
+                          : 'border-slate-600/50 bg-slate-900/60 text-slate-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="destinationType"
+                        value={opt.value}
+                        checked={destinationType === opt.value}
+                        onChange={() => setDestinationType(opt.value)}
+                        className="text-amber-500"
+                      />
+                      {opt.label}
+                    </label>
+                  ))}
+                </div>
+                {destinationType === 'channel' ? (
+                  <div className="mt-3">
+                    <label className={labelClass()} htmlFor="n-channel">
+                      Channel
+                    </label>
+                    <select
+                      id="n-channel"
+                      value={selectedChannelId}
+                      onChange={(e) => setSelectedChannelId(e.target.value)}
+                      className={inputClass()}
+                      disabled={channelsLoading}
+                    >
+                      <option value="">{channelsLoading ? 'Loading channels…' : 'Select channel'}</option>
+                      {channels.map((ch) => (
+                        <option key={ch.id} value={String(ch.id)}>
+                          {ch.name} (#{ch.id})
+                        </option>
+                      ))}
+                    </select>
+                    {touched && errors.channel ? (
+                      <p className="mt-1 text-xs text-red-400">{errors.channel}</p>
+                    ) : null}
+                  </div>
                 ) : null}
+                {destinationType === 'custom' ? (
+                  <div className="mt-3">
+                    <label className={labelClass()} htmlFor="n-link">
+                      Custom deep link
+                    </label>
+                    <input
+                      id="n-link"
+                      value={customDeepLink}
+                      onChange={(e) => setCustomDeepLink(e.target.value)}
+                      className={inputClass()}
+                      placeholder="osmani://settings"
+                    />
+                    {touched && errors.customDeepLink ? (
+                      <p className="mt-1 text-xs text-red-400">{errors.customDeepLink}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+                <p className="mt-2 text-xs text-slate-500">
+                  Stored in notification payload for in-app history and optional OneSignal push data.
+                </p>
               </div>
             </div>
 
@@ -688,30 +852,90 @@ function NotificationsPage() {
                 <span className="text-sm text-slate-200">Send immediately</span>
               </label>
               {!instant ? (
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className={labelClass()}>Schedule date</label>
-                    <input
-                      type="date"
-                      value={scheduleDate}
-                      onChange={(e) => setScheduleDate(e.target.value)}
-                      className={inputClass()}
-                    />
+                <div className="mt-4 space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className={labelClass()}>First send — date</label>
+                      <input
+                        type="date"
+                        value={scheduleDate}
+                        onChange={(e) => setScheduleDate(e.target.value)}
+                        className={inputClass()}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass()}>First send — time</label>
+                      <input
+                        type="time"
+                        value={scheduleTime}
+                        onChange={(e) => setScheduleTime(e.target.value)}
+                        className={inputClass()}
+                      />
+                    </div>
+                    {touched && errors.schedule ? (
+                      <p className="sm:col-span-2 text-xs text-red-400">{errors.schedule}</p>
+                    ) : null}
                   </div>
                   <div>
-                    <label className={labelClass()}>Schedule time</label>
-                    <input
-                      type="time"
-                      value={scheduleTime}
-                      onChange={(e) => setScheduleTime(e.target.value)}
+                    <label className={labelClass()} htmlFor="n-recurrence">
+                      Repeat
+                    </label>
+                    <select
+                      id="n-recurrence"
+                      value={recurrenceKind}
+                      onChange={(e) => setRecurrenceKind(e.target.value)}
                       className={inputClass()}
-                    />
+                    >
+                      {RECURRENCE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  {touched && errors.schedule ? (
-                    <p className="sm:col-span-2 text-xs text-red-400">{errors.schedule}</p>
+                  {recurrenceKind === 'interval_minutes' || recurrenceKind === 'interval_hours' ? (
+                    <div>
+                      <label className={labelClass()} htmlFor="n-interval">
+                        Interval ({recurrenceKind === 'interval_minutes' ? 'minutes' : 'hours'})
+                      </label>
+                      <input
+                        id="n-interval"
+                        type="number"
+                        min={1}
+                        value={recurrenceInterval}
+                        onChange={(e) => setRecurrenceInterval(e.target.value)}
+                        className={inputClass()}
+                      />
+                      {touched && errors.recurrenceInterval ? (
+                        <p className="mt-1 text-xs text-red-400">{errors.recurrenceInterval}</p>
+                      ) : null}
+                    </div>
                   ) : null}
-                  <p className="mt-2 text-xs text-slate-500">
-                    Server sends the push when the scheduled time arrives (checked every ~30 seconds).
+                  {recurrenceKind !== 'once' ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass()}>End date (optional)</label>
+                        <input
+                          type="date"
+                          value={recurrenceUntilDate}
+                          onChange={(e) => setRecurrenceUntilDate(e.target.value)}
+                          className={inputClass()}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass()}>End time (optional)</label>
+                        <input
+                          type="time"
+                          value={recurrenceUntilTime}
+                          onChange={(e) => setRecurrenceUntilTime(e.target.value)}
+                          className={inputClass()}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                  <p className="text-xs text-slate-500">
+                    Server sends when due (polled ~every 30s). Recurring jobs stay scheduled and insert a
+                    sent row each time.
                   </p>
                 </div>
               ) : null}
@@ -748,10 +972,11 @@ function NotificationsPage() {
           </div>
           <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1100px] border-collapse text-left text-sm">
+              <table className="w-full min-w-[1280px] border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-700/80 bg-slate-900/50 text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-4 py-3 font-semibold">Title</th>
+                    <th className="px-4 py-3 font-semibold">Destination</th>
                     <th className="px-4 py-3 font-semibold">Message</th>
                     <th className="px-4 py-3 font-semibold">Delivered</th>
                     <th className="px-4 py-3 font-semibold">Clicked</th>
@@ -769,6 +994,12 @@ function NotificationsPage() {
                       className="border-b border-slate-800/80 hover:bg-slate-900/50"
                     >
                       <td className="px-4 py-3 font-medium text-white">{n.title}</td>
+                      <td className="px-4 py-3 text-xs text-slate-400">
+                        <p>{destinationSummary(n)}</p>
+                        {n.isRecurrenceTemplate && n.recurrenceLabel ? (
+                          <p className="mt-0.5 text-sky-300/90">{n.recurrenceLabel}</p>
+                        ) : null}
+                      </td>
                       <td className="max-w-[200px] truncate px-4 py-3 text-slate-400">
                         {n.message}
                       </td>
@@ -822,7 +1053,9 @@ function NotificationsPage() {
                         </span>
                         {n.status === 'scheduled' && n.scheduleAt ? (
                           <p className="mt-1 text-[10px] text-sky-300/90">
-                            Due {new Date(n.scheduleAt).toLocaleString()}
+                            {n.isRecurrenceTemplate
+                              ? `Next ${new Date(n.scheduleAt).toLocaleString()}`
+                              : `Due ${new Date(n.scheduleAt).toLocaleString()}`}
                           </p>
                         ) : null}
                         {n.deliveryError ? (
@@ -1000,9 +1233,21 @@ function NotificationsPage() {
                   </dd>
                 </div>
                 <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
+                  <dt>Destination</dt>
+                  <dd className="max-w-[60%] truncate text-right text-slate-200">
+                    {destinationSummary(detailRow)}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
                   <dt>Deep link</dt>
                   <dd className="max-w-[60%] truncate font-mono text-amber-200/90">{detailRow.targetType}</dd>
                 </div>
+                {detailRow.isRecurrenceTemplate || detailRow.recurrenceKind !== 'once' ? (
+                  <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
+                    <dt>Recurrence</dt>
+                    <dd className="text-slate-200">{detailRow.recurrenceLabel || detailRow.recurrenceKind}</dd>
+                  </div>
+                ) : null}
                 <div className="flex justify-between gap-4 border-b border-slate-800/80 py-2">
                   <dt>Sent (OneSignal)</dt>
                   <dd className="text-slate-200">

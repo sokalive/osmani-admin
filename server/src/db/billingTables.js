@@ -283,6 +283,30 @@ export async function ensureBillingTables(client) {
   `)
 
   await client.query(`
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS recurrence_kind TEXT NOT NULL DEFAULT 'once';
+  `)
+  await client.query(`
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER;
+  `)
+  await client.query(`
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS recurrence_until TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS recurrence_anchor_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS recurrence_parent_id UUID;
+  `)
+  await client.query(`
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS is_recurrence_template BOOLEAN NOT NULL DEFAULT false;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS notifications_recurrence_template_idx
+    ON notifications (status, schedule_at)
+    WHERE is_recurrence_template = true AND status = 'scheduled';
+  `)
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS plans (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL DEFAULT '',
