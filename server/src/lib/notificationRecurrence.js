@@ -84,7 +84,7 @@ export function normalizeRecurrenceFields(body, existing = null, { status } = {}
 
 /**
  * @param {object} opts
- * @param {Date|string} opts.from - last fire / due time
+ * @param {Date|string} opts.from - scheduled occurrence that fired (calendar) or last fire time (interval)
  * @param {string} opts.kind
  * @param {number|null} opts.interval
  * @param {Date|string|null} opts.anchorAt - first scheduled time (daily/weekly/monthly alignment)
@@ -126,6 +126,16 @@ export function computeNextScheduleAt({ from, kind, interval, anchorAt }) {
     return next.toISOString()
   }
   return null
+}
+
+/** Calendar recurrence advances from the scheduled occurrence, not send latency. */
+export function recurrenceAdvanceFrom({ kind, scheduleAt, sentAtIso }) {
+  const k = normalizeRecurrenceKind(kind)
+  if ((k === 'daily' || k === 'weekly' || k === 'monthly') && scheduleAt != null && scheduleAt !== '') {
+    const d = new Date(scheduleAt)
+    if (!Number.isNaN(d.getTime())) return d.toISOString()
+  }
+  return sentAtIso
 }
 
 export function recurrenceKindLabel(kind, interval) {

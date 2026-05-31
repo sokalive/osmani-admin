@@ -20,6 +20,7 @@ import {
   computeNextScheduleAt,
   isRecurringKind,
   normalizeRecurrenceFields,
+  recurrenceAdvanceFrom,
   recurrenceKindLabel,
 } from './notificationRecurrence.js'
 const ONESIGNAL_STATS_STALE_MS = Math.max(
@@ -383,10 +384,15 @@ async function insertSentNotificationInstance(pool, templateRow, sentPayload, se
   return rows[0]
 }
 
-async function advanceRecurrenceTemplate(pool, templateRow, firedAtIso) {
+async function advanceRecurrenceTemplate(pool, templateRow, sentAtIso) {
   const kind = text(templateRow.recurrence_kind, 32) || 'once'
+  const from = recurrenceAdvanceFrom({
+    kind,
+    scheduleAt: templateRow.schedule_at,
+    sentAtIso,
+  })
   const nextAt = computeNextScheduleAt({
-    from: firedAtIso,
+    from,
     kind,
     interval: templateRow.recurrence_interval,
     anchorAt: templateRow.recurrence_anchor_at ?? templateRow.schedule_at,

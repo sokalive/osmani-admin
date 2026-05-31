@@ -13,6 +13,7 @@ import {
   isRecurringKind,
   normalizeRecurrenceFields,
   normalizeRecurrenceInterval,
+  recurrenceAdvanceFrom,
   recurrenceKindLabel,
 } from '../src/lib/notificationRecurrence.js'
 import { buildProductionOneSignalBody } from '../src/lib/oneSignalPush.js'
@@ -94,6 +95,19 @@ const nextDaily = computeNextScheduleAt({
   anchorAt: anchor,
 })
 assert(nextDaily && new Date(nextDaily).getDate() === 2, 'daily next schedule')
+
+const lateFrom = recurrenceAdvanceFrom({
+  kind: 'daily',
+  scheduleAt: '2026-06-01T19:00:00.000Z',
+  sentAtIso: '2026-06-02T22:00:00.000Z',
+})
+const lateNext = computeNextScheduleAt({
+  from: lateFrom,
+  kind: 'daily',
+  interval: null,
+  anchorAt: '2026-06-01T19:00:00.000Z',
+})
+assert(lateNext === '2026-06-02T19:00:00.000Z', 'daily late flush uses schedule_at basis')
 
 const nextMin = computeNextScheduleAt({
   from: anchor,
