@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { getPool } from '../db/pool.js'
-import { normalizePhoneDigits } from '../billingStore.js'
+import { normalizePhoneDigits, setManualAdminBlocked } from '../billingStore.js'
+import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
 
 function requirePool() {
   const pool = getPool()
@@ -306,6 +307,29 @@ export async function registerDeviceIntelligence(payload, meta = {}) {
   }
 }
 
+/** Apply Users Intelligence block to subscription verify path (manual_admin_blocked). */
+export async function syncIntelligenceBlockToPlayback(deviceId, blocked) {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return { ok: false, reason: 'device_id required' }
+  await setManualAdminBlocked(d, Boolean(blocked))
+  deviceSubscriptionBus.emit('update', { deviceId: d, source: 'users_intelligence' })
+  return { ok: true, deviceId: d, blocked: Boolean(blocked) }
+}
+
+/** Repair: registry blocked rows → device_subscriptions.manual_admin_blocked */
+export async function syncAllIntelligenceBlocksToPlayback() {
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT device_id FROM device_intelligence_registry WHERE status = 'blocked'`,
+  )
+  let synced = 0
+  for (const row of rows) {
+    await syncIntelligenceBlockToPlayback(row.device_id, true)
+    synced += 1
+  }
+  return { synced }
+}
+
 export async function blockDeviceIntelligenceUser(id, { reason, adminEmail }) {
   const pool = requirePool()
   const r = String(reason ?? '').trim()
@@ -342,6 +366,7 @@ export async function blockDeviceIntelligenceUser(id, { reason, adminEmail }) {
       [reg.id, reg.device_id, reg.account_id, reg.app_version],
     )
     await client.query('COMMIT')
+    await syncIntelligenceBlockToPlayback(reg.device_id, true)
     return rowToRegistry(reg)
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
@@ -379,6 +404,7 @@ export async function unblockDeviceIntelligenceUser(id, { adminEmail, note } = {
       [reg.id, reg.device_id, String(note ?? ''), String(adminEmail ?? 'admin')],
     )
     await client.query('COMMIT')
+    await syncIntelligenceBlockToPlayback(reg.device_id, false)
     return rowToRegistry(reg)
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})

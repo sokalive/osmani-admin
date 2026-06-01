@@ -529,8 +529,12 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
        ds.updated_at,
        ds.transaction_id,
        (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
-       (COALESCE(ds.manual_admin_blocked, false) OR COALESCE(ad.is_blocked, false)) AS blocked_now,
-       ad.block_reason,
+       (
+         COALESCE(ds.manual_admin_blocked, false)
+         OR COALESCE(ad.is_blocked, false)
+         OR COALESCE(ir.status = 'blocked', false)
+       ) AS blocked_now,
+       COALESCE(NULLIF(ir.block_reason, ''), ad.block_reason) AS block_reason,
        CASE
          WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
@@ -555,11 +559,66 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
      LEFT JOIN admin_devices ad
        ON ad.device_id = ds.device_id
        OR ($2::text IS NOT NULL AND ad.fingerprint_hash = $2::text)
+     LEFT JOIN device_intelligence_registry ir ON ir.device_id = ds.device_id
      WHERE ds.device_id = $1
      LIMIT 1`,
     [d, fpHash],
   )
-  return rows[0] ?? null
+  if (rows[0]) return rows[0]
+  const ir = await pool.query(
+    `SELECT block_reason FROM device_intelligence_registry
+     WHERE device_id = $1 AND status = 'blocked' LIMIT 1`,
+    [d],
+  )
+  if (ir.rows[0]) {
+    await setManualAdminBlocked(d, true)
+    const retry = await pool.query(
+      `SELECT
+         ds.device_id,
+         ds.status,
+         ds.expires_at,
+         ds.started_at,
+         ds.updated_at,
+         ds.transaction_id,
+         (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
+         (
+           COALESCE(ds.manual_admin_blocked, false)
+           OR COALESCE(ad.is_blocked, false)
+           OR COALESCE(ir.status = 'blocked', false)
+         ) AS blocked_now,
+         COALESCE(NULLIF(ir.block_reason, ''), ad.block_reason) AS block_reason,
+         CASE
+           WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+           THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
+           ELSE 0::bigint
+         END AS remaining_seconds,
+         CASE
+           WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+           THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 3600.0)::int)
+           ELSE 0
+         END AS remaining_hours,
+         CASE
+           WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+           THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
+           ELSE 0
+         END AS remaining_days,
+         (
+           ds.expires_at IS NOT NULL
+           AND ds.expires_at > now()
+           AND ds.expires_at <= now() + interval '48 hours'
+         ) AS near_expiry
+       FROM device_subscriptions ds
+       LEFT JOIN admin_devices ad
+         ON ad.device_id = ds.device_id
+         OR ($2::text IS NOT NULL AND ad.fingerprint_hash = $2::text)
+       LEFT JOIN device_intelligence_registry ir ON ir.device_id = ds.device_id
+       WHERE ds.device_id = $1
+       LIMIT 1`,
+      [d, fpHash],
+    )
+    return retry.rows[0] ?? null
+  }
+  return null
 }
 
 /** Touch live presence row so analytics can reflect app-open presence immediately. */

@@ -10,8 +10,7 @@ function clientIp(req) {
   return String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? '').split(',')[0].trim()
 }
 
-/** Android app: register or refresh device on launch (additive endpoint). */
-usersIntelligencePublicRouter.post('/register', async (req, res) => {
+async function handleRegister(req, res) {
   try {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
     const body = req.body && typeof req.body === 'object' ? req.body : {}
@@ -31,7 +30,11 @@ usersIntelligencePublicRouter.post('/register', async (req, res) => {
     const status = msg.includes('required') ? 400 : 500
     res.status(status).json({ ok: false, error: msg })
   }
-})
+}
+
+/** Android app: register or refresh device on launch (additive endpoint). */
+usersIntelligencePublicRouter.post('/register', handleRegister)
+usersIntelligencePublicRouter.post('/register-device', handleRegister)
 
 /** Lightweight poll: is this device blocked by Users Intelligence? */
 usersIntelligencePublicRouter.get('/access-check', async (req, res) => {

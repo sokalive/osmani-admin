@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import {
   backfillDeviceIntelligenceFromExisting,
+  syncAllIntelligenceBlocksToPlayback,
   blockDeviceIntelligenceUser,
   getDeviceIntelligenceDetailBundle,
   getDeviceIntelligenceSummary,
@@ -41,9 +42,20 @@ usersIntelligenceAdminRouter.get('/', async (req, res) => {
 usersIntelligenceAdminRouter.post('/backfill', async (_req, res) => {
   try {
     const result = await backfillDeviceIntelligenceFromExisting()
-    res.json({ ok: true, ...result })
+    const sync = await syncAllIntelligenceBlocksToPlayback()
+    res.json({ ok: true, ...result, blockSync: sync })
   } catch (e) {
     console.error('[users-intelligence backfill]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+usersIntelligenceAdminRouter.post('/sync-blocks', async (_req, res) => {
+  try {
+    const sync = await syncAllIntelligenceBlocksToPlayback()
+    res.json({ ok: true, ...sync })
+  } catch (e) {
+    console.error('[users-intelligence sync-blocks]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
