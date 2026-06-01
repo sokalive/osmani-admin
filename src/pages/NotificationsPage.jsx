@@ -16,6 +16,13 @@ import {
   syncNotificationStats,
   syncStreamUrl,
 } from '../lib/api'
+import {
+  ADMIN_DISPLAY_TIMEZONE,
+  adminDateAndTimeToIso,
+  adminDateFromIso,
+  adminTimeFromIso,
+  formatAdminDateTime,
+} from '../lib/formatAdminDateTime'
 
 function inputClass() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
@@ -54,36 +61,12 @@ function analyticsMetric(n, field, { pct = false } = {}) {
 function analyticsMetricTitle(n) {
   if (n?.onesignalStatsError) return n.onesignalStatsError
   if (n?.status === 'scheduled' && n?.scheduleAt) {
-    return `Scheduled for ${new Date(n.scheduleAt).toLocaleString()}`
+    return `Scheduled for ${formatAdminDateTime(n.scheduleAt)} (${ADMIN_DISPLAY_TIMEZONE})`
   }
   if (n?.status === 'sent' && n?.onesignalId && !n?.onesignalStatsSyncedAt) {
     return 'Waiting for first OneSignal analytics sync'
   }
   return undefined
-}
-
-function isoFromLocalDateTime(dateStr, timeStr) {
-  if (!dateStr || !timeStr) return null
-  const at = new Date(`${dateStr}T${timeStr}:00`)
-  if (Number.isNaN(at.getTime())) return null
-  return at.toISOString()
-}
-
-function localDateFromIso(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
-function localTimeFromIso(iso) {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 function formatBytes(bytes) {
@@ -281,10 +264,9 @@ function NotificationsPage() {
       if (!scheduleDate) e.schedule = 'Pick a date'
       else if (!scheduleTime) e.schedule = 'Pick a time'
       else {
-        const iso = `${scheduleDate}T${scheduleTime}:00`
-        const at = new Date(iso)
-        if (Number.isNaN(at.getTime())) e.schedule = 'Invalid schedule'
-        else if (at.getTime() <= Date.now()) e.schedule = 'Schedule must be in the future'
+        const iso = adminDateAndTimeToIso(scheduleDate, scheduleTime)
+        if (!iso) e.schedule = 'Invalid schedule (use EAT date and time)'
+        else if (new Date(iso).getTime() <= Date.now()) e.schedule = 'Schedule must be in the future (EAT)'
       }
       if (
         (recurrenceKind === 'interval_minutes' || recurrenceKind === 'interval_hours') &&
@@ -361,10 +343,10 @@ function NotificationsPage() {
     }
     setSending(true)
     try {
-      const iso = instant ? null : `${scheduleDate}T${scheduleTime}:00`
+      const iso = instant ? null : adminDateAndTimeToIso(scheduleDate, scheduleTime)
       const recurrenceUntil =
         !instant && recurrenceUntilDate && recurrenceUntilTime
-          ? new Date(`${recurrenceUntilDate}T${recurrenceUntilTime}:00`).toISOString()
+          ? adminDateAndTimeToIso(recurrenceUntilDate, recurrenceUntilTime)
           : null
       const created = await postNotification({
         title: title.trim(),
@@ -372,8 +354,8 @@ function NotificationsPage() {
         image: imageData || '',
         targetAudience: 'all',
         destination: buildDestinationPayload(),
-        scheduleAt: instant ? null : new Date(iso).toISOString(),
-        recurrenceAnchorAt: instant ? null : new Date(iso).toISOString(),
+        scheduleAt: instant ? null : iso,
+        recurrenceAnchorAt: instant ? null : iso,
         status: instant ? 'sent' : 'scheduled',
         sentAt: instant ? new Date().toISOString() : null,
         recurrenceKind: instant ? 'once' : recurrenceKind,
@@ -406,8 +388,8 @@ function NotificationsPage() {
         showFlash(
           'success',
           recurrenceKind === 'once'
-            ? `Scheduled for ${new Date(iso).toLocaleString()}. The server will send the push at that time.`
-            : `${recurLabel} schedule starting ${new Date(iso).toLocaleString()}.`,
+            ? `Scheduled for ${formatAdminDateTime(iso)} (EAT). The server will send the push at that time.`
+            : `${recurLabel} schedule starting ${formatAdminDateTime(iso)} (EAT).`,
         )
       }
       setTitle('')
@@ -533,14 +515,14 @@ function NotificationsPage() {
 
   function openReschedule(n) {
     setRescheduleRow(n)
-    setRescheduleDate(localDateFromIso(n.scheduleAt))
-    setRescheduleTime(localTimeFromIso(n.scheduleAt))
+    setRescheduleDate(adminDateFromIso(n.scheduleAt))
+    setRescheduleTime(adminTimeFromIso(n.scheduleAt))
   }
 
   async function submitReschedule(e) {
     e.preventDefault()
     if (!rescheduleRow) return
-    const iso = isoFromLocalDateTime(rescheduleDate, rescheduleTime)
+    const iso = adminDateAndTimeToIso(rescheduleDate, rescheduleTime)
     if (!iso) {
       showToast('error', 'Pick a valid date and time.')
       return
@@ -559,7 +541,7 @@ function NotificationsPage() {
         sentAt: null,
       })
       await loadNotifications()
-      showFlash('success', `Rescheduled for ${new Date(iso).toLocaleString()}.`)
+      showFlash('success', `Rescheduled for ${formatAdminDateTime(iso)} (EAT).`)
       setRescheduleRow(null)
     } catch (err) {
       showToast('error', err?.message || 'Reschedule failed')
@@ -672,9 +654,9 @@ function NotificationsPage() {
                     <span className="font-medium text-white">{n.title}</span>
                     <span className="text-amber-200/90">
                       {n.isRecurrenceTemplate && n.recurrenceLabel
-                        ? `${n.recurrenceLabel} · next ${n.scheduleAt ? new Date(n.scheduleAt).toLocaleString() : '—'}`
+                        ? `${n.recurrenceLabel} · next ${n.scheduleAt ? formatAdminDateTime(n.scheduleAt) : '—'}`
                         : n.scheduleAt
-                          ? `Sends ${new Date(n.scheduleAt).toLocaleString()}`
+                          ? `Sends ${formatAdminDateTime(n.scheduleAt)}`
                           : '—'}
                     </span>
                   </li>
@@ -875,6 +857,10 @@ function NotificationsPage() {
                     {touched && errors.schedule ? (
                       <p className="sm:col-span-2 text-xs text-red-400">{errors.schedule}</p>
                     ) : null}
+                    <p className="sm:col-span-2 text-xs text-slate-500">
+                      All schedule times are <strong className="text-slate-400">East Africa Time (EAT)</strong>.
+                      Server stores UTC and sends when <code className="text-slate-400">schedule_at ≤ now()</code>.
+                    </p>
                   </div>
                   <div>
                     <label className={labelClass()} htmlFor="n-recurrence">
@@ -1054,8 +1040,8 @@ function NotificationsPage() {
                         {n.status === 'scheduled' && n.scheduleAt ? (
                           <p className="mt-1 text-[10px] text-sky-300/90">
                             {n.isRecurrenceTemplate
-                              ? `Next ${new Date(n.scheduleAt).toLocaleString()}`
-                              : `Due ${new Date(n.scheduleAt).toLocaleString()}`}
+                              ? `Next ${formatAdminDateTime(n.scheduleAt)}`
+                              : `Due ${formatAdminDateTime(n.scheduleAt)}`}
                           </p>
                         ) : null}
                         {n.deliveryError ? (
@@ -1071,7 +1057,10 @@ function NotificationsPage() {
                         {n.status === 'scheduled' && n.scheduleAt ? (
                           <>
                             <span className="text-sky-300">Scheduled</span>
-                            <p className="mt-0.5">{new Date(n.scheduleAt).toLocaleString()}</p>
+                            <p className="mt-0.5">
+                              {formatAdminDateTime(n.scheduleAt)}
+                              <span className="block text-[10px] text-slate-500">East Africa Time</span>
+                            </p>
                           </>
                         ) : n.onesignalSentAt ? (
                           new Date(n.onesignalSentAt).toLocaleString()

@@ -124,6 +124,26 @@ export function isoToAdminDatetimeLocal(iso) {
  * EAT wall time from `datetime-local` → UTC ISO for API storage.
  * Dar es Salaam has no DST (fixed UTC+3).
  */
+/** EAT calendar date `YYYY-MM-DD` from stored UTC ISO. */
+export function adminDateFromIso(iso) {
+  const local = isoToAdminDatetimeLocal(iso)
+  return local ? local.slice(0, 10) : ''
+}
+
+/** EAT wall time `HH:mm` from stored UTC ISO. */
+export function adminTimeFromIso(iso) {
+  const local = isoToAdminDatetimeLocal(iso)
+  return local ? local.slice(11, 16) : ''
+}
+
+/** EAT date + time fields → UTC ISO for API (`schedule_at`). */
+export function adminDateAndTimeToIso(dateStr, timeStr) {
+  const d = String(dateStr ?? '').trim()
+  const t = String(timeStr ?? '').trim()
+  if (!d || !t) return null
+  return adminDatetimeLocalToIso(`${d}T${t}`)
+}
+
 export function adminDatetimeLocalToIso(local) {
   const s = String(local ?? '').trim()
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/)

@@ -109,20 +109,20 @@ export function computeNextScheduleAt({ from, kind, interval, anchorAt }) {
 
   if (k === 'daily') {
     const next = new Date(fromDate)
-    next.setDate(next.getDate() + 1)
-    next.setHours(anchor.getHours(), anchor.getMinutes(), anchor.getSeconds(), 0)
+    next.setUTCDate(next.getUTCDate() + 1)
+    next.setUTCHours(anchor.getUTCHours(), anchor.getUTCMinutes(), anchor.getUTCSeconds(), 0)
     return next.toISOString()
   }
   if (k === 'weekly') {
     const next = new Date(fromDate)
-    next.setDate(next.getDate() + 7)
-    next.setHours(anchor.getHours(), anchor.getMinutes(), anchor.getSeconds(), 0)
+    next.setUTCDate(next.getUTCDate() + 7)
+    next.setUTCHours(anchor.getUTCHours(), anchor.getUTCMinutes(), anchor.getUTCSeconds(), 0)
     return next.toISOString()
   }
   if (k === 'monthly') {
     const next = new Date(fromDate)
-    next.setMonth(next.getMonth() + 1)
-    next.setHours(anchor.getHours(), anchor.getMinutes(), anchor.getSeconds(), 0)
+    next.setUTCMonth(next.getUTCMonth() + 1)
+    next.setUTCHours(anchor.getUTCHours(), anchor.getUTCMinutes(), anchor.getUTCSeconds(), 0)
     return next.toISOString()
   }
   return null
