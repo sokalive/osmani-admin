@@ -975,3 +975,5 @@ export const postUsersIntelligenceBlock = (id, body) =>
 export const postUsersIntelligenceUnblock = (id, body) =>
   adminApiPost(`/admin/users-intelligence/${encodeURIComponent(id)}/unblock`, body)
 export const postUsersIntelligenceBackfill = () => adminApiPost('/admin/users-intelligence/backfill', {})
+export const postUsersIntelligenceSyncBlocks = () =>
+  adminApiPost('/admin/users-intelligence/sync-blocks', {})

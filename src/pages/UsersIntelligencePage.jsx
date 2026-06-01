@@ -3,7 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { BrainCircuit, Loader2, Search } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getUsersIntelligenceList, postUsersIntelligenceBackfill } from '../lib/api'
+import {
+  getUsersIntelligenceList,
+  postUsersIntelligenceBackfill,
+  postUsersIntelligenceSyncBlocks,
+} from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
 function statusBadge(status) {
@@ -52,7 +56,10 @@ export default function UsersIntelligencePage() {
 
   useEffect(() => {
     void load('')
-    void postUsersIntelligenceBackfill().catch(() => {})
+    void Promise.all([
+      postUsersIntelligenceBackfill().catch(() => {}),
+      postUsersIntelligenceSyncBlocks().catch(() => {}),
+    ])
   }, [load])
 
   function handleSearch(e) {

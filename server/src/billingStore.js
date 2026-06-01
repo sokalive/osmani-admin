@@ -20,6 +20,15 @@ export async function ensureBillingStorage() {
   await ensureBootstrapAdminPanelUser().catch((err) => {
     console.error('[admin-panel-bootstrap]', err?.message || err)
   })
+  try {
+    const { syncAllIntelligenceBlocksToPlayback } = await import('./lib/deviceIntelligenceStore.js')
+    const sync = await syncAllIntelligenceBlocksToPlayback()
+    if (sync.synced > 0) {
+      console.log('[users-intelligence] startup synced blocks to playback:', sync.synced)
+    }
+  } catch (err) {
+    console.error('[users-intelligence] startup block sync failed:', err?.message || err)
+  }
 }
 
 function requirePool() {
