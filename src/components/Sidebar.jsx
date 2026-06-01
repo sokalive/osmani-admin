@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   BarChart3,
   Bell,
+  BrainCircuit,
   Building2,
   Clock,
   CreditCard,
@@ -34,6 +35,12 @@ const menuItems = [
   { id: 'manual-subscription', label: 'Toa Kifurushi', icon: Gift, path: '/manual-subscription' },
   { id: 'transactions', label: 'Transactions', icon: CreditCard, path: '/transactions' },
   { id: 'users', label: 'Users', icon: Users, path: '/users' },
+  {
+    id: 'users-intelligence',
+    label: 'Users Intelligence',
+    icon: BrainCircuit,
+    path: '/users-intelligence',
+  },
   { id: 'notifications', label: 'Notifications', icon: Bell, path: '/notifications' },
   { id: 'payment-providers', label: 'Payment Providers', icon: Building2, path: '/payment-providers' },
   { id: 'analytics', label: 'Analytics', icon: BarChart3, path: '/analytics' },

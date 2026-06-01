@@ -17,6 +17,8 @@ import TransferCodesPage from './pages/TransferCodesPage'
 import ManualSubscriptionPage from './pages/ManualSubscriptionPage'
 import TransactionsPage from './pages/TransactionsPage'
 import UsersPage from './pages/UsersPage'
+import UsersIntelligencePage from './pages/UsersIntelligencePage'
+import UsersIntelligenceDetailPage from './pages/UsersIntelligenceDetailPage'
 import WhatsAppPage from './pages/WhatsAppPage'
 import ZenoPayPage from './pages/ZenoPayPage'
 import SonicPesaSettingsPage from './pages/SonicPesaSettingsPage'
@@ -33,6 +35,12 @@ export const dashboardRouteElements = [
   <Route key="plans" path="plans" element={<PlansPage />} />,
   <Route key="transactions" path="transactions" element={<TransactionsPage />} />,
   <Route key="users" path="users" element={<UsersPage />} />,
+  <Route key="users-intelligence" path="users-intelligence" element={<UsersIntelligencePage />} />,
+  <Route
+    key="users-intelligence-detail"
+    path="users-intelligence/:id"
+    element={<UsersIntelligenceDetailPage />}
+  />,
   <Route key="notifications" path="notifications" element={<NotificationsPage />} />,
   <Route
     key="payment-providers"

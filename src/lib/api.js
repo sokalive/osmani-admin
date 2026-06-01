@@ -960,3 +960,18 @@ export const postAnalyticsResetExecute = (body) =>
 export const getServerHealth = () => adminApiGet('/server-health')
 export const getApiHealth = () => apiGet('/health')
 export const getAdminPanelDiagnostics = () => adminApiGet('/admin/panel-diagnostics')
+
+export const getUsersIntelligenceList = (q) => {
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  const qs = params.toString()
+  return adminApiGet(qs ? `/admin/users-intelligence?${qs}` : '/admin/users-intelligence')
+}
+export const getUsersIntelligenceSummary = () => adminApiGet('/admin/users-intelligence/summary')
+export const getUsersIntelligenceDetail = (id) =>
+  adminApiGet(`/admin/users-intelligence/${encodeURIComponent(id)}`)
+export const postUsersIntelligenceBlock = (id, body) =>
+  adminApiPost(`/admin/users-intelligence/${encodeURIComponent(id)}/block`, body)
+export const postUsersIntelligenceUnblock = (id, body) =>
+  adminApiPost(`/admin/users-intelligence/${encodeURIComponent(id)}/unblock`, body)
+export const postUsersIntelligenceBackfill = () => adminApiPost('/admin/users-intelligence/backfill', {})

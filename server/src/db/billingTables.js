@@ -778,4 +778,7 @@ export async function ensureBillingTables(client) {
     CREATE INDEX IF NOT EXISTS admin_panel_login_otps_user_created_idx
     ON admin_panel_login_otps (admin_user_id, created_at DESC);
   `)
+
+  const { ensureDeviceIntelligenceTables } = await import('./deviceIntelligenceTables.js')
+  await ensureDeviceIntelligenceTables(client)
 }
