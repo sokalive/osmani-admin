@@ -931,6 +931,8 @@ export const getSecurityRiskDevices = (params = {}) => {
 }
 export const getSecurityRiskDevice = (deviceId) =>
   adminApiGet(`/security/devices/${encodeURIComponent(deviceId)}`)
+export const getSecurityDeviceInvestigation = (deviceId) =>
+  adminApiGet(`/security/devices/${encodeURIComponent(deviceId)}/investigation`)
 export const postSecurityDeviceAction = (deviceId, body) =>
   adminApiPost(`/security/devices/${encodeURIComponent(deviceId)}/action`, body)
 export const postSecurityDevicesBulkAction = (body) =>

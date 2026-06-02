@@ -3,6 +3,7 @@ import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
+import { getDeviceSecurityInvestigationReport } from '../lib/deviceSecurityInvestigation.js'
 import {
   applyBulkDeviceSecurityAction,
   applyDeviceSecurityAction,
@@ -166,6 +167,18 @@ deviceSecurityReportsRouter.get('/security/devices/:deviceId', async (req, res) 
   } catch (e) {
     console.error('[security/devices/:id]', e)
     res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+/** Read-only investigation report (on-demand; does not change enforcement). */
+deviceSecurityReportsRouter.get('/security/devices/:deviceId/investigation', async (req, res) => {
+  try {
+    const report = await getDeviceSecurityInvestigationReport(req.params.deviceId)
+    if (!report) return res.status(404).json({ ok: false, error: 'Device not found' })
+    res.json({ ok: true, report })
+  } catch (e) {
+    console.error('[security/devices/:id/investigation]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
 

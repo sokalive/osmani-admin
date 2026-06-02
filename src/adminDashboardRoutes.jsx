@@ -12,6 +12,7 @@ import PaymentProvidersPage from './pages/PaymentProvidersPage'
 import PlansPage from './pages/PlansPage'
 import PopupSettingsPage from './pages/PopupSettingsPage'
 import SecurityDashboardPage from './pages/SecurityDashboardPage'
+import SecurityRiskDeviceInvestigationPage from './pages/SecurityRiskDeviceInvestigationPage'
 import ServerHealthPage from './pages/ServerHealthPage'
 import TransferCodesPage from './pages/TransferCodesPage'
 import ManualSubscriptionPage from './pages/ManualSubscriptionPage'
@@ -66,6 +67,11 @@ export const dashboardRouteElements = [
     key="security-risk"
     path="security-risk"
     element={<Navigate to="/security?tab=risk" replace />}
+  />,
+  <Route
+    key="security-risk-investigation"
+    path="security-risk/:deviceId/investigation"
+    element={<SecurityRiskDeviceInvestigationPage />}
   />,
   <Route
     key="security-logs"

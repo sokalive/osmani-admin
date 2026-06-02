@@ -1,18 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import {
-  AlertTriangle,
-  Ban,
-  CheckCircle2,
-  Loader2,
-  RefreshCw,
-  Search,
-  Shield,
-  ShieldAlert,
-  ShieldCheck,
-  Trash2,
-  X,
-} from 'lucide-react'
+import { Loader2, RefreshCw, Search, Shield, ShieldAlert, Trash2 } from 'lucide-react'
 import {
   Bar,
   BarChart,
@@ -32,7 +20,6 @@ import {
   getSecurityRiskDevices,
   getSecurityStats,
   getSecuritySuite,
-  postSecurityDeviceAction,
   postSecurityDevicesBulkAction,
   postSecurityLogsBulkDelete,
   postVerifyAdminSecurityPin,
@@ -107,92 +94,6 @@ function FlagCell({ value }) {
   )
 }
 
-function DeviceDetailModal({ device, loading, onClose, onAction }) {
-  if (!device) return null
-  const actions = [
-    { id: 'allow_device', label: 'Allow Device', icon: CheckCircle2 },
-    { id: 'whitelist', label: 'Whitelist', icon: ShieldCheck },
-    { id: 'remove_restriction', label: 'Remove Restriction', icon: RefreshCw },
-    { id: 'temporary_block', label: 'Temporary Block', icon: Ban },
-    { id: 'permanent_block', label: 'Permanent Block', icon: Ban },
-    { id: 'reset_risk', label: 'Reset Risk', icon: RefreshCw },
-    { id: 'force_logout', label: 'Force Logout', icon: AlertTriangle },
-  ]
-  return (
-    <div className="fixed inset-0 z-[115] flex items-end justify-center p-4 sm:items-center">
-      <button type="button" className="absolute inset-0 bg-black/80" aria-label="Close" onClick={onClose} />
-        <div className="relative max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-600/60 bg-[#0b1220] p-6 shadow-2xl ring-1 ring-cyan-500/15">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-bold text-white">Device security</h2>
-              <p className="mt-1 break-all font-mono text-xs text-slate-400">{device.device_id}</p>
-            </div>
-            <button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-slate-800">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Risk score</p>
-              <p className="text-2xl font-bold text-white">{device.risk_score}</p>
-              <LevelBadge level={device.security_level} />
-            </div>
-            <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3 sm:col-span-2">
-              <p className="text-[10px] uppercase text-slate-500">Phone number</p>
-              <p className="mt-1 text-sm font-medium text-white">{device.phone_user || device.phone || '—'}</p>
-            </div>
-            <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Risk reason</p>
-              <p className="text-sm font-medium text-slate-200">{device.risk_reason || device.risk_type || '—'}</p>
-            </div>
-            <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
-              <p className="text-[10px] uppercase text-slate-500">Detection time</p>
-              <p className="text-sm font-medium text-slate-200">
-                {formatReadableDateTime(device.detection_time || device.first_seen || device.last_seen)}
-              </p>
-            </div>
-              <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-3">
-                <p className="text-[10px] uppercase text-slate-500">Status</p>
-                <p className="text-sm font-medium text-slate-200">{device.status}</p>
-              </div>
-          </div>
-          <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs sm:grid-cols-6">
-            {[
-              ['Root', device.rooted],
-              ['Emulator', device.emulator],
-              ['Clone', device.clone_detected],
-              ['Debugger', device.debugger],
-              ['Frida', device.frida],
-              ['Tampered', device.tampered_apk],
-            ].map(([label, v]) => (
-              <div key={label} className="rounded-lg border border-slate-700/40 bg-slate-900/40 py-2">
-                <p className="text-slate-500">{label}</p>
-                <FlagCell value={v} />
-              </div>
-            ))}
-          </div>
-          <p className="mt-4 text-xs text-slate-500">
-            Last seen: {formatReadableDateTime(device.last_seen)}
-          </p>
-          <div className="mt-5 flex flex-wrap gap-2">
-            {actions.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                disabled={loading}
-                onClick={() => onAction(id)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2 text-xs font-medium text-slate-200 hover:border-cyan-500/40 hover:text-white disabled:opacity-50"
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-    </div>
-  )
-}
-
 function pathToTab(pathname) {
   if (pathname.includes('security-risk')) return 'risk'
   if (pathname.includes('security-logs')) return 'logs'
@@ -224,7 +125,6 @@ function SecurityDashboardPage() {
   const [levelFilter, setLevelFilter] = useState('')
   const [selectedDevices, setSelectedDevices] = useState(() => new Set())
   const [selectedLogs, setSelectedLogs] = useState(() => new Set())
-  const [detailDevice, setDetailDevice] = useState(null)
   const [confirm, setConfirm] = useState(null)
 
   const setTab = (id) => {
@@ -320,23 +220,6 @@ function SecurityDashboardPage() {
         String(a.deviceOrIp || '').toLowerCase().includes(q),
     )
   }, [alerts, search])
-
-  const runDeviceAction = useCallback(
-    async (deviceId, action) => {
-      setActionLoading(true)
-      try {
-        const res = await postSecurityDeviceAction(deviceId, { action })
-        if (res?.device) setDetailDevice(res.device)
-        showToast('success', `Action applied: ${action.replace(/_/g, ' ')}`)
-        await loadAll()
-      } catch (e) {
-        showToast('error', e?.message || 'Action failed')
-      } finally {
-        setActionLoading(false)
-      }
-    },
-    [loadAll, showToast],
-  )
 
   const runBulk = useCallback(
     async (action) => {
@@ -605,7 +488,11 @@ function SecurityDashboardPage() {
                     <tr
                       key={d.device_id}
                       className="cursor-pointer border-b border-slate-800/60 hover:bg-slate-900/50"
-                      onClick={() => setDetailDevice(d)}
+                      onClick={() =>
+                        navigate(
+                          `/security-risk/${encodeURIComponent(d.device_id)}/investigation`,
+                        )
+                      }
                     >
                       <td className="p-3" onClick={(e) => e.stopPropagation()}>
                         <input
@@ -783,24 +670,6 @@ function SecurityDashboardPage() {
           </>
         )}
       </main>
-
-      <DeviceDetailModal
-        device={detailDevice}
-        loading={actionLoading}
-        onClose={() => setDetailDevice(null)}
-        onAction={(action) => {
-          if (!detailDevice?.device_id) return
-          if (action === 'permanent_block' || action === 'temporary_block') {
-            setConfirm({
-              title: action === 'permanent_block' ? 'Permanent block' : 'Temporary block',
-              message: `Apply ${action.replace(/_/g, ' ')} to ${detailDevice.device_id}?`,
-              action: () => runDeviceAction(detailDevice.device_id, action),
-            })
-            return
-          }
-          void runDeviceAction(detailDevice.device_id, action)
-        }}
-      />
 
       <ConfirmModal
         open={Boolean(confirm)}
