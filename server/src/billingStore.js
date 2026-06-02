@@ -1137,6 +1137,82 @@ export async function getLatestCompletedTransactionForDevice(deviceId) {
   return rows[0] ?? null
 }
 
+async function getActivePlanByDurationDays(durationDays) {
+  const pool = requirePool()
+  const n = Number(durationDays)
+  if (!Number.isFinite(n) || n < 1) return null
+  const { rows } = await pool.query(
+    `SELECT id, price, duration_days
+     FROM plans
+     WHERE deleted_at IS NULL
+       AND is_active = true
+       AND expiry_type <> 'fixed'
+       AND duration_days = $1
+     ORDER BY id ASC
+     LIMIT 1`,
+    [Math.trunc(n)],
+  )
+  return rows[0] ?? null
+}
+
+/**
+ * Manual grants (Toa Kifurushi + Offer Codes) do not create completed payment transactions.
+ * Provide verify metadata from the active manual grant path so Account screen shows
+ * amount/duration consistent with selected plan.
+ */
+async function getLatestManualGrantSubscriptionTxnSummary(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+
+  const { rows } = await pool.query(
+    `SELECT
+       ds.transaction_id,
+       ds.updated_at,
+       g.id AS grant_id,
+       g.duration_days
+     FROM device_subscriptions ds
+     LEFT JOIN manual_subscription_grants g
+       ON (
+         ds.transaction_id ~ '^manual_grant:[0-9]+$'
+         AND g.id = regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint
+       )
+     WHERE ds.device_id = $1
+       AND ds.transaction_id LIKE 'manual_grant:%'
+     ORDER BY ds.updated_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  const row = rows[0]
+  if (!row) return null
+
+  let durationDays = Number(row.duration_days)
+  if (!Number.isFinite(durationDays) || durationDays < 1) {
+    const fallback = await pool.query(
+      `SELECT duration_days
+       FROM manual_subscription_grants
+       WHERE device_id = $1
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [d],
+    )
+    durationDays = Number(fallback.rows[0]?.duration_days)
+  }
+  if (!Number.isFinite(durationDays) || durationDays < 1) return null
+
+  const plan = await getActivePlanByDurationDays(durationDays)
+  return {
+    amount: plan?.price != null ? Number(plan.price) : null,
+    currency: 'TZS',
+    plan_id: plan?.id != null ? Number(plan.id) : null,
+    plan_duration_days: Math.trunc(durationDays),
+    source: 'manual_grant',
+    transaction_id: String(row.transaction_id ?? ''),
+    grant_id: row.grant_id != null ? Number(row.grant_id) : null,
+  }
+}
+
 function phoneFromTransactionRow(txn) {
   if (!txn) return ''
   const direct = String(txn.phone ?? '').trim()
@@ -1263,6 +1339,11 @@ export async function resolvePaymentPhoneForDevice(deviceId) {
 export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
   const d = String(deviceId ?? '').trim()
   if (!d) return null
+
+  const manualSummary = await getLatestManualGrantSubscriptionTxnSummary(d)
+  if (manualSummary != null) {
+    return manualSummary
+  }
 
   const txn = await getLatestCompletedTransactionForDevice(deviceId)
   if (!txn) return null
