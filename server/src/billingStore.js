@@ -1155,12 +1155,94 @@ async function getActivePlanByDurationDays(durationDays) {
   return rows[0] ?? null
 }
 
+function timestampMs(v) {
+  if (v == null || v === '') return 0
+  const t = v instanceof Date ? v.getTime() : new Date(v).getTime()
+  return Number.isFinite(t) ? t : 0
+}
+
+/** Latest non-deleted manual / offer-code grant row for a device. */
+export async function getLatestManualSubscriptionGrantRecord(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT id, duration_days, created_at
+     FROM manual_subscription_grants
+     WHERE device_id = $1 AND deleted_at IS NULL
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  return rows[0] ?? null
+}
+
 /**
- * Manual grants (Toa Kifurushi + Offer Codes) do not create completed payment transactions.
- * Provide verify metadata from the active manual grant path so Account screen shows
- * amount/duration consistent with selected plan.
+ * True when the newest manual grant should win over verify repair + payment txn metadata
+ * (grant created at or after the latest completed payment).
  */
-async function getLatestManualGrantSubscriptionTxnSummary(deviceId) {
+export function manualGrantIsNewerThanCompletedPayment(grant, completedTxn) {
+  if (!grant) return false
+  if (!completedTxn) return true
+  const grantMs = timestampMs(grant.created_at)
+  const txnMs = timestampMs(
+    completedTxn.completed_at ?? completedTxn.updated_at ?? completedTxn.created_at,
+  )
+  return grantMs >= txnMs
+}
+
+export async function manualGrantOverridesCompletedPayment(deviceId) {
+  const d = String(deviceId ?? '').trim()
+  const grant = await getLatestManualSubscriptionGrantRecord(d)
+  if (!grant) return { overrides: false, grant: null, txn: null }
+  const txn = await getLatestCompletedTransactionForDevice(d)
+  return {
+    overrides: manualGrantIsNewerThanCompletedPayment(grant, txn),
+    grant,
+    txn,
+  }
+}
+
+/** Restore manual_grant transaction_id link without changing expires_at (metadata + repair guard). */
+export async function ensureManualGrantTransactionLink(deviceId, grantId, client = null) {
+  const q = dbQuery(client)
+  const d = String(deviceId ?? '').trim()
+  const gid = Number(grantId)
+  if (!d || !Number.isSafeInteger(gid) || gid < 1) return { updated: false }
+  const orderId = `manual_grant:${gid}`
+  const { rowCount } = await q(
+    `UPDATE device_subscriptions
+     SET transaction_id = $2, updated_at = now()
+     WHERE device_id = $1
+       AND transaction_id IS DISTINCT FROM $2`,
+    [d, orderId],
+  )
+  return { updated: Number(rowCount) > 0, transaction_id: orderId }
+}
+
+async function buildManualGrantSubscriptionTxnSummary(grant, transactionId = null) {
+  const durationDays = Number(grant?.duration_days)
+  if (!Number.isFinite(durationDays) || durationDays < 1) return null
+  const grantId = grant?.id != null ? Number(grant.id) : null
+  const tid =
+    transactionId != null
+      ? String(transactionId)
+      : grantId != null
+        ? `manual_grant:${grantId}`
+        : ''
+  const plan = await getActivePlanByDurationDays(durationDays)
+  return {
+    amount: plan?.price != null ? Number(plan.price) : null,
+    currency: 'TZS',
+    plan_id: plan?.id != null ? Number(plan.id) : null,
+    plan_duration_days: Math.trunc(durationDays),
+    source: 'manual_grant',
+    transaction_id: tid,
+    grant_id: grantId,
+  }
+}
+
+async function getManualGrantSummaryFromSubscriptionTransactionId(deviceId) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return null
@@ -1168,7 +1250,6 @@ async function getLatestManualGrantSubscriptionTxnSummary(deviceId) {
   const { rows } = await pool.query(
     `SELECT
        ds.transaction_id,
-       ds.updated_at,
        g.id AS grant_id,
        g.duration_days
      FROM device_subscriptions ds
@@ -1188,18 +1269,10 @@ async function getLatestManualGrantSubscriptionTxnSummary(deviceId) {
 
   let durationDays = Number(row.duration_days)
   if (!Number.isFinite(durationDays) || durationDays < 1) {
-    const fallback = await pool.query(
-      `SELECT duration_days
-       FROM manual_subscription_grants
-       WHERE device_id = $1
-         AND deleted_at IS NULL
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [d],
-    )
-    durationDays = Number(fallback.rows[0]?.duration_days)
+    const fallback = await getLatestManualSubscriptionGrantRecord(d)
+    if (!fallback) return null
+    return await buildManualGrantSubscriptionTxnSummary(fallback, row.transaction_id)
   }
-  if (!Number.isFinite(durationDays) || durationDays < 1) return null
 
   const plan = await getActivePlanByDurationDays(durationDays)
   return {
@@ -1211,6 +1284,24 @@ async function getLatestManualGrantSubscriptionTxnSummary(deviceId) {
     transaction_id: String(row.transaction_id ?? ''),
     grant_id: row.grant_id != null ? Number(row.grant_id) : null,
   }
+}
+
+/**
+ * Manual grants (Toa Kifurushi + Offer Codes) do not create completed payment transactions.
+ * Prefer the latest manual grant when it is newer than any completed payment so verify metadata
+ * stays correct even if subscription-status repair overwrote transaction_id.
+ */
+async function getLatestManualGrantSubscriptionTxnSummary(deviceId) {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+
+  const { overrides, grant } = await manualGrantOverridesCompletedPayment(d)
+  if (overrides && grant) {
+    await ensureManualGrantTransactionLink(d, grant.id)
+    return await buildManualGrantSubscriptionTxnSummary(grant)
+  }
+
+  return getManualGrantSummaryFromSubscriptionTransactionId(d)
 }
 
 function phoneFromTransactionRow(txn) {
@@ -1390,7 +1481,18 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
 
 /** Repair path: completed txn exists but device_subscriptions not yet updated. */
 export async function tryFinalizeActivationForDevice(deviceId) {
-  const txn = await getLatestCompletedTransactionForDevice(deviceId)
+  const d = String(deviceId ?? '').trim()
+  const { overrides, grant } = await manualGrantOverridesCompletedPayment(d)
+  if (overrides && grant) {
+    await ensureManualGrantTransactionLink(d, grant.id)
+    return {
+      ran: false,
+      reason: 'manual_grant_takes_precedence',
+      grantId: Number(grant.id),
+    }
+  }
+
+  const txn = await getLatestCompletedTransactionForDevice(d)
   if (!txn) return { ran: false, reason: 'no_completed_txn' }
   const act = await tryActivateDeviceSubscriptionFromCompletedTxn(txn)
   return { ran: true, ...act }
