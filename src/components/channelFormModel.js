@@ -8,7 +8,7 @@ import {
 
 export const SECTION_OPTIONS = [...APP_TAB_ORDER]
 
-export const PLAYER_TYPES = ['Exo', 'WebView', 'VLC', 'Native', 'IJK', 'Chrome']
+export const PLAYER_TYPES = ['Exo', 'WebView', 'VLC', 'Native', 'IJK']
 
 export function formSelectClass() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
