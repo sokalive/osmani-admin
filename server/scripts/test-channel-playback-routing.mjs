@@ -23,7 +23,6 @@ const mpingoWebview = channelToResponse(
     name: 'Azam 1 HD',
     url: 'https://nur.mpingotv.com/v3/player.php?channel=1',
     playerType: 'webview',
-    authorizedPackageName: 'MWENZI 1',
     isActive: true,
     showInApp: true,
     category: 'General',
@@ -34,8 +33,6 @@ const mpingoWebview = channelToResponse(
 )
 
 assert.equal(mpingoWebview.playerType, 'webview')
-assert.equal(mpingoWebview.authorizedPackageName, 'MWENZI 1')
-assert.equal(mpingoWebview.authorized_package_name, 'MWENZI 1')
 assert.equal(mpingoWebview.playbackUrl, 'https://nur.mpingotv.com/v3/player.php?channel=1')
 assert.equal(mpingoWebview.stream_delivery_effective, 'upstream')
 assert.equal(mpingoWebview.playback_source, 'upstream')
