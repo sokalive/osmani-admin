@@ -12,6 +12,7 @@ import {
   isHlsManifestResponse,
   normalizeUpstreamHeaders,
 } from '../lib/streamUpstreamHeaders.js'
+import { injectMpingoHtmlBaseHref, isMpingoPlayerPageUrl } from '../lib/streamMpingoHtmlBase.js'
 
 export { PROXY_MOUNT_STREAM, buildPublicStreamProxyUrl } from '../lib/streamManifestRewrite.js'
 
@@ -289,6 +290,27 @@ async function runStreamProxyRequestInner(req, res, opts, ctx) {
       bodyText.slice(0, 120),
       upstreamHeaders,
     )
+  }
+
+  const mpingoPlayerHtml =
+    /text\/html/i.test(contentType) && isMpingoPlayerPageUrl(finalUrl || parsed.href)
+  if (mpingoPlayerHtml) {
+    const bodyText = await upstreamRes.text().catch(() => '')
+    const outbound = injectMpingoHtmlBaseHref(bodyText, finalUrl || parsed.href)
+    logProxyDiagnostics({
+      scope: 'mpingo_html_base',
+      mount: mountPath,
+      source_url: parsed.toString(),
+      final_url: finalUrl,
+      base_href: new URL('./', finalUrl || parsed.href).href,
+      output_bytes: Buffer.byteLength(outbound, 'utf8'),
+    })
+    if (isDirectEntry) recordDirectRequest('segment_passthrough')
+    else recordProxyRequest('segment_passthrough')
+    res.status(upstreamRes.status)
+    res.setHeader('Content-Type', contentType.includes('charset') ? contentType : 'text/html; charset=UTF-8')
+    res.setHeader('Cache-Control', 'no-store')
+    return res.send(outbound)
   }
 
   if (isDirectEntry) recordDirectRequest('segment_passthrough')
