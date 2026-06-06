@@ -189,6 +189,26 @@ function ChannelFormFields({
       </div>
 
       <div>
+        <label htmlFor={`${formId}-mpingo-pkg`} className={lc}>
+          Mpingo authorized package{' '}
+          <span className="font-normal normal-case text-slate-500">(optional)</span>
+        </label>
+        <input
+          id={`${formId}-mpingo-pkg`}
+          type="text"
+          value={form.authorizedPackageName ?? ''}
+          onChange={(e) => updateField('authorizedPackageName', e.target.value)}
+          className={ic}
+          placeholder="e.g. MWENZI 1, MWAKA — leave empty for default behavior"
+          maxLength={128}
+        />
+        <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+          Package name the Mpingo player should authorize for this channel. When empty, clients use
+          existing playback rules unchanged.
+        </p>
+      </div>
+
+      <div>
         <label htmlFor={`${formId}-player`} className={lc}>
           Player Type
         </label>

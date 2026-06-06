@@ -28,9 +28,29 @@ import {
   logChannelStreamDiagWrite,
 } from '../lib/channelStreamDiagnostics.js'
 import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
+import {
+  logChannelAuthorizedPackageAudit,
+  validateAuthorizedPackageName,
+} from '../lib/channelAuthorizedPackage.js'
 import { triggerServerHealthBroadcast } from './realtimeSettings.js'
 
 export const channelsRouter = Router()
+
+function adminActor(req) {
+  const actor =
+    req.adminAuth?.email ?? (req.adminAuth?.legacy ? 'legacy-admin' : 'admin')
+  return String(actor).slice(0, 120)
+}
+
+function rejectInvalidAuthorizedPackage(res, parsed, cleanupFile) {
+  const err = validateAuthorizedPackageName(parsed.authorizedPackageName)
+  if (!err) return false
+  if (cleanupFile) {
+    void fs.unlink(path.join(UPLOADS_DIR, cleanupFile)).catch(() => {})
+  }
+  res.status(400).json({ error: err })
+  return true
+}
 
 function channelCatalogSyncPayload(action, channelId) {
   return {
@@ -94,11 +114,19 @@ channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) 
       }
       return res.status(400).json({ error: 'name and url (stream URL) are required' })
     }
+    if (rejectInvalidAuthorizedPackage(res, parsed, req.file?.filename)) return
     const nextId = await getNextChannelId()
     const sortOrder = await getNextChannelSortOrder()
     const now = new Date().toISOString()
     const created = mergeChannelRecord(null, { ...parsed, sortOrder }, nextId, now)
     await insertChannel(created)
+    if (created.authorizedPackageName) {
+      logChannelAuthorizedPackageAudit('channel_created', {
+        channel_id: created.id,
+        actor: adminActor(req),
+        authorized_package_name: created.authorizedPackageName,
+      })
+    }
     liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('created', created.id))
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after create failed:', err)
@@ -187,6 +215,7 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
       if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
       return res.status(400).json({ error: 'name and url (stream URL) are required' })
     }
+    if (rejectInvalidAuthorizedPackage(res, parsed, req.file?.filename)) return
 
     if (req.file && existing.thumbnail?.startsWith('/uploads/')) {
       const oldFile = uploadsFilePathFromThumbnail(existing.thumbnail)
@@ -196,7 +225,17 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
     }
 
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
+    const prevPkg = String(existing.authorizedPackageName ?? '').trim()
+    const nextPkg = String(updated.authorizedPackageName ?? '').trim()
     await updateChannel(updated)
+    if (prevPkg !== nextPkg) {
+      logChannelAuthorizedPackageAudit('channel_updated', {
+        channel_id: id,
+        actor: adminActor(req),
+        previous: prevPkg || null,
+        authorized_package_name: nextPkg || null,
+      })
+    }
     liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('updated', updated.id))
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after update failed:', err)
