@@ -19,26 +19,35 @@ assert.ok(ycn.length > 0, 'expected YCN channels')
 const results = { api: API, verified_at: new Date().toISOString(), mpingo: [], ycn: [], ok: true }
 
 for (const ch of mpingo.slice(0, 3)) {
-  const r = await fetch(ch.playbackUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124 Mobile' },
-  })
-  const body = await r.text()
-  const baseMatch = body.match(/<base href="([^"]+)"[^>]*data-osmani-mpingo-base="1"/i)
   const entry = {
     id: ch.id,
     name: ch.name,
     playerType: ch.playerType,
-    status: r.status,
-    has_base_tag: Boolean(baseMatch),
-    base_href: baseMatch?.[1] || null,
-    subscriptions_resolves_to: baseMatch
-      ? new URL('subscriptions.php?expired=1', baseMatch[1]).href
-      : null,
-    assets_resolves_to: baseMatch ? new URL('assets/js/offline.js', baseMatch[1]).href : null,
+    playbackUrl: ch.playbackUrl,
+    proxy_fallback_url: ch.proxy_fallback_url ?? null,
   }
   try {
+    if (ch.playerType === 'webview') {
+      assert.equal(ch.playbackUrl, ch.url, `webview ${ch.id} playbackUrl must be upstream url`)
+      assert.equal(ch.stream_delivery_effective, 'upstream', `webview ${ch.id} effective routing`)
+    }
+    const proxyProbeUrl = ch.direct_stream_url || ch.playbackUrl
+    const r = await fetch(proxyProbeUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124 Mobile' },
+    })
+    const body = await r.text()
+    const baseMatch = body.match(/<base href="([^"]+)"[^>]*data-osmani-mpingo-base="1"/i)
+    Object.assign(entry, {
+      status: r.status,
+      has_base_tag: Boolean(baseMatch),
+      base_href: baseMatch?.[1] || null,
+      subscriptions_resolves_to: baseMatch
+        ? new URL('subscriptions.php?expired=1', baseMatch[1]).href
+        : null,
+      assets_resolves_to: baseMatch ? new URL('assets/js/offline.js', baseMatch[1]).href : null,
+    })
     assert.equal(r.status, 200, `channel ${ch.id} status`)
-    assert.ok(baseMatch, `channel ${ch.id} missing Mpingo base tag`)
+    assert.ok(baseMatch, `channel ${ch.id} missing Mpingo base tag on stream-direct`)
     assert.equal(entry.base_href, 'https://nur.mpingotv.com/v3/', `channel ${ch.id} base href`)
     assert.equal(
       entry.subscriptions_resolves_to,

@@ -6,6 +6,7 @@ import {
 } from './lib/channelTabs.js'
 import { resolvePublicAssetUrl } from './lib/cdnAssets.js'
 import { buildChannelStreamDelivery } from './lib/streamDelivery.js'
+import { isMpingoPlayerPageUrl } from './lib/streamMpingoHtmlBase.js'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
 
@@ -246,6 +247,24 @@ export function resolveThumbnailForApi(thumbnail, req) {
   return resolvePublicAssetUrl(thumbnail, req)
 }
 
+/** WebView Mpingo player.php must use upstream url as playbackUrl (not stream-direct HTML proxy). */
+function resolveClientPlaybackFields(m, delivery) {
+  const playerType = normalizePlayerType(m.playerType)
+  const upstream = String(m.url || '').trim()
+  if (playerType === 'webview' && isMpingoPlayerPageUrl(upstream)) {
+    return {
+      playbackUrl: upstream,
+      stream_delivery_effective: 'upstream',
+      playback_source: 'upstream',
+    }
+  }
+  return {
+    playbackUrl: delivery.playbackUrl,
+    stream_delivery_effective: delivery.stream_delivery_effective,
+    playback_source: delivery.streamProxy?.playbackSource ?? delivery.stream_delivery_effective,
+  }
+}
+
 /** Public API shape (+ legacy aliases for older clients) */
 export function channelToResponse(c, req) {
   const m = migrateStoredChannel({ ...c })
@@ -258,16 +277,18 @@ export function channelToResponse(c, req) {
   const isActive = Boolean(m.isActive)
   const showInApp = Boolean(m.showInApp)
   const delivery = buildChannelStreamDelivery(req, m)
+  const playback = resolveClientPlaybackFields(m, delivery)
 
   return {
     id: m.id,
     name: m.name,
     url: m.url,
-    playbackUrl: delivery.playbackUrl,
+    playbackUrl: playback.playbackUrl,
     direct_stream_url: delivery.direct_stream_url,
     stream_delivery_mode: delivery.stream_delivery_mode,
-    stream_delivery_effective: delivery.stream_delivery_effective,
+    stream_delivery_effective: playback.stream_delivery_effective,
     proxy_playback_url: delivery.proxy_playback_url,
+    proxy_fallback_url: delivery.proxy_playback_url,
     direct_stream_rollout: delivery.direct_stream_rollout,
     thumbnail: thumbFull,
     isLive: Boolean(m.isLive),
@@ -289,6 +310,7 @@ export function channelToResponse(c, req) {
     referer: m.referer ?? '',
     userAgent: m.userAgent ?? '',
     playerType: normalizePlayerType(m.playerType),
+    playback_source: playback.playback_source,
     deliveryPath: delivery.streamProxy.route,
     streamProxy: delivery.streamProxy,
     bottomTabsDisplay: bottomTabCsv,
