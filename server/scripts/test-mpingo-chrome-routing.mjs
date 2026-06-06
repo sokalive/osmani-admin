@@ -79,6 +79,8 @@ const widevineChannel = channelToResponse(
 
 assert.equal(widevineChannel.player_type_configured, 'webview')
 assert.equal(widevineChannel.playerType, 'chrome', 'Widevine-only Mpingo must use chrome player')
+assert.equal(widevineChannel.player_type, 'chrome', 'player_type alias')
+assert.equal(widevineChannel.use_chrome_player, true, 'use_chrome_player flag')
 assert.equal(widevineChannel.playbackUrl, ch2Url)
 assert.equal(widevineChannel.playback_source, 'mpingo_chrome_widevine')
 assert.equal(widevineChannel.mpingo_drm?.has_clear_key, false)

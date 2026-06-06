@@ -34,14 +34,26 @@ const report = {
   })),
 }
 
+function upstreamId(url) {
+  try {
+    return new URL(url).searchParams.get('channel')
+  } catch {
+    return null
+  }
+}
+
 for (const ch of mpingo) {
   assert.ok(ch.playbackUrl, `channel ${ch.id} playbackUrl`)
-  if (ch.url?.includes('channel=1') || ch.url?.includes('channel=3')) {
+  const upId = upstreamId(ch.url)
+  if (upId === '1' || upId === '3') {
     assert.equal(ch.playerType, 'webview', `ClearKey channel ${ch.id} must stay webview`)
     assert.equal(ch.playback_source, 'upstream', `ClearKey channel ${ch.id} playback_source`)
+    assert.equal(ch.use_chrome_player, false, `ClearKey channel ${ch.id} use_chrome_player`)
   }
-  if (ch.url?.includes('channel=2') || ch.url?.includes('channel=4') || ch.url?.includes('channel=7')) {
+  if (['2', '4', '7', '8', '9'].includes(upId)) {
     assert.equal(ch.playerType, 'chrome', `Widevine channel ${ch.id} must be chrome`)
+    assert.equal(ch.player_type, 'chrome', `Widevine channel ${ch.id} player_type alias`)
+    assert.equal(ch.use_chrome_player, true, `Widevine channel ${ch.id} use_chrome_player`)
     assert.equal(ch.playback_source, 'mpingo_chrome_widevine', `Widevine channel ${ch.id} source`)
     assert.equal(ch.mpingo_drm?.has_clear_key, false, `Widevine channel ${ch.id} no clear key`)
   }

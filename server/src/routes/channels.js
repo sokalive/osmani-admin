@@ -29,6 +29,7 @@ import {
 } from '../lib/channelStreamDiagnostics.js'
 import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
 import { warmMpingoMetadataCache } from '../lib/mpingoPlayerMetadata.js'
+import { applyChannelsRoutingHeaders } from '../lib/mpingoRoutingSync.js'
 import { triggerServerHealthBroadcast } from './realtimeSettings.js'
 
 export const channelsRouter = Router()
@@ -80,6 +81,7 @@ channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.setHeader('Pragma', 'no-cache')
     res.setHeader('Expires', '0')
+    applyChannelsRoutingHeaders(res)
     res.json(payload)
   } catch (e) {
     console.error('[channels] GET / failed:', e)

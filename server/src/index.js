@@ -13,6 +13,7 @@ import {
   UPLOADS_DIR,
 } from './multerUpload.js'
 import { wireApiCacheInvalidation } from './lib/apiCacheInvalidation.js'
+import { ensureMpingoRoutingStartupSync } from './lib/mpingoRoutingSync.js'
 import { getStreamDeliveryHealthSnapshot } from './lib/streamDelivery.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
 import { streamDeliveryReportRouter } from './routes/streamDeliveryReport.js'
@@ -195,6 +196,7 @@ app.use((err, req, res, _next) => {
 async function main() {
   try {
     wireApiCacheInvalidation()
+    ensureMpingoRoutingStartupSync()
     assertUploadStorageReady()
     logUploadStorageDiagnostics()
     const cdnHealth = getCdnHealthSnapshot()
