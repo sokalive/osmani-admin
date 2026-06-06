@@ -8,7 +8,7 @@ import {
 import { resolvePublicAssetUrl } from './lib/cdnAssets.js'
 import { buildChannelStreamDelivery } from './lib/streamDelivery.js'
 
-const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
+const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk', 'chrome'])
 
 /** Canonical playerType for API + storage */
 export function normalizePlayerType(v) {
@@ -24,6 +24,8 @@ export function normalizePlayerType(v) {
     native: 'native',
     ijk: 'ijk',
     ijkplayer: 'ijk',
+    chrome: 'chrome',
+    googlechrome: 'chrome',
   }
   const mapped = legacy[raw] ?? raw
   return PLAYER_TYPES.has(mapped) ? mapped : 'exo'

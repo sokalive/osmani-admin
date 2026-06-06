@@ -212,18 +212,34 @@ function ChannelFormFields({
         <label htmlFor={`${formId}-player`} className={lc}>
           Player Type
         </label>
-        <select
-          id={`${formId}-player`}
-          value={form.playerType}
-          onChange={(e) => updateField('playerType', e.target.value)}
-          className={sc}
-        >
-          {PLAYER_TYPES.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
+        <div className="relative rounded-xl ring-1 ring-slate-600/50">
+          <select
+            id={`${formId}-player`}
+            value={form.playerType}
+            onChange={(e) => updateField('playerType', e.target.value)}
+            size={PLAYER_TYPES.length}
+            className={`${sc} max-h-44 min-h-[10.5rem] overflow-y-auto scroll-py-1 ring-0 focus:ring-2`}
+            aria-describedby={`${formId}-player-hint`}
+          >
+            {PLAYER_TYPES.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+          <div
+            className="pointer-events-none absolute bottom-0 left-0 right-0 flex items-end justify-center rounded-b-xl bg-gradient-to-t from-slate-950/90 via-slate-950/40 to-transparent pb-1 pt-4"
+            aria-hidden
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              Scroll for more
+            </span>
+          </div>
+        </div>
+        <p id={`${formId}-player-hint`} className="mt-1.5 text-xs text-slate-500">
+          {PLAYER_TYPES.length} player types — Chrome is listed below IJK. Scroll the list if your
+          screen shows fewer options.
+        </p>
       </div>
 
       <div>
