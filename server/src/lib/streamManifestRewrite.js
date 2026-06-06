@@ -1,6 +1,7 @@
 /**
  * HLS manifest rewrite — segment lines rewritten via injectable URL builder (proxy or Bunny CDN).
  */
+import { resolveStreamApiBaseUrl } from './directStreamSigning.js'
 
 export const PROXY_MOUNT_STREAM = 'stream-proxy'
 
@@ -15,11 +16,7 @@ function parseMaybeUrl(raw) {
 }
 
 export function resolveBaseOrigin(req) {
-  const base = String(process.env.BASE_URL || '').trim()
-  if (base) return base.replace(/\/$/, '')
-  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
-  const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0]
-  return `${proto}://${host}`.replace(/\/$/, '')
+  return resolveStreamApiBaseUrl(req)
 }
 
 export function buildProxyUrl(req, absoluteTarget, hdr, mountPath) {

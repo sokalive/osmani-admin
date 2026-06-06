@@ -1,8 +1,48 @@
 import crypto from 'node:crypto'
+import { isBunnyCdnHost } from './cdnAssets.js'
 import { recordTokenValidationFailure } from './streamDeliveryMetrics.js'
 import { normalizeUpstreamHeaders } from './streamUpstreamHeaders.js'
 
 export const STREAM_DIRECT_MOUNT = 'stream-direct'
+
+const DEFAULT_STREAM_API_BASE = 'https://osmani-admin-api.onrender.com'
+
+function parseStreamApiBaseUrl(raw) {
+  const s = String(raw || '').trim().replace(/\/+$/, '')
+  if (!s) return ''
+  try {
+    const u = new URL(s.includes('://') ? s : `https://${s}`)
+    if (isBunnyCdnHost(u.hostname)) return ''
+    return `${u.protocol}//${u.host}`
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * API origin for stream-direct / stream-proxy entrypoints.
+ * Never use Bunny CDN pull zones — manifests and tokens are served only from the API host.
+ */
+export function resolveStreamApiBaseUrl(req) {
+  for (const raw of [
+    process.env.STREAM_API_BASE_URL,
+    process.env.DIRECT_STREAM_BASE_URL,
+    process.env.BASE_URL,
+  ]) {
+    const parsed = parseStreamApiBaseUrl(raw)
+    if (parsed) return parsed
+  }
+  if (req) {
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
+    const host = String(req.headers['x-forwarded-host'] || req.get('host') || '')
+      .split(',')[0]
+      .trim()
+    if (host && !isBunnyCdnHost(host)) {
+      return `${proto}://${host}`.replace(/\/+$/, '')
+    }
+  }
+  return DEFAULT_STREAM_API_BASE
+}
 
 const DEFAULT_TOKEN_TTL_SEC = Math.min(
   900,
@@ -119,14 +159,7 @@ export function verifyDirectStreamToken(token) {
 }
 
 export function resolveStreamDirectBaseUrl(req) {
-  const fromEnv = String(process.env.DIRECT_STREAM_BASE_URL || process.env.BASE_URL || '').trim()
-  if (fromEnv) return fromEnv.replace(/\/+$/, '')
-  if (req) {
-    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
-    const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim()
-    if (host) return `${proto}://${host}`.replace(/\/+$/, '')
-  }
-  return ''
+  return resolveStreamApiBaseUrl(req)
 }
 
 /**
