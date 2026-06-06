@@ -6,9 +6,13 @@ import {
 } from './lib/channelTabs.js'
 import { resolvePublicAssetUrl } from './lib/cdnAssets.js'
 import { buildChannelStreamDelivery } from './lib/streamDelivery.js'
+import {
+  getCachedMpingoPlayerMetadata,
+  mpingoNeedsChromePlayer,
+} from './lib/mpingoPlayerMetadata.js'
 import { isMpingoPlayerPageUrl } from './lib/streamMpingoHtmlBase.js'
 
-const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk'])
+const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk', 'chrome'])
 
 /** Canonical playerType for API + storage */
 export function normalizePlayerType(v) {
@@ -24,6 +28,8 @@ export function normalizePlayerType(v) {
     native: 'native',
     ijk: 'ijk',
     ijkplayer: 'ijk',
+    chrome: 'chrome',
+    googlechrome: 'chrome',
   }
   const mapped = legacy[raw] ?? raw
   return PLAYER_TYPES.has(mapped) ? mapped : 'exo'
@@ -247,21 +253,39 @@ export function resolveThumbnailForApi(thumbnail, req) {
   return resolvePublicAssetUrl(thumbnail, req)
 }
 
-/** WebView Mpingo player.php must use upstream url as playbackUrl (not stream-direct HTML proxy). */
+/**
+ * Mpingo player.php in WebView: upstream url (not stream-direct HTML proxy).
+ * Widevine-only Mpingo rows (empty clearKey) must use Chrome player — WebView lacks Widevine EME (Shaka 6001).
+ */
 function resolveClientPlaybackFields(m, delivery) {
-  const playerType = normalizePlayerType(m.playerType)
+  const configuredPlayerType = normalizePlayerType(m.playerType)
   const upstream = String(m.url || '').trim()
-  if (playerType === 'webview' && isMpingoPlayerPageUrl(upstream)) {
+  const isMpingoPlayer = isMpingoPlayerPageUrl(upstream)
+
+  if ((configuredPlayerType === 'webview' || configuredPlayerType === 'chrome') && isMpingoPlayer) {
+    const meta = getCachedMpingoPlayerMetadata(upstream)
+    const useChrome = configuredPlayerType === 'chrome' || mpingoNeedsChromePlayer(meta)
     return {
       playbackUrl: upstream,
       stream_delivery_effective: 'upstream',
-      playback_source: 'upstream',
+      playback_source: useChrome ? 'mpingo_chrome_widevine' : 'upstream',
+      effectivePlayerType: useChrome ? 'chrome' : configuredPlayerType,
+      mpingo_drm: meta
+        ? {
+            has_clear_key: Boolean(meta.hasClearKey),
+            has_stream_url: Boolean(meta.hasStreamUrl),
+            stream_type: meta.streamType || null,
+          }
+        : null,
     }
   }
+
   return {
     playbackUrl: delivery.playbackUrl,
     stream_delivery_effective: delivery.stream_delivery_effective,
     playback_source: delivery.streamProxy?.playbackSource ?? delivery.stream_delivery_effective,
+    effectivePlayerType: configuredPlayerType,
+    mpingo_drm: null,
   }
 }
 
@@ -309,8 +333,10 @@ export function channelToResponse(c, req) {
     origin: m.origin ?? '',
     referer: m.referer ?? '',
     userAgent: m.userAgent ?? '',
-    playerType: normalizePlayerType(m.playerType),
+    playerType: playback.effectivePlayerType ?? normalizePlayerType(m.playerType),
+    player_type_configured: normalizePlayerType(m.playerType),
     playback_source: playback.playback_source,
+    mpingo_drm: playback.mpingo_drm,
     deliveryPath: delivery.streamProxy.route,
     streamProxy: delivery.streamProxy,
     bottomTabsDisplay: bottomTabCsv,

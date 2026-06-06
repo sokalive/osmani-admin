@@ -28,6 +28,7 @@ import {
   logChannelStreamDiagWrite,
 } from '../lib/channelStreamDiagnostics.js'
 import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
+import { warmMpingoMetadataCache } from '../lib/mpingoPlayerMetadata.js'
 import { triggerServerHealthBroadcast } from './realtimeSettings.js'
 
 export const channelsRouter = Router()
@@ -65,6 +66,7 @@ channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
   const t0 = Date.now()
   try {
     const list = await readChannels()
+    await warmMpingoMetadataCache(list)
     const payload = list.map((c) => {
       const api = channelToResponse(c, req)
       logChannelStreamDiagGet(c, api, {
