@@ -94,8 +94,6 @@ export function uiFromApiRow(c) {
     userAgent: c.userAgent ?? '',
     playerType,
     thumbnailUrl: thumbnail,
-    authorizedPackageName:
-      c.authorizedPackageName ?? c.authorized_package_name ?? '',
   }
 }
 
@@ -122,7 +120,6 @@ export function channelFormDataFromSubmit(submitPayload) {
   fd.append('userAgent', (s.userAgent ?? '').trim())
   const uiPt = (s.playerType ?? 'Exo').trim() || 'Exo'
   fd.append('playerType', PLAYER_UI_TO_API[uiPt] ?? 'exo')
-  fd.append('authorizedPackageName', (s.authorizedPackageName ?? '').trim())
 
   if (s.thumbnailFile instanceof Blob) {
     fd.append('thumbnail', s.thumbnailFile, s.thumbnailFile.name || 'thumbnail.jpg')
@@ -197,7 +194,6 @@ export function apiBodyFromUiChannel(ch) {
     isHD: ch.hd !== false,
     isActive: Boolean(ch.active),
     showInApp: ch.showInApp !== false,
-    authorizedPackageName: (ch.authorizedPackageName ?? '').trim(),
     thumbnailUrl: ch.thumbnailUrl ?? null,
     sortOrder: Number(ch.sortOrder) || 0,
   }

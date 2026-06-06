@@ -36,8 +36,4 @@ export async function ensureChannelsTable(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS channels_sort_order_idx ON channels (sort_order ASC, id ASC);
   `)
-  /** Optional Mpingo authorized package label; empty = legacy behavior unchanged */
-  await client.query(`
-    ALTER TABLE channels ADD COLUMN IF NOT EXISTS authorized_package_name TEXT NOT NULL DEFAULT '';
-  `)
 }

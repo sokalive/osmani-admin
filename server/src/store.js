@@ -29,7 +29,6 @@ function rowToChannel(row) {
     userAgent: row.user_agent ?? '',
     playerType: normalizePlayerType(row.player_type),
     sortOrder: Number(row.sort_order) || 0,
-    authorizedPackageName: String(row.authorized_package_name ?? '').trim(),
     createdAt: ca instanceof Date ? ca.toISOString() : ca,
     updatedAt: ua instanceof Date ? ua.toISOString() : ua,
   }
@@ -55,7 +54,6 @@ function channelToRowParams(c) {
     c.userAgent ?? '',
     normalizePlayerType(c.playerType),
     Number(c.sortOrder) || 0,
-    String(c.authorizedPackageName ?? '').trim(),
     c.createdAt ?? new Date().toISOString(),
     c.updatedAt ?? new Date().toISOString(),
   ]
@@ -81,7 +79,7 @@ export async function readChannels() {
   const { rows } = await pool.query(
     `SELECT id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
             access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
-            sort_order, authorized_package_name, created_at, updated_at
+            sort_order, created_at, updated_at
      FROM channels ORDER BY sort_order ASC, id ASC`,
   )
   return rows.map(rowToChannel)
@@ -100,7 +98,7 @@ export async function getChannelById(id) {
   const { rows } = await pool.query(
     `SELECT id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
             access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
-            sort_order, authorized_package_name, created_at, updated_at
+            sort_order, created_at, updated_at
      FROM channels WHERE id = $1`,
     [Number(id)],
   )
@@ -115,8 +113,8 @@ export async function insertChannel(c) {
     `INSERT INTO channels (
        id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
        access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
-       sort_order, authorized_package_name, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::timestamptz,$21::timestamptz)`,
+       sort_order, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::timestamptz,$20::timestamptz)`,
     p,
   )
 }
@@ -130,8 +128,7 @@ export async function updateChannel(c) {
        name = $2, url = $3, thumbnail = $4, category = $5, bottom_tab = $6,
        is_live = $7, is_hd = $8, is_active = $9, show_in_app = $10, access_type = $11,
        backup_stream_1 = $12, backup_stream_2 = $13, origin = $14, referer = $15, user_agent = $16,
-       player_type = $17, sort_order = $18, authorized_package_name = $19,
-       created_at = $20::timestamptz, updated_at = $21::timestamptz
+       player_type = $17, sort_order = $18, created_at = $19::timestamptz, updated_at = $20::timestamptz
      WHERE id = $1`,
     p,
   )
