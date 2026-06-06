@@ -42,6 +42,7 @@ export function emptyFormState() {
     hd: true,
     active: true,
     showInApp: true,
+    authorizedPackageName: '',
   }
 }
 
@@ -72,5 +73,7 @@ export function channelToForm(channel) {
     hd: channel.hd !== false,
     active: channel.active !== false,
     showInApp: channel.showInApp !== false,
+    authorizedPackageName:
+      channel.authorizedPackageName ?? channel.authorized_package_name ?? '',
   }
 }

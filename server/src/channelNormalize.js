@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { normalizeAuthorizedPackageName } from './lib/channelAuthorizedPackage.js'
 import {
   migrateContentCategory,
   parseVisibleTabsFromBottomTabField,
@@ -75,6 +76,9 @@ export function migrateStoredChannel(c) {
     bottomTab,
     playerType: normalizePlayerType(c.playerType),
     sortOrder: Number(c.sortOrder ?? c.sort_order) || 0,
+    authorizedPackageName: normalizeAuthorizedPackageName(
+      c.authorizedPackageName ?? c.authorized_package_name ?? '',
+    ),
     url: (c.url || '').trim(),
     name: (c.name || '').trim(),
   }
@@ -172,6 +176,12 @@ export function parseChannelInput(body, file, existing = null) {
         : ex != null
           ? Number(ex.sortOrder) || 0
           : 0,
+    authorizedPackageName:
+      b.authorizedPackageName !== undefined || b.authorized_package_name !== undefined
+        ? normalizeAuthorizedPackageName(b.authorizedPackageName ?? b.authorized_package_name)
+        : ex != null
+          ? normalizeAuthorizedPackageName(ex.authorizedPackageName ?? '')
+          : '',
   }
 }
 
@@ -206,6 +216,7 @@ export function buildDuplicateChannelRecord(sourceRow, { id, sortOrder, nowIso }
     userAgent: src.userAgent ?? '',
     playerType: normalizePlayerType(src.playerType),
     sortOrder: Number(sortOrder) || 0,
+    authorizedPackageName: normalizeAuthorizedPackageName(src.authorizedPackageName ?? ''),
   }
   return mergeChannelRecord(null, parsed, id, nowIso)
 }
@@ -234,6 +245,9 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
       parsed.sortOrder != null
         ? Number(parsed.sortOrder) || 0
         : Number(base.sortOrder) || Number(id) || 0,
+    authorizedPackageName: normalizeAuthorizedPackageName(
+      parsed.authorizedPackageName ?? base.authorizedPackageName ?? '',
+    ),
     createdAt: base.createdAt || nowIso,
     updatedAt: nowIso,
   }
@@ -324,6 +338,8 @@ export function channelToResponse(c, req) {
     active: Boolean(m.isActive),
     accessPremium: m.accessType === 'premium',
     thumbnailUrl: thumbFull,
+    authorizedPackageName: m.authorizedPackageName || '',
+    authorized_package_name: m.authorizedPackageName || '',
   }
 }
 
