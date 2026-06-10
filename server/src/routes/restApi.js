@@ -30,6 +30,9 @@ import { adminAuthRouter } from './adminAuth.js'
 import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { notificationsRouter } from './notifications.js'
+import { beemSettingsRouter } from './beemSettings.js'
+import { smsAdminRouter } from './smsAdmin.js'
+import './smsScheduler.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { runtimePublicRouter } from './runtimePublic.js'
 import { usersIntelligencePublicRouter } from './usersIntelligencePublic.js'
@@ -76,6 +79,8 @@ restApi.get('/', (_req, res) => {
       '/settings/zenopay',
       '/settings/sonicpesa',
       '/settings/auraxpay',
+      '/settings/beem',
+      '/admin/sms',
       '/settings/payment-providers',
       '/payment-providers',
       '/plans',
@@ -278,6 +283,8 @@ restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings/sonicpesa', sonicpesaSettingsRouter)
 restApi.use('/settings/auraxpay', auraxpaySettingsRouter)
+restApi.use('/settings/beem', beemSettingsRouter)
+restApi.use('/admin/sms', smsAdminRouter)
 restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 restApi.use('/settings/trial-watch', trialWatchSettingsRouter)

@@ -19,7 +19,8 @@
     "verify:ycn-upstream-headers": "node scripts/verify-ycn-upstream-headers.mjs",
     "verify:strict-security": "node scripts/verify-strict-security-enforcement.mjs",
     "verify:security-phone": "node scripts/verify-security-phone-resolution.mjs",
-    "verify:checkout-providers": "node scripts/verify-checkout-providers.mjs"
+    "verify:checkout-providers": "node scripts/verify-checkout-providers.mjs",
+    "verify:sms-integration": "node scripts/verify-sms-integration.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",

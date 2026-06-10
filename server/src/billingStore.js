@@ -1020,6 +1020,9 @@ export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expire
       deviceId: d.length > 20 ? `${d.slice(0, 18)}…` : d,
       orderId: oid.length > 24 ? `${oid.slice(0, 22)}…` : oid,
     })
+    void import('./lib/smsSubscriptionHooks.js')
+      .then((m) => m.notifySubscriptionActivated({ deviceId: d, orderId: oid, expiresAt }))
+      .catch((err) => console.warn('[sms] activation notify failed:', err))
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)

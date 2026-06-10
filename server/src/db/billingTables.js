@@ -816,6 +816,85 @@ export async function ensureBillingTables(client) {
     ON admin_panel_login_otps (admin_user_id, created_at DESC);
   `)
 
+  /** Beem SMS gateway (additive — does not replace push notifications). */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS beem_settings (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      api_key TEXT NOT NULL DEFAULT '',
+      secret_key TEXT NOT NULL DEFAULT '',
+      sender_name TEXT NOT NULL DEFAULT '',
+      last_test_at TIMESTAMPTZ,
+      last_test_ok BOOLEAN,
+      last_test_message TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    INSERT INTO beem_settings (id) VALUES (1)
+    ON CONFLICT (id) DO NOTHING;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS sms_templates (
+      template_key TEXT PRIMARY KEY,
+      body TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  const defaultSmsTemplates = [
+    [
+      'subscription_activated',
+      'Asante kwa kununua kifurushi cha Osmani TV. Kifurushi chako kimewezeshwa.',
+      'Sent when a subscription is activated after payment or manual grant',
+    ],
+    [
+      'subscription_expiring_soon',
+      'Kifurushi chako kinaisha hivi karibuni. Tafadhali renew ili kuendelea kutumia huduma.',
+      'Sent 3 days and 1 day before subscription expiry',
+    ],
+    [
+      'subscription_expired',
+      'Kifurushi chako kimekwisha. Lipia upya kuendelea kutumia Osmani TV.',
+      'Sent when subscription expires',
+    ],
+  ]
+  for (const [key, body, description] of defaultSmsTemplates) {
+    await client.query(
+      `INSERT INTO sms_templates (template_key, body, description)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (template_key) DO NOTHING`,
+      [key, body, description],
+    )
+  }
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS sms_send_log (
+      id BIGSERIAL PRIMARY KEY,
+      recipient TEXT NOT NULL DEFAULT '',
+      device_id TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      template_key TEXT NOT NULL DEFAULT '',
+      trigger_type TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      provider_response JSONB,
+      provider_message_id TEXT NOT NULL DEFAULT '',
+      idempotency_key TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS sms_send_log_created_at_idx
+    ON sms_send_log (created_at DESC);
+  `)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS sms_send_log_idempotency_key_uidx
+    ON sms_send_log (idempotency_key)
+    WHERE idempotency_key <> '';
+  `)
+
   const { ensureDeviceIntelligenceTables } = await import('./deviceIntelligenceTables.js')
   await ensureDeviceIntelligenceTables(client)
 }

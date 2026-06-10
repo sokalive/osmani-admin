@@ -8,6 +8,7 @@ import DashboardPage from './pages/DashboardPage'
 import DeviceControlPage from './pages/DeviceControlPage'
 import TrialWatchPage from './pages/TrialWatchPage'
 import NotificationsPage from './pages/NotificationsPage'
+import SmsCenterPage from './pages/SmsCenterPage'
 import PaymentProvidersPage from './pages/PaymentProvidersPage'
 import PlansPage from './pages/PlansPage'
 import PopupSettingsPage from './pages/PopupSettingsPage'
@@ -44,6 +45,7 @@ export const dashboardRouteElements = [
     element={<UsersIntelligenceDetailPage />}
   />,
   <Route key="notifications" path="notifications" element={<NotificationsPage />} />,
+  <Route key="sms-center" path="sms-center" element={<SmsCenterPage />} />,
   <Route
     key="payment-providers"
     path="payment-providers"

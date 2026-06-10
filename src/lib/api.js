@@ -852,6 +852,21 @@ export const deletePaymentProvider = (id) =>
 export const getWhatsappSettings = () => adminApiGet('/whatsapp-settings')
 export const putWhatsappSettings = (body) => adminApiPut('/whatsapp-settings', body)
 
+export const getBeemSettings = () => adminApiGet('/settings/beem')
+export const putBeemSettings = (body) => adminApiPut('/settings/beem', body)
+export const postBeemTest = (body = {}) => adminApiPost('/settings/beem/test', body)
+export const getSmsTemplates = () => adminApiGet('/admin/sms/templates')
+export const putSmsTemplate = (key, body) => adminApiPut(`/admin/sms/templates/${encodeURIComponent(key)}`, body)
+export const getSmsLog = (params = {}) => {
+  const q = new URLSearchParams()
+  if (params.limit != null) q.set('limit', String(params.limit))
+  if (params.offset != null) q.set('offset', String(params.offset))
+  const qs = q.toString()
+  return adminApiGet(`/admin/sms/log${qs ? `?${qs}` : ''}`)
+}
+export const getSmsRecipientCounts = () => adminApiGet('/admin/sms/recipients/counts')
+export const postSmsSend = (body) => adminApiPost('/admin/sms/send', body)
+
 export const getAppUpdateSettings = () => adminApiGet('/settings/app-update')
 export const putAppUpdateSettings = (body) => adminApiPut('/settings/app-update', body)
 export const getUpdateCheck = () => apiGet('/update-check')
