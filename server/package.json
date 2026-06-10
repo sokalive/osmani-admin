@@ -18,7 +18,8 @@
     "verify:selective-segment-routing": "node scripts/verify-selective-segment-routing.mjs",
     "verify:ycn-upstream-headers": "node scripts/verify-ycn-upstream-headers.mjs",
     "verify:strict-security": "node scripts/verify-strict-security-enforcement.mjs",
-    "verify:security-phone": "node scripts/verify-security-phone-resolution.mjs"
+    "verify:security-phone": "node scripts/verify-security-phone-resolution.mjs",
+    "verify:checkout-providers": "node scripts/verify-checkout-providers.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",

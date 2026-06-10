@@ -8,7 +8,9 @@ import {
   resolveZenopayCredentials,
   zenopayCreateCollection,
 } from '../zenopayClient.js'
+import { resolveAuraxpayCredentials } from '../lib/payments/providers/auraxpay.js'
 import { resolveSonicpesaCredentials } from '../lib/payments/providers/sonicpesa.js'
+import { auraxpayPaymentsRouter } from './auraxpayPayments.js'
 import { sonicpesaPaymentsRouter } from './sonicpesaPayments.js'
 
 export const paymentsRouter = Router()
@@ -23,15 +25,27 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
     const scred = resolveSonicpesaCredentials(srow || {})
     const sonicpesa =
       Boolean(srow?.enabled === true) && Boolean(scred.apiKey)
+    const arow = await billing.getAuraxpayRow()
+    const acred = resolveAuraxpayCredentials(arow || {})
+    const auraxpay =
+      Boolean(arow?.enabled === true) && Boolean(acred.apiKey) && Boolean(acred.apiEndpoint)
     const checkout = await billing.getCheckoutPaymentSettings()
     let payment_provider = checkout.payment_provider
-    if (payment_provider === 'sonicpesa' && !sonicpesa) payment_provider = 'zenopay'
-    if (payment_provider === 'zenopay' && !zenopay && sonicpesa) payment_provider = 'sonicpesa'
+    if (payment_provider === 'auraxpay' && !auraxpay) {
+      payment_provider = zenopay ? 'zenopay' : sonicpesa ? 'sonicpesa' : 'zenopay'
+    }
+    if (payment_provider === 'sonicpesa' && !sonicpesa) {
+      payment_provider = zenopay ? 'zenopay' : auraxpay ? 'auraxpay' : 'zenopay'
+    }
+    if (payment_provider === 'zenopay' && !zenopay) {
+      payment_provider = sonicpesa ? 'sonicpesa' : auraxpay ? 'auraxpay' : 'zenopay'
+    }
     res.json({
       ok: true,
       payment_provider,
       zenopay,
       sonicpesa,
+      auraxpay,
     })
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) })
@@ -39,6 +53,7 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
 })
 
 paymentsRouter.use('/sonicpesa', sonicpesaPaymentsRouter)
+paymentsRouter.use('/auraxpay', auraxpayPaymentsRouter)
 
 paymentsRouter.post('/zeno-webhook', handleZenoPayWebhook)
 

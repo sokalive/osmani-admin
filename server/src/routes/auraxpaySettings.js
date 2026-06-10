@@ -4,13 +4,13 @@ import * as billing from '../billingStore.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import {
-  resolveSonicpesaCredentials,
-  testConnection as testSonicpesaConnection,
-} from '../lib/payments/providers/sonicpesa.js'
+  resolveAuraxpayCredentials,
+  testConnection as testAuraxpayConnection,
+} from '../lib/payments/providers/auraxpay.js'
 
-export const sonicpesaSettingsRouter = Router()
+export const auraxpaySettingsRouter = Router()
 
-sonicpesaSettingsRouter.use(requireAdminPanelAccess)
+auraxpaySettingsRouter.use(requireAdminPanelAccess)
 
 const DEFAULT_PUBLIC_API = 'https://osmani-admin-api.onrender.com'
 
@@ -20,7 +20,7 @@ function defaultWebhookUrl(req) {
     DEFAULT_PUBLIC_API ||
     `${req.protocol}://${req.get('host') || ''}`
   ).replace(/\/$/, '')
-  return `${base}/api/payments/sonicpesa/webhook`
+  return `${base}/api/payments/auraxpay/webhook`
 }
 
 function normalizeEnvironment(v) {
@@ -32,21 +32,23 @@ function normalizeEnvironment(v) {
 
 async function rowToApiResponse(row, req) {
   const r = row && typeof row === 'object' ? row : {}
-  const cred = resolveSonicpesaCredentials(r)
+  const cred = resolveAuraxpayCredentials(r)
   const checkout = await billing.getCheckoutPaymentSettings()
-  const isActiveCheckoutProvider = checkout.payment_provider === 'sonicpesa'
-  const apiEndpoint = String(r.api_endpoint ?? '').trim() || 'https://api.sonicpesa.com/api/v1'
+  const isActiveCheckoutProvider = checkout.payment_provider === 'auraxpay'
+  const apiEndpoint = String(r.api_endpoint ?? '').trim()
   const accountId = String(r.account_id ?? '').trim()
   const webhookUrl = String(r.webhook_url ?? '').trim() || defaultWebhookUrl(req)
-  const hasKey = Boolean(String(process.env.SONICPESA_API_KEY || r.api_key || '').trim())
-  const apiKeyMasked = hasKey ? maskSecret(String(process.env.SONICPESA_API_KEY || r.api_key || '').trim()) : ''
+  const hasKey = Boolean(String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim())
+  const apiKeyMasked = hasKey
+    ? maskSecret(String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim())
+    : ''
   const la = r.last_test_at
   const env = normalizeEnvironment(r.environment)
   const envOverrideActive = {
-    apiEndpoint: Boolean(String(process.env.SONICPESA_ENDPOINT || '').trim()),
-    accountId: Boolean(String(process.env.SONICPESA_ACCOUNT_ID || '').trim()),
-    apiKey: Boolean(String(process.env.SONICPESA_API_KEY || '').trim()),
-    webhookUrl: Boolean(String(process.env.SONICPESA_WEBHOOK_URL || '').trim()),
+    apiEndpoint: Boolean(String(process.env.AURAXPAY_ENDPOINT || '').trim()),
+    accountId: Boolean(String(process.env.AURAXPAY_ACCOUNT_ID || '').trim()),
+    apiKey: Boolean(String(process.env.AURAXPAY_API_KEY || '').trim()),
+    webhookUrl: Boolean(String(process.env.AURAXPAY_WEBHOOK_URL || '').trim()),
   }
   const envOverrideAny = Object.values(envOverrideActive).some(Boolean)
   const lastWebhookAt = r.last_webhook_at
@@ -82,21 +84,21 @@ async function rowToApiResponse(row, req) {
   }
 }
 
-sonicpesaSettingsRouter.get('/', async (req, res) => {
+auraxpaySettingsRouter.get('/', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
-    const row = await billing.getSonicpesaRow()
+    const row = await billing.getAuraxpayRow()
     res.json(await rowToApiResponse(row, req))
   } catch (e) {
-    console.error('[settings/sonicpesa] GET failed:', e)
+    console.error('[settings/auraxpay] GET failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
 
-sonicpesaSettingsRouter.put('/', async (req, res) => {
+auraxpaySettingsRouter.put('/', async (req, res) => {
   try {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
-    const current = (await billing.getSonicpesaRow()) || {}
+    const current = (await billing.getAuraxpayRow()) || {}
     const nextKey = String(b.apiKey ?? b.api_key ?? '').trim()
     const keepKey =
       nextKey === '' ||
@@ -105,13 +107,13 @@ sonicpesaSettingsRouter.put('/', async (req, res) => {
 
     const apiEndpointIn = String(b.apiEndpoint ?? b.api_endpoint ?? current.api_endpoint ?? '').trim()
     if (!apiEndpointIn && !keepKey && Boolean(b.enabled)) {
-      return res.status(400).json({ error: 'API endpoint is required when SonicPesa is enabled' })
+      return res.status(400).json({ error: 'API endpoint is required when Aurax Pay is enabled' })
     }
 
-    const row = await billing.updateSonicpesaRowFull({
+    const row = await billing.updateAuraxpayRowFull({
       enabled: Boolean(b.enabled ?? current.enabled ?? false),
       environment: normalizeEnvironment(b.environment ?? current.environment ?? 'sandbox'),
-      api_endpoint: apiEndpointIn || 'https://api.sonicpesa.com/api/v1',
+      api_endpoint: apiEndpointIn,
       account_id: String(b.accountId ?? b.account_id ?? current.account_id ?? ''),
       webhook_url: String(
         b.webhookUrl ?? b.webhook_url ?? current.webhook_url ?? defaultWebhookUrl(req),
@@ -124,15 +126,15 @@ sonicpesaSettingsRouter.put('/', async (req, res) => {
     })
 
     const wantProvider = String(b.payment_provider ?? '').trim().toLowerCase()
-    if (wantProvider === 'sonicpesa' || b.setAsActiveCheckoutProvider === true) {
-      await billing.updateCheckoutPaymentProvider('sonicpesa')
+    if (wantProvider === 'auraxpay' || b.setAsActiveCheckoutProvider === true) {
+      await billing.updateCheckoutPaymentProvider('auraxpay')
     } else if (wantProvider === 'zenopay') {
       await billing.updateCheckoutPaymentProvider('zenopay')
-    } else if (wantProvider === 'auraxpay') {
-      await billing.updateCheckoutPaymentProvider('auraxpay')
+    } else if (wantProvider === 'sonicpesa') {
+      await billing.updateCheckoutPaymentProvider('sonicpesa')
     }
 
-    liveSyncBus.publish('config.sonicpesa_settings_changed', {
+    liveSyncBus.publish('config.auraxpay_settings_changed', {
       topics: ['config'],
       action: 'updated',
       synced_at: new Date().toISOString(),
@@ -140,18 +142,18 @@ sonicpesaSettingsRouter.put('/', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, private')
     res.json(await rowToApiResponse(row, req))
   } catch (e) {
-    console.error('[settings/sonicpesa] PUT failed:', e)
+    console.error('[settings/auraxpay] PUT failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
 
-sonicpesaSettingsRouter.post('/test', async (req, res) => {
+auraxpaySettingsRouter.post('/test', async (req, res) => {
   try {
-    const row = (await billing.getSonicpesaRow()) || {}
-    const cred = resolveSonicpesaCredentials(row)
-    const result = await testSonicpesaConnection(cred)
+    const row = (await billing.getAuraxpayRow()) || {}
+    const cred = resolveAuraxpayCredentials(row)
+    const result = await testAuraxpayConnection(cred)
     const now = new Date().toISOString()
-    await billing.updateSonicpesaRowFull({
+    await billing.updateAuraxpayRowFull({
       enabled: Boolean(row.enabled),
       environment: normalizeEnvironment(row.environment ?? 'sandbox'),
       api_endpoint: String(row.api_endpoint ?? ''),
@@ -163,7 +165,7 @@ sonicpesaSettingsRouter.post('/test', async (req, res) => {
       last_test_ok: result.ok,
       last_test_message: result.message,
     })
-    liveSyncBus.publish('config.sonicpesa_settings_changed', {
+    liveSyncBus.publish('config.auraxpay_settings_changed', {
       topics: ['config'],
       action: 'tested',
       success: result.ok,
@@ -175,7 +177,7 @@ sonicpesaSettingsRouter.post('/test', async (req, res) => {
       httpStatus: Number(result.httpStatus || 0),
     })
   } catch (e) {
-    console.error('[settings/sonicpesa] POST /test failed:', e)
+    console.error('[settings/auraxpay] POST /test failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

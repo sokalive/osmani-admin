@@ -636,7 +636,37 @@ export async function ensureBillingTables(client) {
     ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_webhook_order_id TEXT NOT NULL DEFAULT '';
   `)
 
-  /** Active checkout gateway for mobile app (zenopay | sonicpesa). */
+  /** Aurax Pay (additive third gateway — ZenoPay + SonicPesa unchanged). */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS auraxpay_settings (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      environment TEXT NOT NULL DEFAULT 'sandbox',
+      api_endpoint TEXT NOT NULL DEFAULT '',
+      api_key TEXT NOT NULL DEFAULT '',
+      account_id TEXT NOT NULL DEFAULT '',
+      webhook_url TEXT NOT NULL DEFAULT '',
+      last_test_at TIMESTAMPTZ,
+      last_test_ok BOOLEAN,
+      last_test_message TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    INSERT INTO auraxpay_settings (id) VALUES (1)
+    ON CONFLICT (id) DO NOTHING;
+  `)
+  await client.query(`
+    ALTER TABLE auraxpay_settings ADD COLUMN IF NOT EXISTS last_webhook_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE auraxpay_settings ADD COLUMN IF NOT EXISTS last_webhook_event TEXT NOT NULL DEFAULT '';
+  `)
+  await client.query(`
+    ALTER TABLE auraxpay_settings ADD COLUMN IF NOT EXISTS last_webhook_order_id TEXT NOT NULL DEFAULT '';
+  `)
+
+  /** Active checkout gateway for mobile app (zenopay | sonicpesa | auraxpay). */
   await client.query(`
     CREATE TABLE IF NOT EXISTS checkout_payment_settings (
       id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -644,6 +674,13 @@ export async function ensureBillingTables(client) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       CONSTRAINT checkout_payment_provider_check CHECK (payment_provider IN ('zenopay', 'sonicpesa'))
     );
+  `)
+  await client.query(`
+    ALTER TABLE checkout_payment_settings DROP CONSTRAINT IF EXISTS checkout_payment_provider_check;
+  `)
+  await client.query(`
+    ALTER TABLE checkout_payment_settings ADD CONSTRAINT checkout_payment_provider_check
+      CHECK (payment_provider IN ('zenopay', 'sonicpesa', 'auraxpay'));
   `)
   await client.query(`
     INSERT INTO checkout_payment_settings (id, payment_provider) VALUES (1, 'zenopay')

@@ -1651,23 +1651,29 @@ export async function recordSonicpesaWebhookReceived(body) {
   )
 }
 
+function normalizeCheckoutProvider(raw) {
+  const p = String(raw ?? 'zenopay').trim().toLowerCase()
+  if (p === 'sonicpesa') return 'sonicpesa'
+  if (p === 'auraxpay') return 'auraxpay'
+  return 'zenopay'
+}
+
 /** Checkout gateway selection (row id = 1). */
 export async function getCheckoutPaymentSettings() {
   const pool = requirePool()
   const { rows } = await pool.query(`SELECT * FROM checkout_payment_settings WHERE id = 1`)
   const row = rows[0]
-  const provider = String(row?.payment_provider ?? 'zenopay').trim().toLowerCase()
   return {
-    payment_provider: provider === 'sonicpesa' ? 'sonicpesa' : 'zenopay',
+    payment_provider: normalizeCheckoutProvider(row?.payment_provider),
     updated_at: row?.updated_at ?? null,
   }
 }
 
 export async function updateCheckoutPaymentProvider(paymentProvider) {
   const pool = requirePool()
-  const p = String(paymentProvider ?? '').trim().toLowerCase()
-  if (p !== 'zenopay' && p !== 'sonicpesa') {
-    throw new Error('payment_provider must be zenopay or sonicpesa')
+  const p = normalizeCheckoutProvider(paymentProvider)
+  if (p !== 'zenopay' && p !== 'sonicpesa' && p !== 'auraxpay') {
+    throw new Error('payment_provider must be zenopay, sonicpesa, or auraxpay')
   }
   const { rows } = await pool.query(
     `INSERT INTO checkout_payment_settings (id, payment_provider, updated_at)
@@ -1677,9 +1683,65 @@ export async function updateCheckoutPaymentProvider(paymentProvider) {
     [p],
   )
   return {
-    payment_provider: rows[0]?.payment_provider === 'sonicpesa' ? 'sonicpesa' : 'zenopay',
+    payment_provider: normalizeCheckoutProvider(rows[0]?.payment_provider),
     updated_at: rows[0]?.updated_at ?? null,
   }
+}
+
+/** --- Aurax Pay settings (row id = 1) — additive third gateway --- */
+
+export async function getAuraxpayRow() {
+  const pool = requirePool()
+  const { rows } = await pool.query(`SELECT * FROM auraxpay_settings WHERE id = 1`)
+  return rows[0] ?? null
+}
+
+export async function updateAuraxpayRowFull(d) {
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `UPDATE auraxpay_settings SET
+       enabled = $1,
+       environment = $2,
+       api_endpoint = $3,
+       account_id = $4,
+       webhook_url = $5,
+       api_key = CASE WHEN $6::boolean THEN api_key ELSE $7 END,
+       last_test_at = $8::timestamptz,
+       last_test_ok = $9,
+       last_test_message = $10,
+       updated_at = now()
+     WHERE id = 1
+     RETURNING *`,
+    [
+      Boolean(d.enabled),
+      d.environment,
+      d.api_endpoint,
+      d.account_id,
+      d.webhook_url,
+      Boolean(d.keep_api_key),
+      d.api_key ?? '',
+      d.last_test_at ?? null,
+      d.last_test_ok ?? null,
+      d.last_test_message ?? null,
+    ],
+  )
+  return rows[0]
+}
+
+export async function recordAuraxpayWebhookReceived(body) {
+  const pool = requirePool()
+  const o = body && typeof body === 'object' ? body : {}
+  const event = String(o.event ?? o.type ?? '').trim().slice(0, 128)
+  const orderId = String(o.order_id ?? o.orderId ?? o.merchant_order_id ?? '').trim().slice(0, 128)
+  await pool.query(
+    `UPDATE auraxpay_settings SET
+       last_webhook_at = now(),
+       last_webhook_event = $1,
+       last_webhook_order_id = $2,
+       updated_at = now()
+     WHERE id = 1`,
+    [event, orderId],
+  )
 }
 
 // --- Offer codes (admin-generated; redeem uses manual grant + popup flow) ---

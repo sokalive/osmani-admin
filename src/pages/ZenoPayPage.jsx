@@ -11,6 +11,7 @@ import {
   getPlans,
   getZenopaySettings,
   postCreatePayment,
+  postAuraxpayCreateOrder,
   postSonicpesaCreateOrder,
   postZenopayTest,
   syncStreamUrl,
@@ -63,7 +64,7 @@ function ZenoPayPage() {
   const [flash, setFlash] = useState(null)
 
   const [checkoutPlans, setCheckoutPlans] = useState([])
-  const [checkoutAvail, setCheckoutAvail] = useState({ zenopay: false, sonicpesa: false })
+  const [checkoutAvail, setCheckoutAvail] = useState({ zenopay: false, sonicpesa: false, auraxpay: false })
   const [payProvider, setPayProvider] = useState('zenopay')
   const [payPhone, setPayPhone] = useState('')
   const [payDeviceId, setPayDeviceId] = useState('')
@@ -105,9 +106,10 @@ function ZenoPayPage() {
       setCheckoutAvail({
         zenopay: r?.zenopay === true,
         sonicpesa: r?.sonicpesa === true,
+        auraxpay: r?.auraxpay === true,
       })
     } catch {
-      setCheckoutAvail({ zenopay: false, sonicpesa: false })
+      setCheckoutAvail({ zenopay: false, sonicpesa: false, auraxpay: false })
     }
   }, [])
 
@@ -151,12 +153,16 @@ function ZenoPayPage() {
 
   useEffect(() => {
     if (payProvider === 'sonicpesa' && !checkoutAvail.sonicpesa) {
-      setPayProvider('zenopay')
+      setPayProvider(checkoutAvail.auraxpay ? 'auraxpay' : 'zenopay')
     }
-    if (payProvider === 'zenopay' && !checkoutAvail.zenopay && checkoutAvail.sonicpesa) {
-      setPayProvider('sonicpesa')
+    if (payProvider === 'auraxpay' && !checkoutAvail.auraxpay) {
+      setPayProvider(checkoutAvail.sonicpesa ? 'sonicpesa' : 'zenopay')
     }
-  }, [checkoutAvail.zenopay, checkoutAvail.sonicpesa, payProvider])
+    if (payProvider === 'zenopay' && !checkoutAvail.zenopay) {
+      if (checkoutAvail.sonicpesa) setPayProvider('sonicpesa')
+      else if (checkoutAvail.auraxpay) setPayProvider('auraxpay')
+    }
+  }, [checkoutAvail.zenopay, checkoutAvail.sonicpesa, checkoutAvail.auraxpay, payProvider])
 
   useEffect(() => {
     const es = new EventSource(syncStreamUrl(['analytics', 'config']))
@@ -298,7 +304,7 @@ function ZenoPayPage() {
       showToast('error', 'Enter device ID (matches client device_subscriptions)')
       return
     }
-    if (!checkoutAvail.zenopay && !checkoutAvail.sonicpesa) {
+    if (!checkoutAvail.zenopay && !checkoutAvail.sonicpesa && !checkoutAvail.auraxpay) {
       showToast('error', 'No payment providers are configured')
       return
     }
@@ -310,20 +316,23 @@ function ZenoPayPage() {
       showToast('error', 'SonicPesa is disabled or not configured')
       return
     }
+    if (payProvider === 'auraxpay' && !checkoutAvail.auraxpay) {
+      showToast('error', 'Aurax Pay is disabled or not configured')
+      return
+    }
     setCheckoutBusy(true)
     try {
+      const orderBody = {
+        phone: payPhone.trim(),
+        planId: pid,
+        deviceId: dev,
+      }
       const data =
         payProvider === 'sonicpesa'
-          ? await postSonicpesaCreateOrder({
-              phone: payPhone.trim(),
-              planId: pid,
-              deviceId: dev,
-            })
-          : await postCreatePayment({
-              phone: payPhone.trim(),
-              planId: pid,
-              deviceId: dev,
-            })
+          ? await postSonicpesaCreateOrder(orderBody)
+          : payProvider === 'auraxpay'
+            ? await postAuraxpayCreateOrder(orderBody)
+            : await postCreatePayment(orderBody)
       const oid = data?.orderId ?? data?.order_id
       if (!oid) {
         showToast('error', 'No order id returned from server')
@@ -589,30 +598,47 @@ function ZenoPayPage() {
             </div>
           </div>
           <form onSubmit={handleCheckoutPay} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {checkoutAvail.zenopay && checkoutAvail.sonicpesa ? (
+            {[checkoutAvail.zenopay, checkoutAvail.sonicpesa, checkoutAvail.auraxpay].filter(Boolean).length >
+            1 ? (
               <div className="sm:col-span-2 lg:col-span-4">
                 <p className={labelClass()}>Select payment method</p>
                 <div className="mt-2 flex flex-wrap gap-6">
-                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
-                    <input
-                      type="radio"
-                      name="checkoutPayProvider"
-                      className="h-4 w-4 border-slate-500 text-amber-500 focus:ring-amber-500/40"
-                      checked={payProvider === 'zenopay'}
-                      onChange={() => setPayProvider('zenopay')}
-                    />
-                    ZenoPay
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
-                    <input
-                      type="radio"
-                      name="checkoutPayProvider"
-                      className="h-4 w-4 border-slate-500 text-amber-500 focus:ring-amber-500/40"
-                      checked={payProvider === 'sonicpesa'}
-                      onChange={() => setPayProvider('sonicpesa')}
-                    />
-                    SonicPesa
-                  </label>
+                  {checkoutAvail.zenopay ? (
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+                      <input
+                        type="radio"
+                        name="checkoutPayProvider"
+                        className="h-4 w-4 border-slate-500 text-amber-500 focus:ring-amber-500/40"
+                        checked={payProvider === 'zenopay'}
+                        onChange={() => setPayProvider('zenopay')}
+                      />
+                      ZenoPay
+                    </label>
+                  ) : null}
+                  {checkoutAvail.sonicpesa ? (
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+                      <input
+                        type="radio"
+                        name="checkoutPayProvider"
+                        className="h-4 w-4 border-slate-500 text-amber-500 focus:ring-amber-500/40"
+                        checked={payProvider === 'sonicpesa'}
+                        onChange={() => setPayProvider('sonicpesa')}
+                      />
+                      SonicPesa
+                    </label>
+                  ) : null}
+                  {checkoutAvail.auraxpay ? (
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
+                      <input
+                        type="radio"
+                        name="checkoutPayProvider"
+                        className="h-4 w-4 border-slate-500 text-amber-500 focus:ring-amber-500/40"
+                        checked={payProvider === 'auraxpay'}
+                        onChange={() => setPayProvider('auraxpay')}
+                      />
+                      Aurax Pay
+                    </label>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -665,14 +691,20 @@ function ZenoPayPage() {
                 type="submit"
                 disabled={
                   checkoutBusy ||
-                  (!checkoutAvail.zenopay && !checkoutAvail.sonicpesa) ||
+                  (!checkoutAvail.zenopay && !checkoutAvail.sonicpesa && !checkoutAvail.auraxpay) ||
                   (payProvider === 'zenopay' && !checkoutAvail.zenopay) ||
-                  (payProvider === 'sonicpesa' && !checkoutAvail.sonicpesa)
+                  (payProvider === 'sonicpesa' && !checkoutAvail.sonicpesa) ||
+                  (payProvider === 'auraxpay' && !checkoutAvail.auraxpay)
                 }
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:opacity-50"
               >
                 {checkoutBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Pay with {payProvider === 'sonicpesa' ? 'SonicPesa' : 'ZenoPay'}
+                Pay with{' '}
+                {payProvider === 'sonicpesa'
+                  ? 'SonicPesa'
+                  : payProvider === 'auraxpay'
+                    ? 'Aurax Pay'
+                    : 'ZenoPay'}
               </button>
             </div>
           </form>

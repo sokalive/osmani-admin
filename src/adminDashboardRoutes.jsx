@@ -23,6 +23,7 @@ import UsersIntelligenceDetailPage from './pages/UsersIntelligenceDetailPage'
 import WhatsAppPage from './pages/WhatsAppPage'
 import ZenoPayPage from './pages/ZenoPayPage'
 import SonicPesaSettingsPage from './pages/SonicPesaSettingsPage'
+import AuraxPaySettingsPage from './pages/AuraxPaySettingsPage'
 
 /**
  * Route elements for use under a pathless layout route (`<Route element={…}>`).
@@ -51,6 +52,7 @@ export const dashboardRouteElements = [
   <Route key="analytics" path="analytics" element={<AnalyticsPage />} />,
   <Route key="zenopay" path="zenopay" element={<ZenoPayPage />} />,
   <Route key="sonicpesa" path="sonicpesa" element={<SonicPesaSettingsPage />} />,
+  <Route key="auraxpay" path="auraxpay" element={<AuraxPaySettingsPage />} />,
   <Route key="whatsapp" path="whatsapp" element={<WhatsAppPage />} />,
   <Route key="app-update" path="app-update" element={<AppUpdatePage />} />,
   <Route key="server-health" path="server-health" element={<ServerHealthPage />} />,

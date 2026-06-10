@@ -19,6 +19,7 @@ import { webhooksRouter } from './webhooks.js'
 import { subscriptionRouter } from './subscription.js'
 import { zenopaySettingsRouter } from './zenopaySettings.js'
 import { sonicpesaSettingsRouter } from './sonicpesaSettings.js'
+import { auraxpaySettingsRouter } from './auraxpaySettings.js'
 import { liveSyncRouter } from './liveSync.js'
 import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentProviders.js'
 import { appUpdateRouter } from './appUpdate.js'
@@ -74,6 +75,7 @@ restApi.get('/', (_req, res) => {
       '/settings',
       '/settings/zenopay',
       '/settings/sonicpesa',
+      '/settings/auraxpay',
       '/settings/payment-providers',
       '/payment-providers',
       '/plans',
@@ -83,6 +85,9 @@ restApi.get('/', (_req, res) => {
       '/payments/sonicpesa/create-order',
       '/payments/sonicpesa/webhook',
       '/payments/sonicpesa/status/',
+      '/payments/auraxpay/create-order',
+      '/payments/auraxpay/webhook',
+      '/payments/auraxpay/status/',
       '/payments/zeno-webhook',
       '/zeno-webhook',
       '/payment-status/:order_id',
@@ -272,6 +277,7 @@ restApi.use('/channels', channelsRouter)
 restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings/sonicpesa', sonicpesaSettingsRouter)
+restApi.use('/settings/auraxpay', auraxpaySettingsRouter)
 restApi.use(paymentProvidersRouter)
 restApi.use('/settings', globalAppSettingsRouter)
 restApi.use('/settings/trial-watch', trialWatchSettingsRouter)

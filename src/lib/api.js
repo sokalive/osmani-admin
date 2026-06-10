@@ -235,6 +235,9 @@ export const getCheckoutPaymentProviders = () => apiGet('/payments/checkout-prov
 /** Initiate SonicPesa payment (separate from ZenoPay; tags transaction as sonicpesa). */
 export const postSonicpesaCreateOrder = (body) => apiPost('/payments/sonicpesa/create-order', body)
 
+/** Initiate Aurax Pay payment (separate from ZenoPay/SonicPesa; tags transaction as auraxpay). */
+export const postAuraxpayCreateOrder = (body) => apiPost('/payments/auraxpay/create-order', body)
+
 /** Poll payment status: { order_id, status } where status is SUCCESS | PENDING | FAILED */
 export const getPaymentStatus = (orderId) =>
   apiGet(`/payment-status/${encodeURIComponent(String(orderId ?? ''))}`)
@@ -824,6 +827,9 @@ export const postZenopayTest = (body) => adminApiPost('/settings/zenopay/test', 
 export const getSonicpesaSettings = () => adminApiGet('/settings/sonicpesa')
 export const putSonicpesaSettings = (body) => adminApiPut('/settings/sonicpesa', body)
 export const postSonicpesaTest = (body = {}) => adminApiPost('/settings/sonicpesa/test', body)
+export const getAuraxpaySettings = () => adminApiGet('/settings/auraxpay')
+export const putAuraxpaySettings = (body) => adminApiPut('/settings/auraxpay', body)
+export const postAuraxpayTest = (body = {}) => adminApiPost('/settings/auraxpay/test', body)
 export const getPaymentProvidersSettings = () => adminApiGet('/settings/payment-providers')
 export const getPaymentProviders = () => apiGet('/payment-providers')
 export const postPaymentProviderFormData = (formData) =>
