@@ -11,7 +11,7 @@ import {
   getPlans,
   getZenopaySettings,
   postCreatePayment,
-  postAuraxpayCreateOrder,
+  postAdminAuraxpayTestCreateOrder,
   postSonicpesaCreateOrder,
   postZenopayTest,
   syncStreamUrl,
@@ -103,11 +103,21 @@ function ZenoPayPage() {
   const loadCheckoutProviders = useCallback(async () => {
     try {
       const r = await getCheckoutPaymentProviders()
+      const auraxForTest = r?.auraxpay === true || r?.auraxpay_test === true
       setCheckoutAvail({
         zenopay: r?.zenopay === true,
         sonicpesa: r?.sonicpesa === true,
-        auraxpay: r?.auraxpay === true,
+        auraxpay: auraxForTest,
       })
+      if (import.meta.env.DEV) {
+        console.info('[test-checkout] providers', {
+          zenopay: r?.zenopay === true,
+          sonicpesa: r?.sonicpesa === true,
+          auraxpay: r?.auraxpay === true,
+          auraxpay_test: r?.auraxpay_test === true,
+          auraxForTest,
+        })
+      }
     } catch {
       setCheckoutAvail({ zenopay: false, sonicpesa: false, auraxpay: false })
     }
@@ -192,6 +202,7 @@ function ZenoPayPage() {
     }
     es.addEventListener('config.zenopay_settings_changed', onConfigRefresh)
     es.addEventListener('config.sonicpesa_settings_changed', onConfigRefresh)
+    es.addEventListener('config.auraxpay_settings_changed', onConfigRefresh)
     es.addEventListener('analytics.transaction_updated', onTransactionUpdate)
     return () => es.close()
   }, [checkoutOrderId, loadSettings, loadCheckoutProviders])
@@ -327,11 +338,14 @@ function ZenoPayPage() {
         planId: pid,
         deviceId: dev,
       }
+      if (import.meta.env.DEV) {
+        console.info('[test-checkout] initiating payment', { provider: payProvider, ...orderBody })
+      }
       const data =
         payProvider === 'sonicpesa'
           ? await postSonicpesaCreateOrder(orderBody)
           : payProvider === 'auraxpay'
-            ? await postAuraxpayCreateOrder(orderBody)
+            ? await postAdminAuraxpayTestCreateOrder(orderBody)
             : await postCreatePayment(orderBody)
       const oid = data?.orderId ?? data?.order_id
       if (!oid) {
@@ -579,8 +593,9 @@ function ZenoPayPage() {
                 Test checkout · device subscription (realtime + poll)
               </h2>
               <p className="mt-1 text-xs text-slate-500">
-                Requires <code className="font-mono text-slate-400">deviceId</code>. Choose ZenoPay or SonicPesa
-                (when enabled). After the provider webhook,
+                Requires <code className="font-mono text-slate-400">deviceId</code>. Choose ZenoPay, SonicPesa, or
+                Aurax Pay (Aurax appears when configured in Aurax Pay Settings — production Enable not required for
+                admin test). After the provider webhook,
                 runtime parity uses canonical{' '}
                 <code className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-300">
                   /api/subscription/verify

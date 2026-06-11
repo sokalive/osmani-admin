@@ -3,7 +3,11 @@ import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { handleAuraxPayWebhook } from '../handlers/auraxPayWebhook.js'
-import { createOrder, resolveAuraxpayCredentials } from '../lib/payments/providers/auraxpay.js'
+import {
+  createOrder,
+  isAuraxpayConfigured,
+  resolveAuraxpayCredentials,
+} from '../lib/payments/providers/auraxpay.js'
 import { formatPhone } from '../zenopayClient.js'
 
 export const auraxpayPaymentsRouter = Router()
@@ -16,8 +20,13 @@ function normalizeTzPhone(raw) {
   return s
 }
 
-/** POST /payments/auraxpay/create-order */
-auraxpayPaymentsRouter.post('/create-order', async (req, res) => {
+/**
+ * Shared Aurax Pay order creation (mobile + admin test checkout).
+ * @param {{ requireEnabled?: boolean, context?: string }} opts
+ */
+export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
+  const requireEnabled = opts.requireEnabled !== false
+  const context = String(opts.context || 'public')
   try {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const planId = Number(b.planId ?? b.plan_id)
@@ -39,15 +48,25 @@ auraxpayPaymentsRouter.post('/create-order', async (req, res) => {
       return res.status(400).json({ error: 'Plan not found or inactive' })
     }
     const row = await billing.getAuraxpayRow()
-    if (!row || row.enabled !== true) {
-      return res.status(503).json({ error: 'Aurax Pay is disabled or not configured in admin' })
-    }
-    const cred = resolveAuraxpayCredentials(row)
-    if (!cred.apiKey || !cred.apiEndpoint) {
+    const cred = resolveAuraxpayCredentials(row || {})
+    if (!isAuraxpayConfigured(cred)) {
       return res.status(503).json({ error: 'Aurax Pay credentials incomplete (admin or env)' })
+    }
+    if (requireEnabled && (!row || row.enabled !== true)) {
+      console.warn('[auraxpay] create-order blocked — gateway disabled in admin', { context, deviceId })
+      return res.status(503).json({ error: 'Aurax Pay is disabled or not configured in admin' })
     }
     const orderId = `osm_ax_${Date.now()}_${randomBytes(5).toString('hex')}`
     const amount = Number(plan.price)
+    console.log('[auraxpay] create-order', {
+      context,
+      orderId,
+      deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+      planId,
+      requireEnabled,
+      enabled: row?.enabled === true,
+      phone: phone.slice(0, 6) + '***',
+    })
     const tx = await billing.insertTransaction({
       order_id: orderId,
       plan_id: planId,
@@ -61,6 +80,7 @@ auraxpayPaymentsRouter.post('/create-order', async (req, res) => {
         payment_provider: 'auraxpay',
         phoneNorm: phone,
         device_id: deviceId,
+        checkout_context: context,
       },
     })
     liveSyncBus.publish('analytics.transaction_updated', {
@@ -86,6 +106,12 @@ auraxpayPaymentsRouter.post('/create-order', async (req, res) => {
       },
     })
     if (!ax.ok) {
+      console.warn('[auraxpay] create-order provider failed', {
+        context,
+        orderId,
+        httpStatus: ax.status,
+        body: ax.body,
+      })
       liveSyncBus.publish('analytics.transaction_updated', {
         topics: ['analytics'],
         orderId,
@@ -100,6 +126,7 @@ auraxpayPaymentsRouter.post('/create-order', async (req, res) => {
         details: ax.body,
       })
     }
+    console.log('[auraxpay] create-order accepted', { context, orderId, providerOrderId })
     res.status(201).json({
       ok: true,
       provider: 'auraxpay',
@@ -112,8 +139,14 @@ auraxpayPaymentsRouter.post('/create-order', async (req, res) => {
       auraxpay: ax.body,
     })
   } catch (e) {
+    console.error('[auraxpay] create-order error', { context, error: e })
     res.status(500).json({ error: String(e.message || e) })
   }
+}
+
+/** POST /payments/auraxpay/create-order — production/mobile (requires enabled) */
+auraxpayPaymentsRouter.post('/create-order', (req, res) => {
+  void handleAuraxpayCreateOrder(req, res, { requireEnabled: true, context: 'public' })
 })
 
 auraxpayPaymentsRouter.post('/webhook', (req, res) => {

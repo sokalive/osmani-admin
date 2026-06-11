@@ -11,6 +11,11 @@ import {
 const DEFAULT_API_BASE = ''
 const LOG_PREFIX = '[auraxpay]'
 
+export function isAuraxpayConfigured(cred) {
+  const c = cred && typeof cred === 'object' ? cred : {}
+  return Boolean(String(c.apiKey ?? '').trim()) && Boolean(String(c.apiEndpoint ?? '').trim())
+}
+
 export function resolveAuraxpayCredentials(row) {
   const r = row && typeof row === 'object' ? row : {}
   const apiEndpoint = String(process.env.AURAXPAY_ENDPOINT || r.api_endpoint || DEFAULT_API_BASE).trim()

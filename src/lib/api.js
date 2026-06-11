@@ -229,14 +229,18 @@ export async function deleteTransactionsBulk(ids) {
 /** Initiate ZenoPay collection (uses server-stored credentials + env overrides). */
 export const postCreatePayment = (body) => apiPost('/payments/create-payment', body)
 
-/** Public: which checkout providers are available (ZenoPay always if configured; SonicPesa only if enabled + configured). */
+/** Public: checkout providers (auraxpay_test = configured for admin test; auraxpay = production enabled). */
 export const getCheckoutPaymentProviders = () => apiGet('/payments/checkout-providers')
 
 /** Initiate SonicPesa payment (separate from ZenoPay; tags transaction as sonicpesa). */
 export const postSonicpesaCreateOrder = (body) => apiPost('/payments/sonicpesa/create-order', body)
 
-/** Initiate Aurax Pay payment (separate from ZenoPay/SonicPesa; tags transaction as auraxpay). */
+/** Initiate Aurax Pay payment (mobile/production — requires gateway enabled in admin). */
 export const postAuraxpayCreateOrder = (body) => apiPost('/payments/auraxpay/create-order', body)
+
+/** Admin test checkout on ZenoPay page — uses Aurax settings even when production Enable is off. */
+export const postAdminAuraxpayTestCreateOrder = (body) =>
+  adminApiPost('/admin/payments/auraxpay/create-order', body)
 
 /** Poll payment status: { order_id, status } where status is SUCCESS | PENDING | FAILED */
 export const getPaymentStatus = (orderId) =>

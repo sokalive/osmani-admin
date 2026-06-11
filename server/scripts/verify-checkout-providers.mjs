@@ -29,13 +29,20 @@ assert(
 
 // payments router
 const payments = read('routes/payments.js')
+const restApi = read('routes/restApi.js')
 assert(
   'payments checkout-providers includes auraxpay',
-  payments.includes('auraxpay') && payments.includes("paymentsRouter.use('/auraxpay'"),
+  payments.includes('auraxpay') &&
+    payments.includes('auraxpay_test') &&
+    payments.includes("paymentsRouter.use('/auraxpay'"),
+)
+assert(
+  'admin auraxpay test checkout route',
+  read('routes/adminAuraxpayPayments.js').includes('admin_test_checkout') &&
+    restApi.includes("restApi.use('/admin/payments/auraxpay'"),
 )
 
 // restApi mount
-const restApi = read('routes/restApi.js')
 assert(
   'restApi mounts auraxpay settings',
   restApi.includes("restApi.use('/settings/auraxpay'") &&

@@ -20,6 +20,7 @@ import { subscriptionRouter } from './subscription.js'
 import { zenopaySettingsRouter } from './zenopaySettings.js'
 import { sonicpesaSettingsRouter } from './sonicpesaSettings.js'
 import { auraxpaySettingsRouter } from './auraxpaySettings.js'
+import { adminAuraxpayPaymentsRouter } from './adminAuraxpayPayments.js'
 import { liveSyncRouter } from './liveSync.js'
 import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentProviders.js'
 import { appUpdateRouter } from './appUpdate.js'
@@ -90,6 +91,7 @@ restApi.get('/', (_req, res) => {
       '/payments/sonicpesa/create-order',
       '/payments/sonicpesa/webhook',
       '/payments/sonicpesa/status/',
+      '/admin/payments/auraxpay/create-order',
       '/payments/auraxpay/create-order',
       '/payments/auraxpay/webhook',
       '/payments/auraxpay/status/',
@@ -296,6 +298,7 @@ restApi.use(deviceSecurityRouter)
 restApi.use('/admin/auth', adminAuthRouter)
 restApi.use('/admin/manual-subscription', manualSubscriptionAdminRouter)
 restApi.use('/admin/offer-codes', offerCodesAdminRouter)
+restApi.use('/admin/payments/auraxpay', adminAuraxpayPaymentsRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
 restApi.use('/analytics', analyticsRouter)

@@ -8,7 +8,10 @@ import {
   resolveZenopayCredentials,
   zenopayCreateCollection,
 } from '../zenopayClient.js'
-import { resolveAuraxpayCredentials } from '../lib/payments/providers/auraxpay.js'
+import {
+  isAuraxpayConfigured,
+  resolveAuraxpayCredentials,
+} from '../lib/payments/providers/auraxpay.js'
 import { resolveSonicpesaCredentials } from '../lib/payments/providers/sonicpesa.js'
 import { auraxpayPaymentsRouter } from './auraxpayPayments.js'
 import { sonicpesaPaymentsRouter } from './sonicpesaPayments.js'
@@ -27,8 +30,11 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
       Boolean(srow?.enabled === true) && Boolean(scred.apiKey)
     const arow = await billing.getAuraxpayRow()
     const acred = resolveAuraxpayCredentials(arow || {})
-    const auraxpay =
-      Boolean(arow?.enabled === true) && Boolean(acred.apiKey) && Boolean(acred.apiEndpoint)
+    const auraxConfigured = isAuraxpayConfigured(acred)
+    /** Production / mobile checkout — requires admin Enable switch. */
+    const auraxpay = Boolean(arow?.enabled === true) && auraxConfigured
+    /** Admin test checkout — credentials + endpoint only (test before production enable). */
+    const auraxpay_test = auraxConfigured
     const checkout = await billing.getCheckoutPaymentSettings()
     let payment_provider = checkout.payment_provider
     if (payment_provider === 'auraxpay' && !auraxpay) {
@@ -40,12 +46,22 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
     if (payment_provider === 'zenopay' && !zenopay) {
       payment_provider = sonicpesa ? 'sonicpesa' : auraxpay ? 'auraxpay' : 'zenopay'
     }
+    console.log('[checkout-providers]', {
+      zenopay,
+      sonicpesa,
+      auraxpay,
+      auraxpay_test,
+      aurax_enabled: arow?.enabled === true,
+      aurax_configured: auraxConfigured,
+      payment_provider,
+    })
     res.json({
       ok: true,
       payment_provider,
       zenopay,
       sonicpesa,
       auraxpay,
+      auraxpay_test,
     })
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) })
