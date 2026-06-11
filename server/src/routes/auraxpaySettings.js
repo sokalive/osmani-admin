@@ -4,6 +4,8 @@ import * as billing from '../billingStore.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import {
+  detectAuraxpayApiStyle,
+  resolveAuraxpayCollectPostUrl,
   resolveAuraxpayCredentials,
   testConnection as testAuraxpayConnection,
 } from '../lib/payments/providers/auraxpay.js'
@@ -81,6 +83,8 @@ async function rowToApiResponse(row, req) {
     last_webhook_event: String(r.last_webhook_event ?? ''),
     lastWebhookOrderId: String(r.last_webhook_order_id ?? ''),
     last_webhook_order_id: String(r.last_webhook_order_id ?? ''),
+    detectedApiStyle: detectAuraxpayApiStyle(cred),
+    collectPostUrl: resolveAuraxpayCollectPostUrl(cred),
   }
 }
 
@@ -143,6 +147,36 @@ auraxpaySettingsRouter.put('/', async (req, res) => {
     res.json(await rowToApiResponse(row, req))
   } catch (e) {
     console.error('[settings/auraxpay] PUT failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+auraxpaySettingsRouter.post('/set-active-provider', async (req, res) => {
+  try {
+    const row = (await billing.getAuraxpayRow()) || {}
+    const cred = resolveAuraxpayCredentials(row)
+    if (!row.enabled) {
+      return res.status(400).json({ error: 'Enable Aurax Pay before setting it as the active checkout provider' })
+    }
+    if (!cred.apiKey || !cred.apiEndpoint) {
+      return res.status(400).json({ error: 'Aurax Pay API endpoint and key are required' })
+    }
+    const checkout = await billing.updateCheckoutPaymentProvider('auraxpay')
+    liveSyncBus.publish('config.auraxpay_settings_changed', {
+      topics: ['config'],
+      action: 'set_active_provider',
+      payment_provider: checkout.payment_provider,
+      synced_at: new Date().toISOString(),
+    })
+    res.setHeader('Cache-Control', 'no-store, private')
+    res.json({
+      ok: true,
+      payment_provider: checkout.payment_provider,
+      isActiveCheckoutProvider: true,
+      updated_at: checkout.updated_at,
+    })
+  } catch (e) {
+    console.error('[settings/auraxpay] POST /set-active-provider failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

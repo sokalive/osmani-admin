@@ -357,7 +357,18 @@ function ZenoPayPage() {
       setPaymentWaitOpen(true)
       showToast('success', 'Complete payment on phone — unlocking via realtime stream + poll.')
     } catch (err) {
-      showToast('error', err?.message || 'Payment could not be started')
+      const providerDetail =
+        err?.body?.providerMessage ||
+        (err?.body?.providerError && typeof err.body.providerError === 'object'
+          ? err.body.providerError.message || err.body.providerError.error
+          : null) ||
+        (err?.body?.details && typeof err.body.details === 'object'
+          ? err.body.details.message || err.body.details.error
+          : null)
+      if (import.meta.env.DEV && err?.body) {
+        console.warn('[test-checkout] payment failed', err.body)
+      }
+      showToast('error', providerDetail || err?.message || 'Payment could not be started')
     } finally {
       setCheckoutBusy(false)
     }

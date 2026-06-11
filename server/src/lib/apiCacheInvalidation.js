@@ -7,6 +7,7 @@ const EVENT_NAMESPACES = {
   'config.banners_changed': ['banners'],
   'config.plans_changed': ['plans'],
   'config.payment_providers_changed': ['payment-providers'],
+  'config.checkout_payment_provider_changed': ['checkout-providers'],
   'whatsapp_settings_changed': ['whatsapp-settings', 'settings-whatsapp', 'settings-public'],
   'popup_settings_changed': ['settings-popup', 'settings-public'],
   'config.settings_changed': ['runtime-app-modes', 'settings-public'],

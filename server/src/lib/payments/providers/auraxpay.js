@@ -7,6 +7,7 @@ import {
   webhookExplicitFailure,
   webhookSuccess,
 } from '../../../handlers/zenoPayWebhook.js'
+import { formatPhone } from '../../../zenopayClient.js'
 
 const DEFAULT_API_BASE = ''
 const LOG_PREFIX = '[auraxpay]'
@@ -43,11 +44,60 @@ function orderStatusPath() {
   return p.startsWith('/') ? p : `/${p}`
 }
 
-function authHeaders(cred) {
+function isHttpsUrl(url) {
+  try {
+    return new URL(url).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/** sonicpesa-style (default) vs zenoapi/mobile_money Tanzania APIs. */
+export function detectAuraxpayApiStyle(cred) {
+  const forced = String(process.env.AURAXPAY_API_STYLE || '').trim().toLowerCase()
+  if (forced === 'zenopay' || forced === 'zeno') return 'zenopay'
+  if (forced === 'sonicpesa' || forced === 'sonic') return 'sonicpesa'
+  const base = apiBase(cred).toLowerCase()
+  if (
+    base.includes('zenoapi') ||
+    base.includes('mobile_money') ||
+    base.includes('zeno.africa') ||
+    base.includes('zenopay')
+  ) {
+    return 'zenopay'
+  }
+  return 'sonicpesa'
+}
+
+export function resolveAuraxpayCollectPostUrl(cred) {
+  const full = String(process.env.AURAXPAY_COLLECT_URL || '').trim()
+  if (full) return full.replace(/\/+$/, '')
+  const base = apiBase(cred)
+  if (!base) return ''
+  const lower = base.toLowerCase()
+  if (
+    lower.includes('mobile_money') ||
+    lower.includes('/payment/create_order') ||
+    lower.endsWith('/create_order')
+  ) {
+    return base
+  }
+  return `${base}${collectPath()}`
+}
+
+function authHeaders(cred, style = 'sonicpesa') {
+  const apiKey = String(process.env.AURAXPAY_API_KEY || cred.apiKey || '').trim()
+  if (style === 'zenopay') {
+    return {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'x-api-key': apiKey,
+    }
+  }
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
-    'X-API-KEY': String(process.env.AURAXPAY_API_KEY || cred.apiKey || '').trim(),
+    'X-API-KEY': apiKey,
   }
   const secretKey = String(process.env.AURAXPAY_SECRET_KEY || '').trim()
   if (secretKey) headers['X-SECRET-KEY'] = secretKey
@@ -57,6 +107,12 @@ function authHeaders(cred) {
     headers['X-Merchant-Id'] = accountId
   }
   return headers
+}
+
+function logPayloadForDebug(payload) {
+  const out = { ...payload }
+  if (out.buyer_phone) out.buyer_phone = maskPhoneForLog(out.buyer_phone)
+  return out
 }
 
 function buyerPhone(phone) {
@@ -90,9 +146,28 @@ export function isCreateOrderAccepted(httpRes) {
 }
 
 export function buildCreateOrderPayload(cred, { phone, amount, orderId, currency = 'TZS' }) {
-  const buyer_phone = buyerPhone(phone)
+  const apiStyle = detectAuraxpayApiStyle(cred)
   const amountInt = Math.round(Number(amount))
+  const merchantRef = String(orderId ?? '').trim()
   const accountId = String(process.env.AURAXPAY_ACCOUNT_ID || cred?.accountId || '').trim()
+  const webhookUrl = String(process.env.AURAXPAY_WEBHOOK_URL || cred?.webhookUrl || '').trim()
+
+  if (apiStyle === 'zenopay') {
+    const buyer_phone = formatPhone(phone)
+    const payload = {
+      order_id: merchantRef,
+      reference: merchantRef,
+      buyer_name: String(process.env.AURAXPAY_BUYER_NAME || 'Osmani Customer').trim(),
+      buyer_phone,
+      buyer_email: String(process.env.AURAXPAY_BUYER_EMAIL || 'customer@osmani.tv').trim(),
+      amount: amountInt,
+    }
+    if (accountId) payload.account_id = accountId
+    if (webhookUrl && isHttpsUrl(webhookUrl)) payload.webhook_url = webhookUrl
+    return { payload, buyerPhone: buyer_phone, amountInt, merchantRef, apiStyle }
+  }
+
+  const buyer_phone = buyerPhone(phone)
   const payload = {
     buyer_email: String(process.env.AURAXPAY_BUYER_EMAIL || 'customer@osmani.tv').trim(),
     buyer_name: String(process.env.AURAXPAY_BUYER_NAME || 'Osmani Customer').trim(),
@@ -101,12 +176,12 @@ export function buildCreateOrderPayload(cred, { phone, amount, orderId, currency
     currency: String(currency || 'TZS').trim() || 'TZS',
   }
   if (accountId) payload.account_id = accountId
-  const merchantRef = String(orderId ?? '').trim()
-  if (merchantRef) {
+  if (webhookUrl && isHttpsUrl(webhookUrl)) payload.webhook_url = webhookUrl
+  if (merchantRef && process.env.AURAXPAY_INCLUDE_MERCHANT_REF === '1') {
     payload.merchant_order_id = merchantRef
     payload.reference = merchantRef
   }
-  return { payload, buyerPhone: buyer_phone, amountInt, merchantRef }
+  return { payload, buyerPhone: buyer_phone, amountInt, merchantRef, apiStyle }
 }
 
 async function httpJson(url, { method = 'GET', headers = {}, body } = {}) {
@@ -169,8 +244,8 @@ export function normalizeResponse(raw, httpStatus = 0) {
 }
 
 export async function createOrder(cred, { phone, amount, orderId, currency = 'TZS' }) {
-  const base = apiBase(cred)
-  if (!base) {
+  const url = resolveAuraxpayCollectPostUrl(cred)
+  if (!url) {
     return {
       ok: false,
       httpOk: false,
@@ -180,10 +255,46 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
       requestPayload: null,
     }
   }
-  const url = `${base}${collectPath()}`
   const built = buildCreateOrderPayload(cred, { phone, amount, orderId, currency })
-  const { payload, buyerPhone: bp, amountInt, merchantRef } = built
-  if (!bp || !bp.startsWith('255') || bp.length < 12) {
+  const { payload, buyerPhone: bp, amountInt, merchantRef, apiStyle } = built
+  const accountId = String(process.env.AURAXPAY_ACCOUNT_ID || cred?.accountId || '').trim()
+  const webhookUrl = String(process.env.AURAXPAY_WEBHOOK_URL || cred?.webhookUrl || '').trim()
+
+  if (apiStyle === 'zenopay') {
+    if (!bp || !bp.startsWith('+255')) {
+      return {
+        ok: false,
+        httpOk: false,
+        status: 0,
+        body: { error: 'buyer_phone must be valid Tanzania +255… for Zeno-style Aurax API' },
+        normalized: null,
+        requestPayload: payload,
+        apiStyle,
+      }
+    }
+    if (!accountId) {
+      return {
+        ok: false,
+        httpOk: false,
+        status: 0,
+        body: { error: 'account_id is required (AURAXPAY_ACCOUNT_ID or admin account id)' },
+        normalized: null,
+        requestPayload: payload,
+        apiStyle,
+      }
+    }
+    if (!webhookUrl || !isHttpsUrl(webhookUrl)) {
+      return {
+        ok: false,
+        httpOk: false,
+        status: 0,
+        body: { error: 'webhook_url must be a valid https URL in Aurax Pay settings' },
+        normalized: null,
+        requestPayload: payload,
+        apiStyle,
+      }
+    }
+  } else if (!bp || !bp.startsWith('255') || bp.length < 12) {
     return {
       ok: false,
       httpOk: false,
@@ -191,8 +302,10 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
       body: { error: 'buyer_phone must be valid Tanzania 255XXXXXXXXX' },
       normalized: null,
       requestPayload: payload,
+      apiStyle,
     }
   }
+
   if (!Number.isFinite(amountInt) || amountInt <= 0) {
     return {
       ok: false,
@@ -201,22 +314,43 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
       body: { error: 'amount must be a positive integer' },
       normalized: null,
       requestPayload: payload,
+      apiStyle,
     }
   }
+
+  const headerMeta = authHeaders(cred, apiStyle)
   console.log(LOG_PREFIX, 'createOrder request', {
     url,
+    apiStyle,
     merchantRef,
-    body: { ...payload, buyer_phone: maskPhoneForLog(bp) },
+    headers: {
+      'x-api-key': headerMeta['x-api-key'] || headerMeta['X-API-KEY'] ? '(set)' : '(missing)',
+      'X-SECRET-KEY': headerMeta['X-SECRET-KEY'] ? '(set)' : '(not set)',
+      'X-Account-Id': headerMeta['X-Account-Id'] || '(not set)',
+    },
+    body: logPayloadForDebug(payload),
+    accountInBody: Boolean(payload.account_id),
+    webhookInBody: Boolean(payload.webhook_url),
   })
-  const res = await httpJson(url, { method: 'POST', headers: authHeaders(cred), body: payload })
+
+  const res = await httpJson(url, { method: 'POST', headers: headerMeta, body: payload })
   const accepted = isCreateOrderAccepted(res)
   const normalized = normalizeResponse(res.body, res.status)
+  const providerMessage = String(
+    res.body?.message ?? res.body?.error ?? res.body?.data?.message ?? '',
+  ).trim()
+
   console.log(LOG_PREFIX, 'createOrder response', {
     url,
+    apiStyle,
     merchantRef,
     httpStatus: res.status,
+    httpOk: res.ok,
     accepted,
+    providerMessage: providerMessage || null,
+    body: res.body,
   })
+
   return {
     ...res,
     ok: accepted,
@@ -224,6 +358,8 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
     normalized,
     merchantOrderId: merchantRef,
     requestPayload: payload,
+    apiStyle,
+    providerMessage,
   }
 }
 

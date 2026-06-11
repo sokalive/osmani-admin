@@ -106,10 +106,16 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
       },
     })
     if (!ax.ok) {
+      const providerMessage = String(
+        ax.providerMessage ?? ax.body?.message ?? ax.body?.error ?? ax.body?.data?.message ?? '',
+      ).trim()
+      const clientError = ax.status === 0 && ax.body?.error
       console.warn('[auraxpay] create-order provider failed', {
         context,
         orderId,
+        apiStyle: ax.apiStyle,
         httpStatus: ax.status,
+        providerMessage: providerMessage || null,
         body: ax.body,
       })
       liveSyncBus.publish('analytics.transaction_updated', {
@@ -118,8 +124,11 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
         status: 'failed',
         deviceId,
       })
-      return res.status(502).json({
-        error: 'Aurax Pay payment initiation failed',
+      return res.status(clientError ? 400 : 502).json({
+        error: providerMessage || ax.body?.error || 'Aurax Pay payment initiation failed',
+        providerMessage: providerMessage || null,
+        providerError: ax.body,
+        apiStyle: ax.apiStyle || null,
         orderId,
         transactionId: tx.id,
         httpStatus: ax.status,

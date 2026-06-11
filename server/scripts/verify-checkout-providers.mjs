@@ -64,6 +64,18 @@ assert(
     (fn) => aurax.includes(`export function ${fn}`) || aurax.includes(`export async function ${fn}`),
   ),
 )
+assert(
+  'auraxpay API style + collect URL helpers',
+  aurax.includes('detectAuraxpayApiStyle') && aurax.includes('resolveAuraxpayCollectPostUrl'),
+)
+assert(
+  'checkout provider liveSync on update',
+  read('billingStore.js').includes('config.checkout_payment_provider_changed'),
+)
+assert(
+  'auraxpay set-active-provider route',
+  read('routes/auraxpaySettings.js').includes("'/set-active-provider'"),
+)
 
 const failed = checks.filter((c) => !c.ok)
 for (const c of checks) {

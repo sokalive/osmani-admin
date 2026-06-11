@@ -1685,10 +1685,21 @@ export async function updateCheckoutPaymentProvider(paymentProvider) {
      RETURNING *`,
     [p],
   )
-  return {
+  const result = {
     payment_provider: normalizeCheckoutProvider(rows[0]?.payment_provider),
     updated_at: rows[0]?.updated_at ?? null,
   }
+  try {
+    const { liveSyncBus } = await import('./lib/liveSyncBus.js')
+    liveSyncBus.publish('config.checkout_payment_provider_changed', {
+      topics: ['config'],
+      payment_provider: result.payment_provider,
+      synced_at: new Date().toISOString(),
+    })
+  } catch (e) {
+    console.warn('[billing] checkout provider liveSync publish failed:', e)
+  }
+  return result
 }
 
 /** --- Aurax Pay settings (row id = 1) — additive third gateway --- */
