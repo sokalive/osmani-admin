@@ -6,6 +6,7 @@ import { handleAuraxPayWebhook } from '../handlers/auraxPayWebhook.js'
 import {
   createOrder,
   isAuraxpayConfigured,
+  resolveAuraxpayCollectPostUrl,
   resolveAuraxpayCredentials,
 } from '../lib/payments/providers/auraxpay.js'
 import { formatPhone } from '../zenopayClient.js'
@@ -90,6 +91,15 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
       deviceId,
     })
     const ax = await createOrder(cred, { phone, amount, orderId, currency: 'TZS' })
+    void billing
+      .recordAuraxpayCreateOrderAttempt({
+        url: ax.collectUrl || resolveAuraxpayCollectPostUrl(cred),
+        apiStyle: ax.apiStyle,
+        httpStatus: ax.status,
+        responseBody: ax.body,
+        providerMessage: ax.providerMessage,
+      })
+      .catch((e) => console.warn('[auraxpay] record create-order attempt failed', e))
     const providerOrderId =
       ax.normalized?.providerOrderId ??
       (ax.body?.data?.order_id != null ? String(ax.body.data.order_id) : null)

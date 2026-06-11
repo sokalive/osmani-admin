@@ -12,10 +12,13 @@ import { formatPhone } from '../../../zenopayClient.js'
 
 const DEFAULT_API_BASE = ''
 const LOG_PREFIX = '[auraxpay]'
-/** Trawx / Aurax Pay mobile-money collect path (see trawx.readme.io mobile-money). */
-const AURAXPAY_DEFAULT_COLLECT_PATH = '/api/create-order'
+/** Native Aurax Pay API (api.auraxpay.net) — POST {base}/payments/create-order */
+const AURAXPAY_NATIVE_COLLECT_PATH = '/payments/create-order'
+/** Trawx white-label mobile-money — POST {origin}/api/create-order */
+const AURAXPAY_TRAWX_COLLECT_PATH = '/api/create-order'
 
 const KNOWN_COLLECT_PATH_SUFFIXES = [
+  '/payments/create-order',
   '/api/create-order',
   '/payment/create_order',
   '/api/payments/mobile_money_tanzania',
@@ -43,8 +46,10 @@ function apiBase(cred) {
   return ep
 }
 
-function collectPath() {
-  const p = String(process.env.AURAXPAY_COLLECT_PATH || AURAXPAY_DEFAULT_COLLECT_PATH).trim()
+function collectPathForStyle(style) {
+  const fallback =
+    style === 'trawx' ? AURAXPAY_TRAWX_COLLECT_PATH : AURAXPAY_NATIVE_COLLECT_PATH
+  const p = String(process.env.AURAXPAY_COLLECT_PATH || fallback).trim()
   return p.startsWith('/') ? p : `/${p}`
 }
 
@@ -61,12 +66,13 @@ function isHttpsUrl(url) {
   }
 }
 
-/** trawx (Aurax default) | zenoapi | sonicpesa-style APIs. */
+/** aurax (native api.auraxpay.*) | trawx | zenoapi | sonicpesa-style APIs. */
 export function detectAuraxpayApiStyle(cred) {
   const forced = String(process.env.AURAXPAY_API_STYLE || '').trim().toLowerCase()
   if (forced === 'zenopay' || forced === 'zeno') return 'zenopay'
   if (forced === 'sonicpesa' || forced === 'sonic') return 'sonicpesa'
-  if (forced === 'trawx' || forced === 'aurax') return 'trawx'
+  if (forced === 'trawx') return 'trawx'
+  if (forced === 'aurax' || forced === 'auraxnative' || forced === 'native') return 'aurax'
   const base = apiBase(cred).toLowerCase()
   if (
     base.includes('zenoapi') ||
@@ -77,8 +83,9 @@ export function detectAuraxpayApiStyle(cred) {
     return 'zenopay'
   }
   if (base.includes('sonicpesa')) return 'sonicpesa'
-  if (base.includes('aurax') || base.includes('trawx')) return 'trawx'
-  return 'trawx'
+  if (base.includes('trawx')) return 'trawx'
+  if (base.includes('auraxpay')) return 'aurax'
+  return 'aurax'
 }
 
 export function resolveAuraxpayCollectPostUrl(cred) {
@@ -90,10 +97,17 @@ export function resolveAuraxpayCollectPostUrl(cred) {
   const ep = String(cred?.apiEndpoint || '').trim()
   if (!ep) return ''
 
-  const configured = String(process.env.AURAXPAY_COLLECT_PATH || AURAXPAY_DEFAULT_COLLECT_PATH).trim()
+  const style = detectAuraxpayApiStyle(cred)
+  const configured = String(process.env.AURAXPAY_COLLECT_PATH || '').trim()
   if (/^https?:\/\//i.test(configured)) return configured.replace(/\/+$/, '')
 
-  const pathSuffix = (configured.startsWith('/') ? configured : `/${configured}`).replace(/\/+$/, '')
+  const pathSuffix = (
+    configured
+      ? configured.startsWith('/')
+        ? configured
+        : `/${configured}`
+      : collectPathForStyle(style)
+  ).replace(/\/+$/, '')
 
   try {
     const u = new URL(ep)
@@ -103,8 +117,15 @@ export function resolveAuraxpayCollectPostUrl(cred) {
         return `${u.origin}${pathname}`.replace(/\/+$/, '')
       }
     }
-    const style = detectAuraxpayApiStyle(cred)
-    // Trawx/Aurax: POST {origin}/api/create-order — not under /v1/payment/create_order
+    // Native Aurax: POST https://api.auraxpay.net/v1/payments/create-order
+    if (style === 'aurax') {
+      if (!pathname || pathname === '/') {
+        return `${u.origin}/v1${pathSuffix}`
+      }
+      const base = `${u.origin}${pathname}`.replace(/\/+$/, '')
+      return `${base}${pathSuffix}`
+    }
+    // Trawx white-label: POST {origin}/api/create-order
     if (style === 'trawx') {
       return `${u.origin}${pathSuffix}`
     }
@@ -115,9 +136,9 @@ export function resolveAuraxpayCollectPostUrl(cred) {
   }
 }
 
-function authHeaders(cred, style = 'trawx') {
+function authHeaders(cred, style = 'aurax') {
   const apiKey = String(process.env.AURAXPAY_API_KEY || cred.apiKey || '').trim()
-  if (style === 'zenopay') {
+  if (style === 'zenopay' || style === 'aurax') {
     return {
       'Content-Type': 'application/json',
       Accept: 'application/json',
@@ -144,6 +165,7 @@ function logPayloadForDebug(payload) {
   const out = { ...payload }
   if (out.buyer_phone) out.buyer_phone = maskPhoneForLog(out.buyer_phone)
   if (out.customer_phone) out.customer_phone = maskPhoneForLog(out.customer_phone)
+  if (out.phone) out.phone = maskPhoneForLog(out.phone)
   return out
 }
 
@@ -201,6 +223,22 @@ export function buildCreateOrderPayload(cred, { phone, amount, orderId, currency
     if (accountId) payload.account_id = accountId
     if (webhookUrl && isHttpsUrl(webhookUrl)) payload.webhook_url = webhookUrl
     return { payload, buyerPhone: buyer_phone, amountInt, merchantRef, apiStyle }
+  }
+
+  if (apiStyle === 'aurax') {
+    const phone255 = buyerPhone(phone)
+    const payload = {
+      phone: phone255,
+      amount: amountInt,
+      currency: String(currency || 'TZS').trim() || 'TZS',
+      reference: merchantRef,
+      order_id: merchantRef,
+      webhook_url: webhookUrl,
+      customer_email: String(process.env.AURAXPAY_BUYER_EMAIL || 'customer@osmani.tv').trim(),
+      customer_name: String(process.env.AURAXPAY_BUYER_NAME || 'Osmani Customer').trim(),
+    }
+    if (accountId) payload.account_id = accountId
+    return { payload, buyerPhone: phone255, amountInt, merchantRef, apiStyle }
   }
 
   if (apiStyle === 'trawx') {
@@ -347,13 +385,18 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
         apiStyle,
       }
     }
-  } else if (apiStyle === 'trawx') {
+  } else if (apiStyle === 'aurax' || apiStyle === 'trawx') {
     if (!bp || !bp.startsWith('255') || bp.length < 12) {
       return {
         ok: false,
         httpOk: false,
         status: 0,
-        body: { error: 'customer_phone must be valid Tanzania 255XXXXXXXXX' },
+        body: {
+          error:
+            apiStyle === 'trawx'
+              ? 'customer_phone must be valid Tanzania 255XXXXXXXXX'
+              : 'phone must be valid Tanzania 255XXXXXXXXX',
+        },
         normalized: null,
         requestPayload: payload,
         apiStyle,
@@ -364,7 +407,12 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
         ok: false,
         httpOk: false,
         status: 0,
-        body: { error: 'merchant_webhook must be a valid https URL in Aurax Pay settings' },
+        body: {
+          error:
+            apiStyle === 'trawx'
+              ? 'merchant_webhook must be a valid https URL in Aurax Pay settings'
+              : 'webhook_url must be a valid https URL in Aurax Pay settings',
+        },
         normalized: null,
         requestPayload: payload,
         apiStyle,
@@ -417,7 +465,7 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
     },
     body: logPayloadForDebug(payload),
     accountInBody: Boolean(payload.account_id),
-    webhookInBody: Boolean(payload.webhook_url),
+    webhookInBody: Boolean(payload.webhook_url || payload.merchant_webhook),
   })
 
   const res = await httpJson(url, { method: 'POST', headers: headerMeta, body: payload })
@@ -447,6 +495,7 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
     requestPayload: payload,
     apiStyle,
     providerMessage,
+    collectUrl: url,
   }
 }
 
@@ -624,7 +673,7 @@ export async function testConnection(cred) {
   const apiStyle = detectAuraxpayApiStyle(cred)
   const collectUrl = resolveAuraxpayCollectPostUrl(cred)
   try {
-    const url = collectUrl || `${base}${collectPath()}`
+    const url = collectUrl || `${base}${collectPathForStyle(apiStyle)}`
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), 15_000)
     const res = await fetch(url, {

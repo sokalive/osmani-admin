@@ -1742,6 +1742,35 @@ export async function updateAuraxpayRowFull(d) {
   return rows[0]
 }
 
+export async function recordAuraxpayCreateOrderAttempt({
+  url,
+  apiStyle,
+  httpStatus,
+  responseBody,
+  providerMessage,
+}) {
+  const pool = requirePool()
+  await pool.query(
+    `UPDATE auraxpay_settings SET
+       last_create_order_at = now(),
+       last_create_order_url = $1,
+       last_create_order_api_style = $2,
+       last_create_order_http_status = $3,
+       last_create_order_response = $4::jsonb,
+       updated_at = now()
+     WHERE id = 1`,
+    [
+      String(url ?? '').slice(0, 512),
+      String(apiStyle ?? '').slice(0, 32),
+      Number(httpStatus) || 0,
+      JSON.stringify({
+        providerMessage: providerMessage || null,
+        body: responseBody ?? null,
+      }),
+    ],
+  )
+}
+
 export async function recordAuraxpayWebhookReceived(body) {
   const pool = requirePool()
   const o = body && typeof body === 'object' ? body : {}

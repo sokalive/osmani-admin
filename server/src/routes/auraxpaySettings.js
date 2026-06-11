@@ -85,6 +85,14 @@ async function rowToApiResponse(row, req) {
     last_webhook_order_id: String(r.last_webhook_order_id ?? ''),
     detectedApiStyle: detectAuraxpayApiStyle(cred),
     collectPostUrl: resolveAuraxpayCollectPostUrl(cred),
+    lastCreateOrderAt:
+      r.last_create_order_at instanceof Date
+        ? r.last_create_order_at.toISOString()
+        : r.last_create_order_at || null,
+    lastCreateOrderUrl: String(r.last_create_order_url ?? ''),
+    lastCreateOrderApiStyle: String(r.last_create_order_api_style ?? ''),
+    lastCreateOrderHttpStatus: r.last_create_order_http_status ?? null,
+    lastCreateOrderResponse: r.last_create_order_response ?? null,
   }
 }
 

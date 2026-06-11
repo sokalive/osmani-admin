@@ -83,12 +83,20 @@ assert(
   read('routes/auraxpaySettings.js').includes("'/set-active-provider'"),
 )
 
-const auraxCred = { apiEndpoint: 'https://api.auraxpay.com/v1', apiKey: 'test' }
+const auraxNetCred = { apiEndpoint: 'https://api.auraxpay.net/v1', apiKey: 'test' }
 assert(
-  'aurax trawx collect URL (not /v1/payment/create_order)',
-  detectAuraxpayApiStyle(auraxCred) === 'trawx' &&
-    resolveAuraxpayCollectPostUrl(auraxCred) === 'https://api.auraxpay.com/api/create-order',
-  resolveAuraxpayCollectPostUrl(auraxCred),
+  'aurax native collect URL (/v1/payments/create-order)',
+  detectAuraxpayApiStyle(auraxNetCred) === 'aurax' &&
+    resolveAuraxpayCollectPostUrl(auraxNetCred) ===
+      'https://api.auraxpay.net/v1/payments/create-order',
+  resolveAuraxpayCollectPostUrl(auraxNetCred),
+)
+const trawxCred = { apiEndpoint: 'https://pay.trawx.example/v1', apiKey: 'test' }
+assert(
+  'trawx collect URL uses origin + /api/create-order',
+  detectAuraxpayApiStyle(trawxCred) === 'trawx' &&
+    resolveAuraxpayCollectPostUrl(trawxCred) === 'https://pay.trawx.example/api/create-order',
+  resolveAuraxpayCollectPostUrl(trawxCred),
 )
 
 const failed = checks.filter((c) => !c.ok)
