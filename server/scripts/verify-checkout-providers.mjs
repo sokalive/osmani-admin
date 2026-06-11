@@ -85,10 +85,10 @@ assert(
 
 const auraxNetCred = { apiEndpoint: 'https://api.auraxpay.net/v1', apiKey: 'test' }
 assert(
-  'aurax native collect URL (/v1/payments/create-order)',
+  'aurax native collect URL (/v1/payments/collect)',
   detectAuraxpayApiStyle(auraxNetCred) === 'aurax' &&
     resolveAuraxpayCollectPostUrl(auraxNetCred) ===
-      'https://api.auraxpay.net/v1/payments/create-order',
+      'https://api.auraxpay.net/v1/payments/collect',
   resolveAuraxpayCollectPostUrl(auraxNetCred),
 )
 const trawxCred = { apiEndpoint: 'https://pay.trawx.example/v1', apiKey: 'test' }

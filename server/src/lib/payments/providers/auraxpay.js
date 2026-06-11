@@ -12,12 +12,13 @@ import { formatPhone } from '../../../zenopayClient.js'
 
 const DEFAULT_API_BASE = ''
 const LOG_PREFIX = '[auraxpay]'
-/** Native Aurax Pay API (api.auraxpay.net) — POST {base}/payments/create-order */
-const AURAXPAY_NATIVE_COLLECT_PATH = '/payments/create-order'
+/** Native Aurax Pay mobile-money USSD push — POST {base}/payments/collect */
+const AURAXPAY_NATIVE_COLLECT_PATH = '/payments/collect'
 /** Trawx white-label mobile-money — POST {origin}/api/create-order */
 const AURAXPAY_TRAWX_COLLECT_PATH = '/api/create-order'
 
 const KNOWN_COLLECT_PATH_SUFFIXES = [
+  '/payments/collect',
   '/payments/create-order',
   '/api/create-order',
   '/payment/create_order',
@@ -88,6 +89,25 @@ export function detectAuraxpayApiStyle(cred) {
   return 'aurax'
 }
 
+/** Candidate POST URLs for native Aurax (collect first; create-order kept as fallback). */
+export function listAuraxNativeCollectCandidateUrls(cred) {
+  const primary = resolveAuraxpayCollectPostUrl(cred)
+  if (!primary) return []
+  const urls = [primary]
+  try {
+    const u = new URL(primary)
+    const pathname = (u.pathname || '/').replace(/\/+$/, '')
+    if (pathname.endsWith('/payments/create-order')) {
+      urls.push(`${u.origin}${pathname.replace(/\/payments\/create-order$/, '/payments/collect')}`)
+    } else if (pathname.endsWith('/payments/collect')) {
+      urls.push(`${u.origin}${pathname.replace(/\/payments\/collect$/, '/payments/create-order')}`)
+    }
+  } catch {
+    /* ignore */
+  }
+  return [...new Set(urls.map((x) => x.replace(/\/+$/, '')))]
+}
+
 export function resolveAuraxpayCollectPostUrl(cred) {
   const envFull = String(
     process.env.AURAXPAY_COLLECT_URL || process.env.AURAXPAY_PAYMENT_URL || '',
@@ -117,7 +137,7 @@ export function resolveAuraxpayCollectPostUrl(cred) {
         return `${u.origin}${pathname}`.replace(/\/+$/, '')
       }
     }
-    // Native Aurax: POST https://api.auraxpay.net/v1/payments/create-order
+    // Native Aurax: POST https://api.auraxpay.net/v1/payments/collect
     if (style === 'aurax') {
       if (!pathname || pathname === '/') {
         return `${u.origin}/v1${pathSuffix}`
@@ -232,10 +252,7 @@ export function buildCreateOrderPayload(cred, { phone, amount, orderId, currency
       amount: amountInt,
       currency: String(currency || 'TZS').trim() || 'TZS',
       reference: merchantRef,
-      order_id: merchantRef,
-      webhook_url: webhookUrl,
-      customer_email: String(process.env.AURAXPAY_BUYER_EMAIL || 'customer@osmani.tv').trim(),
-      customer_name: String(process.env.AURAXPAY_BUYER_NAME || 'Osmani Customer').trim(),
+      callback_url: webhookUrl,
     }
     if (accountId) payload.account_id = accountId
     return { payload, buyerPhone: phone255, amountInt, merchantRef, apiStyle }
@@ -411,7 +428,7 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
           error:
             apiStyle === 'trawx'
               ? 'merchant_webhook must be a valid https URL in Aurax Pay settings'
-              : 'webhook_url must be a valid https URL in Aurax Pay settings',
+              : 'callback_url must be a valid https URL in Aurax Pay settings',
         },
         normalized: null,
         requestPayload: payload,
@@ -454,21 +471,39 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
   }
 
   const headerMeta = authHeaders(cred, apiStyle)
-  console.log(LOG_PREFIX, 'createOrder request', {
-    url,
-    apiStyle,
-    merchantRef,
-    headers: {
-      'x-api-key': headerMeta['x-api-key'] || headerMeta['X-API-KEY'] ? '(set)' : '(missing)',
-      'X-SECRET-KEY': headerMeta['X-SECRET-KEY'] ? '(set)' : '(not set)',
-      'X-Account-Id': headerMeta['X-Account-Id'] || '(not set)',
-    },
-    body: logPayloadForDebug(payload),
-    accountInBody: Boolean(payload.account_id),
-    webhookInBody: Boolean(payload.webhook_url || payload.merchant_webhook),
-  })
-
-  const res = await httpJson(url, { method: 'POST', headers: headerMeta, body: payload })
+  const tryUrls =
+    apiStyle === 'aurax' ? listAuraxNativeCollectCandidateUrls(cred) : [url]
+  let res = null
+  let usedUrl = url
+  for (const tryUrl of tryUrls) {
+    usedUrl = tryUrl
+    console.log(LOG_PREFIX, 'createOrder request', {
+      url: tryUrl,
+      apiStyle,
+      merchantRef,
+      attempt: tryUrls.indexOf(tryUrl) + 1,
+      of: tryUrls.length,
+      headers: {
+        'x-api-key': headerMeta['x-api-key'] || headerMeta['X-API-KEY'] ? '(set)' : '(missing)',
+        'X-SECRET-KEY': headerMeta['X-SECRET-KEY'] ? '(set)' : '(not set)',
+        'X-Account-Id': headerMeta['X-Account-Id'] || '(not set)',
+      },
+      body: logPayloadForDebug(payload),
+      accountInBody: Boolean(payload.account_id),
+      webhookInBody: Boolean(payload.callback_url || payload.webhook_url || payload.merchant_webhook),
+    })
+    res = await httpJson(tryUrl, { method: 'POST', headers: headerMeta, body: payload })
+    const endpointMissing =
+      res.status === 404 &&
+      String(res.body?.error ?? '')
+        .trim()
+        .toLowerCase() === 'endpoint not found'
+    if (!endpointMissing || tryUrl === tryUrls[tryUrls.length - 1]) break
+    console.warn(LOG_PREFIX, 'createOrder retry after 404 Endpoint not found', {
+      failedUrl: tryUrl,
+      nextUrl: tryUrls[tryUrls.indexOf(tryUrl) + 1],
+    })
+  }
   const accepted = isCreateOrderAccepted(res)
   const normalized = normalizeResponse(res.body, res.status)
   const providerMessage = String(
@@ -476,7 +511,7 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
   ).trim()
 
   console.log(LOG_PREFIX, 'createOrder response', {
-    url,
+    url: usedUrl,
     apiStyle,
     merchantRef,
     httpStatus: res.status,
@@ -495,8 +530,34 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
     requestPayload: payload,
     apiStyle,
     providerMessage,
-    collectUrl: url,
+    collectUrl: usedUrl,
   }
+}
+
+/** Admin diagnostic: POST probe against native Aurax collect routes using stored credentials. */
+export async function diagnoseAuraxpayCollectRoutes(cred) {
+  const apiStyle = detectAuraxpayApiStyle(cred)
+  const urls = apiStyle === 'aurax' ? listAuraxNativeCollectCandidateUrls(cred) : [resolveAuraxpayCollectPostUrl(cred)].filter(Boolean)
+  const headerMeta = authHeaders(cred, apiStyle)
+  const probeBody = {
+    phone: '255700000000',
+    amount: 1000,
+    currency: 'TZS',
+    reference: `osm_probe_${Date.now()}`,
+    callback_url: String(cred.webhookUrl || process.env.AURAXPAY_WEBHOOK_URL || '').trim(),
+  }
+  if (cred.accountId) probeBody.account_id = cred.accountId
+  const results = []
+  for (const tryUrl of urls) {
+    const res = await httpJson(tryUrl, { method: 'POST', headers: headerMeta, body: probeBody })
+    results.push({
+      url: tryUrl,
+      httpStatus: res.status,
+      body: res.body,
+      providerMessage: String(res.body?.message ?? res.body?.error ?? '').trim() || null,
+    })
+  }
+  return { apiStyle, probeBody: { ...probeBody, phone: '255700***' }, results }
 }
 
 export async function verifyPayment(cred, orderId) {
