@@ -1,6 +1,7 @@
 /**
  * Aurax Pay payment provider (additive — ZenoPay + SonicPesa unchanged).
- * API shape mirrors SonicPesa-style Tanzania mobile money gateways; paths/credentials via admin + env.
+ * Default contract: Trawx-style mobile money (POST {origin}/api/create-order, code 101).
+ * Also supports Zeno-style and SonicPesa-style via AURAXPAY_API_STYLE + path overrides.
  */
 import crypto from 'node:crypto'
 import {
@@ -11,6 +12,14 @@ import { formatPhone } from '../../../zenopayClient.js'
 
 const DEFAULT_API_BASE = ''
 const LOG_PREFIX = '[auraxpay]'
+/** Trawx / Aurax Pay mobile-money collect path (see trawx.readme.io mobile-money). */
+const AURAXPAY_DEFAULT_COLLECT_PATH = '/api/create-order'
+
+const KNOWN_COLLECT_PATH_SUFFIXES = [
+  '/api/create-order',
+  '/payment/create_order',
+  '/api/payments/mobile_money_tanzania',
+]
 
 export function isAuraxpayConfigured(cred) {
   const c = cred && typeof cred === 'object' ? cred : {}
@@ -35,7 +44,7 @@ function apiBase(cred) {
 }
 
 function collectPath() {
-  const p = String(process.env.AURAXPAY_COLLECT_PATH || '/payment/create_order').trim()
+  const p = String(process.env.AURAXPAY_COLLECT_PATH || AURAXPAY_DEFAULT_COLLECT_PATH).trim()
   return p.startsWith('/') ? p : `/${p}`
 }
 
@@ -52,11 +61,12 @@ function isHttpsUrl(url) {
   }
 }
 
-/** sonicpesa-style (default) vs zenoapi/mobile_money Tanzania APIs. */
+/** trawx (Aurax default) | zenoapi | sonicpesa-style APIs. */
 export function detectAuraxpayApiStyle(cred) {
   const forced = String(process.env.AURAXPAY_API_STYLE || '').trim().toLowerCase()
   if (forced === 'zenopay' || forced === 'zeno') return 'zenopay'
   if (forced === 'sonicpesa' || forced === 'sonic') return 'sonicpesa'
+  if (forced === 'trawx' || forced === 'aurax') return 'trawx'
   const base = apiBase(cred).toLowerCase()
   if (
     base.includes('zenoapi') ||
@@ -66,26 +76,46 @@ export function detectAuraxpayApiStyle(cred) {
   ) {
     return 'zenopay'
   }
-  return 'sonicpesa'
+  if (base.includes('sonicpesa')) return 'sonicpesa'
+  if (base.includes('aurax') || base.includes('trawx')) return 'trawx'
+  return 'trawx'
 }
 
 export function resolveAuraxpayCollectPostUrl(cred) {
-  const full = String(process.env.AURAXPAY_COLLECT_URL || '').trim()
-  if (full) return full.replace(/\/+$/, '')
-  const base = apiBase(cred)
-  if (!base) return ''
-  const lower = base.toLowerCase()
-  if (
-    lower.includes('mobile_money') ||
-    lower.includes('/payment/create_order') ||
-    lower.endsWith('/create_order')
-  ) {
-    return base
+  const envFull = String(
+    process.env.AURAXPAY_COLLECT_URL || process.env.AURAXPAY_PAYMENT_URL || '',
+  ).trim()
+  if (envFull) return envFull.replace(/\/+$/, '')
+
+  const ep = String(cred?.apiEndpoint || '').trim()
+  if (!ep) return ''
+
+  const configured = String(process.env.AURAXPAY_COLLECT_PATH || AURAXPAY_DEFAULT_COLLECT_PATH).trim()
+  if (/^https?:\/\//i.test(configured)) return configured.replace(/\/+$/, '')
+
+  const pathSuffix = (configured.startsWith('/') ? configured : `/${configured}`).replace(/\/+$/, '')
+
+  try {
+    const u = new URL(ep)
+    let pathname = (u.pathname || '/').replace(/\/+$/, '') || ''
+    for (const suffix of KNOWN_COLLECT_PATH_SUFFIXES) {
+      if (pathname.endsWith(suffix)) {
+        return `${u.origin}${pathname}`.replace(/\/+$/, '')
+      }
+    }
+    const style = detectAuraxpayApiStyle(cred)
+    // Trawx/Aurax: POST {origin}/api/create-order — not under /v1/payment/create_order
+    if (style === 'trawx') {
+      return `${u.origin}${pathSuffix}`
+    }
+    const base = !pathname || pathname === '/' ? u.origin : `${u.origin}${pathname}`
+    return `${base.replace(/\/+$/, '')}${pathSuffix}`
+  } catch {
+    return ''
   }
-  return `${base}${collectPath()}`
 }
 
-function authHeaders(cred, style = 'sonicpesa') {
+function authHeaders(cred, style = 'trawx') {
   const apiKey = String(process.env.AURAXPAY_API_KEY || cred.apiKey || '').trim()
   if (style === 'zenopay') {
     return {
@@ -97,6 +127,7 @@ function authHeaders(cred, style = 'sonicpesa') {
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
+    'X-API-Key': apiKey,
     'X-API-KEY': apiKey,
   }
   const secretKey = String(process.env.AURAXPAY_SECRET_KEY || '').trim()
@@ -112,6 +143,7 @@ function authHeaders(cred, style = 'sonicpesa') {
 function logPayloadForDebug(payload) {
   const out = { ...payload }
   if (out.buyer_phone) out.buyer_phone = maskPhoneForLog(out.buyer_phone)
+  if (out.customer_phone) out.customer_phone = maskPhoneForLog(out.customer_phone)
   return out
 }
 
@@ -135,6 +167,10 @@ function maskPhoneForLog(phone) {
 export function isCreateOrderAccepted(httpRes) {
   if (!httpRes?.ok) return false
   const body = httpRes.body && typeof httpRes.body === 'object' ? httpRes.body : {}
+  const numericStatus = Number(body.status)
+  if (numericStatus === 203) return true
+  const result = String(body.result ?? '').trim().toLowerCase()
+  if (result === 'dispatched' || result === 'success') return true
   const topStatus = String(body.status ?? '').trim().toLowerCase()
   if (topStatus === 'error' || topStatus === 'failed') return false
   if (topStatus === 'success') return true
@@ -165,6 +201,23 @@ export function buildCreateOrderPayload(cred, { phone, amount, orderId, currency
     if (accountId) payload.account_id = accountId
     if (webhookUrl && isHttpsUrl(webhookUrl)) payload.webhook_url = webhookUrl
     return { payload, buyerPhone: buyer_phone, amountInt, merchantRef, apiStyle }
+  }
+
+  if (apiStyle === 'trawx') {
+    const customer_phone = buyerPhone(phone)
+    const payload = {
+      code: 101,
+      merchant_order_id: merchantRef,
+      amount: amountInt,
+      currency: String(currency || 'TZS').trim() || 'TZS',
+      merchant_webhook: webhookUrl,
+      product_count: 1,
+      customer_email: String(process.env.AURAXPAY_BUYER_EMAIL || 'customer@osmani.tv').trim(),
+      customer_name: String(process.env.AURAXPAY_BUYER_NAME || 'Osmani Customer').trim(),
+      customer_phone,
+      customer_userid: accountId || merchantRef.slice(0, 100),
+    }
+    return { payload, buyerPhone: customer_phone, amountInt, merchantRef, apiStyle }
   }
 
   const buyer_phone = buyerPhone(phone)
@@ -289,6 +342,40 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
         httpOk: false,
         status: 0,
         body: { error: 'webhook_url must be a valid https URL in Aurax Pay settings' },
+        normalized: null,
+        requestPayload: payload,
+        apiStyle,
+      }
+    }
+  } else if (apiStyle === 'trawx') {
+    if (!bp || !bp.startsWith('255') || bp.length < 12) {
+      return {
+        ok: false,
+        httpOk: false,
+        status: 0,
+        body: { error: 'customer_phone must be valid Tanzania 255XXXXXXXXX' },
+        normalized: null,
+        requestPayload: payload,
+        apiStyle,
+      }
+    }
+    if (!webhookUrl || !isHttpsUrl(webhookUrl)) {
+      return {
+        ok: false,
+        httpOk: false,
+        status: 0,
+        body: { error: 'merchant_webhook must be a valid https URL in Aurax Pay settings' },
+        normalized: null,
+        requestPayload: payload,
+        apiStyle,
+      }
+    }
+    if (amountInt < 1000) {
+      return {
+        ok: false,
+        httpOk: false,
+        status: 0,
+        body: { error: 'amount must be at least 1000 TZS for Aurax mobile money' },
         normalized: null,
         requestPayload: payload,
         apiStyle,
@@ -534,33 +621,39 @@ export async function testConnection(cred) {
   if (!base) {
     return { ok: false, message: 'API endpoint is required (admin or AURAXPAY_ENDPOINT).' }
   }
+  const apiStyle = detectAuraxpayApiStyle(cred)
+  const collectUrl = resolveAuraxpayCollectPostUrl(cred)
   try {
-    const url = `${base}${collectPath()}`
+    const url = collectUrl || `${base}${collectPath()}`
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), 15_000)
     const res = await fetch(url, {
       method: 'OPTIONS',
-      headers: authHeaders(cred),
+      headers: authHeaders(cred, apiStyle),
       signal: ac.signal,
     })
     clearTimeout(timer)
     if (res.status === 200 || res.status === 204 || res.status === 405) {
       return {
         ok: true,
-        message: `Aurax Pay API reachable at ${base} (HTTP ${res.status}).`,
+        message: `Aurax Pay collect URL reachable (${url}, HTTP ${res.status}).`,
         httpStatus: res.status,
+        apiStyle,
+        collectUrl: url,
       }
     }
-    const probe = await httpJson(base, { method: 'GET', headers: authHeaders(cred) })
+    const probe = await httpJson(base, { method: 'GET', headers: authHeaders(cred, apiStyle) })
     const authRejected = probe.status === 401 || probe.status === 403
     return {
       ok: probe.ok || authRejected,
       message: authRejected
-        ? `API reachable; auth rejected (HTTP ${probe.status}) — check API key.`
+        ? `API reachable; auth rejected (HTTP ${probe.status}) — check API key. Collect URL: ${url}`
         : probe.ok
-          ? `API reachable (HTTP ${probe.status}).`
-          : `HTTP ${probe.status}: ${JSON.stringify(probe.body).slice(0, 120)}`,
+          ? `API reachable (HTTP ${probe.status}). Collect URL: ${url}`
+          : `HTTP ${probe.status}: ${JSON.stringify(probe.body).slice(0, 120)} (collect: ${url})`,
       httpStatus: probe.status,
+      apiStyle,
+      collectUrl: url,
     }
   } catch (e) {
     return {

@@ -371,7 +371,7 @@ function AuraxPaySettingsPage() {
                 id="ax-end"
                 value={draft.apiEndpoint}
                 onChange={(e) => setDraft((d) => ({ ...d, apiEndpoint: e.target.value }))}
-                placeholder="https://api.auraxpay.com/v1"
+                placeholder="https://api.auraxpay.com"
                 className={inputClass()}
               />
             </div>

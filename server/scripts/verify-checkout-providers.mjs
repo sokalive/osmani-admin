@@ -5,6 +5,10 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import {
+  detectAuraxpayApiStyle,
+  resolveAuraxpayCollectPostUrl,
+} from '../src/lib/payments/providers/auraxpay.js'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const src = path.join(root, 'src')
@@ -66,7 +70,9 @@ assert(
 )
 assert(
   'auraxpay API style + collect URL helpers',
-  aurax.includes('detectAuraxpayApiStyle') && aurax.includes('resolveAuraxpayCollectPostUrl'),
+  aurax.includes('detectAuraxpayApiStyle') &&
+    aurax.includes('resolveAuraxpayCollectPostUrl') &&
+    aurax.includes('/api/create-order'),
 )
 assert(
   'checkout provider liveSync on update',
@@ -75,6 +81,14 @@ assert(
 assert(
   'auraxpay set-active-provider route',
   read('routes/auraxpaySettings.js').includes("'/set-active-provider'"),
+)
+
+const auraxCred = { apiEndpoint: 'https://api.auraxpay.com/v1', apiKey: 'test' }
+assert(
+  'aurax trawx collect URL (not /v1/payment/create_order)',
+  detectAuraxpayApiStyle(auraxCred) === 'trawx' &&
+    resolveAuraxpayCollectPostUrl(auraxCred) === 'https://api.auraxpay.com/api/create-order',
+  resolveAuraxpayCollectPostUrl(auraxCred),
 )
 
 const failed = checks.filter((c) => !c.ok)
