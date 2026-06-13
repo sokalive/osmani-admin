@@ -6,6 +6,10 @@ import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { getDeviceSecurityInvestigationReport } from '../lib/deviceSecurityInvestigation.js'
 import { getDeviceSecurityVerificationReport } from '../lib/deviceSecurityVerification.js'
 import {
+  auditUnblockedPlaybackMismatches,
+  reconcileUnblockedPlaybackAccess,
+} from '../lib/deviceSecurityPlaybackAudit.js'
+import {
   applyBulkDeviceSecurityAction,
   applyDeviceSecurityAction,
   ensureDeviceSecurityTables,
@@ -143,6 +147,29 @@ deviceSecurityReportsRouter.get('/security/stats', async (_req, res) => {
   } catch (e) {
     console.error('[security/stats]', e)
     res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+/** Audit admin-unblocked devices where playback is still denied (layer breakdown). */
+deviceSecurityReportsRouter.get('/security/playback-audit', async (_req, res) => {
+  try {
+    const audit = await auditUnblockedPlaybackMismatches()
+    res.json({ ok: true, audit })
+  } catch (e) {
+    console.error('[security/playback-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** System-wide repair for all smart_monitor / allowed devices (not per-device manual patch). */
+deviceSecurityReportsRouter.post('/security/reconcile-unblocked-playback', async (req, res) => {
+  try {
+    const out = await reconcileUnblockedPlaybackAccess({ emitUpdates: true })
+    emitSync('security_device_changed', { reconcile: true, count: out.devices_scanned })
+    res.json({ ok: true, ...out })
+  } catch (e) {
+    console.error('[security/reconcile-unblocked-playback]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
 

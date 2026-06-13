@@ -157,10 +157,14 @@ export async function getDeviceSecurityVerificationReport(deviceId) {
     statusSwahili = 'Kifaa Kimefunguliwa'
     headlineSwahili = 'Kifaa Kimefunguliwa Kikamilifu'
     sababuSwahili = device.unblocked_by ? 'Admin Ameondoa Block' : 'Hakuna vizuizi vinavyotumika'
-  } else if (!subscriptionBlocked && !securityDenied) {
+  } else if (!subscriptionBlocked && !securityDenied && access?.active_now === true) {
     statusSwahili = 'Kifaa Kimefunguliwa'
     headlineSwahili = 'Kifaa Kimefunguliwa Kikamilifu'
     sababuSwahili = 'Admin Ameondoa Block'
+  } else if (!subscriptionBlocked && !securityDenied && access?.active_now !== true) {
+    statusSwahili = 'Kifaa Kimefunguliwa'
+    headlineSwahili = 'Kifaa Kimefunguliwa — Usajili Haupo'
+    sababuSwahili = 'Usajili umeisha au haupo (si kizuizi cha usalama)'
   }
 
   const smartMonitorSwahili = device.smart_monitor_enabled
@@ -170,6 +174,15 @@ export async function getDeviceSecurityVerificationReport(deviceId) {
       : 'Imezimwa'
 
   const playbackSwahili = playbackAllowed ? 'Inaruhusiwa' : 'Hairuhusiwi'
+
+  let denialLayer = 'none'
+  if (layers.manual_admin_blocked) denialLayer = 'manual_admin_blocked'
+  else if (layers.intelligence_blocked) denialLayer = 'intelligence_blocked'
+  else if (layers.admin_devices_blocked) denialLayer = 'admin_devices_blocked'
+  else if (layers.profile_blocked) denialLayer = 'profile_blocked'
+  else if (securityDenied) denialLayer = 'security_level_blocked'
+  else if (subscriptionBlocked) denialLayer = 'subscription_blocked_now'
+  else if (access?.active_now !== true) denialLayer = 'subscription_inactive'
 
   if (device.smart_monitor_enabled && fullyOpen) {
     headlineSwahili = 'Kifaa Kinafuatiliwa Na Smart Monitor'
@@ -189,6 +202,7 @@ export async function getDeviceSecurityVerificationReport(deviceId) {
     playback: playbackSwahili,
     playback_swahili: playbackSwahili,
     playback_allowed: playbackAllowed,
+    denial_layer: denialLayer,
     subscription_blocked: subscriptionBlocked,
     security_denied: securityDenied,
     layers: {

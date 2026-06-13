@@ -207,6 +207,22 @@ async function main() {
     )
     await ensureAllApiDataFiles()
 
+    if (process.env.AUTO_RECONCILE_UNBLOCKED_PLAYBACK !== '0') {
+      const { reconcileUnblockedPlaybackAccess } = await import(
+        './lib/deviceSecurityPlaybackAudit.js'
+      )
+      reconcileUnblockedPlaybackAccess({ emitUpdates: true })
+        .then((out) => {
+          console.log('[security] auto reconcile unblocked playback:', {
+            scanned: out.devices_scanned,
+            manual_cleared: out.manual_admin_blocked_cleared,
+            intelligence: out.intelligence_unblocked,
+            post_affected: out.post_reconcile?.total_affected,
+          })
+        })
+        .catch((e) => console.error('[security] auto reconcile failed:', e))
+    }
+
     const server = app.listen(PORT, () => {
       console.log(`🚀 API listening on port ${PORT}`)
     })
