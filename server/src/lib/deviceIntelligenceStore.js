@@ -376,6 +376,46 @@ export async function blockDeviceIntelligenceUser(id, { reason, adminEmail }) {
   }
 }
 
+/** Clear Users Intelligence block for all registry rows tied to a device_id. */
+export async function unblockDeviceIntelligenceByDeviceId(deviceId, { adminEmail, note } = {}) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return { updated: 0 }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows } = await client.query(
+      `UPDATE device_intelligence_registry SET
+        status = 'active',
+        block_reason = '',
+        blocked_by = '',
+        blocked_at = NULL,
+        updated_at = now()
+      WHERE device_id = $1 AND status = 'blocked'
+      RETURNING id, device_id`,
+      [d],
+    )
+    for (const reg of rows) {
+      await client.query(
+        `INSERT INTO device_intelligence_admin_actions
+         (registry_id, device_id, action, reason, admin_email)
+         VALUES ($1,$2,'unblock',$3,$4)`,
+        [reg.id, reg.device_id, String(note ?? ''), String(adminEmail ?? 'admin')],
+      )
+    }
+    await client.query('COMMIT')
+    if (rows.length > 0) {
+      await syncIntelligenceBlockToPlayback(d, false)
+    }
+    return { updated: rows.length }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
+}
+
 export async function unblockDeviceIntelligenceUser(id, { adminEmail, note } = {}) {
   const pool = requirePool()
   const client = await pool.connect()

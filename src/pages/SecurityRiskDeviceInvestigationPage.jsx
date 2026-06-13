@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, ChevronDown, ChevronRight, Loader2, Shield, ShieldAlert, ShieldCheck } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getSecurityDeviceInvestigation, postSecurityDeviceAction } from '../lib/api'
+import { getSecurityDeviceInvestigation, getSecurityDeviceVerification, postSecurityDeviceAction } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
 import { levelBadgeClass } from '../lib/securityLevels'
 
@@ -136,17 +136,23 @@ export default function SecurityRiskDeviceInvestigationPage() {
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
   const [report, setReport] = useState(null)
+  const [verification, setVerification] = useState(null)
   const [confirm, setConfirm] = useState(null)
 
   const load = useCallback(async () => {
     if (!deviceId) return
     setLoading(true)
     try {
-      const res = await getSecurityDeviceInvestigation(deviceId)
+      const [res, ver] = await Promise.all([
+        getSecurityDeviceInvestigation(deviceId),
+        getSecurityDeviceVerification(deviceId).catch(() => null),
+      ])
       setReport(res?.report ?? res)
+      setVerification(ver?.verification ?? ver ?? null)
     } catch (e) {
       showToast('error', e?.message || 'Failed to load investigation')
       setReport(null)
+      setVerification(null)
     } finally {
       setLoading(false)
     }
@@ -169,7 +175,8 @@ export default function SecurityRiskDeviceInvestigationPage() {
       if (!deviceId) return
       setActionLoading(true)
       try {
-        await postSecurityDeviceAction(deviceId, { action })
+        const res = await postSecurityDeviceAction(deviceId, { action })
+        setVerification(res?.verification ?? null)
         showToast('success', 'Enforcement action applied')
         await load()
       } catch (e) {
@@ -247,6 +254,7 @@ export default function SecurityRiskDeviceInvestigationPage() {
   const reasons = report?.detection_reasons ?? []
   const swahili = report?.swahili_explanations ?? []
   const timeline = report?.security_timeline ?? []
+  const audit = report?.audit_summary
   const raw = report?.raw_evidence
 
   return (
@@ -330,6 +338,57 @@ export default function SecurityRiskDeviceInvestigationPage() {
                 </div>
               </dl>
             </Section>
+
+            {verification ? (
+              <Section title="Uthibitisho Wa Kifaa (Baada Ya Hatua)">
+                <p className="mb-4 text-lg font-semibold text-white">{verification.headline_swahili}</p>
+                <dl className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/50 px-4 py-3">
+                    <dt className="text-xs font-bold uppercase text-cyan-400">STATUS</dt>
+                    <dd className="mt-1 text-sm text-white">{verification.status_swahili}</dd>
+                  </div>
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/50 px-4 py-3">
+                    <dt className="text-xs font-bold uppercase text-cyan-400">Sababu</dt>
+                    <dd className="mt-1 text-sm text-white">{verification.sababu_swahili}</dd>
+                  </div>
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/50 px-4 py-3">
+                    <dt className="text-xs font-bold uppercase text-cyan-400">Smart Monitor</dt>
+                    <dd className="mt-1 text-sm text-white">{verification.smart_monitor_swahili}</dd>
+                  </div>
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/50 px-4 py-3">
+                    <dt className="text-xs font-bold uppercase text-cyan-400">Playback</dt>
+                    <dd
+                      className={`mt-1 text-sm font-semibold ${verification.playback_allowed ? 'text-emerald-300' : 'text-red-300'}`}
+                    >
+                      {verification.playback_swahili}
+                    </dd>
+                  </div>
+                </dl>
+                {verification.propagation_ok === false ? (
+                  <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                    Tahadhari: Kuna tabaka la kuzuia ambalo bado halijasawazishwa (subscription, intelligence,
+                    au usalama).
+                  </p>
+                ) : null}
+              </Section>
+            ) : null}
+
+            {audit ? (
+              <Section title="Muhtasari Wa Ukaguzi (Timeline)">
+                <InfoGrid
+                  rows={[
+                    ['Aliyefungia', audit.blocked_by || '—'],
+                    ['Alifungwa', formatReadableDateTime(audit.blocked_at) || '—'],
+                    ['Sababu ya kufungiwa', audit.block_reason_swahili || '—'],
+                    ['Aliyefungua', audit.unblocked_by || '—'],
+                    ['Alifunguliwa', formatReadableDateTime(audit.unblocked_at) || '—'],
+                    ['Sababu ya kufunguliwa', audit.unblock_reason_swahili || '—'],
+                    ['Smart Monitor imewashwa', formatReadableDateTime(audit.smart_monitor_enabled_at) || '—'],
+                    ['Na nani', audit.smart_monitor_enabled_by || '—'],
+                  ]}
+                />
+              </Section>
+            ) : null}
 
             <Section title="A. Device Information">
               <InfoGrid

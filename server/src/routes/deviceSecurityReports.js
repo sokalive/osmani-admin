@@ -4,6 +4,7 @@ import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { getDeviceSecurityInvestigationReport } from '../lib/deviceSecurityInvestigation.js'
+import { getDeviceSecurityVerificationReport } from '../lib/deviceSecurityVerification.js'
 import {
   applyBulkDeviceSecurityAction,
   applyDeviceSecurityAction,
@@ -182,6 +183,18 @@ deviceSecurityReportsRouter.get('/security/devices/:deviceId/investigation', asy
   }
 })
 
+/** Automated post-unblock verification with Swahili admin summary. */
+deviceSecurityReportsRouter.get('/security/devices/:deviceId/verification', async (req, res) => {
+  try {
+    const verification = await getDeviceSecurityVerificationReport(req.params.deviceId)
+    if (!verification) return res.status(404).json({ ok: false, error: 'Device not found' })
+    res.json({ ok: true, verification })
+  } catch (e) {
+    console.error('[security/devices/:id/verification]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 const ACTIONS = new Set([
   'allow_device',
   'whitelist',
@@ -249,11 +262,16 @@ deviceSecurityReportsRouter.post('/security/devices/:deviceId/action', async (re
       deviceSubscriptionBus.emit('update', { deviceId })
     }
 
+    const verification = await getDeviceSecurityVerificationReport(deviceId).catch((e) => {
+      console.error('[security/devices/action] verification failed:', e)
+      return null
+    })
+
     emitSync('security_admin_action', { device_id: deviceId, action })
     emitSync('security_device_changed', { device_id: deviceId })
     emitSync('security_logs_changed', { action, device_id: deviceId })
 
-    res.json({ ok: true, device })
+    res.json({ ok: true, device, verification })
   } catch (e) {
     console.error('[security/devices/action]', e)
     res.status(500).json({ error: String(e.message || e) })

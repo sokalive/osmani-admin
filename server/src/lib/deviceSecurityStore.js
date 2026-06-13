@@ -1,7 +1,9 @@
 import crypto from 'node:crypto'
-import { resolvePaymentPhoneForDevice } from '../billingStore.js'
+import { resolvePaymentPhoneForDevice, setManualAdminBlocked } from '../billingStore.js'
 import { getPool } from '../db/pool.js'
 import { ensureDeviceSecuritySchema } from '../db/deviceSecuritySchema.js'
+import { unblockDeviceIntelligenceByDeviceId } from './deviceIntelligenceStore.js'
+import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
 
 /** Display-only weights; strict mode blocks on any signal regardless of score. */
 export const RISK_WEIGHTS = {
@@ -241,7 +243,10 @@ function rowToDevice(row, adminRow) {
       adminBlocked ||
       status === 'perm_block' ||
       status === 'temp_block' ||
-      String(row.security_level || '') === 'blocked',
+      (status !== 'allowed' &&
+        status !== 'smart_monitor' &&
+        status !== 'whitelisted' &&
+        String(row.security_level || '') === 'blocked'),
     blocked_at:
       row.blocked_at instanceof Date ? row.blocked_at.toISOString() : row.blocked_at ? String(row.blocked_at) : null,
     blocked_by: String(row.blocked_by ?? ''),
@@ -310,6 +315,13 @@ export async function ingestSecurityReport(payload) {
       signals: merged,
       flags,
     })
+  } else if (ADMIN_OVERRIDE_STATUSES.includes(adminStatus)) {
+    if (adminStatus === 'temp_block' || adminStatus === 'perm_block') securityLevel = 'blocked'
+    else if (adminStatus === 'whitelisted') securityLevel = String(prev?.security_level || 'warning')
+    else if (adminStatus === 'allowed') securityLevel = 'warning'
+    else if (adminStatus === 'smart_monitor') {
+      securityLevel = resolveSmartMonitorSecurityLevel({ score, signals: merged, flags })
+    }
   } else if (strictEnabled) {
     securityLevel = resolveStrictSecurityLevel({
       score,
@@ -318,13 +330,6 @@ export async function ingestSecurityReport(payload) {
       prev,
       adminStatus,
     })
-  } else if (ADMIN_OVERRIDE_STATUSES.includes(adminStatus)) {
-    if (adminStatus === 'temp_block' || adminStatus === 'perm_block') securityLevel = 'blocked'
-    else if (adminStatus === 'whitelisted') securityLevel = String(prev?.security_level || 'warning')
-    else if (adminStatus === 'allowed') securityLevel = 'warning'
-    else if (adminStatus === 'smart_monitor') {
-      securityLevel = resolveSmartMonitorSecurityLevel({ score, signals: merged, flags })
-    }
   }
 
   const detectedNow = hasDetectionSignals({ score, signals: merged, flags })
@@ -352,9 +357,9 @@ export async function ingestSecurityReport(payload) {
        tampered_apk = EXCLUDED.tampered_apk,
        signals = EXCLUDED.signals,
        security_level = CASE
-         WHEN device_security_profiles.admin_status IN ('whitelisted', 'temp_block', 'perm_block', 'allowed')
+         WHEN device_security_profiles.admin_status IN ('whitelisted', 'temp_block', 'perm_block')
          THEN device_security_profiles.security_level
-         WHEN device_security_profiles.admin_status = 'smart_monitor'
+         WHEN device_security_profiles.admin_status IN ('allowed', 'smart_monitor')
          THEN EXCLUDED.security_level
          ELSE EXCLUDED.security_level
        END,
@@ -673,6 +678,31 @@ function resolveLevelAfterAction(spec, profile) {
   return spec.security_level || 'warning'
 }
 
+async function syncPlaybackAccessAfterSecurityAction(deviceId, action, spec, actor) {
+  const d = text(deviceId, 128)
+  if (!d) return
+
+  if (spec.clear_block || spec.record_unblock) {
+    await setManualAdminBlocked(d, false).catch((e) => {
+      console.error('[security] setManualAdminBlocked(false) failed:', e)
+    })
+    await unblockDeviceIntelligenceByDeviceId(d, {
+      adminEmail: actor || 'security_center',
+      note: `Security unblock: ${action}`,
+    }).catch((e) => {
+      console.error('[security] unblockDeviceIntelligenceByDeviceId failed:', e)
+    })
+    deviceSubscriptionBus.emit('update', { deviceId: d, source: 'security_unblock' })
+  }
+
+  if (spec.perm_block || spec.record_block) {
+    await setManualAdminBlocked(d, true).catch((e) => {
+      console.error('[security] setManualAdminBlocked(true) failed:', e)
+    })
+    deviceSubscriptionBus.emit('update', { deviceId: d, source: 'security_block' })
+  }
+}
+
 export async function applyDeviceSecurityAction(deviceId, action, opts = {}) {
   const pool = getPool()
   if (!pool) throw new Error('Database not configured')
@@ -809,6 +839,8 @@ export async function applyDeviceSecurityAction(deviceId, action, opts = {}) {
   } finally {
     client.release()
   }
+
+  await syncPlaybackAccessAfterSecurityAction(d, action, spec, actor)
 
   return getRiskDevice(d)
 }

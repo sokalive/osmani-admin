@@ -339,6 +339,50 @@ function seedProfileTimelineEvents(device, events) {
   return seeded
 }
 
+function buildAuditSummary(device, timeline) {
+  const unblockEvents = timeline.filter((e) => e.kind === 'unblock_action')
+  const blockEvents = timeline.filter((e) => e.kind === 'enforcement_applied')
+  const smartMonitorEvents = timeline.filter((e) => e.kind === 'smart_monitor_enable')
+  const lastUnblock = unblockEvents[unblockEvents.length - 1]
+  const lastBlock = blockEvents[blockEvents.length - 1]
+  const lastSmartMonitor = smartMonitorEvents[smartMonitorEvents.length - 1]
+
+  const threatKey = device.rooted
+    ? 'rooted'
+    : device.emulator
+      ? 'emulator'
+      : device.tampered_apk
+        ? 'tampered_apk'
+        : device.frida
+          ? 'frida'
+          : String(device.risk_type || '').toLowerCase() || null
+
+  const blockReasonSwahili = threatKey
+    ? {
+        rooted: 'Kifaa kimefungwa kwa sababu ya ROOT',
+        root_detected: 'Kifaa kimefungwa kwa sababu ya ROOT',
+        emulator: 'Kifaa kimefungwa kwa sababu ya Emulator',
+        emulator_detected: 'Kifaa kimefungwa kwa sababu ya Emulator',
+        tampered_apk: 'Kifaa kimefungwa kwa sababu ya APK isiyo rasmi',
+        frida: 'Kifaa kimefungwa kwa sababu ya uingiliaji wa programu',
+      }[threatKey] || `Kifaa kimefungwa kwa sababu ya ${threatKey.replace(/_/g, ' ')}`
+    : lastBlock?.detail || 'Hatari ya usalama iligunduliwa'
+
+  return {
+    blocked_by: device.blocked_by || lastBlock?.actor || null,
+    blocked_at: device.blocked_at || lastBlock?.at || null,
+    block_reason_swahili: blockReasonSwahili,
+    unblocked_by: device.unblocked_by || lastUnblock?.actor || null,
+    unblocked_at: device.unblocked_at || lastUnblock?.at || null,
+    unblock_reason_swahili: lastUnblock ? 'Admin ameondoa block' : null,
+    smart_monitor_enabled_at: lastSmartMonitor?.at || null,
+    smart_monitor_enabled_by: lastSmartMonitor?.actor || null,
+    smart_monitor_swahili: device.smart_monitor_enabled
+      ? 'Smart Monitor imewashwa — kifaa kinafuatiliwa'
+      : null,
+  }
+}
+
 function buildRawEvidence(device, policy, strictEnabled) {
   const meta = device.metadata && typeof device.metadata === 'object' ? device.metadata : {}
   return {
@@ -403,6 +447,7 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
     device,
     await fetchDeviceTimeline(pool, deviceId),
   )
+  const auditSummary = buildAuditSummary(device, timeline)
 
   return {
     read_only: true,
@@ -435,6 +480,7 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
     detection_reasons: detectionReasons,
     swahili_explanations: swahiliExplanations,
     security_timeline: timeline,
+    audit_summary: auditSummary,
     raw_evidence: buildRawEvidence(device, policy, strictEnabled),
   }
 }
