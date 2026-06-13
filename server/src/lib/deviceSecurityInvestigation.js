@@ -5,6 +5,7 @@ import {
   getRiskDevice,
   isStrictEnforcementEnabled,
   RISK_WEIGHTS,
+  SMART_MONITOR_REBLOCK_SCORE,
 } from './deviceSecurityStore.js'
 
 function text(v, max = 256) {
@@ -204,6 +205,7 @@ function resolveEnforcementSummary(device, policy, strictEnabled) {
   if (policy?.deny_playback) finalAction = 'block_playback'
   else if (adminStatus === 'whitelisted' || device.whitelisted) finalAction = 'whitelisted'
   else if (adminStatus === 'allowed') finalAction = 'allowed'
+  else if (adminStatus === 'smart_monitor') finalAction = 'smart_monitor'
   else if (adminStatus === 'temp_block') finalAction = 'temporary_block'
   else if (adminStatus === 'perm_block' || device.admin_blocked) finalAction = 'permanent_block'
   else if (device.security_level === 'blocked' || device.security_level === 'critical') {
@@ -230,11 +232,19 @@ function classifyTimelineEvent(row) {
     action === 'remove_restriction' ||
     action === 'reset_risk' ||
     action === 'allow_device' ||
+    action === 'unblock_user' ||
     et.includes('unblock')
   ) {
     return 'unblock_action'
   }
+  if (action === 'enable_smart_monitor' || et.includes('smart monitor enable')) {
+    return 'smart_monitor_enable'
+  }
+  if (action === 'disable_smart_monitor' || et.includes('smart monitor disable')) {
+    return 'smart_monitor_disable'
+  }
   if (
+    action === 'block_user' ||
     action === 'temporary_block' ||
     action === 'permanent_block' ||
     et.includes('block') ||
@@ -263,6 +273,10 @@ function timelineTitle(kind, row) {
       return 'Kifaa kimeongezwa kwenye whitelist'
     case 'unblock_action':
       return 'Vizuizi vimeondolewa / hatari imesafishwa'
+    case 'smart_monitor_enable':
+      return 'Smart Monitor Mode imewashwa'
+    case 'smart_monitor_disable':
+      return 'Smart Monitor Mode imezimwa'
     case 'manual_action':
       return action ? `Hatua ya msimamizi: ${action.replace(/_/g, ' ')}` : et || 'Hatua ya msimamizi'
     default:
@@ -355,6 +369,11 @@ function buildRawEvidence(device, policy, strictEnabled) {
     admin_status: device.admin_status,
     temp_block_until: device.temp_block_until ?? null,
     block_reason: device.block_reason ?? null,
+    smart_monitor_enabled: device.smart_monitor_enabled === true,
+    blocked_at: device.blocked_at ?? null,
+    blocked_by: device.blocked_by ?? null,
+    unblocked_at: device.unblocked_at ?? null,
+    unblocked_by: device.unblocked_by ?? null,
   }
 }
 
@@ -396,6 +415,12 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
       last_seen: device.last_seen || '',
       current_status: device.status || device.admin_status || 'monitoring',
       risk_score: device.risk_score ?? 0,
+      blocked: device.blocked === true,
+      smart_monitor_enabled: device.smart_monitor_enabled === true,
+      blocked_at: device.blocked_at ?? null,
+      blocked_by: device.blocked_by ?? null,
+      unblocked_at: device.unblocked_at ?? null,
+      unblocked_by: device.unblocked_by ?? null,
     },
     detection_summary: {
       risk_level: device.security_level || 'warning',
@@ -404,6 +429,8 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
       current_block_state: blockState,
       playback_denied: playbackDenied,
       strict_enforcement: strictEnabled,
+      smart_monitor_enabled: device.smart_monitor_enabled === true,
+      smart_monitor_reblock_score: SMART_MONITOR_REBLOCK_SCORE,
     },
     detection_reasons: detectionReasons,
     swahili_explanations: swahiliExplanations,

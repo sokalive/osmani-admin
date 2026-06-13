@@ -538,8 +538,33 @@ export async function ensureBillingTables(client) {
       CONSTRAINT device_security_profiles_level_check
         CHECK (security_level IN ('warning', 'limited', 'blocked', 'critical')),
       CONSTRAINT device_security_profiles_admin_status_check
-        CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block'))
+        CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block', 'smart_monitor'))
     );
+  `)
+  await client.query(`
+    ALTER TABLE device_security_profiles DROP CONSTRAINT IF EXISTS device_security_profiles_admin_status_check;
+  `)
+  await client.query(`
+    ALTER TABLE device_security_profiles ADD CONSTRAINT device_security_profiles_admin_status_check
+      CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block', 'smart_monitor'));
+  `)
+  await client.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT false;
+  `)
+  await client.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked_by TEXT NOT NULL DEFAULT '';
+  `)
+  await client.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS unblocked_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS unblocked_by TEXT NOT NULL DEFAULT '';
+  `)
+  await client.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS smart_monitor_enabled BOOLEAN NOT NULL DEFAULT false;
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS device_security_profiles_level_idx

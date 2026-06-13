@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, ChevronDown, ChevronRight, Loader2, Shield } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronRight, Loader2, Shield, ShieldAlert, ShieldCheck } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { getSecurityDeviceInvestigation } from '../lib/api'
+import { getSecurityDeviceInvestigation, postSecurityDeviceAction } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
 import { levelBadgeClass } from '../lib/securityLevels'
 
@@ -51,6 +51,7 @@ function formatEnforcementAction(action) {
     temporary_block: 'Temporary admin block',
     permanent_block: 'Permanent admin block',
     monitor: 'Monitoring',
+    smart_monitor: 'Smart Monitor Mode',
   }
   return map[action] || action?.replace(/_/g, ' ') || '—'
 }
@@ -85,12 +86,57 @@ function CollapsibleRaw({ title, data }) {
   )
 }
 
+function ConfirmActionModal({ open, title, message, confirmLabel, tone, loading, onConfirm, onCancel }) {
+  if (!open) return null
+  const btnClass =
+    tone === 'danger'
+      ? 'bg-red-500/20 text-red-100 ring-1 ring-red-500/40'
+      : tone === 'success'
+        ? 'bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-500/40'
+        : 'bg-cyan-500/20 text-cyan-100 ring-1 ring-cyan-500/40'
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+        aria-label="Close"
+        onClick={loading ? undefined : onCancel}
+      />
+      <div className="relative w-full max-w-md rounded-2xl border border-slate-600/60 bg-[#0b1220] p-6 shadow-2xl ring-1 ring-cyan-500/20">
+        <h2 className="text-lg font-bold text-white">{title}</h2>
+        <p className="mt-2 text-sm text-slate-400">{message}</p>
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={loading}
+            onClick={onCancel}
+            className="rounded-xl border border-slate-600 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={onConfirm}
+            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold hover:opacity-90 disabled:opacity-50 ${btnClass}`}
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function SecurityRiskDeviceInvestigationPage() {
   const { deviceId } = useParams()
   const navigate = useNavigate()
   const { showToast } = useToast()
   const [loading, setLoading] = useState(true)
+  const [actionLoading, setActionLoading] = useState(false)
   const [report, setReport] = useState(null)
+  const [confirm, setConfirm] = useState(null)
 
   const load = useCallback(async () => {
     if (!deviceId) return
@@ -110,8 +156,94 @@ export default function SecurityRiskDeviceInvestigationPage() {
     void load()
   }, [load])
 
-  const info = report?.device_information
   const summary = report?.detection_summary
+  const info = report?.device_information
+  const isBlocked =
+    summary?.current_block_state === 'blocked' ||
+    summary?.playback_denied === true ||
+    info?.blocked === true
+  const smartMonitorOn = info?.smart_monitor_enabled === true || summary?.smart_monitor_enabled === true
+
+  const runAction = useCallback(
+    async (action) => {
+      if (!deviceId) return
+      setActionLoading(true)
+      try {
+        await postSecurityDeviceAction(deviceId, { action })
+        showToast('success', 'Enforcement action applied')
+        await load()
+      } catch (e) {
+        showToast('error', e?.message || 'Action failed')
+      } finally {
+        setActionLoading(false)
+        setConfirm(null)
+      }
+    },
+    [deviceId, load, showToast],
+  )
+
+  const enforcementActions = useMemo(
+    () => [
+      {
+        id: 'block_user',
+        label: 'Block User',
+        icon: ShieldAlert,
+        tone: 'danger',
+        disabled: isBlocked && !smartMonitorOn,
+        confirm: {
+          title: 'Block user',
+          message:
+            'Permanently block this device from playback. Strict enforcement resumes until you unblock or whitelist.',
+          confirmLabel: 'Block user',
+          tone: 'danger',
+        },
+      },
+      {
+        id: 'unblock_user',
+        label: 'Unblock User',
+        icon: ShieldCheck,
+        tone: 'success',
+        disabled: !isBlocked,
+        confirm: {
+          title: 'Unblock user',
+          message:
+            'Remove the active block and restore access immediately. Security signals remain on record.',
+          confirmLabel: 'Unblock user',
+          tone: 'success',
+        },
+      },
+      {
+        id: 'enable_smart_monitor',
+        label: 'Enable Smart Monitor',
+        icon: Shield,
+        tone: 'primary',
+        disabled: smartMonitorOn || isBlocked,
+        confirm: {
+          title: 'Enable Smart Monitor Mode',
+          message:
+            'Allow normal app use while continuing to collect security signals. Re-block only when combined risk score reaches the elevated threshold (reduces false positives). Unblock the device first if it is still blocked.',
+          confirmLabel: 'Enable Smart Monitor',
+          tone: 'primary',
+        },
+      },
+      {
+        id: 'disable_smart_monitor',
+        label: 'Disable Smart Monitor',
+        icon: ShieldAlert,
+        tone: 'danger',
+        disabled: !smartMonitorOn,
+        confirm: {
+          title: 'Disable Smart Monitor Mode',
+          message:
+            'Return to standard strict monitoring. Devices with stored threat signals may be blocked again immediately.',
+          confirmLabel: 'Disable Smart Monitor',
+          tone: 'danger',
+        },
+      },
+    ],
+    [isBlocked, smartMonitorOn],
+  )
+
   const reasons = report?.detection_reasons ?? []
   const swahili = report?.swahili_explanations ?? []
   const timeline = report?.security_timeline ?? []
@@ -138,7 +270,7 @@ export default function SecurityRiskDeviceInvestigationPage() {
             <h1 className="mt-1 truncate font-mono text-lg font-bold text-white sm:text-xl">
               {deviceId || '—'}
             </h1>
-            <p className="text-xs text-slate-500">Read-only · evidence loaded on demand</p>
+            <p className="text-xs text-slate-500">Enforcement controls · evidence on demand</p>
           </div>
           {summary?.risk_level ? <LevelPill level={summary.risk_level} /> : null}
         </header>
@@ -151,6 +283,54 @@ export default function SecurityRiskDeviceInvestigationPage() {
           <p className="py-16 text-center text-slate-500">Investigation report not found.</p>
         ) : (
           <div className="mx-auto w-full max-w-6xl flex-1 space-y-6 overflow-y-auto pb-16">
+            <Section title="Enforcement controls">
+              <p className="mb-4 text-sm text-slate-400">
+                Block or unblock playback for this device. Smart Monitor Mode applies only after a manual
+                unblock — signals are still collected, but re-block requires stronger combined evidence.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {enforcementActions.map((a) => {
+                  const Icon = a.icon
+                  const btnTone =
+                    a.tone === 'danger'
+                      ? 'border-red-500/40 bg-red-500/10 text-red-100'
+                      : a.tone === 'success'
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100'
+                        : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-100'
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      disabled={a.disabled || actionLoading}
+                      onClick={() => setConfirm({ ...a.confirm, action: a.id })}
+                      className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 ${btnTone}`}
+                    >
+                      <Icon className="h-4 w-4 shrink-0" />
+                      {a.label}
+                    </button>
+                  )
+                })}
+              </div>
+              <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <dt className="text-xs uppercase text-slate-500">Blocked</dt>
+                  <dd className="text-sm text-white">{info?.blocked ? 'Yes' : 'No'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-slate-500">Smart Monitor</dt>
+                  <dd className="text-sm text-white">{smartMonitorOn ? 'Enabled' : 'Off'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-slate-500">Unblocked at</dt>
+                  <dd className="text-sm text-white">{formatReadableDateTime(info?.unblocked_at) || '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-slate-500">Unblocked by</dt>
+                  <dd className="text-sm text-white">{info?.unblocked_by || '—'}</dd>
+                </div>
+              </dl>
+            </Section>
+
             <Section title="A. Device Information">
               <InfoGrid
                 rows={[
@@ -177,6 +357,12 @@ export default function SecurityRiskDeviceInvestigationPage() {
                     summary?.playback_denied ? 'Denied (security)' : 'Not denied by security policy',
                   ],
                   ['Strict enforcement', summary?.strict_enforcement ? 'On' : 'Off (monitor only)'],
+                  [
+                    'Smart Monitor',
+                    summary?.smart_monitor_enabled
+                      ? `On (re-block ≥ ${summary?.smart_monitor_reblock_score ?? 15} score)`
+                      : 'Off',
+                  ],
                 ]}
               />
             </Section>
@@ -265,6 +451,16 @@ export default function SecurityRiskDeviceInvestigationPage() {
           </div>
         )}
       </main>
+      <ConfirmActionModal
+        open={Boolean(confirm)}
+        title={confirm?.title}
+        message={confirm?.message}
+        confirmLabel={confirm?.confirmLabel}
+        tone={confirm?.tone}
+        loading={actionLoading}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => confirm?.action && runAction(confirm.action)}
+      />
     </>
   )
 }

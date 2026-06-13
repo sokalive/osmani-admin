@@ -24,7 +24,19 @@ export const RISK_WEIGHTS = {
 }
 
 const LEVELS = ['warning', 'limited', 'blocked', 'critical']
-const ADMIN_OVERRIDE_STATUSES = ['whitelisted', 'temp_block', 'perm_block', 'allowed']
+const ADMIN_OVERRIDE_STATUSES = [
+  'whitelisted',
+  'temp_block',
+  'perm_block',
+  'allowed',
+  'smart_monitor',
+]
+
+/** Combined risk score required to re-block a device in Smart Monitor Mode (not single weak signals). */
+export const SMART_MONITOR_REBLOCK_SCORE = Math.max(
+  10,
+  Number(process.env.SMART_MONITOR_REBLOCK_SCORE) || 15,
+)
 
 function text(v, max = 256) {
   return String(v ?? '')
@@ -57,8 +69,33 @@ export async function ensureDeviceSecurityTables(pool) {
       CONSTRAINT device_security_profiles_level_check
         CHECK (security_level IN ('warning', 'limited', 'blocked', 'critical')),
       CONSTRAINT device_security_profiles_admin_status_check
-        CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block'))
+        CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block', 'smart_monitor'))
     );
+  `)
+  await pool.query(`
+    ALTER TABLE device_security_profiles DROP CONSTRAINT IF EXISTS device_security_profiles_admin_status_check;
+  `)
+  await pool.query(`
+    ALTER TABLE device_security_profiles ADD CONSTRAINT device_security_profiles_admin_status_check
+      CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block', 'smart_monitor'));
+  `)
+  await pool.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT false;
+  `)
+  await pool.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
+  `)
+  await pool.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked_by TEXT NOT NULL DEFAULT '';
+  `)
+  await pool.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS unblocked_at TIMESTAMPTZ;
+  `)
+  await pool.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS unblocked_by TEXT NOT NULL DEFAULT '';
+  `)
+  await pool.query(`
+    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS smart_monitor_enabled BOOLEAN NOT NULL DEFAULT false;
   `)
   await pool.query(`
     CREATE INDEX IF NOT EXISTS device_security_profiles_level_idx
@@ -160,6 +197,9 @@ export function resolveStrictSecurityLevel({ score, signals, flags, prev, adminS
   if (status === 'allowed') {
     return 'warning'
   }
+  if (status === 'smart_monitor') {
+    return resolveSmartMonitorSecurityLevel({ score, signals, flags })
+  }
   if (status === 'temp_block' || status === 'perm_block') {
     return 'blocked'
   }
@@ -174,6 +214,20 @@ export function resolveStrictSecurityLevel({ score, signals, flags, prev, adminS
   if (detectedNow || persistedAutoBlock) {
     return 'blocked'
   }
+  return 'warning'
+}
+
+/**
+ * Smart Monitor Mode — only for manually unblocked devices (admin_status smart_monitor).
+ * Collects signals but requires elevated combined score before re-blocking.
+ */
+export function resolveSmartMonitorSecurityLevel({ score, signals, flags }) {
+  const s = Number(score) || 0
+  if (s >= SMART_MONITOR_REBLOCK_SCORE) return 'blocked'
+  if (flags?.tampered_apk && (flags?.frida || flags?.clone_detected)) return 'blocked'
+  if (flags?.frida && flags?.emulator) return 'blocked'
+  if (flags?.frida && flags?.debugger && flags?.clone_detected) return 'blocked'
+  if (hasDetectionSignals({ score: s, signals, flags })) return 'warning'
   return 'warning'
 }
 
@@ -203,6 +257,7 @@ function rowToDevice(row, adminRow) {
   let status = String(row.admin_status || 'monitoring')
   if (whitelisted) status = 'whitelisted'
   else if (adminBlocked) status = 'perm_block'
+  else if (row.smart_monitor_enabled === true && status !== 'smart_monitor') status = 'smart_monitor'
   const tempUntil = row.temp_block_until
   if (status === 'temp_block' && tempUntil) {
     const t = tempUntil instanceof Date ? tempUntil : new Date(tempUntil)
@@ -237,6 +292,23 @@ function rowToDevice(row, adminRow) {
     admin_status: String(row.admin_status || 'monitoring'),
     whitelisted,
     admin_blocked: adminBlocked,
+    blocked:
+      row.blocked === true ||
+      adminBlocked ||
+      status === 'perm_block' ||
+      status === 'temp_block' ||
+      String(row.security_level || '') === 'blocked',
+    blocked_at:
+      row.blocked_at instanceof Date ? row.blocked_at.toISOString() : row.blocked_at ? String(row.blocked_at) : null,
+    blocked_by: String(row.blocked_by ?? ''),
+    unblocked_at:
+      row.unblocked_at instanceof Date
+        ? row.unblocked_at.toISOString()
+        : row.unblocked_at
+          ? String(row.unblocked_at)
+          : null,
+    unblocked_by: String(row.unblocked_by ?? ''),
+    smart_monitor_enabled: row.smart_monitor_enabled === true || status === 'smart_monitor',
     temp_block_until:
       tempUntil instanceof Date ? tempUntil.toISOString() : tempUntil ? String(tempUntil) : null,
     signals: Array.isArray(row.signals) ? row.signals : [],
@@ -288,7 +360,13 @@ export async function ingestSecurityReport(payload) {
 
   const strictEnabled = await isStrictEnforcementEnabled(pool)
   let securityLevel = 'warning'
-  if (strictEnabled) {
+  if (adminStatus === 'smart_monitor') {
+    securityLevel = resolveSmartMonitorSecurityLevel({
+      score,
+      signals: merged,
+      flags,
+    })
+  } else if (strictEnabled) {
     securityLevel = resolveStrictSecurityLevel({
       score,
       signals: merged,
@@ -300,6 +378,9 @@ export async function ingestSecurityReport(payload) {
     if (adminStatus === 'temp_block' || adminStatus === 'perm_block') securityLevel = 'blocked'
     else if (adminStatus === 'whitelisted') securityLevel = String(prev?.security_level || 'warning')
     else if (adminStatus === 'allowed') securityLevel = 'warning'
+    else if (adminStatus === 'smart_monitor') {
+      securityLevel = resolveSmartMonitorSecurityLevel({ score, signals: merged, flags })
+    }
   }
 
   const detectedNow = hasDetectionSignals({ score, signals: merged, flags })
@@ -329,6 +410,8 @@ export async function ingestSecurityReport(payload) {
        security_level = CASE
          WHEN device_security_profiles.admin_status IN ('whitelisted', 'temp_block', 'perm_block', 'allowed')
          THEN device_security_profiles.security_level
+         WHEN device_security_profiles.admin_status = 'smart_monitor'
+         THEN EXCLUDED.security_level
          ELSE EXCLUDED.security_level
        END,
        last_seen_at = now(),
@@ -520,6 +603,10 @@ export async function getPlaybackSecurityPolicy(deviceId) {
     level === 'critical' ||
     (strictEnabled && hasThreat && adminStatus === 'monitoring')
 
+  if (adminStatus === 'smart_monitor') {
+    deny = adminBlocked || level === 'blocked' || level === 'critical'
+  }
+
   if (adminStatus === 'temp_block') {
     const until = r.temp_block_until
     const t = until instanceof Date ? until : until ? new Date(until) : null
@@ -535,6 +622,7 @@ export async function getPlaybackSecurityPolicy(deviceId) {
     security_level: level,
     limited_playback: false,
     deny_playback: deny,
+    smart_monitor_enabled: adminStatus === 'smart_monitor',
   }
 }
 
@@ -547,16 +635,98 @@ const ACTION_MAP = {
     clear_block: true,
     whitelist: false,
     clear_flags: true,
+    disable_smart_monitor: true,
   },
-  temporary_block: { admin_status: 'temp_block', security_level: 'blocked', temp_hours: 24 },
-  permanent_block: { admin_status: 'perm_block', security_level: 'blocked', perm_block: true },
+  temporary_block: {
+    admin_status: 'temp_block',
+    security_level: 'blocked',
+    temp_hours: 24,
+    record_block: true,
+    disable_smart_monitor: true,
+  },
+  permanent_block: {
+    admin_status: 'perm_block',
+    security_level: 'blocked',
+    perm_block: true,
+    record_block: true,
+    disable_smart_monitor: true,
+  },
+  block_user: {
+    admin_status: 'perm_block',
+    security_level: 'blocked',
+    perm_block: true,
+    record_block: true,
+    disable_smart_monitor: true,
+  },
+  unblock_user: {
+    admin_status: 'allowed',
+    security_level: 'warning',
+    clear_block: true,
+    whitelist: false,
+    record_unblock: true,
+    disable_smart_monitor: true,
+  },
+  enable_smart_monitor: {
+    admin_status: 'smart_monitor',
+    security_level: 'warning',
+    clear_block: true,
+    smart_monitor: true,
+    require_prior_unblock: true,
+  },
+  disable_smart_monitor: {
+    admin_status: 'monitoring',
+    security_level: 'warning',
+    smart_monitor: false,
+    reapply_strict_level: true,
+  },
   reset_risk: {
     admin_status: 'monitoring',
     security_level: 'warning',
     clear_flags: true,
     clear_block: true,
     whitelist: false,
+    disable_smart_monitor: true,
   },
+}
+
+function resolveLevelAfterAction(spec, profile) {
+  if (spec.reapply_strict_level && profile) {
+    const flags = {
+      rooted: profile.rooted === true,
+      emulator: profile.emulator === true,
+      clone_detected: profile.clone_detected === true,
+      debugger: profile.debugger === true,
+      frida: profile.frida === true,
+      tampered_apk: profile.tampered_apk === true,
+    }
+    const signals = Array.isArray(profile.signals) ? profile.signals : []
+    const score = Number(profile.risk_score) || 0
+    if (rowHasStoredThreat(profile)) {
+      return resolveStrictSecurityLevel({
+        score,
+        signals,
+        flags,
+        prev: profile,
+        adminStatus: 'monitoring',
+      })
+    }
+  }
+  if (spec.admin_status === 'smart_monitor' && profile) {
+    const flags = {
+      rooted: profile.rooted === true,
+      emulator: profile.emulator === true,
+      clone_detected: profile.clone_detected === true,
+      debugger: profile.debugger === true,
+      frida: profile.frida === true,
+      tampered_apk: profile.tampered_apk === true,
+    }
+    return resolveSmartMonitorSecurityLevel({
+      score: Number(profile.risk_score) || 0,
+      signals: Array.isArray(profile.signals) ? profile.signals : [],
+      flags,
+    })
+  }
+  return spec.security_level || 'warning'
 }
 
 export async function applyDeviceSecurityAction(deviceId, action, opts = {}) {
@@ -566,6 +736,8 @@ export async function applyDeviceSecurityAction(deviceId, action, opts = {}) {
   const d = text(deviceId, 128)
   const spec = ACTION_MAP[action]
   if (!d || !spec) throw new Error('Invalid device_id or action')
+  const actor = text(opts.actor || 'Admin', 120)
+  const now = new Date().toISOString()
 
   const client = await pool.connect()
   try {
@@ -573,43 +745,92 @@ export async function applyDeviceSecurityAction(deviceId, action, opts = {}) {
     const { rows } = await client.query(`SELECT * FROM device_security_profiles WHERE device_id = $1`, [d])
     const profile = rows[0]
 
+    if (spec.require_prior_unblock) {
+      const wasUnblocked =
+        profile?.unblocked_at != null ||
+        profile?.admin_status === 'allowed' ||
+        profile?.admin_status === 'whitelisted'
+      if (!wasUnblocked && action === 'enable_smart_monitor') {
+        throw new Error('Unblock the device before enabling Smart Monitor Mode')
+      }
+    }
+
     if (spec.clear_flags) {
       await client.query(
         `UPDATE device_security_profiles SET
            risk_score = 0, risk_type = '', rooted = false, emulator = false,
            clone_detected = false, debugger = false, frida = false, tampered_apk = false,
            signals = '[]'::jsonb, security_level = 'warning', admin_status = 'monitoring',
-           temp_block_until = NULL, updated_at = now()
+           temp_block_until = NULL, smart_monitor_enabled = false,
+           blocked = false, blocked_at = NULL, blocked_by = '',
+           updated_at = now()
          WHERE device_id = $1`,
         [d],
       )
-    } else if (profile) {
-      const level = spec.security_level || 'warning'
-      await client.query(
-        `UPDATE device_security_profiles SET
-           admin_status = $2, security_level = $3,
-           temp_block_until = $4, updated_at = now()
-         WHERE device_id = $1`,
-        [
-          d,
-          spec.admin_status,
-          level,
-          spec.temp_hours
-            ? new Date(Date.now() + spec.temp_hours * 3600 * 1000).toISOString()
-            : spec.admin_status === 'temp_block'
-              ? new Date(Date.now() + 24 * 3600 * 1000).toISOString()
-              : null,
-        ],
-      )
     } else {
-      await client.query(
-        `INSERT INTO device_security_profiles (device_id, admin_status, security_level, updated_at)
-         VALUES ($1, $2, $3, now())`,
-        [d, spec.admin_status, spec.security_level || 'warning'],
-      )
+      const level = resolveLevelAfterAction(spec, profile)
+      const smartMonitorVal = spec.smart_monitor === true
+      const disableSmart = spec.disable_smart_monitor === true
+      const recordBlock = spec.record_block === true
+      const recordUnblock = spec.record_unblock === true
+
+      if (profile) {
+        await client.query(
+          `UPDATE device_security_profiles SET
+             admin_status = $2,
+             security_level = $3,
+             temp_block_until = $4,
+             smart_monitor_enabled = CASE
+               WHEN $5::boolean THEN true
+               WHEN $6::boolean THEN false
+               ELSE smart_monitor_enabled
+             END,
+             blocked = CASE WHEN $7::boolean THEN true WHEN $8::boolean THEN false ELSE blocked END,
+             blocked_at = CASE WHEN $7::boolean THEN $9::timestamptz ELSE blocked_at END,
+             blocked_by = CASE WHEN $7::boolean THEN $10 ELSE blocked_by END,
+             unblocked_at = CASE WHEN $8::boolean THEN $9::timestamptz ELSE unblocked_at END,
+             unblocked_by = CASE WHEN $8::boolean THEN $10 ELSE unblocked_by END,
+             updated_at = now()
+           WHERE device_id = $1`,
+          [
+            d,
+            spec.admin_status,
+            level,
+            spec.temp_hours
+              ? new Date(Date.now() + spec.temp_hours * 3600 * 1000).toISOString()
+              : spec.admin_status === 'temp_block'
+                ? new Date(Date.now() + 24 * 3600 * 1000).toISOString()
+                : null,
+            smartMonitorVal,
+            disableSmart || spec.smart_monitor === false,
+            recordBlock,
+            recordUnblock,
+            now,
+            actor,
+          ],
+        )
+      } else {
+        await client.query(
+          `INSERT INTO device_security_profiles (
+             device_id, admin_status, security_level, smart_monitor_enabled,
+             blocked, blocked_at, blocked_by, unblocked_at, unblocked_by, updated_at
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
+          [
+            d,
+            spec.admin_status,
+            level,
+            smartMonitorVal,
+            recordBlock,
+            recordBlock ? now : null,
+            recordBlock ? actor : '',
+            recordUnblock ? now : null,
+            recordUnblock ? actor : '',
+          ],
+        )
+      }
     }
 
-    if (spec.clear_block || spec.whitelist === false) {
+    if (spec.clear_block || spec.whitelist === false || spec.record_unblock) {
       await client.query(
         `INSERT INTO admin_devices (device_id, is_blocked, whitelisted, block_reason, updated_at)
          VALUES ($1, false, false, NULL, now())
@@ -627,7 +848,7 @@ export async function applyDeviceSecurityAction(deviceId, action, opts = {}) {
       )
     }
     if (spec.perm_block) {
-      const reason = text(opts.reason || 'Security: permanent block', 500)
+      const reason = text(opts.reason || 'Security: admin block', 500)
       await client.query(
         `INSERT INTO admin_devices (device_id, is_blocked, block_reason, whitelisted, updated_at)
          VALUES ($1, true, $2, false, now())

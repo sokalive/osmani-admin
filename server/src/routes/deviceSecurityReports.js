@@ -190,7 +190,20 @@ const ACTIONS = new Set([
   'permanent_block',
   'reset_risk',
   'force_logout',
+  'block_user',
+  'unblock_user',
+  'enable_smart_monitor',
+  'disable_smart_monitor',
 ])
+
+const AUDIT_EVENT_BY_ACTION = {
+  block_user: 'Security block user',
+  permanent_block: 'Security block user',
+  temporary_block: 'Security block user',
+  unblock_user: 'Security unblock user',
+  enable_smart_monitor: 'Security smart monitor enable',
+  disable_smart_monitor: 'Security smart monitor disable',
+}
 
 deviceSecurityReportsRouter.post('/security/devices/:deviceId/action', async (req, res) => {
   try {
@@ -214,13 +227,24 @@ deviceSecurityReportsRouter.post('/security/devices/:deviceId/action', async (re
       })
       device = (await getRiskDevice(deviceId)) || { device_id: deviceId }
     } else {
-      device = await applyDeviceSecurityAction(deviceId, action, req.body || {})
+      device = await applyDeviceSecurityAction(deviceId, action, {
+        ...(req.body || {}),
+        actor: adminActor(req),
+      })
+      const auditType = AUDIT_EVENT_BY_ACTION[action] || `Security action: ${action}`
       await logSecurityEvent(pool, {
         actor: adminActor(req),
-        eventType: `Security action: ${action}`,
-        status: 'completed',
+        eventType: auditType,
+        status: action.includes('block') && action !== 'unblock_user' ? 'blocked' : 'completed',
         detail: `${action} on ${deviceId}`,
-        metadata: { device_id: deviceId, action },
+        metadata: {
+          device_id: deviceId,
+          action,
+          smart_monitor_enabled: device?.smart_monitor_enabled === true,
+          blocked: device?.blocked === true,
+          unblocked_at: device?.unblocked_at ?? null,
+          unblocked_by: device?.unblocked_by ?? null,
+        },
       })
       deviceSubscriptionBus.emit('update', { deviceId })
     }

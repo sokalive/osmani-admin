@@ -7,6 +7,7 @@ import {
   computeRiskFromSignals,
   hasDetectionSignals,
   resolveStrictSecurityLevel,
+  resolveSmartMonitorSecurityLevel,
   levelFromScore,
 } from '../src/lib/deviceSecurityStore.js'
 
@@ -105,5 +106,34 @@ assert.notEqual(whitelisted, 'blocked', 'whitelist bypasses block level')
 assert.equal(levelFromScore(99), 'blocked')
 assert.equal(levelFromScore(0), 'warning')
 assert.equal(hasDetectionSignals(rootOnly), true)
+
+const smartRootOnly = resolveSmartMonitorSecurityLevel({
+  score: rootOnly.score,
+  signals: rootOnly.signals,
+  flags: rootOnly.flags,
+})
+assert.equal(smartRootOnly, 'warning', 'single root must not re-block in smart monitor')
+
+const smartFridaOnly = resolveSmartMonitorSecurityLevel({
+  ...computeRiskFromSignals([{ risk_type: 'frida_detected' }]),
+})
+assert.equal(smartFridaOnly, 'warning', 'single frida below threshold must not re-block')
+
+const smartCombo = resolveSmartMonitorSecurityLevel({
+  ...computeRiskFromSignals([
+    { risk_type: 'frida_detected' },
+    { risk_type: 'tampered_apk' },
+  ]),
+})
+assert.equal(smartCombo, 'blocked', 'frida + tampered must re-block in smart monitor')
+
+const smartHighScore = resolveSmartMonitorSecurityLevel({
+  ...computeRiskFromSignals([
+    { risk_type: 'emulator_detected' },
+    { risk_type: 'clone_detected' },
+    { risk_type: 'debugger_attached' },
+  ]),
+})
+assert.ok(smartHighScore === 'blocked', 'combined score >= threshold must re-block')
 
 console.log('verify-strict-security-enforcement: OK')
