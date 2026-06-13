@@ -1,6 +1,7 @@
 /**
  * Billing: plans, transactions, subscriptions, ZenoPay settings (single-row).
  */
+import { ensureDeviceSecuritySchema } from './deviceSecuritySchema.js'
 async function currentConstraintDefinition(client, tableName, constraintName) {
   const { rows } = await client.query(
     `SELECT pg_get_constraintdef(c.oid) AS def
@@ -514,66 +515,7 @@ export async function ensureBillingTables(client) {
     WHERE is_blocked = true;
   `)
 
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS device_security_profiles (
-      device_id TEXT PRIMARY KEY,
-      phone_user TEXT NOT NULL DEFAULT '',
-      app_version TEXT NOT NULL DEFAULT '',
-      risk_type TEXT NOT NULL DEFAULT '',
-      risk_score INT NOT NULL DEFAULT 0,
-      rooted BOOLEAN NOT NULL DEFAULT false,
-      emulator BOOLEAN NOT NULL DEFAULT false,
-      clone_detected BOOLEAN NOT NULL DEFAULT false,
-      debugger BOOLEAN NOT NULL DEFAULT false,
-      frida BOOLEAN NOT NULL DEFAULT false,
-      tampered_apk BOOLEAN NOT NULL DEFAULT false,
-      signals JSONB NOT NULL DEFAULT '[]'::jsonb,
-      security_level TEXT NOT NULL DEFAULT 'warning',
-      admin_status TEXT NOT NULL DEFAULT 'monitoring',
-      temp_block_until TIMESTAMPTZ,
-      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-      CONSTRAINT device_security_profiles_level_check
-        CHECK (security_level IN ('warning', 'limited', 'blocked', 'critical')),
-      CONSTRAINT device_security_profiles_admin_status_check
-        CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block', 'smart_monitor'))
-    );
-  `)
-  await client.query(`
-    ALTER TABLE device_security_profiles DROP CONSTRAINT IF EXISTS device_security_profiles_admin_status_check;
-  `)
-  await client.query(`
-    ALTER TABLE device_security_profiles ADD CONSTRAINT device_security_profiles_admin_status_check
-      CHECK (admin_status IN ('monitoring', 'allowed', 'whitelisted', 'temp_block', 'perm_block', 'smart_monitor'));
-  `)
-  await client.query(`
-    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT false;
-  `)
-  await client.query(`
-    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
-  `)
-  await client.query(`
-    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS blocked_by TEXT NOT NULL DEFAULT '';
-  `)
-  await client.query(`
-    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS unblocked_at TIMESTAMPTZ;
-  `)
-  await client.query(`
-    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS unblocked_by TEXT NOT NULL DEFAULT '';
-  `)
-  await client.query(`
-    ALTER TABLE device_security_profiles ADD COLUMN IF NOT EXISTS smart_monitor_enabled BOOLEAN NOT NULL DEFAULT false;
-  `)
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS device_security_profiles_level_idx
-    ON device_security_profiles (security_level, updated_at DESC);
-  `)
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS device_security_profiles_last_seen_idx
-    ON device_security_profiles (last_seen_at DESC);
-  `)
+  await ensureDeviceSecuritySchema(client)
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS admin_otp_codes (
