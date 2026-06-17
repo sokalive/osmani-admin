@@ -107,6 +107,15 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
     if (topics.includes('config') && au && typeof au === 'object') {
       send('app_update_settings', { ...au, reason: String(packet.event || 'sync') })
     }
+    if (topics.includes('config') && packet?.event === 'config.channels_changed') {
+      send('channels_catalog', {
+        v: packet.configVersion,
+        action: packet?.payload?.action ?? null,
+        channelId: packet?.payload?.channelId ?? null,
+        routing_epoch: packet?.payload?.routing_epoch ?? null,
+        reason: String(packet.event || 'sync'),
+      })
+    }
     send(packet.event || 'sync', packet)
   }
 

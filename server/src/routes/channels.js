@@ -20,7 +20,7 @@ import {
   reorderChannels,
   updateChannel,
 } from '../store.js'
-import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { publishChannelCatalogChange, invalidateChannelCatalogCaches } from '../lib/channelCatalogSync.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import {
   logChannelStreamDiagGet,
@@ -34,13 +34,8 @@ import { triggerServerHealthBroadcast } from './realtimeSettings.js'
 
 export const channelsRouter = Router()
 
-function channelCatalogSyncPayload(action, channelId) {
-  return {
-    topics: ['config'],
-    action,
-    channelId,
-    synced_at: new Date().toISOString(),
-  }
+async function notifyChannelCatalogChange(action, channelId = null) {
+  await publishChannelCatalogChange(action, channelId)
 }
 
 const upload = uploadThumbnail.single('thumbnail')
@@ -103,7 +98,7 @@ channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) 
     const now = new Date().toISOString()
     const created = mergeChannelRecord(null, { ...parsed, sortOrder }, nextId, now)
     await insertChannel(created)
-    liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('created', created.id))
+    await notifyChannelCatalogChange('created', created.id)
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after create failed:', err)
     })
@@ -138,7 +133,7 @@ channelsRouter.post('/:id/duplicate', requireAdminPanelAccess, async (req, res) 
       return res.status(400).json({ error: 'Source channel is missing required name or stream URL' })
     }
     await insertChannel(created)
-    liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('duplicated', created.id))
+    await notifyChannelCatalogChange('duplicated', created.id)
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after duplicate failed:', err)
     })
@@ -159,10 +154,7 @@ channelsRouter.post('/reorder', requireAdminPanelAccess, async (req, res) => {
       return res.status(400).json({ error: 'orders array required' })
     }
     const updated = await reorderChannels(orders)
-    liveSyncBus.publish(
-      'config.channels_changed',
-      channelCatalogSyncPayload('reordered', null),
-    )
+    await notifyChannelCatalogChange('reordered', null)
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after reorder failed:', err)
     })
@@ -201,7 +193,7 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
 
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
     await updateChannel(updated)
-    liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('updated', updated.id))
+    await notifyChannelCatalogChange('updated', updated.id)
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after update failed:', err)
     })
@@ -230,7 +222,7 @@ channelsRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
       if (f) await fs.unlink(path.join(UPLOADS_DIR, f)).catch(() => {})
     }
     await deleteChannelById(id)
-    liveSyncBus.publish('config.channels_changed', channelCatalogSyncPayload('deleted', id))
+    await notifyChannelCatalogChange('deleted', id)
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after delete failed:', err)
     })

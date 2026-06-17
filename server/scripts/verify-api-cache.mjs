@@ -72,6 +72,26 @@ serveFromApiCacheOrContinue('channels', req, res3, () => {
 }, 60_000)
 assert.equal(callsAfterInvalidate, 1)
 
+// In-flight handler must not re-cache after invalidation (generation bump).
+invalidateAllApiCache()
+const resRace = mockRes()
+let raceHandlerDone = null
+serveFromApiCacheOrContinue('channels', req, resRace, () => {
+  raceHandlerDone = () => {
+    resRace.json({ channels: [99] })
+  }
+}, 60_000)
+assert.equal(typeof raceHandlerDone, 'function')
+invalidateApiCacheNamespace('channels')
+raceHandlerDone()
+const resAfterRace = mockRes()
+let callsAfterRace = 0
+serveFromApiCacheOrContinue('channels', req, resAfterRace, () => {
+  callsAfterRace += 1
+  resAfterRace.json({ channels: [3] })
+}, 60_000)
+assert.equal(callsAfterRace, 1, 'stale in-flight response must not be stored after invalidation')
+
 const key = buildApiCacheKey('channels', req)
 assert.equal(key, 'channels|https://api.example.com|/api/channels')
 

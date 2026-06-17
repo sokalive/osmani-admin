@@ -3,7 +3,7 @@ import { invalidateApiCacheNamespace } from './apiResponseCache.js'
 
 /** liveSync `event` → cache namespaces to purge (admin writes stay visible quickly). */
 const EVENT_NAMESPACES = {
-  'config.channels_changed': ['channels'],
+  'config.channels_changed': ['channels', 'runtime-app-modes'],
   'config.banners_changed': ['banners'],
   'config.plans_changed': ['plans'],
   'config.payment_providers_changed': ['payment-providers'],

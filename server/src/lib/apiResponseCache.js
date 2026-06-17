@@ -14,6 +14,20 @@ const store = new Map()
 /** @type {Map<string, Promise<{ body: unknown, status: number }>>} */
 const inflight = new Map()
 
+/** Bumped on namespace invalidation so in-flight handlers cannot re-store stale JSON. */
+/** @type {Map<string, number>} */
+const namespaceGeneration = new Map()
+
+function generationFor(namespace) {
+  return namespaceGeneration.get(namespace) || 0
+}
+
+function bumpNamespaceGeneration(namespace) {
+  const next = generationFor(namespace) + 1
+  namespaceGeneration.set(namespace, next)
+  return next
+}
+
 const stats = {
   hit: 0,
   miss: 0,
@@ -97,6 +111,7 @@ export function serveFromApiCacheOrContinue(namespace, req, res, next, ttlMs) {
   }
 
   const key = buildApiCacheKey(namespace, req)
+  const generationAtStart = generationFor(namespace)
   const now = Date.now()
   const hit = store.get(key)
   if (hit && hit.expiresAt > now) {
@@ -152,7 +167,7 @@ export function serveFromApiCacheOrContinue(namespace, req, res, next, ttlMs) {
       res.removeListener('close', finishUncached)
     }
     const status = res.statusCode || 200
-    if (!settled && status >= 200 && status < 300) {
+    if (!settled && status >= 200 && status < 300 && generationAtStart === generationFor(namespace)) {
       const entry = { body, status }
       remember(key, entry, ttlMs)
       settled = true
@@ -173,6 +188,7 @@ export function serveFromApiCacheOrContinue(namespace, req, res, next, ttlMs) {
 }
 
 export function invalidateApiCacheNamespace(namespace) {
+  bumpNamespaceGeneration(namespace)
   const prefix = `${namespace}|`
   let removed = 0
   for (const key of [...store.keys()]) {
