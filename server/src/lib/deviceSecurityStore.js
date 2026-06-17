@@ -103,6 +103,25 @@ export function computeRiskFromSignals(signals) {
   return { score, signals: merged, risk_type: primary, flags }
 }
 
+/**
+ * Automatic enforcement tier for monitoring devices (strict / automatic mode).
+ * ROOT-only, EMULATOR-only, and ROOT+EMULATOR-only → Smart Monitor (warning, not block).
+ * FRIDA, APK tampering, debugger, clone, and severe combos → block.
+ * @returns {'block'|'smart_monitor'}
+ */
+export function classifyAutomaticThreatEnforcement(flags) {
+  const rooted = flags?.rooted === true
+  const emulator = flags?.emulator === true
+  const frida = flags?.frida === true
+  const tampered = flags?.tampered_apk === true
+  const debuggerOn = flags?.debugger === true
+  const clone = flags?.clone_detected === true
+
+  if (frida || tampered || debuggerOn || clone) return 'block'
+  if (rooted || emulator) return 'smart_monitor'
+  return 'block'
+}
+
 /** True when any anti-tamper signal is present in this report. */
 export function hasDetectionSignals({ score, signals, flags }) {
   if (Number(score) > 0) return true
@@ -157,7 +176,24 @@ export function resolveStrictSecurityLevel({ score, signals, flags, prev, adminS
     status === 'monitoring' &&
     rowHasStoredThreat(prev)
 
+  const effectiveFlags = detectedNow
+    ? flags || {}
+    : persistedAutoBlock
+      ? {
+          rooted: prev.rooted === true,
+          emulator: prev.emulator === true,
+          clone_detected: prev.clone_detected === true,
+          debugger: prev.debugger === true,
+          frida: prev.frida === true,
+          tampered_apk: prev.tampered_apk === true,
+        }
+      : flags || {}
+
   if (detectedNow || persistedAutoBlock) {
+    const enforcement = classifyAutomaticThreatEnforcement(effectiveFlags)
+    if (enforcement === 'smart_monitor') {
+      return resolveSmartMonitorSecurityLevel({ score, signals, flags: effectiveFlags })
+    }
     return 'blocked'
   }
   return 'warning'
@@ -308,7 +344,12 @@ export async function ingestSecurityReport(payload) {
   const adminStatus = String(prev?.admin_status || 'monitoring')
 
   const strictEnabled = await isStrictEnforcementEnabled(pool)
+  const autoEnforcement =
+    strictEnabled && adminStatus === 'monitoring' && hasDetectionSignals({ score, signals: merged, flags })
+      ? classifyAutomaticThreatEnforcement(flags)
+      : null
   let securityLevel = 'warning'
+  let promoteSmartMonitor = false
   if (adminStatus === 'smart_monitor') {
     securityLevel = resolveSmartMonitorSecurityLevel({
       score,
@@ -330,6 +371,14 @@ export async function ingestSecurityReport(payload) {
       prev,
       adminStatus,
     })
+    if (autoEnforcement === 'smart_monitor') {
+      promoteSmartMonitor = true
+      securityLevel = resolveSmartMonitorSecurityLevel({
+        score,
+        signals: merged,
+        flags,
+      })
+    }
   }
 
   const detectedNow = hasDetectionSignals({ score, signals: merged, flags })
@@ -388,6 +437,32 @@ export async function ingestSecurityReport(payload) {
       }),
     ],
   )
+
+  if (promoteSmartMonitor) {
+    const nowIso = new Date().toISOString()
+    await pool.query(
+      `UPDATE device_security_profiles SET
+         admin_status = 'smart_monitor',
+         smart_monitor_enabled = true,
+         security_level = $2,
+         blocked = false,
+         blocked_at = NULL,
+         blocked_by = '',
+         unblocked_at = COALESCE(unblocked_at, $3::timestamptz),
+         unblocked_by = CASE WHEN unblocked_at IS NULL THEN $4 ELSE unblocked_by END,
+         updated_at = now()
+       WHERE device_id = $1`,
+      [deviceId, securityLevel, nowIso, 'system:auto_smart_monitor'],
+    )
+    await pool.query(
+      `INSERT INTO admin_devices (device_id, is_blocked, block_reason, whitelisted, updated_at)
+       VALUES ($1, false, NULL, false, now())
+       ON CONFLICT (device_id) DO UPDATE SET
+         is_blocked = false, block_reason = NULL, updated_at = now()`,
+      [deviceId],
+    )
+    await syncPlaybackAccessAfterSecurityAction(deviceId, 'auto_smart_monitor', { clear_block: true }, 'system:auto_smart_monitor')
+  }
 
   await pool.query(
     `INSERT INTO admin_devices (device_id, last_seen_at, updated_at)
@@ -462,7 +537,7 @@ export async function getRiskDevice(deviceId) {
   return { ...device, block_reason: rows[0]?.block_reason ? String(rows[0].block_reason) : '' }
 }
 
-/** One-shot reconcile: devices with stored threats but warning/limited → blocked (strict mode). */
+/** One-shot reconcile: block severe threats only; ROOT/EMULATOR-only stay on Smart Monitor path. */
 export async function reconcileStrictSecurityLevels(pool) {
   if (!(await isStrictEnforcementEnabled(pool))) return { updated: 0 }
   const out = await pool.query(
@@ -471,16 +546,187 @@ export async function reconcileStrictSecurityLevels(pool) {
      WHERE admin_status = 'monitoring'
        AND security_level IN ('warning', 'limited')
        AND (
-         risk_score > 0
-         OR rooted = true
-         OR emulator = true
-         OR clone_detected = true
-         OR debugger = true
-         OR frida = true
+         frida = true
          OR tampered_apk = true
+         OR debugger = true
+         OR clone_detected = true
+         OR (
+           (risk_score > 0 OR rooted = true OR emulator = true)
+           AND NOT (
+             (rooted = true OR emulator = true)
+             AND frida = false
+             AND tampered_apk = false
+             AND debugger = false
+             AND clone_detected = false
+           )
+         )
        )`,
   )
   return { updated: Number(out.rowCount) || 0 }
+}
+
+function isLowRiskRootEmulatorProfile(row) {
+  if (!row) return false
+  const rooted = row.rooted === true
+  const emulator = row.emulator === true
+  if (!rooted && !emulator) return false
+  if (row.frida === true || row.tampered_apk === true || row.debugger === true || row.clone_detected === true) {
+    return false
+  }
+  return true
+}
+
+/**
+ * Migrate a blocked ROOT/EMULATOR-only device to Smart Monitor (all enforcement layers).
+ */
+export async function migrateLowRiskDeviceToSmartMonitor(deviceId, opts = {}) {
+  const pool = getPool()
+  if (!pool) throw new Error('Database not configured')
+  await ensureDeviceSecurityTables(pool)
+  const d = text(deviceId, 128)
+  const actor = text(opts.actor || 'system:root_emulator_migration', 120)
+
+  const { rows } = await pool.query(`SELECT * FROM device_security_profiles WHERE device_id = $1`, [d])
+  const profile = rows[0]
+  if (!profile) return { ok: false, reason: 'not_found', device_id: d }
+  if (!isLowRiskRootEmulatorProfile(profile)) {
+    return { ok: false, reason: 'not_eligible', device_id: d }
+  }
+
+  const level = resolveSmartMonitorSecurityLevel({
+    score: Number(profile.risk_score) || 0,
+    signals: Array.isArray(profile.signals) ? profile.signals : [],
+    flags: {
+      rooted: profile.rooted === true,
+      emulator: profile.emulator === true,
+      clone_detected: profile.clone_detected === true,
+      debugger: profile.debugger === true,
+      frida: profile.frida === true,
+      tampered_apk: profile.tampered_apk === true,
+    },
+  })
+  const nowIso = new Date().toISOString()
+
+  await pool.query(
+    `UPDATE device_security_profiles SET
+       admin_status = 'smart_monitor',
+       smart_monitor_enabled = true,
+       security_level = $2,
+       blocked = false,
+       blocked_at = NULL,
+       blocked_by = '',
+       unblocked_at = COALESCE(unblocked_at, $3::timestamptz),
+       unblocked_by = CASE WHEN unblocked_at IS NULL THEN $4 ELSE unblocked_by END,
+       updated_at = now()
+     WHERE device_id = $1`,
+    [d, level, nowIso, actor],
+  )
+  await pool.query(
+    `INSERT INTO admin_devices (device_id, is_blocked, block_reason, whitelisted, updated_at)
+     VALUES ($1, false, NULL, false, now())
+     ON CONFLICT (device_id) DO UPDATE SET
+       is_blocked = false, block_reason = NULL, updated_at = now()`,
+    [d],
+  )
+  await syncPlaybackAccessAfterSecurityAction(d, 'migrate_smart_monitor', { clear_block: true }, actor)
+
+  return { ok: true, device_id: d, security_level: level, smart_monitor: true }
+}
+
+/** Audit + optional migrate all blocked ROOT/EMULATOR-only devices. */
+export async function auditAndMigrateLowRiskSmartMonitor({ execute = false, actor } = {}) {
+  const pool = getPool()
+  if (!pool) throw new Error('Database not configured')
+  await ensureDeviceSecurityTables(pool)
+
+  const { rows } = await pool.query(
+    `SELECT dsp.*, ad.is_blocked AS admin_devices_blocked
+     FROM device_security_profiles dsp
+     LEFT JOIN admin_devices ad ON ad.device_id = dsp.device_id
+     WHERE dsp.security_level IN ('blocked', 'critical')
+        OR dsp.blocked = true
+        OR ad.is_blocked = true`,
+  )
+
+  const buckets = {
+    root_only: [],
+    emulator_only: [],
+    root_emulator_only: [],
+    keep_blocked: [],
+    other: [],
+  }
+
+  for (const row of rows) {
+    const entry = {
+      device_id: String(row.device_id),
+      admin_status: String(row.admin_status || ''),
+      security_level: String(row.security_level || ''),
+      rooted: row.rooted === true,
+      emulator: row.emulator === true,
+      frida: row.frida === true,
+      tampered_apk: row.tampered_apk === true,
+      debugger: row.debugger === true,
+      clone_detected: row.clone_detected === true,
+      risk_type: String(row.risk_type || ''),
+      risk_score: Number(row.risk_score) || 0,
+    }
+    if (!isLowRiskRootEmulatorProfile(row)) {
+      if (entry.frida || entry.tampered_apk || entry.debugger || entry.clone_detected) {
+        buckets.keep_blocked.push({ ...entry, reason: 'severe_signal' })
+      } else if (!entry.rooted && !entry.emulator) {
+        buckets.other.push({ ...entry, reason: 'no_root_emulator' })
+      } else {
+        buckets.keep_blocked.push({ ...entry, reason: 'ineligible_combo' })
+      }
+      continue
+    }
+    if (entry.rooted && entry.emulator) buckets.root_emulator_only.push(entry)
+    else if (entry.rooted) buckets.root_only.push(entry)
+    else buckets.emulator_only.push(entry)
+  }
+
+  const eligible = [
+    ...buckets.root_only,
+    ...buckets.emulator_only,
+    ...buckets.root_emulator_only,
+  ]
+
+  const migrated = []
+  const failed = []
+  if (execute) {
+    for (const item of eligible) {
+      try {
+        const out = await migrateLowRiskDeviceToSmartMonitor(item.device_id, { actor })
+        if (out.ok) migrated.push(out)
+        else failed.push(out)
+      } catch (e) {
+        failed.push({ ok: false, device_id: item.device_id, error: String(e.message || e) })
+      }
+    }
+    if (migrated.length > 0) {
+      const reconcile = await import('./deviceSecurityPlaybackAudit.js')
+      await reconcile.reconcileUnblockedPlaybackAccess({ emitUpdates: true })
+    }
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    execute,
+    counts: {
+      total_blocked_scanned: rows.length,
+      root_only: buckets.root_only.length,
+      emulator_only: buckets.emulator_only.length,
+      root_emulator_only: buckets.root_emulator_only.length,
+      eligible_total: eligible.length,
+      keep_blocked: buckets.keep_blocked.length,
+      other: buckets.other.length,
+      migrated: migrated.length,
+      failed: failed.length,
+    },
+    buckets,
+    migrated,
+    failed,
+  }
 }
 
 export async function getSecurityStats() {

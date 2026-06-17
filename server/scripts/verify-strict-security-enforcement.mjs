@@ -22,14 +22,14 @@ const levelRoot = resolveStrictSecurityLevel({
   prev: null,
   adminStatus: 'monitoring',
 })
-assert.equal(levelRoot, 'blocked', 'root must block immediately')
+assert.equal(levelRoot, 'warning', 'root only routes to smart monitor (warning), not block')
 
 const emu = resolveStrictSecurityLevel({
   ...computeRiskFromSignals([{ risk_type: 'emulator_detected' }]),
   prev: null,
   adminStatus: 'monitoring',
 })
-assert.equal(emu, 'blocked', 'emulator must block')
+assert.equal(emu, 'warning', 'emulator only routes to smart monitor')
 
 const frida = resolveStrictSecurityLevel({
   ...computeRiskFromSignals([{ risk_type: 'frida_detected' }]),
@@ -94,7 +94,7 @@ const persisted = resolveStrictSecurityLevel({
   },
   adminStatus: 'monitoring',
 })
-assert.equal(persisted, 'blocked', 'stays blocked until admin clears')
+assert.equal(persisted, 'warning', 'persisted root-only re-evaluates to smart monitor path')
 
 const whitelisted = resolveStrictSecurityLevel({
   ...rootOnly,

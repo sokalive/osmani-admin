@@ -12,6 +12,7 @@ import {
 import {
   applyBulkDeviceSecurityAction,
   applyDeviceSecurityAction,
+  auditAndMigrateLowRiskSmartMonitor,
   ensureDeviceSecurityTables,
   getPlaybackSecurityPolicy,
   getRiskDevice,
@@ -169,6 +170,43 @@ deviceSecurityReportsRouter.post('/security/reconcile-unblocked-playback', async
     res.json({ ok: true, ...out })
   } catch (e) {
     console.error('[security/reconcile-unblocked-playback]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Audit ROOT/EMULATOR-only blocked devices; optional migrate to Smart Monitor. */
+deviceSecurityReportsRouter.get('/security/root-emulator-audit', async (_req, res) => {
+  try {
+    const audit = await auditAndMigrateLowRiskSmartMonitor({ execute: false })
+    res.json({ ok: true, audit })
+  } catch (e) {
+    console.error('[security/root-emulator-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+deviceSecurityReportsRouter.post('/security/migrate-root-emulator-smart-monitor', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })
+    const actor = adminActor(req)
+    const audit = await auditAndMigrateLowRiskSmartMonitor({ execute: true, actor })
+    await logSecurityEvent(pool, {
+      actor,
+      eventType: 'Security root/emulator smart monitor migration',
+      status: 'completed',
+      detail: `migrated ${audit.counts.migrated} devices; kept blocked ${audit.counts.keep_blocked}`,
+      metadata: {
+        counts: audit.counts,
+        migrated_device_ids: audit.migrated.map((m) => m.device_id),
+        failed: audit.failed,
+      },
+    })
+    emitSync('security_device_changed', { migration: 'root_emulator_smart_monitor', ...audit.counts })
+    emitSync('security_logs_changed', { action: 'migrate_root_emulator_smart_monitor' })
+    res.json({ ok: true, audit })
+  } catch (e) {
+    console.error('[security/migrate-root-emulator-smart-monitor]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
