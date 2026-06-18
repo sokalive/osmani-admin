@@ -157,6 +157,14 @@ curl -fsS "http://127.0.0.1:10001/api/runtime/cutover-status" | head -c 500 || t
 echo
 curl -fsS "http://127.0.0.1/api/health" | head -c 200 || true
 echo
+
+if [[ -f "$API_DIR/scripts/run-subscription-repair.mjs" ]]; then
+  echo "==> subscription restoration repair"
+  (cd "$API_DIR" && node scripts/run-subscription-repair.mjs) || {
+    echo "WARN: subscription repair reported unresolved users — check audit output" >&2
+  }
+fi
+
 if [[ -f "$ROOT/deploy/contabo/verify-admin-vps.mjs" ]]; then
   node "$ROOT/deploy/contabo/verify-admin-vps.mjs" || {
     echo "WARN: verify-admin-vps failed — check admin SPA build" >&2

@@ -8,6 +8,19 @@ const RENDER_API = String(process.env.RENDER_API || 'https://osmani-admin-api.on
 const VPS_API = String(process.env.VPS_API || 'http://144.91.117.90').replace(/\/$/, '')
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '3030'
 const REPAIR = String(process.env.REPAIR ?? '1').trim() !== '0'
+const API_BASE = String(process.env.API_BASE || '').replace(/\/$/, '')
+
+async function resolveAuditBase() {
+  if (API_BASE) return API_BASE
+  for (const base of [RENDER_API, VPS_API]) {
+    const res = await fetch(`${base}/api/runtime/subscription-restoration-audit`, {
+      headers: { 'X-Admin-Token': ADMIN_TOKEN },
+      cache: 'no-store',
+    })
+    if (res.status !== 404) return base
+  }
+  return RENDER_API
+}
 
 const report = {
   restored_users_count: 0,
@@ -94,6 +107,17 @@ async function dbAudit(base, repair) {
     ? '/api/runtime/subscription-restoration-repair'
     : '/api/runtime/subscription-restoration-audit'
   const { res, body } = await fetchJson(`${base}${path}`, { method: repair ? 'POST' : 'GET' })
+  if (res.status === 404 && String(process.env.DATABASE_URL || '').trim()) {
+    const { loadProcessEnv } = await import('../src/loadEnv.js')
+    loadProcessEnv()
+    const { runSubscriptionRestorationAudit } = await import('../src/lib/subscriptionRestorationAudit.js')
+    return runSubscriptionRestorationAudit({ repair })
+  }
+  if (res.status === 404) {
+    throw new Error(
+      `${path} HTTP 404 — deploy commit a7cad57+ to Render/VPS or set DATABASE_URL for local audit`,
+    )
+  }
   if (!res.ok) throw new Error(`${path} HTTP ${res.status}: ${JSON.stringify(body)}`)
   return body
 }
@@ -107,16 +131,19 @@ async function paymentStats(base) {
 async function main() {
   console.log('=== FINAL SUBSCRIPTION RESTORATION AUDIT ===\n')
 
+  const auditBase = await resolveAuditBase()
+  console.log(`Using API base: ${auditBase}\n`)
+
   if (REPAIR) {
-    console.log('==> Running safe repair on Render...')
-    const repaired = await dbAudit(RENDER_API, true)
+    console.log('==> Running safe repair...')
+    const repaired = await dbAudit(auditBase, true)
     report.restored_users_count = repaired.repairs?.migrations_recovered + repaired.repairs?.activations_finalized || 0
     report.unresolved_users_count = repaired.unresolved_users_count ?? 0
     report.total_active_subscriptions = repaired.total_active_subscriptions ?? 0
     report.affected_users_count = repaired.affected_users_count ?? 0
     report.evidence.repair = repaired
   } else {
-    const audit = await dbAudit(RENDER_API, false)
+    const audit = await dbAudit(auditBase, false)
     report.unresolved_users_count = audit.unresolved_users_count ?? 0
     report.restored_users_count = audit.restored_users_count ?? 0
     report.total_active_subscriptions = audit.total_active_subscriptions ?? 0
@@ -124,7 +151,7 @@ async function main() {
     report.evidence.audit = audit
   }
 
-  const stats = await paymentStats(RENDER_API)
+  const stats = await paymentStats(auditBase)
   report.payment_activation_average_seconds = stats?.payment_activation_average_seconds ?? null
   report.evidence.payment_stats = stats
 
@@ -135,7 +162,7 @@ async function main() {
   report.evidence.legacy_apk = legacy
   report.evidence.vps_apk = vps
 
-  const postAudit = await dbAudit(RENDER_API, false)
+  const postAudit = await dbAudit(auditBase, false)
   report.unresolved_users_count = postAudit.unresolved_users_count ?? 0
   report.restored_users_count =
     (postAudit.affected_users_count ?? 0) - report.unresolved_users_count
