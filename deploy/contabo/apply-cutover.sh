@@ -108,6 +108,10 @@ ensure_database_url() {
 ensure_database_url
 export DATABASE_URL
 
+GIT_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+export OSMANI_GIT_COMMIT="$GIT_COMMIT"
+echo "    git commit: $GIT_COMMIT"
+
 echo "==> Admin SPA build (same-origin /api)"
 cd "$ROOT"
 npm ci

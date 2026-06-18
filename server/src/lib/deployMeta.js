@@ -1,13 +1,23 @@
-/** Git SHA for the running API (Render / GitHub Actions / Vercel set these at deploy). */
+import { execSync } from 'node:child_process'
+
+/** Git SHA for the running API (Render / GitHub Actions / VPS deploy set these at deploy). */
 export function getServerGitCommit() {
   const raw =
     process.env.RENDER_GIT_COMMIT ||
     process.env.GITHUB_SHA ||
     process.env.VERCEL_GIT_COMMIT_SHA ||
     process.env.CI_COMMIT_SHA ||
+    process.env.OSMANI_GIT_COMMIT ||
     ''
   const s = String(raw || '').trim()
-  return s ? s.slice(0, 40) : 'unknown'
+  if (s) return s.slice(0, 40)
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      .trim()
+      .slice(0, 40)
+  } catch {
+    return 'unknown'
+  }
 }
 
 /** Non-secret fingerprint so ops can confirm all instances point at the same DB. */

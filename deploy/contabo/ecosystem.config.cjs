@@ -41,6 +41,7 @@ module.exports = {
         PORT: 10001,
         OSMANI_ADMIN_ROOT: ROOT,
         OSMANI_LOAD_CUTOVER_ENV: '1',
+        OSMANI_GIT_COMMIT: process.env.OSMANI_GIT_COMMIT || '',
         ...pickProcessEnv(SECRET_ENV_KEYS),
       },
       max_memory_restart: '512M',

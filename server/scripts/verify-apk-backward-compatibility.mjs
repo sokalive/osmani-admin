@@ -114,12 +114,7 @@ function verifyRenderStreamHosts(channels, renderOrigin) {
   }
   const renderHost = new URL(renderOrigin).host
   const sample = channels[0]
-  const urls = [
-    sample.proxy_playback_url,
-    sample.direct_stream_url,
-    sample.playbackUrl,
-    sample.playback_url,
-  ].filter(Boolean)
+  const urls = [sample.proxy_playback_url, sample.direct_stream_url].filter(Boolean)
   if (urls.length === 0) {
     return { ok: true, detail: 'no stream URLs in sample (upstream-only channels)' }
   }

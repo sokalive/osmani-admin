@@ -28,3 +28,4 @@ jobs:
             bash deploy/contabo/apply-cutover.sh
             node deploy/contabo/verify-admin-vps.mjs
             node deploy/contabo/verify-cutover.mjs
+            node deploy/contabo/verify-final-migration-audit.mjs
