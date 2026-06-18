@@ -10,6 +10,20 @@ import { getLoadedEnvPaths } from '../loadEnv.js'
 import { getPool } from '../db/pool.js'
 import { UPLOADS_DIR } from '../multerUpload.js'
 import fs from 'node:fs'
+import { runSubscriptionRestorationAudit } from '../lib/subscriptionRestorationAudit.js'
+import { getServerGitCommit } from '../lib/deployMeta.js'
+
+function legacyAdminTokenOk(req) {
+  const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
+  if (!expected) return false
+  const got = String(req.headers['x-admin-token'] ?? '').trim()
+  return got === expected
+}
+
+function requireLegacyAdminToken(req, res, next) {
+  if (legacyAdminTokenOk(req)) return next()
+  return res.status(403).json({ ok: false, error: 'Invalid admin token' })
+}
 
 /**
  * Public, read-only runtime flags (no secrets). Lets Android (and optional web) clients poll
@@ -104,6 +118,60 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
     })
   } catch (e) {
     console.error('[runtime/cutover-status]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Read-only subscription restoration audit (admin token). */
+runtimePublicRouter.get('/subscription-restoration-audit', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const report = await runSubscriptionRestorationAudit({ repair: false })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-restoration-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Safe repair: backfill fingerprints, recover migration shadows, finalize orphan activations. */
+runtimePublicRouter.post('/subscription-restoration-repair', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const report = await runSubscriptionRestorationAudit({ repair: true })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-restoration-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Payment activation timing stats from completed transactions (last 7 days). */
+runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })
+    const { rows } = await pool.query(
+      `SELECT
+         COUNT(*)::int AS completed_count,
+         COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::float AS avg_activation_seconds,
+         COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::float AS median_activation_seconds
+       FROM transactions
+       WHERE status = 'completed'
+         AND plan_id IS NOT NULL
+         AND created_at > now() - interval '7 days'`,
+    )
+    res.json({
+      ok: true,
+      commit: getServerGitCommit(),
+      window_days: 7,
+      completed_count: rows[0]?.completed_count ?? 0,
+      payment_activation_average_seconds: Number(rows[0]?.avg_activation_seconds ?? 0).toFixed(2),
+      payment_activation_median_seconds: Number(rows[0]?.median_activation_seconds ?? 0).toFixed(2),
+    })
+  } catch (e) {
+    console.error('[runtime/payment-activation-stats]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
