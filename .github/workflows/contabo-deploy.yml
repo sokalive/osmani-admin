@@ -1,0 +1,29 @@
+name: Deploy Contabo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/contabo/**'
+      - 'server/**'
+      - 'src/**'
+      - 'package.json'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Contabo VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /var/www/osmani-admin-api
+            git fetch origin main
+            git reset --hard origin/main
+            bash deploy/contabo/apply-cutover.sh
+            node deploy/contabo/verify-cutover.mjs

@@ -1,25 +1,24 @@
 /**
  * PM2 ecosystem for Contabo osmani-admin-api.
- * Usage (on VPS):
- *   cd /var/www/osmani-admin/server
- *   cp ../deploy/contabo/env.production.example .env   # edit secrets first
- *   pm2 start ../deploy/contabo/ecosystem.config.cjs
- *   pm2 save
+ * Uses start-with-env.sh so server/.env + .env.cutover are always loaded.
  */
+const ROOT = process.env.OSMANI_ADMIN_ROOT || '/var/www/osmani-admin-api'
+const API_DIR = `${ROOT}/server`
+
 module.exports = {
   apps: [
     {
       name: 'osmani-admin-api',
-      cwd: '/var/www/osmani-admin/server',
-      script: 'src/index.js',
-      interpreter: 'node',
+      cwd: API_DIR,
+      script: 'scripts/start-with-env.sh',
+      interpreter: 'bash',
       instances: 1,
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'production',
         PORT: 10001,
+        OSMANI_ADMIN_ROOT: ROOT,
       },
-      env_file: '/var/www/osmani-admin/server/.env',
       max_memory_restart: '512M',
       merge_logs: true,
       time: true,

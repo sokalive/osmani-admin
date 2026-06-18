@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Apply Contabo cutover on the VPS (run as root or with sudo).
-#   cd /var/www/osmani-admin && git pull && bash deploy/contabo/apply-cutover.sh
+# Apply Contabo cutover on the VPS.
+#   cd /var/www/osmani-admin-api && git pull origin main && bash deploy/contabo/apply-cutover.sh
 set -euo pipefail
 
-ROOT="${OSMANI_ADMIN_ROOT:-/var/www/osmani-admin}"
+ROOT="${OSMANI_ADMIN_ROOT:-/var/www/osmani-admin-api}"
 API_DIR="$ROOT/server"
 ENV_FILE="$API_DIR/.env"
 NGINX_SRC="$ROOT/deploy/contabo/nginx-osmani-admin.conf"
 NGINX_DST="/etc/nginx/sites-available/osmani-admin"
+DIST_DIR="$ROOT/dist"
 
 echo "==> Osmani Admin Contabo cutover"
 echo "    root: $ROOT"
@@ -17,44 +18,80 @@ if [[ ! -d "$API_DIR" ]]; then
   exit 1
 fi
 
+ensure_env_key() {
+  local key="$1"
+  local val="$2"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    touch "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+  fi
+  if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    echo "${key}=${val}" >> "$ENV_FILE"
+    echo "    + added ${key} to .env"
+  fi
+}
+
 if [[ ! -f "$ENV_FILE" ]]; then
-  echo "WARN: $ENV_FILE missing — copy deploy/contabo/env.production.example and edit secrets"
+  echo "WARN: creating $ENV_FILE — set DATABASE_URL before production use"
+  touch "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
 fi
 
-echo "==> Install admin SPA"
+# Non-secrets are also in server/.env.cutover (git); patch .env for legacy installs.
+ensure_env_key BUNNY_CDN_BASE_URL "https://osmanitv.b-cdn.net"
+ensure_env_key BASE_URL "http://144.91.117.90"
+ensure_env_key STREAM_API_BASE_URL "http://144.91.117.90"
+ensure_env_key UPLOAD_DIR "/var/www/osmani-admin-api/server/uploads"
+
+if ! grep -q "^ADMIN_API_TOKEN=" "$ENV_FILE" 2>/dev/null; then
+  tok="${ADMIN_API_TOKEN:-${APP_UPDATE_ADMIN_TOKEN:-3030}}"
+  echo "ADMIN_API_TOKEN=${tok}" >> "$ENV_FILE"
+  echo "    + added ADMIN_API_TOKEN to .env"
+fi
+if ! grep -q "^APP_UPDATE_ADMIN_TOKEN=" "$ENV_FILE" 2>/dev/null; then
+  tok="$(grep '^ADMIN_API_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+  echo "APP_UPDATE_ADMIN_TOKEN=${tok}" >> "$ENV_FILE"
+  echo "    + added APP_UPDATE_ADMIN_TOKEN to .env"
+fi
+
+echo "==> Admin SPA build (same-origin /api)"
 cd "$ROOT"
 npm ci
-# Same-origin /api — do not bake Render URL into the bundle.
 VITE_API_BASE_URL= npm run build
-mkdir -p /var/www/osmani-admin/dist
-rsync -a --delete dist/ /var/www/osmani-admin/dist/ 2>/dev/null || cp -a dist/. /var/www/osmani-admin/dist/
+mkdir -p "$DIST_DIR"
+rsync -a --delete dist/ "$DIST_DIR/" 2>/dev/null || cp -a dist/. "$DIST_DIR/"
 
-echo "==> Install API dependencies"
+echo "==> API dependencies"
 cd "$API_DIR"
 npm ci
+chmod +x scripts/start-with-env.sh
 
-echo "==> PM2 restart API"
+echo "==> PM2 restart"
 if command -v pm2 >/dev/null 2>&1; then
-  pm2 startOrReload "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
+  pm2 delete osmani-admin-api 2>/dev/null || true
+  pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
   pm2 save
 else
-  echo "WARN: pm2 not installed — start API manually on PORT=10001"
+  echo "ERROR: pm2 not installed" >&2
+  exit 1
 fi
 
 echo "==> Nginx"
 if [[ -f "$NGINX_SRC" ]]; then
   cp "$NGINX_SRC" "$NGINX_DST"
   ln -sf "$NGINX_DST" /etc/nginx/sites-enabled/osmani-admin
+  rm -f /etc/nginx/sites-enabled/default
   nginx -t
   systemctl reload nginx
 else
-  echo "WARN: nginx config not found at $NGINX_SRC"
+  echo "ERROR: nginx config missing at $NGINX_SRC" >&2
+  exit 1
 fi
 
-echo "==> Verify"
-sleep 2
-curl -fsS "http://127.0.0.1:10001/api/health" | head -c 200 || true
+echo "==> Post-deploy checks"
+sleep 3
+curl -fsS "http://127.0.0.1:10001/api/runtime/cutover-status" | head -c 500 || true
 echo
-curl -fsS "http://127.0.0.1/api/runtime/cutover-status" | head -c 400 || true
+curl -fsS "http://127.0.0.1/api/health" | head -c 200 || true
 echo
 echo "Done. Run: node $ROOT/deploy/contabo/verify-cutover.mjs"

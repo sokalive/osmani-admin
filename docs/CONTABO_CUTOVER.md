@@ -14,12 +14,28 @@ Production API host: `http://144.91.117.90` (nginx :80 → Node :10001).
 ## Apply on VPS
 
 ```bash
-cd /var/www/osmani-admin
+cd /var/www/osmani-admin-api
 git pull origin main
 bash deploy/contabo/apply-cutover.sh
+node deploy/contabo/verify-cutover.mjs
 ```
 
-Edit `server/.env` from `deploy/contabo/env.production.example` first (DATABASE_URL, ADMIN_API_TOKEN, BUNNY_CDN_BASE_URL).
+Or one-liner from Contabo console:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sokalive/osmani-admin/main/deploy/contabo/apply-cutover.sh | OSMANI_ADMIN_ROOT=/var/www/osmani-admin-api bash
+```
+
+### What apply-cutover fixes
+
+- Loads `server/.env` + `server/.env.cutover` via `start-with-env.sh` (PM2 `env_file` is unreliable)
+- Sets `BUNNY_CDN_BASE_URL`, `ADMIN_API_TOKEN`, `BASE_URL` in `.env` if missing
+- Nginx: `^~ /uploads/` → Bunny CDN; `^~ /api/` → Node :10001; removes `default` site
+- Rebuilds admin SPA with same-origin `/api`
+
+### Auto-deploy (optional)
+
+Add GitHub secret `CONTABO_SSH_KEY` (root private key). Push to `main` runs `.github/workflows/contabo-deploy.yml`.
 
 ## Verify
 

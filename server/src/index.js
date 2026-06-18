@@ -1,3 +1,4 @@
+import './loadEnv.js'
 import cors from 'cors'
 import express from 'express'
 import { isStreamPlaybackPath, streamPlaybackCors } from './middleware/streamCors.js'

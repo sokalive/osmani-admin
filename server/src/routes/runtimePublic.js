@@ -6,6 +6,7 @@ import { loadAppUpdatePublicPayload } from './appUpdate.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { getCdnHealthSnapshot } from '../lib/cdnAssets.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
+import { getLoadedEnvPaths } from '../loadEnv.js'
 import { getPool } from '../db/pool.js'
 import { UPLOADS_DIR } from '../multerUpload.js'
 import fs from 'node:fs'
@@ -88,6 +89,7 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
       ok: true,
       server_time: new Date().toISOString(),
       commit: getServerGitCommit(),
+      env_files_loaded: getLoadedEnvPaths(),
       database: getDatabaseUrlFingerprint(),
       pool_ready: Boolean(pool),
       plan_count: planCount,

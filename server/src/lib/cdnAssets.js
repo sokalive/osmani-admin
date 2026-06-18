@@ -69,13 +69,21 @@ export function isBunnyCdnOriginPullRequest(req) {
  */
 export function getCdnBaseUrl() {
   const raw = String(process.env.BUNNY_CDN_BASE_URL || process.env.BUNNY_CDN_URL || '').trim()
-  if (!raw) return ''
-  try {
-    const u = new URL(raw.includes('://') ? raw : `https://${raw}`)
-    return `${u.protocol}//${u.host}`.replace(/\/$/, '')
-  } catch {
-    return trimSlash(raw)
+  if (raw) {
+    try {
+      const u = new URL(raw.includes('://') ? raw : `https://${raw}`)
+      return `${u.protocol}//${u.host}`.replace(/\/$/, '')
+    } catch {
+      return trimSlash(raw)
+    }
   }
+  // Contabo VPS cutover: thumbnails live on Bunny (origin disk is empty on Contabo).
+  const uploadDir = String(process.env.UPLOAD_DIR || '').toLowerCase()
+  const baseUrl = String(process.env.BASE_URL || '').toLowerCase()
+  if (uploadDir.includes('osmani-admin-api') || baseUrl.includes('144.91.117.90')) {
+    return 'https://osmanitv.b-cdn.net'
+  }
+  return ''
 }
 
 export function isCdnEnabled() {
