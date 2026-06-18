@@ -6,12 +6,17 @@ const API_BASE_ENV = String(
 ).trim()
 
 function normalizeApiBase(raw) {
-  const fallback = 'https://osmani-admin-api.onrender.com/api'
   const s = String(raw || '').trim()
-  if (!s) return fallback
-  const clean = s.replace(/\/$/, '')
-  if (/\/api$/i.test(clean)) return clean
-  return `${clean}/api`
+  if (s) {
+    const clean = s.replace(/\/$/, '')
+    if (/\/api$/i.test(clean)) return clean
+    return `${clean}/api`
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin.replace(/\/$/, '')}/api`
+  }
+  // Build-time / SSR: same-origin relative path (Contabo nginx proxies /api → Node).
+  return '/api'
 }
 
 export const API_BASE = normalizeApiBase(API_BASE_ENV)

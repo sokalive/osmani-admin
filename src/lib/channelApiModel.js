@@ -14,9 +14,19 @@ const CATEGORY_GRADIENTS = {
 const API_BASE_ENV = String(
   import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
 ).trim()
-const API_ORIGIN =
-  (API_BASE_ENV ? API_BASE_ENV.replace(/\/$/, '').replace(/\/api$/, '') : '') ||
-  'https://osmani-admin-api.onrender.com'
+
+function resolveApiOrigin() {
+  if (API_BASE_ENV) {
+    const clean = API_BASE_ENV.replace(/\/$/, '').replace(/\/api$/i, '')
+    if (clean) return clean
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin.replace(/\/$/, '')
+  }
+  return ''
+}
+
+const API_ORIGIN = resolveApiOrigin()
 
 const PLAYER_UI_TO_API = {
   Exo: 'exo',

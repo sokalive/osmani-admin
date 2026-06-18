@@ -11,10 +11,13 @@ const DEFAULT_STATIC_MAX_AGE_SEC = Math.max(
   Number(process.env.BUNNY_CDN_STATIC_MAX_AGE_SEC) || 31_536_000,
 )
 
-/** Hostnames rewritten to CDN on API read (legacy Render absolute URLs). */
+/** Hostnames rewritten to CDN on API read (legacy absolute URLs). */
 const BUILTIN_LEGACY_HOSTS = new Set([
   'osmani-admin-api.onrender.com',
   'osmani-admin-mpya.onrender.com',
+  '144.91.117.90',
+  'localhost',
+  '127.0.0.1',
 ])
 
 function trimSlash(s) {
