@@ -209,6 +209,23 @@ async function loadPopupSettings(pool) {
   }
 }
 
+/** Legacy APK + `/api/settings/popup` contract (`once` / `always` mode aliases). */
+function buildPublicPopupPayload(loaded) {
+  const mode = loaded.mode
+  const payload = {
+    mode,
+    title: loaded.title,
+    greeting: loaded.greeting,
+    introduction: '',
+    bullets: loaded.bullet_points,
+    disclaimer: loaded.disclaimer,
+    bullet_points: loaded.bullet_points,
+  }
+  if (mode === 'show_once') payload.mode = 'once'
+  if (mode === 'always_show') payload.mode = 'always'
+  return payload
+}
+
 async function savePopupSettings(pool, body) {
   const payload = {
     mode: normalizePopupMode(body.mode),
@@ -594,17 +611,21 @@ realtimeSettingsRouter.put('/settings/whatsapp', requireAdminPanelAccess, async 
   }
 })
 
-realtimeSettingsRouter.get('/popup-settings', requireAdminPanelAccess, async (_req, res) => {
-  try {
-    const pool = getPool()
-    if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const payload = await loadPopupSettings(pool)
-    return res.json(payload)
-  } catch (e) {
-    console.error('[popup-settings] GET', e)
-    return res.status(500).json({ error: String(e.message || e) })
-  }
-})
+/** Public read for legacy production APK; admin PUT remains protected. */
+realtimeSettingsRouter.get(
+  '/popup-settings',
+  apiResponseCacheNamespace('popup-settings'),
+  async (_req, res) => {
+    try {
+      const pool = getPool()
+      if (!pool) return res.status(503).json({ error: 'Database not configured' })
+      return res.json(buildPublicPopupPayload(await loadPopupSettings(pool)))
+    } catch (e) {
+      console.error('[popup-settings] GET', e)
+      return res.status(500).json({ error: String(e.message || e) })
+    }
+  },
+)
 
 realtimeSettingsRouter.put('/popup-settings', requireAdminPanelAccess, async (req, res) => {
   try {
@@ -627,20 +648,7 @@ realtimeSettingsRouter.get(
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const loaded = await loadPopupSettings(pool)
-    const mode = loaded.mode
-    const payload = {
-      mode,
-      title: loaded.title,
-      greeting: loaded.greeting,
-      introduction: '',
-      bullets: loaded.bullet_points,
-      disclaimer: loaded.disclaimer,
-      bullet_points: loaded.bullet_points,
-    }
-    if (mode === 'show_once') payload.mode = 'once'
-    if (mode === 'always_show') payload.mode = 'always'
-    return res.json(payload)
+    return res.json(buildPublicPopupPayload(await loadPopupSettings(pool)))
   } catch (e) {
     console.error('[settings/popup] GET', e)
     return res.status(500).json({ error: String(e.message || e) })
@@ -679,7 +687,8 @@ realtimeSettingsRouter.put('/settings/popup', requireAdminPanelAccess, async (re
   }
 })
 
-realtimeSettingsRouter.get('/server-health', requireAdminPanelAccess, async (_req, res) => {
+/** Public connectivity + channel probe for legacy production APK; admin UI uses same route with auth. */
+realtimeSettingsRouter.get('/server-health', async (_req, res) => {
   try {
     const payload = await getServerHealthCached()
     return res.json(payload)

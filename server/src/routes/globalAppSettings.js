@@ -65,8 +65,10 @@ export async function loadGlobalAppModesPayload() {
 
 export const globalAppSettingsRouter = Router()
 
-globalAppSettingsRouter.get('/', requireAdminPanelAccess, async (_req, res) => {
+/** Public read for legacy production APK (camelCase modes). PUT remains admin-only. */
+globalAppSettingsRouter.get('/', async (_req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     const data = await loadMergedNormalizedSettings()
     res.json(data)
   } catch (e) {
