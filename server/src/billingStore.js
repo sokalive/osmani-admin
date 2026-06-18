@@ -395,7 +395,6 @@ export async function getLatestCompletedTransactionByNormalizedPhone(phoneInput)
     `SELECT *
      FROM transactions t
      WHERE t.status = 'completed'
-       AND t.plan_id IS NOT NULL
        AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
      ORDER BY t.created_at DESC
      LIMIT 1`,
@@ -406,24 +405,35 @@ export async function getLatestCompletedTransactionByNormalizedPhone(phoneInput)
 
 /**
  * Resolve the device_id that currently holds an active subscription tied to this payment phone.
- * Prefer txn.device_id when it matches an active row; otherwise fall back to latest completed txn's device.
+ * When proofDeviceId is set, require that device to also have a txn with the same phone (migration safety).
  */
-export async function findActiveDeviceIdForPaymentPhone(phoneInput) {
+export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
   const digits = normalizePhoneDigits(phoneInput)
   if (!digits || digits.length < 10) return null
+  const proofDeviceId = String(opts.proofDeviceId ?? '').trim()
   const pool = requirePool()
+  const proofClause = proofDeviceId
+    ? `AND EXISTS (
+         SELECT 1 FROM transactions t_proof
+         WHERE t_proof.device_id = $2
+           AND trim(coalesce(t_proof.phone::text, '')) <> ''
+           AND ${tzPhoneCanonicalSql('t_proof.phone::text')} = $1
+       )`
+    : ''
+  const params = proofDeviceId ? [digits, proofDeviceId] : [digits]
   const { rows } = await pool.query(
-    `SELECT t.device_id::text AS device_id
-     FROM transactions t
-     INNER JOIN device_subscriptions ds ON ds.device_id = t.device_id
+    `SELECT ds.device_id::text AS device_id
+     FROM device_subscriptions ds
+     INNER JOIN transactions t ON t.device_id = ds.device_id
      WHERE t.status = 'completed'
-       AND t.plan_id IS NOT NULL
+       AND trim(coalesce(t.phone::text, '')) <> ''
        AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
        AND ds.status = 'active'
        AND ds.expires_at > now()
-     ORDER BY t.created_at DESC
+       ${proofClause}
+     ORDER BY ds.expires_at DESC, t.created_at DESC
      LIMIT 1`,
-    [digits],
+    params,
   )
   if (rows[0]?.device_id) return String(rows[0].device_id)
 
@@ -432,6 +442,17 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput) {
   const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
   const dev = String(txn.device_id ?? '').trim() || String(raw.device_id ?? '').trim()
   if (!dev) return null
+  if (proofDeviceId) {
+    const { rows: proofRows } = await pool.query(
+      `SELECT 1 FROM transactions
+       WHERE device_id = $1
+         AND trim(coalesce(phone::text, '')) <> ''
+         AND ${tzPhoneCanonicalSql('phone::text')} = $2
+       LIMIT 1`,
+      [proofDeviceId, digits],
+    )
+    if (!proofRows[0]) return null
+  }
   const { rows: dr } = await pool.query(
     `SELECT device_id::text AS device_id
      FROM device_subscriptions
@@ -1437,6 +1458,37 @@ export async function resolvePaymentPhoneForDevice(deviceId) {
     return {
       phone: formatPaymentPhoneForDisplay(anyTxnRows[0].phone),
       source: 'completed_payment',
+    }
+  }
+
+  const { rows: pendingTxnRows } = await pool.query(
+    `SELECT phone::text AS phone
+     FROM transactions
+     WHERE device_id = $1
+       AND trim(coalesce(phone::text, '')) <> ''
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  if (pendingTxnRows[0]?.phone) {
+    return {
+      phone: formatPaymentPhoneForDisplay(pendingTxnRows[0].phone),
+      source: 'pending_or_recent_payment',
+    }
+  }
+
+  const { rows: intelRows } = await pool.query(
+    `SELECT phone_number::text AS phone
+     FROM device_intelligence_registry
+     WHERE device_id = $1
+       AND trim(coalesce(phone_number::text, '')) <> ''
+     LIMIT 1`,
+    [d],
+  )
+  if (intelRows[0]?.phone) {
+    return {
+      phone: formatPaymentPhoneForDisplay(intelRows[0].phone),
+      source: 'device_intelligence',
     }
   }
 
