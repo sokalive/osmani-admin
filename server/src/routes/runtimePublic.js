@@ -165,6 +165,7 @@ runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, as
     res.json({
       ok: true,
       commit: getServerGitCommit(),
+      audit_version: 1,
       window_days: 7,
       completed_count: rows[0]?.completed_count ?? 0,
       payment_activation_average_seconds: Number(rows[0]?.avg_activation_seconds ?? 0).toFixed(2),
