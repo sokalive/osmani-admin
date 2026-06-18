@@ -41,9 +41,18 @@ function loadEnvFile(filePath, { override = false } = {}) {
   return wrote
 }
 
+function shouldLoadCutoverEnv() {
+  const flag = String(process.env.OSMANI_LOAD_CUTOVER_ENV ?? '').trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(flag)) return true
+  if (['0', 'false', 'no', 'off'].includes(flag)) return false
+  // Repo ships Contabo defaults in .env.cutover — never auto-apply on Render (breaks legacy APK stream URLs).
+  if (String(process.env.RENDER || '').trim().toLowerCase() === 'true') return false
+  return false
+}
+
 /**
  * Load env files for Contabo/Render:
- * 1. .env.cutover — non-secret defaults (git)
+ * 1. .env.cutover — Contabo-only when OSMANI_LOAD_CUTOVER_ENV=1 (or non-Render local cutover testing)
  * 2. server/.env, repo-root/.env — secrets (DATABASE_URL); override cutover
  */
 export function loadProcessEnv() {
@@ -51,10 +60,9 @@ export function loadProcessEnv() {
   const serverRoot = path.join(__dirname, '..')
   const repoRoot = path.join(serverRoot, '..')
 
-  const cutoverFiles = [
-    path.join(serverRoot, '.env.cutover'),
-    path.join(process.cwd(), '.env.cutover'),
-  ]
+  const cutoverFiles = shouldLoadCutoverEnv()
+    ? [path.join(serverRoot, '.env.cutover'), path.join(process.cwd(), '.env.cutover')]
+    : []
   const secretFiles = [
     path.join(serverRoot, '.env'),
     path.join(repoRoot, '.env'),

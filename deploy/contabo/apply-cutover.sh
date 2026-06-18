@@ -41,6 +41,7 @@ fi
 ensure_env_key BUNNY_CDN_BASE_URL "https://osmanitv.b-cdn.net"
 ensure_env_key BASE_URL "http://144.91.117.90"
 ensure_env_key STREAM_API_BASE_URL "http://144.91.117.90"
+ensure_env_key OSMANI_LOAD_CUTOVER_ENV "1"
 ensure_env_key UPLOAD_DIR "/var/www/osmani-admin-api/server/uploads"
 
 if ! grep -q "^ADMIN_API_TOKEN=" "$ENV_FILE" 2>/dev/null; then

@@ -496,6 +496,34 @@ async function getServerHealthCached(force = false) {
   return healthCache.probePromise
 }
 
+/**
+ * Legacy production APK treats online_channels===0 as "Muunganisho wa Intaneti Unahitajika"
+ * even when the API is reachable. Floor to 1 when catalog exists; add camelCase + ok mirrors.
+ */
+export function toLegacyPublicServerHealthPayload(payload) {
+  const body = payload && typeof payload === 'object' ? payload : {}
+  const total = Math.max(0, Number(body.total_channels) || 0)
+  let online = Math.max(0, Number(body.online_channels) || 0)
+  if (total > 0 && online === 0) online = 1
+  const offline = Math.max(0, total - online)
+  const serverTime =
+    typeof body.server_time === 'string' && body.server_time
+      ? body.server_time
+      : new Date().toISOString()
+  return {
+    ok: true,
+    total_channels: total,
+    online_channels: online,
+    offline_channels: offline,
+    totalChannels: total,
+    onlineChannels: online,
+    offlineChannels: offline,
+    channels: Array.isArray(body.channels) ? body.channels : [],
+    server_time: serverTime,
+    serverTime,
+  }
+}
+
 function publishWithLog(eventName, payload) {
   console.info('[SSE_BROADCAST]', JSON.stringify({ event: eventName, payload }))
   liveSyncBus.publish(eventName, {
@@ -691,14 +719,19 @@ realtimeSettingsRouter.put('/settings/popup', requireAdminPanelAccess, async (re
 realtimeSettingsRouter.get('/server-health', async (_req, res) => {
   try {
     const payload = await getServerHealthCached()
-    return res.json(payload)
+    return res.json(toLegacyPublicServerHealthPayload(payload))
   } catch (e) {
     console.error('[server-health] GET', e)
     return res.status(500).json({
+      ok: false,
       total_channels: 0,
       online_channels: 0,
       offline_channels: 0,
+      totalChannels: 0,
+      onlineChannels: 0,
+      offlineChannels: 0,
       channels: [],
+      server_time: new Date().toISOString(),
       error: String(e.message || e),
     })
   }

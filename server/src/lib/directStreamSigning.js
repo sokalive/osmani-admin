@@ -19,28 +19,44 @@ function parseStreamApiBaseUrl(raw) {
   }
 }
 
+function resolveRequestStreamApiBase(req) {
+  if (!req) return ''
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
+  const host = String(req.headers['x-forwarded-host'] || req.get('host') || '')
+    .split(',')[0]
+    .trim()
+  if (!host || isBunnyCdnHost(host)) return ''
+  return `${proto}://${host}`.replace(/\/+$/, '')
+}
+
+function envStreamBaseMatchesRequest(envBase, requestBase) {
+  if (!envBase || !requestBase) return true
+  try {
+    return new URL(envBase).host === new URL(requestBase).host
+  } catch {
+    return true
+  }
+}
+
 /**
  * API origin for stream-direct / stream-proxy entrypoints.
  * Never use Bunny CDN pull zones — manifests and tokens are served only from the API host.
+ * When STREAM_API_BASE_URL points at another deployment (e.g. Contabo IP on Render), prefer the request host
+ * so legacy Render APK clients keep same-origin HTTPS playback URLs.
  */
 export function resolveStreamApiBaseUrl(req) {
+  const requestBase = resolveRequestStreamApiBase(req)
   for (const raw of [
     process.env.STREAM_API_BASE_URL,
     process.env.DIRECT_STREAM_BASE_URL,
     process.env.BASE_URL,
   ]) {
     const parsed = parseStreamApiBaseUrl(raw)
-    if (parsed) return parsed
+    if (!parsed) continue
+    if (requestBase && !envStreamBaseMatchesRequest(parsed, requestBase)) continue
+    return parsed
   }
-  if (req) {
-    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
-    const host = String(req.headers['x-forwarded-host'] || req.get('host') || '')
-      .split(',')[0]
-      .trim()
-    if (host && !isBunnyCdnHost(host)) {
-      return `${proto}://${host}`.replace(/\/+$/, '')
-    }
-  }
+  if (requestBase) return requestBase
   return DEFAULT_STREAM_API_BASE
 }
 

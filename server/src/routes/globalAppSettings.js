@@ -65,12 +65,21 @@ export async function loadGlobalAppModesPayload() {
 
 export const globalAppSettingsRouter = Router()
 
-/** Public read for legacy production APK (camelCase modes). PUT remains admin-only. */
+/** Public read for legacy production APK (camelCase + snake_case + app_modes). PUT remains admin-only. */
 globalAppSettingsRouter.get('/', async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     const data = await loadMergedNormalizedSettings()
-    res.json(data)
+    const modes = modesPayloadFromNormalized(data)
+    res.json({
+      ok: true,
+      ...data,
+      free_mode: modes.free_mode,
+      emergency_mode: modes.emergency_mode,
+      maintenance_mode: modes.maintenance_mode,
+      app_modes: modes,
+      appModes: modes,
+    })
   } catch (e) {
     console.error('[settings] GET / failed:', e)
     res.status(500).json({ error: String(e.message || e) })

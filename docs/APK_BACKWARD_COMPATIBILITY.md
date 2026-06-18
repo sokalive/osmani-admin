@@ -9,17 +9,20 @@
 
 Both hosts share the Vultr database. Do **not** disable Render until all legacy APK users are migrated or pointed at VPS.
 
-## Root cause: "No Internet Connection" on old APK
+## Root causes (updated)
 
-Production has `ADMIN_PANEL_AUTH_REQUIRED=true`. Three **legacy public GET** routes were incorrectly gated behind admin session auth:
+### 1. Admin auth on public GET routes (fixed in `51efc36`)
+`GET /api/server-health`, `/api/settings`, `/api/popup-settings` returned 401 when `ADMIN_PANEL_AUTH_REQUIRED=true`.
 
-| Endpoint | Was | Impact on old APK |
-|----------|-----|-------------------|
-| `GET /api/server-health` | 401 | Connectivity probe fails → "No Internet Connection" |
-| `GET /api/popup-settings` | 401 | Bootstrap config fetch fails |
-| `GET /api/settings` | 401 | App modes (`freeMode` / `maintenanceMode`) unavailable |
+### 2. Contabo `.env.cutover` leaked onto Render (fixed after `51efc36`)
+`server/.env.cutover` set `STREAM_API_BASE_URL=http://144.91.117.90`. It auto-loaded on **Render** too, so channel responses from Render pointed playback at the VPS (cleartext HTTP). Legacy APK bootstrap can treat that as unreachable.
 
-**Fix:** restore public read on these routes; admin PUT/write paths remain protected.
+**Fix:** load `.env.cutover` only when `OSMANI_LOAD_CUTOVER_ENV=1` (Contabo PM2). Render uses dashboard `BASE_URL` + request host for streams.
+
+### 3. `online_channels === 0` connectivity gate
+When upstream probes fail, `GET /api/server-health` could return `online_channels: 0` while the API is healthy. Legacy APK shows **"Muunganisho wa Intaneti Unahitajika"** in that case.
+
+**Fix:** public server-health floors `online_channels` to ≥1 when `total_channels > 0`, adds `ok: true` and camelCase mirrors (`onlineChannels`, etc.).
 
 ## Legacy APK endpoint matrix
 

@@ -352,6 +352,7 @@ export function channelToResponse(c, req) {
     active: Boolean(m.isActive),
     accessPremium: m.accessType === 'premium',
     thumbnailUrl: thumbFull,
+    thumbnail_url: thumbFull,
   }
 }
 
