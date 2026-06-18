@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Apply Contabo cutover on the VPS.
 #   cd /var/www/osmani-admin-api && git pull origin main && bash deploy/contabo/apply-cutover.sh
+#
+# If DATABASE_URL errors: node deploy/contabo/sync-database-url-env.cjs
 set -euo pipefail
 
 ROOT="${OSMANI_ADMIN_ROOT:-/var/www/osmani-admin-api}"
@@ -67,42 +69,21 @@ source_env_file() {
 }
 
 ensure_database_url() {
-  source_env_file "$ENV_FILE"
-  source_env_file "$ROOT/.env"
-  source_env_file "$API_DIR/.env.local"
-  source_env_file "$ROOT/.env.local"
+  echo "==> DATABASE_URL discovery (Node — avoids bash source breaking on special chars)"
+  node "$ROOT/deploy/contabo/sync-database-url-env.cjs" "$ROOT"
 
-  if [[ -n "${DATABASE_URL:-}" ]]; then
-    echo "    DATABASE_URL present (${#DATABASE_URL} chars)"
-    return 0
-  fi
-
-  echo "==> DATABASE_URL missing — searching legacy locations"
-  local found=""
-  for f in "$ENV_FILE" "$ROOT/.env" "$API_DIR/.env.backup" "$ROOT/.env.backup" /root/.osmani-admin.env; do
-    if [[ -f "$f" ]] && grep -qE '^[[:space:]]*(export[[:space:]]+)?DATABASE_URL=' "$f"; then
-      found="$(grep -E '^[[:space:]]*(export[[:space:]]+)?DATABASE_URL=' "$f" | head -1 | sed 's/^[[:space:]]*export[[:space:]]*//')"
-      echo "    found in $f"
-      break
-    fi
-  done
-
-  if [[ -n "$found" ]]; then
-    if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?DATABASE_URL=' "$ENV_FILE" 2>/dev/null; then
-      echo "$found" >> "$ENV_FILE"
-      echo "    + copied DATABASE_URL into $ENV_FILE"
-    fi
-    set -a
-    # shellcheck disable=SC1090
-    source "$ENV_FILE"
-    set +a
-  fi
+  DATABASE_URL="$(node -e "
+const { loadContaboPm2Env } = require('$ROOT/deploy/contabo/loadPm2Env.cjs');
+process.stdout.write(String(loadContaboPm2Env('$ROOT').DATABASE_URL || ''));
+")"
 
   if [[ -z "${DATABASE_URL:-}" ]]; then
     echo "ERROR: DATABASE_URL is not set." >&2
     echo "Add Vultr PostgreSQL URL to $ENV_FILE (see deploy/contabo/env.production.example)" >&2
     exit 1
   fi
+  export DATABASE_URL
+  echo "    DATABASE_URL present (${#DATABASE_URL} chars)"
 }
 
 ensure_database_url
