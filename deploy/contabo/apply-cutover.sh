@@ -64,13 +64,21 @@ rsync -a --delete dist/ "$DIST_DIR/" 2>/dev/null || cp -a dist/. "$DIST_DIR/"
 echo "==> API dependencies"
 cd "$API_DIR"
 npm ci
-chmod +x scripts/start-with-env.sh
+
+echo "==> Startup smoke test"
+node -e "import('./src/loadEnv.js').then((m)=>{console.log('loadEnv ok', m.getLoadedEnvPaths(), process.env.BUNNY_CDN_BASE_URL);}).catch((e)=>{console.error(e); process.exit(1);})"
 
 echo "==> PM2 restart"
 if command -v pm2 >/dev/null 2>&1; then
   pm2 delete osmani-admin-api 2>/dev/null || true
   pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
   pm2 save
+  sleep 3
+  if ! curl -fsS "http://127.0.0.1:10001/api/health" >/dev/null; then
+    echo "ERROR: API did not respond on :10001 — PM2 logs:" >&2
+    pm2 logs osmani-admin-api --lines 30 --nostream || true
+    exit 1
+  fi
 else
   echo "ERROR: pm2 not installed" >&2
   exit 1
