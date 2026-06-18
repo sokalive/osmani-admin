@@ -54,6 +54,59 @@ if ! grep -q "^APP_UPDATE_ADMIN_TOKEN=" "$ENV_FILE" 2>/dev/null; then
   echo "    + added APP_UPDATE_ADMIN_TOKEN to .env"
 fi
 
+source_env_file() {
+  local f="$1"
+  if [[ -f "$f" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$f"
+    set +a
+    echo "    sourced $(basename "$f") from $f"
+  fi
+}
+
+ensure_database_url() {
+  source_env_file "$ENV_FILE"
+  source_env_file "$ROOT/.env"
+  source_env_file "$API_DIR/.env.local"
+  source_env_file "$ROOT/.env.local"
+
+  if [[ -n "${DATABASE_URL:-}" ]]; then
+    echo "    DATABASE_URL present (${#DATABASE_URL} chars)"
+    return 0
+  fi
+
+  echo "==> DATABASE_URL missing — searching legacy locations"
+  local found=""
+  for f in "$ENV_FILE" "$ROOT/.env" "$API_DIR/.env.backup" "$ROOT/.env.backup" /root/.osmani-admin.env; do
+    if [[ -f "$f" ]] && grep -qE '^[[:space:]]*(export[[:space:]]+)?DATABASE_URL=' "$f"; then
+      found="$(grep -E '^[[:space:]]*(export[[:space:]]+)?DATABASE_URL=' "$f" | head -1 | sed 's/^[[:space:]]*export[[:space:]]*//')"
+      echo "    found in $f"
+      break
+    fi
+  done
+
+  if [[ -n "$found" ]]; then
+    if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?DATABASE_URL=' "$ENV_FILE" 2>/dev/null; then
+      echo "$found" >> "$ENV_FILE"
+      echo "    + copied DATABASE_URL into $ENV_FILE"
+    fi
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+  fi
+
+  if [[ -z "${DATABASE_URL:-}" ]]; then
+    echo "ERROR: DATABASE_URL is not set." >&2
+    echo "Add Vultr PostgreSQL URL to $ENV_FILE (see deploy/contabo/env.production.example)" >&2
+    exit 1
+  fi
+}
+
+ensure_database_url
+export DATABASE_URL
+
 echo "==> Admin SPA build (same-origin /api)"
 cd "$ROOT"
 npm ci
@@ -66,7 +119,7 @@ cd "$API_DIR"
 npm ci
 
 echo "==> Startup smoke test"
-node -e "import('./src/loadEnv.js').then((m)=>{console.log('loadEnv ok', m.getLoadedEnvPaths(), process.env.BUNNY_CDN_BASE_URL);}).catch((e)=>{console.error(e); process.exit(1);})"
+node -e "import('./src/loadEnv.js').then((m)=>{const ok=m.isDatabaseUrlConfigured?.()??Boolean(process.env.DATABASE_URL); if(!ok){console.error('DATABASE_URL missing after loadEnv'); process.exit(1);} console.log('loadEnv ok', m.getLoadedEnvPaths(), 'db', ok, 'bunny', process.env.BUNNY_CDN_BASE_URL);}).catch((e)=>{console.error(e); process.exit(1);})"
 
 echo "==> PM2 restart"
 if command -v pm2 >/dev/null 2>&1; then

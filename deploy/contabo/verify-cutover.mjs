@@ -73,13 +73,16 @@ async function main() {
     const b = cutover.body
     pass('cutover-status', JSON.stringify({
       db: b.database,
+      dbUrlConfigured: b.database_url_configured,
       plans: b.plan_count,
       active_subs: b.active_device_subscriptions,
       cdn: b.cdn?.cdnEnabled,
       cdnBase: b.cdn?.cdnBaseUrl,
       adminToken: b.admin_token_configured,
+      envFiles: b.env_files_loaded,
       uploads: b.uploads_file_count,
     }))
+    if (!b.database_url_configured) fail('database-url', 'DATABASE_URL not in process env')
     if (!b.cdn?.cdnEnabled) fail('bunny-cdn', 'BUNNY_CDN_BASE_URL not set — thumbnails will break')
     if (!b.admin_token_configured) fail('admin-token', 'ADMIN_API_TOKEN not set — admin UI auth fails')
     if (!b.database?.configured) fail('database', 'DATABASE_URL not configured')

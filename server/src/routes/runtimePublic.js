@@ -90,6 +90,7 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
       server_time: new Date().toISOString(),
       commit: getServerGitCommit(),
       env_files_loaded: getLoadedEnvPaths(),
+      database_url_configured: Boolean(String(process.env.DATABASE_URL || '').trim()),
       database: getDatabaseUrlFingerprint(),
       pool_ready: Boolean(pool),
       plan_count: planCount,
