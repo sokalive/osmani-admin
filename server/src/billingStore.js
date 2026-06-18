@@ -37,6 +37,16 @@ function requirePool() {
   return pool
 }
 
+/** SHA-256 hardware fingerprint hash (matches deviceSecurity + trial watch). */
+export function hashDeviceFingerprint(fingerprint) {
+  const raw = String(fingerprint ?? '').trim()
+  if (!raw) return null
+  return crypto
+    .createHash('sha256')
+    .update(`${String(process.env.FINGERPRINT_HASH_SALT || 'osmani-fp-v1')}::${raw}`)
+    .digest('hex')
+}
+
 /** Manual Subscription admin PIN (scrypt; env pin remains legacy until DB hash is set). */
 export const MANUAL_SUBSCRIPTION_PIN_MIN_LENGTH = 6
 
@@ -523,12 +533,7 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
   const d = String(deviceId ?? '').trim()
   if (!d) return null
   const fpHash =
-    fingerprint && String(fingerprint).trim()
-      ? crypto
-          .createHash('sha256')
-          .update(`${String(process.env.FINGERPRINT_HASH_SALT || 'osmani-fp-v1')}::${String(fingerprint).trim()}`)
-          .digest('hex')
-      : null
+    fingerprint && String(fingerprint).trim() ? hashDeviceFingerprint(fingerprint) : null
   const { rows } = await pool.query(
     `SELECT
        ds.device_id,
@@ -992,10 +997,14 @@ export async function bulkSoftDeleteManualGrants(grantIds) {
  * Webhook-driven activation. Skips entirely if transaction_id (order_id) already applied.
  * Renewals overwrite the same device_id row with a newer order/expiry only when not a duplicate webhook.
  */
-export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expiresAt }, client = null) {
+export async function upsertDeviceSubscriptionActive(
+  { deviceId, orderId, expiresAt, fingerprintHash = null },
+  client = null,
+) {
   const q = dbQuery(client)
   const d = String(deviceId ?? '').trim()
   const oid = String(orderId ?? '').trim()
+  const fp = fingerprintHash ? String(fingerprintHash).trim() : null
   if (!d || !oid) throw new Error('deviceId and orderId required')
   if (await deviceSubscriptionOrderAlreadyApplied(oid, client)) {
     console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
@@ -1003,8 +1012,8 @@ export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expire
   }
   try {
     await q(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at)
-       VALUES ($1, 'active', $2::timestamptz, now(), $3, now())
+      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
+       VALUES ($1, 'active', $2::timestamptz, now(), $3, now(), $4)
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = GREATEST(device_subscriptions.expires_at, EXCLUDED.expires_at),
@@ -1013,8 +1022,9 @@ export async function upsertDeviceSubscriptionActive({ deviceId, orderId, expire
            ELSE now()
          END,
          transaction_id = EXCLUDED.transaction_id,
-         updated_at = now()`,
-      [d, expiresAt, oid],
+         updated_at = now(),
+         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
+      [d, expiresAt, oid, fp],
     )
     console.log('[device_subscriptions] upsert active', {
       deviceId: d.length > 20 ? `${d.slice(0, 18)}…` : d,
@@ -1094,7 +1104,15 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
     })
   }
 
-  const { skipped } = await upsertDeviceSubscriptionActive({ deviceId, orderId, expiresAt })
+  const fpRaw = String(raw.device_fingerprint ?? raw.fingerprint ?? raw.deviceFingerprint ?? '').trim()
+  const fpHash = fpRaw ? hashDeviceFingerprint(fpRaw) : null
+
+  const { skipped } = await upsertDeviceSubscriptionActive({
+    deviceId,
+    orderId,
+    expiresAt,
+    fingerprintHash: fpHash,
+  })
   return {
     activated: !skipped,
     skipped,

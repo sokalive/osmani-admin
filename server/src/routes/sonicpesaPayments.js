@@ -9,6 +9,8 @@ import {
   verifyPayment,
 } from '../lib/payments/providers/sonicpesa.js'
 import { formatPhone } from '../zenopayClient.js'
+import { hashDeviceFingerprint } from '../billingStore.js'
+import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
 
 export const sonicpesaPaymentsRouter = Router()
 
@@ -38,6 +40,16 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
     if (!phoneE164.startsWith('+255') || phoneE164.length < 13) {
       return res.status(400).json({ error: 'phone must be a valid Tanzania number (+255…)' })
     }
+    const fpRaw = String(
+      b.device_fingerprint ?? b.fingerprint ?? b.deviceFingerprint ?? '',
+    ).trim()
+    const fingerprintPayload = fpRaw
+      ? {
+          fingerprint: fpRaw,
+          device_fingerprint: fpRaw,
+          fingerprint_hash: hashDeviceFingerprint(fpRaw),
+        }
+      : {}
     const plan = await billing.getPlanById(planId)
     if (!plan || !plan.is_active) {
       return res.status(400).json({ error: 'Plan not found or inactive' })
@@ -65,6 +77,7 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
         payment_provider: 'sonicpesa',
         phoneNorm: phone,
         device_id: deviceId,
+        ...fingerprintPayload,
       },
     })
     liveSyncBus.publish('analytics.transaction_updated', {
@@ -112,6 +125,7 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
         details: sp.body,
       })
     }
+    schedulePostPaymentActivationPolls(orderId, deviceId)
     res.status(201).json({
       ok: true,
       provider: 'sonicpesa',

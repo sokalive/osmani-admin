@@ -8,6 +8,7 @@ import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 import { getDeviceTrialWatchStatus } from '../lib/trialWatchStore.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
+import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint } from '../lib/subscriptionRecovery.js'
 
 export const subscriptionRouter = Router()
 
@@ -257,11 +258,12 @@ function derivePlaybackGate(pub, modesPayload, securityPolicy = null, trialStatu
  * Shared path for GET /subscription-status and POST /subscription/verify:
  * presence touch, reconcile + activate, then access state + plans.
  */
-async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint }) {
+async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint, phone = null }) {
   const country = countryFromRequest(req)
   const d = String(deviceId ?? '').trim()
   const hint = String(orderIdHint ?? '').trim()
   const fp = String(fingerprint ?? '').trim()
+  const paymentPhone = String(phone ?? '').trim()
 
   await billing.touchLivePresence({ deviceId: d, country }).catch((e) => {
     console.error('[subscription-verify] touchLivePresence failed:', e)
@@ -269,6 +271,23 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId: d })
 
   await reconcileOrdersForVerify(d, hint)
+
+  const link = await ensureSubscriptionLinkedForDevice(d, {
+    fingerprint: fp || null,
+    phone: paymentPhone || null,
+  }).catch((e) => {
+    console.error('[subscription-verify] ensureSubscriptionLinkedForDevice failed:', e)
+    return { linked: false, reason: 'link_error' }
+  })
+  if (link.linked) {
+    console.log('[subscription-verify] subscription linked', {
+      deviceId: shortRef(d),
+      method: link.method,
+      from: link.recovered_from ? shortRef(link.recovered_from) : undefined,
+    })
+  } else if (fp) {
+    await tagActiveSubscriptionFingerprint(d, fp).catch(() => {})
+  }
 
   const row = await billing.getDeviceSubscriptionAccessState(d, fp)
   const pub = rowToPublicStatus(row)
@@ -481,6 +500,7 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
     }
     const orderIdHint = String(req.query.order_id ?? '').trim()
     const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
+    const paymentPhone = String(req.query.payment_phone ?? req.query.phone ?? '').trim()
     console.log('[subscription-verify] enter', {
       method: 'GET',
       path: '/subscription-status',
@@ -488,7 +508,12 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
       order_id: orderIdHint ? shortRef(orderIdHint) : undefined,
     })
 
-    const bodyOut = await executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint: fp })
+    const bodyOut = await executeSubscriptionVerify(req, {
+      deviceId,
+      orderIdHint,
+      fingerprint: fp,
+      phone: paymentPhone,
+    })
 
     console.log('[subscription-verify] response', {
       method: 'GET',
@@ -523,6 +548,7 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
     const fp = String(
       b.device_fingerprint ?? b.fingerprint ?? b.deviceFingerprint ?? req.headers['x-device-fingerprint'] ?? '',
     ).trim()
+    const paymentPhone = String(b.payment_phone ?? b.phone ?? b.paymentPhone ?? '').trim()
 
     console.log('[subscription-verify] enter', {
       method: 'POST',
@@ -531,7 +557,12 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
       order_id: orderIdHint ? shortRef(orderIdHint) : undefined,
     })
 
-    const bodyOut = await executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint: fp })
+    const bodyOut = await executeSubscriptionVerify(req, {
+      deviceId,
+      orderIdHint,
+      fingerprint: fp,
+      phone: paymentPhone,
+    })
 
     console.log('[subscription-verify] response', {
       method: 'POST',

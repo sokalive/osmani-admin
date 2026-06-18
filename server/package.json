@@ -14,6 +14,7 @@
     "verify:cdn-assets": "node scripts/verify-cdn-asset-urls.mjs",
     "verify:apk-update-cdn": "node scripts/verify-apk-update-cdn.mjs",
     "verify:apk-backward-compat": "node scripts/verify-apk-backward-compatibility.mjs",
+    "audit:subscriptions": "node scripts/audit-subscription-restoration.mjs",
     "verify:final-migration": "node ../deploy/contabo/verify-final-migration-audit.mjs",
     "verify:load-pm2-env": "node scripts/verify-load-pm2-env.mjs",
     "verify:api-cache": "node scripts/verify-api-cache.mjs",

@@ -12,9 +12,14 @@ import {
   isAuraxpayConfigured,
   resolveAuraxpayCredentials,
 } from '../lib/payments/providers/auraxpay.js'
-import { resolveSonicpesaCredentials } from '../lib/payments/providers/sonicpesa.js'
+import {
+  createOrder,
+  resolveSonicpesaCredentials,
+} from '../lib/payments/providers/sonicpesa.js'
 import { auraxpayPaymentsRouter } from './auraxpayPayments.js'
 import { sonicpesaPaymentsRouter } from './sonicpesaPayments.js'
+import { hashDeviceFingerprint } from '../billingStore.js'
+import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
 
 export const paymentsRouter = Router()
 
@@ -103,6 +108,87 @@ paymentsRouter.post('/create-payment', async (req, res) => {
     if (!plan || !plan.is_active) {
       return res.status(400).json({ error: 'Plan not found or inactive' })
     }
+
+    const fpRaw = String(
+      b.device_fingerprint ?? b.fingerprint ?? b.deviceFingerprint ?? '',
+    ).trim()
+    const fingerprintPayload = fpRaw
+      ? {
+          fingerprint: fpRaw,
+          device_fingerprint: fpRaw,
+          fingerprint_hash: hashDeviceFingerprint(fpRaw),
+        }
+      : {}
+
+    const checkout = await billing.getCheckoutPaymentSettings()
+    if (checkout.payment_provider === 'sonicpesa') {
+      const srow = await billing.getSonicpesaRow()
+      const scred = resolveSonicpesaCredentials(srow || {})
+      if (srow?.enabled === true && scred.apiKey) {
+        const orderId = `osm_sp_${Date.now()}_${randomBytes(5).toString('hex')}`
+        const amount = Number(plan.price)
+        const tx = await billing.insertTransaction({
+          order_id: orderId,
+          plan_id: planId,
+          phone: phoneE164,
+          amount,
+          currency: 'TZS',
+          status: 'pending',
+          device_id: deviceId,
+          raw_payload: {
+            step: 'created',
+            payment_provider: 'sonicpesa',
+            phoneNorm: phone,
+            device_id: deviceId,
+            ...fingerprintPayload,
+          },
+        })
+        liveSyncBus.publish('analytics.transaction_updated', {
+          topics: ['analytics'],
+          orderId,
+          status: 'pending',
+          deviceId,
+        })
+        const sp = await createOrder(scred, { phone, amount, orderId, currency: 'TZS' })
+        const providerOrderId =
+          sp.normalized?.providerOrderId ??
+          (sp.body?.data?.order_id != null ? String(sp.body.data.order_id) : null)
+        const prevPayload =
+          tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}
+        await billing.updateTransactionByOrderId(orderId, {
+          status: sp.ok ? 'pending' : 'failed',
+          external_id: providerOrderId,
+          raw_payload: {
+            ...prevPayload,
+            sonicpesa: sp.body,
+            provider_order_id: providerOrderId,
+            httpStatus: sp.status,
+          },
+        })
+        if (!sp.ok) {
+          return res.status(502).json({
+            error: 'SonicPesa payment initiation failed',
+            orderId,
+            transactionId: tx.id,
+            details: sp.body,
+          })
+        }
+        schedulePostPaymentActivationPolls(orderId, deviceId)
+        return res.status(201).json({
+          ok: true,
+          provider: 'sonicpesa',
+          orderId,
+          provider_order_id: providerOrderId,
+          deviceId,
+          transactionId: tx.id,
+          amount,
+          currency: 'TZS',
+          zeno: sp.body,
+          sonicpesa: sp.body,
+        })
+      }
+    }
+
     const row = await billing.getZenopayRow()
     const cred = resolveZenopayCredentials(row)
     if (!cred.apiEndpoint || !cred.apiKey) {
@@ -118,7 +204,7 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       currency: 'TZS',
       status: 'pending',
       device_id: deviceId,
-      raw_payload: { step: 'created', phoneNorm: phone, device_id: deviceId },
+      raw_payload: { step: 'created', phoneNorm: phone, device_id: deviceId, ...fingerprintPayload },
     })
     liveSyncBus.publish('analytics.transaction_updated', {
       topics: ['analytics'],
@@ -154,6 +240,7 @@ paymentsRouter.post('/create-payment', async (req, res) => {
         details: z.body,
       })
     }
+    schedulePostPaymentActivationPolls(orderId, deviceId)
     res.status(201).json({
       ok: true,
       orderId,

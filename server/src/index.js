@@ -35,7 +35,8 @@ const allowedOrigins = [
   'https://144.91.117.90',
   'http://admin.osmani.tv',
   'https://admin.osmani.tv',
-  'https://osmani-tv-web-vite.vercel.app',
+  'https://osmani-admin-api.onrender.com',
+  'http://osmani-admin-api.onrender.com',
   'https://osmani-tv-web.onrender.com',
   'http://localhost:5173',
   'http://localhost:3000',
@@ -45,17 +46,28 @@ const allowedOrigins = [
   'http://10.0.2.2:3000',
 ]
 
+function isMobileClientApiPath(req) {
+  const path = String(req.path || req.url || '')
+  return (
+    path.startsWith('/api/payments') ||
+    path.startsWith('/api/subscription') ||
+    path.startsWith('/api/payment-status') ||
+    path.startsWith('/api/zeno-webhook')
+  )
+}
+
 const corsOptions = {
   origin: (origin, callback) => {
-    // No Origin: production Android app, curl, server-to-server — default happy path.
-    if (!origin) return callback(null, true)
+    // No Origin, or literal "null" (React Native / WebView) — allow mobile clients.
+    if (!origin || origin === 'null') return callback(null, true)
 
     if (allowedOrigins.includes(origin)) {
       return callback(null, true)
     }
 
     console.warn('❌ Blocked by CORS:', origin)
-    return callback(new Error('Not allowed by CORS'))
+    // Do not throw — Error becomes HTTP 500 "Internal server error" and breaks APK fetch.
+    return callback(null, false)
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
@@ -67,6 +79,13 @@ const adminCors = cors(corsOptions)
 
 function applyCors(req, res, next) {
   if (isStreamPlaybackPath(req)) return streamPlaybackCors(req, res, next)
+  if (isMobileClientApiPath(req)) {
+    return cors({
+      origin: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      credentials: true,
+    })(req, res, next)
+  }
   return adminCors(req, res, next)
 }
 
