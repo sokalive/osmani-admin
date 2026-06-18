@@ -1,8 +1,6 @@
 # Render Blueprint — static admin SPA (Vite).
-# After merging to your production branch, ensure this service's branch in the dashboard
-# matches (typically main). Apply via Dashboard → Blueprint → Link repository file.
-#
-# Reduces stale HTML at the CDN while keeping hashed /assets/* cacheable (immutable filenames).
+# MIGRATION: Primary admin UI is on VPS (http://144.91.117.90). Keep this service until
+# verify-admin-vps.mjs passes, then suspend osmani-admin-mpya only — NOT osmani-admin-api.
 
 services:
   - type: web

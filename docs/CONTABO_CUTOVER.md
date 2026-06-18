@@ -41,5 +41,8 @@ Add GitHub secret `CONTABO_SSH_KEY` (root private key). Push to `main` runs `.gi
 
 ```bash
 node deploy/contabo/verify-cutover.mjs
+node deploy/contabo/verify-admin-vps.mjs
 curl -s http://144.91.117.90/api/runtime/cutover-status | jq
 ```
+
+Admin UI: `http://144.91.117.90` (same-origin `/api`). See [ADMIN_VPS_MIGRATION.md](./ADMIN_VPS_MIGRATION.md) to retire Render static admin.
