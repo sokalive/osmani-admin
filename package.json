@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:final-migration": "node deploy/contabo/verify-final-migration-audit.mjs",
+    "verify:cutover": "node deploy/contabo/verify-cutover.mjs"
   },
   "dependencies": {
     "framer-motion": "^12.38.0",

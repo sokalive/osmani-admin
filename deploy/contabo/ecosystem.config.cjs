@@ -1,30 +1,51 @@
 /**
  * PM2 ecosystem for Contabo osmani-admin-api.
- * Secrets (DATABASE_URL) must be in process.env when pm2 start runs —
- * apply-cutover.sh sources server/.env before invoking this file.
+ * Env is loaded from server/.env + repo .env via loadPm2Env.cjs (not shell-dependent).
  */
+const path = require('node:path')
+const { loadContaboPm2Env } = require('./loadPm2Env.cjs')
+
 const ROOT = process.env.OSMANI_ADMIN_ROOT || '/var/www/osmani-admin-api'
-const API_DIR = `${ROOT}/server`
+const API_DIR = path.join(ROOT, 'server')
+const fileEnv = loadContaboPm2Env(ROOT)
 
 const SECRET_ENV_KEYS = [
   'DATABASE_URL',
   'ADMIN_API_TOKEN',
   'APP_UPDATE_ADMIN_TOKEN',
   'ADMIN_JWT_SECRET',
+  'ADMIN_PANEL_AUTH_REQUIRED',
   'DIRECT_STREAM_SIGNING_SECRET',
   'ZENO_API_KEY',
   'SONICPESA_API_KEY',
   'AURAXPAY_API_KEY',
   'RESEND_API_KEY',
+  'BUNNY_CDN_BASE_URL',
+  'BASE_URL',
+  'STREAM_API_BASE_URL',
+  'UPLOAD_DIR',
 ]
 
-function pickProcessEnv(keys) {
-  const out = {}
-  for (const key of keys) {
-    const val = String(process.env[key] ?? '').trim()
-    if (val) out[key] = val
-  }
-  return out
+const pm2Env = {
+  NODE_ENV: 'production',
+  PORT: '10001',
+  OSMANI_ADMIN_ROOT: ROOT,
+  OSMANI_LOAD_CUTOVER_ENV: '1',
+  ...fileEnv,
+}
+
+for (const key of SECRET_ENV_KEYS) {
+  const val = String(fileEnv[key] ?? '').trim()
+  if (val) pm2Env[key] = val
+}
+
+if (!String(pm2Env.DATABASE_URL || '').trim()) {
+  console.error(
+    '[ecosystem] DATABASE_URL missing — add to',
+    path.join(API_DIR, '.env'),
+    'or',
+    path.join(ROOT, '.env'),
+  )
 }
 
 module.exports = {
@@ -36,14 +57,7 @@ module.exports = {
       interpreter: 'node',
       instances: 1,
       exec_mode: 'fork',
-      env: {
-        NODE_ENV: 'production',
-        PORT: 10001,
-        OSMANI_ADMIN_ROOT: ROOT,
-        OSMANI_LOAD_CUTOVER_ENV: '1',
-        OSMANI_GIT_COMMIT: process.env.OSMANI_GIT_COMMIT || '',
-        ...pickProcessEnv(SECRET_ENV_KEYS),
-      },
+      env: pm2Env,
       max_memory_restart: '512M',
       merge_logs: true,
       time: true,

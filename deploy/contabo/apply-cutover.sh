@@ -110,7 +110,20 @@ export DATABASE_URL
 
 GIT_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 export OSMANI_GIT_COMMIT="$GIT_COMMIT"
+export OSMANI_ADMIN_ROOT="$ROOT"
 echo "    git commit: $GIT_COMMIT"
+
+echo "==> PM2 env preload (from disk)"
+node -e "
+const { loadContaboPm2Env } = require('$ROOT/deploy/contabo/loadPm2Env.cjs');
+const e = loadContaboPm2Env('$ROOT');
+if (!String(e.DATABASE_URL || '').trim()) {
+  console.error('FATAL: DATABASE_URL not found in server/.env or repo .env');
+  process.exit(1);
+}
+console.log('DATABASE_URL ok (' + e.DATABASE_URL.length + ' chars)');
+console.log('BUNNY_CDN_BASE_URL', e.BUNNY_CDN_BASE_URL || '(unset)');
+"
 
 echo "==> Admin SPA build (same-origin /api)"
 cd "$ROOT"
@@ -128,15 +141,18 @@ node -e "import('./src/loadEnv.js').then((m)=>{const ok=m.isDatabaseUrlConfigure
 
 echo "==> PM2 restart"
 if command -v pm2 >/dev/null 2>&1; then
+  export OSMANI_ADMIN_ROOT="$ROOT"
   pm2 delete osmani-admin-api 2>/dev/null || true
   pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
   pm2 save
-  sleep 3
+  sleep 5
   if ! curl -fsS "http://127.0.0.1:10001/api/health" >/dev/null; then
     echo "ERROR: API did not respond on :10001 — PM2 logs:" >&2
-    pm2 logs osmani-admin-api --lines 30 --nostream || true
+    pm2 logs osmani-admin-api --lines 40 --nostream || true
     exit 1
   fi
+  HEALTH_JSON="$(curl -fsS "http://127.0.0.1:10001/api/health" || true)"
+  echo "    API health: $HEALTH_JSON"
 else
   echo "ERROR: pm2 not installed" >&2
   exit 1
@@ -165,4 +181,16 @@ if [[ -f "$ROOT/deploy/contabo/verify-admin-vps.mjs" ]]; then
     echo "WARN: verify-admin-vps failed — check admin SPA build" >&2
   }
 fi
-echo "Done. Run: node $ROOT/deploy/contabo/verify-cutover.mjs"
+for script in verify-cutover.mjs verify-final-migration-audit.mjs; do
+  if [[ -f "$ROOT/deploy/contabo/$script" ]]; then
+    echo "==> $script"
+    node "$ROOT/deploy/contabo/$script" || {
+      echo "ERROR: $script failed" >&2
+      exit 1
+    }
+  else
+    echo "ERROR: missing $ROOT/deploy/contabo/$script — run: git fetch origin main && git reset --hard origin/main" >&2
+    exit 1
+  fi
+done
+echo "Done. All verification scripts passed."
