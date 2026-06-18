@@ -11,7 +11,6 @@ import { getPool } from '../db/pool.js'
 import { UPLOADS_DIR } from '../multerUpload.js'
 import fs from 'node:fs'
 import { runSubscriptionRestorationAudit } from '../lib/subscriptionRestorationAudit.js'
-import { getServerGitCommit } from '../lib/deployMeta.js'
 
 function legacyAdminTokenOk(req) {
   const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
