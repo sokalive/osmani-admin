@@ -413,11 +413,21 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
   const proofDeviceId = String(opts.proofDeviceId ?? '').trim()
   const pool = requirePool()
   const proofClause = proofDeviceId
-    ? `AND EXISTS (
-         SELECT 1 FROM transactions t_proof
-         WHERE t_proof.device_id = $2
-           AND trim(coalesce(t_proof.phone::text, '')) <> ''
-           AND ${tzPhoneCanonicalSql('t_proof.phone::text')} = $1
+    ? `AND (
+         EXISTS (
+           SELECT 1 FROM transactions t_proof
+           WHERE t_proof.device_id = $2
+             AND trim(coalesce(t_proof.phone::text, '')) <> ''
+             AND ${tzPhoneCanonicalSql('t_proof.phone::text')} = $1
+         )
+         OR EXISTS (
+           SELECT 1 FROM device_intelligence_registry ir_proof
+           WHERE ir_proof.device_id = $2
+             AND (
+               ${tzPhoneCanonicalSql('ir_proof.phone_number')} = $1
+               OR ${tzPhoneCanonicalSql('ir_proof.account_id')} = $1
+             )
+         )
        )`
     : ''
   const params = proofDeviceId ? [digits, proofDeviceId] : [digits]
@@ -444,11 +454,19 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
   if (!dev) return null
   if (proofDeviceId) {
     const { rows: proofRows } = await pool.query(
-      `SELECT 1 FROM transactions
-       WHERE device_id = $1
-         AND trim(coalesce(phone::text, '')) <> ''
-         AND ${tzPhoneCanonicalSql('phone::text')} = $2
-       LIMIT 1`,
+      `SELECT 1 FROM (
+         SELECT 1 FROM transactions
+         WHERE device_id = $1
+           AND trim(coalesce(phone::text, '')) <> ''
+           AND ${tzPhoneCanonicalSql('phone::text')} = $2
+         UNION ALL
+         SELECT 1 FROM device_intelligence_registry ir
+         WHERE ir.device_id = $1
+           AND (
+             ${tzPhoneCanonicalSql('ir.phone_number')} = $2
+             OR ${tzPhoneCanonicalSql('ir.account_id')} = $2
+           )
+       ) proof LIMIT 1`,
       [proofDeviceId, digits],
     )
     if (!proofRows[0]) return null
@@ -1500,6 +1518,23 @@ export async function resolvePaymentPhoneForDevice(deviceId) {
  * Uses latest completed txn, then resolves duration from plans via plan_id (same as activation),
  * so duration_days does not depend on SQL JOIN quirks or nullable aggregates.
  */
+async function buildTxnSummaryFromRow(txn) {
+  if (!txn) return null
+  const planId = txn.plan_id != null ? Number(txn.plan_id) : null
+  const planRow = planId != null ? await getPlanRowByIdAny(planId) : null
+  let planDurationDays = null
+  if (planRow != null && planRow.duration_days != null) {
+    const n = Number(planRow.duration_days)
+    if (Number.isFinite(n) && n >= 0) planDurationDays = Math.trunc(n)
+  }
+  return {
+    amount: txn.amount != null ? Number(txn.amount) : null,
+    currency: txn.currency != null ? String(txn.currency).trim() || 'TZS' : 'TZS',
+    plan_id: planId,
+    plan_duration_days: planDurationDays,
+  }
+}
+
 export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
   const d = String(deviceId ?? '').trim()
   if (!d) return null
@@ -1509,24 +1544,38 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
     return manualSummary
   }
 
-  const txn = await getLatestCompletedTransactionForDevice(deviceId)
+  let txn = await getLatestCompletedTransactionForDevice(deviceId)
+  if (!txn) {
+    const pool = requirePool()
+    const { rows: subRows } = await pool.query(
+      `SELECT transaction_id::text AS transaction_id
+       FROM device_subscriptions
+       WHERE device_id = $1
+         AND status = 'active'
+         AND expires_at > now()
+       LIMIT 1`,
+      [d],
+    )
+    const linkedId = String(subRows[0]?.transaction_id ?? '').trim()
+    if (linkedId.startsWith('recovery:')) {
+      const sourceDev = linkedId.slice('recovery:'.length).trim()
+      if (sourceDev && sourceDev !== d) {
+        txn = await getLatestCompletedTransactionForDevice(sourceDev)
+      }
+    } else if (linkedId) {
+      const { rows: orderRows } = await pool.query(
+        `SELECT * FROM transactions
+         WHERE order_id = $1 AND status = 'completed'
+         LIMIT 1`,
+        [linkedId],
+      )
+      txn = orderRows[0] ?? null
+    }
+  }
   if (!txn) return null
 
-  const planId = txn.plan_id != null ? Number(txn.plan_id) : null
-  const planRow = planId != null ? await getPlanRowByIdAny(planId) : null
-
-  let planDurationDays = null
-  if (planRow != null && planRow.duration_days != null) {
-    const n = Number(planRow.duration_days)
-    if (Number.isFinite(n) && n >= 0) planDurationDays = Math.trunc(n)
-  }
-
-  const out = {
-    amount: txn.amount != null ? Number(txn.amount) : null,
-    currency: txn.currency != null ? String(txn.currency).trim() || 'TZS' : 'TZS',
-    plan_id: planId,
-    plan_duration_days: planDurationDays,
-  }
+  const out = await buildTxnSummaryFromRow(txn)
+  if (!out) return null
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
     console.log('[subscription_duration_debug]', {
@@ -1537,14 +1586,6 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
         amount: txn.amount,
         currency: txn.currency,
       },
-      joinedPlanRow: planRow
-        ? {
-            id: planRow.id,
-            duration_days: planRow.duration_days,
-            deleted_at: planRow.deleted_at ?? null,
-          }
-        : null,
-      duration_days_from_plan: planRow?.duration_days,
       normalizedPlanDurationDays: out.plan_duration_days,
     })
   }

@@ -5,6 +5,7 @@ import { getPool } from '../db/pool.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
+import { ensureSubscriptionLinkedForDevice } from '../lib/subscriptionRecovery.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const deviceSecurityRouter = Router()
@@ -1583,8 +1584,40 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
     await ensureSecurityTables(client)
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const deviceId = text(b.device_id, 128)
-    const fpHash = fingerprintHash(b.fingerprint)
-    if (!deviceId || !fpHash) return res.status(400).json({ error: 'device_id and fingerprint are required' })
+    if (!deviceId) return res.status(400).json({ error: 'device_id is required' })
+    const legacyDeviceId = text(
+      b.legacy_device_id ??
+        b.previous_device_id ??
+        b.source_device_id ??
+        b.displayed_account_id ??
+        '',
+      128,
+    )
+    const accountId = text(b.account_id ?? b.accountId ?? '', 64)
+    const paymentPhone = text(b.payment_phone ?? b.phone ?? '', 32)
+    const fingerprint = text(b.fingerprint ?? b.device_fingerprint ?? '', 512)
+
+    const link = await ensureSubscriptionLinkedForDevice(deviceId, {
+      fingerprint: fingerprint || null,
+      phone: paymentPhone || null,
+      legacyDeviceId: legacyDeviceId || null,
+      accountId: accountId || null,
+    }).catch(() => ({ linked: false }))
+    if (link.linked) {
+      const row = await billing.getDeviceSubscriptionAccessState(deviceId, fingerprint)
+      return res.json({
+        ok: true,
+        method: link.method,
+        recovered_from: link.recovered_from ?? null,
+        active: row?.active_now === true,
+        expires_at: row?.expires_at ?? null,
+      })
+    }
+
+    const fpHash = fingerprintHash(fingerprint)
+    if (!fpHash) {
+      return res.status(400).json({ error: 'fingerprint or migration hint (legacy_device_id / phone) is required' })
+    }
     await client.query('BEGIN')
     const { rows } = await client.query(
       `SELECT device_id, expires_at, status

@@ -10,6 +10,26 @@ import {
 } from '../billingStore.js'
 import { getDeviceIntelligenceByDeviceId } from './deviceIntelligenceStore.js'
 
+function phoneCanonicalSql(expr) {
+  return `(
+    CASE
+      WHEN regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g') ~ '^0[0-9]{9}$'
+        THEN '255' || substr(regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g'), 2)
+      WHEN regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g') ~ '^[67][0-9]{8}$'
+        THEN '255' || regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g')
+      ELSE regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g')
+    END
+  )`
+}
+
+function normalizeLegacyDeviceHint(hint) {
+  const s = String(hint ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-f0-9]/g, '')
+  return s.length >= 6 ? s : ''
+}
+
 function requirePool() {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required.')
@@ -205,6 +225,7 @@ async function collectPaymentPhonesForDevice(deviceId) {
 
   const intel = await getDeviceIntelligenceByDeviceId(d)
   if (intel?.phoneNumber) add(intel.phoneNumber)
+  if (intel?.accountId) add(intel.accountId)
 
   const pool = requirePool()
   const { rows } = await pool.query(
@@ -241,6 +262,96 @@ async function findActiveDeviceIdBySharedAndroidId(targetDeviceId) {
   return rows[0]?.device_id ? String(rows[0].device_id) : null
 }
 
+/** Resolve active subscription device_id from legacy/displayed account prefix (e.g. C0972049 → c0972049aa5f862e). */
+async function resolveActiveDeviceIdByLegacyHint(hint, excludeDeviceId) {
+  const prefix = normalizeLegacyDeviceHint(hint)
+  const exclude = String(excludeDeviceId ?? '').trim()
+  if (!prefix) return null
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT ds.device_id::text AS device_id
+     FROM device_subscriptions ds
+     WHERE ds.status = 'active'
+       AND ds.expires_at > now()
+       AND lower(ds.device_id) LIKE $1 || '%'
+       AND ds.device_id <> $2
+     ORDER BY length(ds.device_id) ASC, ds.expires_at DESC
+     LIMIT 2`,
+    [prefix, exclude],
+  )
+  if (rows.length !== 1) return null
+  return String(rows[0].device_id)
+}
+
+/** Exactly one active subscription linked to this phone via intelligence registry. */
+async function findUniqueActiveDeviceIdByIntelligencePhone(phoneInput, excludeDeviceId) {
+  const digits = normalizePhoneDigits(phoneInput)
+  const exclude = String(excludeDeviceId ?? '').trim()
+  if (!digits || digits.length < 10) return null
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT ds.device_id::text AS device_id
+     FROM device_subscriptions ds
+     INNER JOIN device_intelligence_registry ir ON ir.device_id = ds.device_id
+     WHERE ds.status = 'active'
+       AND ds.expires_at > now()
+       AND ds.device_id <> $2
+       AND (
+         ${phoneCanonicalSql('ir.phone_number')} = $1
+         OR ${phoneCanonicalSql('ir.account_id')} = $1
+       )
+     ORDER BY ds.expires_at DESC
+     LIMIT 3`,
+    [digits, exclude],
+  )
+  if (rows.length !== 1) return null
+  return String(rows[0].device_id)
+}
+
+/** Exactly one active subscription tied to payment phone cluster (safe when unambiguous). */
+async function findUniqueActiveDeviceIdForPhoneCluster(phones, excludeDeviceId) {
+  const exclude = String(excludeDeviceId ?? '').trim()
+  const sources = new Set()
+  for (const phone of phones) {
+    const sourceId = await findActiveDeviceIdForPaymentPhone(phone, {})
+    if (sourceId && sourceId !== exclude) sources.add(sourceId)
+  }
+  if (sources.size !== 1) return null
+  return [...sources][0]
+}
+
+/** Shared install_instance_id across APK reinstalls (app_installs registry). */
+async function findActiveDeviceIdBySharedInstallInstance(targetDeviceId) {
+  const target = String(targetDeviceId ?? '').trim()
+  if (!target) return null
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT ds.device_id::text AS device_id
+     FROM app_installs ai_tgt
+     INNER JOIN app_installs ai_src
+       ON ai_src.install_instance_id = ai_tgt.install_instance_id
+      AND trim(ai_src.install_instance_id) <> ''
+      AND ai_src.device_id <> ai_tgt.device_id
+     INNER JOIN device_subscriptions ds
+       ON ds.device_id = ai_src.device_id
+      AND ds.status = 'active'
+      AND ds.expires_at > now()
+     WHERE ai_tgt.device_id = $1
+     ORDER BY ds.expires_at DESC
+     LIMIT 2`,
+    [target],
+  )
+  if (rows.length !== 1) return null
+  return String(rows[0].device_id)
+}
+
+async function resolveFingerprintForDevice(deviceId, explicitFingerprint) {
+  const fp = String(explicitFingerprint ?? '').trim()
+  if (fp) return fp
+  const intel = await getDeviceIntelligenceByDeviceId(deviceId)
+  return String(intel?.deviceFingerprint ?? '').trim() || null
+}
+
 async function tryLinkFromSource(target, sourceId, fpHash, method) {
   if (!sourceId || sourceId === target) return { linked: false, reason: 'no_source' }
   const migrated = await migrateSubscriptionFromSourceDevice(target, sourceId, fpHash)
@@ -251,27 +362,43 @@ async function tryLinkFromSource(target, sourceId, fpHash, method) {
 }
 
 /**
- * APK migration / reinstall: recover by fingerprint, else link by payment phone if provided.
+ * APK migration / reinstall: recover by fingerprint, legacy device id, payment phone, android_id, install registry.
  */
-export async function ensureSubscriptionLinkedForDevice(deviceId, { fingerprint = null, phone = null } = {}) {
+export async function ensureSubscriptionLinkedForDevice(
+  deviceId,
+  { fingerprint = null, phone = null, legacyDeviceId = null, accountId = null } = {},
+) {
   const d = String(deviceId ?? '').trim()
   if (!d) return { linked: false, reason: 'missing_device_id' }
 
   const state = await getDeviceSubscriptionAccessState(d, fingerprint)
   if (state?.active_now === true && state?.blocked_now !== true) {
-    if (fingerprint) await tagActiveSubscriptionFingerprint(d, fingerprint)
+    const fpForTag = await resolveFingerprintForDevice(d, fingerprint)
+    if (fpForTag) await tagActiveSubscriptionFingerprint(d, fpForTag)
     return { linked: false, reason: 'already_active' }
   }
 
-  const fpHash = hashDeviceFingerprint(fingerprint)
+  const resolvedFingerprint = await resolveFingerprintForDevice(d, fingerprint)
+  const fpHash = hashDeviceFingerprint(resolvedFingerprint)
   if (fpHash) {
     const rec = await recoverSubscriptionToDevice(d, fpHash, { reason: 'verify_fingerprint' })
     if (rec.recovered) return { linked: true, method: 'fingerprint', ...rec }
   }
 
+  const legacyHints = [legacyDeviceId, accountId].filter(Boolean)
+  for (const hint of legacyHints) {
+    const legacySource = await resolveActiveDeviceIdByLegacyHint(hint, d)
+    if (legacySource) {
+      const linked = await tryLinkFromSource(d, legacySource, fpHash, 'legacy_device_id')
+      if (linked.linked) return linked
+    }
+  }
+
   const phoneCandidates = new Set()
   const explicit = normalizePhoneDigits(phone)
   if (explicit && explicit.length >= 10) phoneCandidates.add(explicit)
+  const accountDigits = normalizePhoneDigits(accountId)
+  if (accountDigits && accountDigits.length >= 10) phoneCandidates.add(accountDigits)
   for (const p of await collectPaymentPhonesForDevice(d)) phoneCandidates.add(p)
 
   for (const digits of phoneCandidates) {
@@ -282,12 +409,34 @@ export async function ensureSubscriptionLinkedForDevice(deviceId, { fingerprint 
     }
   }
 
+  if (phoneCandidates.size > 0) {
+    const uniqueCluster = await findUniqueActiveDeviceIdForPhoneCluster([...phoneCandidates], d)
+    if (uniqueCluster) {
+      const linked = await tryLinkFromSource(d, uniqueCluster, fpHash, 'phone_cluster_unique')
+      if (linked.linked) return linked
+    }
+  }
+
+  for (const digits of phoneCandidates) {
+    const intelSource = await findUniqueActiveDeviceIdByIntelligencePhone(digits, d)
+    if (intelSource) {
+      const linked = await tryLinkFromSource(d, intelSource, fpHash, 'intelligence_phone')
+      if (linked.linked) return linked
+    }
+  }
+
   const androidSource = await findActiveDeviceIdBySharedAndroidId(d)
   if (androidSource) {
     const linked = await tryLinkFromSource(d, androidSource, fpHash, 'android_id')
     if (linked.linked) return linked
   }
 
-  if (fingerprint) await tagActiveSubscriptionFingerprint(d, fingerprint)
+  const installSource = await findActiveDeviceIdBySharedInstallInstance(d)
+  if (installSource) {
+    const linked = await tryLinkFromSource(d, installSource, fpHash, 'install_instance')
+    if (linked.linked) return linked
+  }
+
+  if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)
   return { linked: false, reason: 'no_match' }
 }

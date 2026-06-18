@@ -31,6 +31,23 @@ function shortRef(id, n = 14) {
   return s.length <= n ? s : `${s.slice(0, n)}…`
 }
 
+function migrationHintsFromPayload(src) {
+  const b = src && typeof src === 'object' ? src : {}
+  const legacyDeviceId = String(
+    b.legacy_device_id ??
+      b.legacyDeviceId ??
+      b.previous_device_id ??
+      b.previousDeviceId ??
+      b.source_device_id ??
+      b.sourceDeviceId ??
+      b.displayed_account_id ??
+      b.displayedAccountId ??
+      '',
+  ).trim()
+  const accountId = String(b.account_id ?? b.accountId ?? '').trim()
+  return { legacyDeviceId: legacyDeviceId || null, accountId: accountId || null }
+}
+
 async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   const d = String(deviceId ?? '').trim()
   const hint = String(orderIdHint ?? '').trim()
@@ -258,7 +275,7 @@ function derivePlaybackGate(pub, modesPayload, securityPolicy = null, trialStatu
  * Shared path for GET /subscription-status and POST /subscription/verify:
  * presence touch, reconcile + activate, then access state + plans.
  */
-async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint, phone = null }) {
+async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint, phone = null, legacyDeviceId = null, accountId = null }) {
   const country = countryFromRequest(req)
   const d = String(deviceId ?? '').trim()
   const hint = String(orderIdHint ?? '').trim()
@@ -275,6 +292,8 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const link = await ensureSubscriptionLinkedForDevice(d, {
     fingerprint: fp || null,
     phone: paymentPhone || null,
+    legacyDeviceId: legacyDeviceId || null,
+    accountId: accountId || null,
   }).catch((e) => {
     console.error('[subscription-verify] ensureSubscriptionLinkedForDevice failed:', e)
     return { linked: false, reason: 'link_error' }
@@ -501,6 +520,7 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
     const orderIdHint = String(req.query.order_id ?? '').trim()
     const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
     const paymentPhone = String(req.query.payment_phone ?? req.query.phone ?? '').trim()
+    const migration = migrationHintsFromPayload(req.query)
     console.log('[subscription-verify] enter', {
       method: 'GET',
       path: '/subscription-status',
@@ -513,6 +533,8 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
       orderIdHint,
       fingerprint: fp,
       phone: paymentPhone,
+      legacyDeviceId: migration.legacyDeviceId,
+      accountId: migration.accountId,
     })
 
     console.log('[subscription-verify] response', {
@@ -549,6 +571,7 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
       b.device_fingerprint ?? b.fingerprint ?? b.deviceFingerprint ?? req.headers['x-device-fingerprint'] ?? '',
     ).trim()
     const paymentPhone = String(b.payment_phone ?? b.phone ?? b.paymentPhone ?? '').trim()
+    const migration = migrationHintsFromPayload(b)
 
     console.log('[subscription-verify] enter', {
       method: 'POST',
@@ -562,6 +585,8 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
       orderIdHint,
       fingerprint: fp,
       phone: paymentPhone,
+      legacyDeviceId: migration.legacyDeviceId,
+      accountId: migration.accountId,
     })
 
     console.log('[subscription-verify] response', {

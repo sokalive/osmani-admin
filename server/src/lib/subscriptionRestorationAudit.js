@@ -2,6 +2,7 @@ import { getPool } from '../db/pool.js'
 import {
   getDeviceSubscriptionAccessState,
   tryFinalizeActivationForDevice,
+  hashDeviceFingerprint,
 } from '../billingStore.js'
 import {
   recoverSubscriptionToDevice,
@@ -80,6 +81,66 @@ export async function findMigrationShadowByPhone(pool = requirePool()) {
        AND ds_source.expires_at > now()
        AND ds_new.device_id IS NULL
      ORDER BY t_new.device_id
+     LIMIT 500`,
+  )
+  return rows
+}
+
+/** New VPS device shares install_instance_id with active sub on old device (APK reinstall). */
+export async function findMigrationShadowByInstallInstance(pool = requirePool()) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT
+       ai_new.device_id::text AS shadow_device_id,
+       ds_source.device_id::text AS source_device_id,
+       ai_new.install_instance_id::text AS install_instance_id
+     FROM app_installs ai_new
+     INNER JOIN app_installs ai_src
+       ON ai_src.install_instance_id = ai_new.install_instance_id
+      AND trim(ai_src.install_instance_id) <> ''
+      AND ai_src.device_id <> ai_new.device_id
+     INNER JOIN device_subscriptions ds_source
+       ON ds_source.device_id = ai_src.device_id
+      AND ds_source.status = 'active'
+      AND ds_source.expires_at > now()
+     LEFT JOIN device_subscriptions ds_new
+       ON ds_new.device_id = ai_new.device_id
+      AND ds_new.status = 'active'
+      AND ds_new.expires_at > now()
+     WHERE ds_new.device_id IS NULL
+     ORDER BY ai_new.device_id
+     LIMIT 500`,
+  )
+  return rows
+}
+
+/** Inactive device shares intelligence phone/account with active sub on another device. */
+export async function findMigrationShadowByIntelligencePhone(pool = requirePool()) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT
+       ir_new.device_id::text AS shadow_device_id,
+       ds_source.device_id::text AS source_device_id,
+       trim(ir_new.phone_number) AS phone
+     FROM device_intelligence_registry ir_new
+     INNER JOIN device_intelligence_registry ir_src
+       ON ir_src.device_id <> ir_new.device_id
+      AND trim(coalesce(ir_src.phone_number, ir_new.phone_number, '')) <> ''
+      AND (
+        regexp_replace(coalesce(ir_new.phone_number, ''), '[^0-9]', '', 'g') =
+        regexp_replace(coalesce(ir_src.phone_number, ''), '[^0-9]', '', 'g')
+        OR regexp_replace(coalesce(ir_new.account_id, ''), '[^0-9]', '', 'g') =
+        regexp_replace(coalesce(ir_src.account_id, ''), '[^0-9]', '', 'g')
+      )
+     INNER JOIN device_subscriptions ds_source
+       ON ds_source.device_id = ir_src.device_id
+      AND ds_source.status = 'active'
+      AND ds_source.expires_at > now()
+     LEFT JOIN device_subscriptions ds_new
+       ON ds_new.device_id = ir_new.device_id
+      AND ds_new.status = 'active'
+      AND ds_new.expires_at > now()
+     WHERE ds_new.device_id IS NULL
+       AND trim(coalesce(ir_new.phone_number, ir_new.account_id, '')) <> ''
+     ORDER BY ir_new.device_id
      LIMIT 500`,
   )
   return rows
@@ -167,6 +228,8 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
     affected_users_count: 0,
     migration_shadow_count: 0,
     migration_phone_shadow_count: 0,
+    migration_install_shadow_count: 0,
+    migration_intelligence_phone_shadow_count: 0,
     orphan_activation_count: 0,
     missing_fingerprint_count: 0,
     expired_users_ignored_count: 0,
@@ -176,8 +239,12 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
       fingerprints_backfilled: 0,
       migrations_recovered: 0,
       phone_migrations_recovered: 0,
+      install_migrations_recovered: 0,
+      intelligence_migrations_recovered: 0,
+      auto_link_recovered: 0,
       activations_finalized: 0,
     },
+    migration_pairs: [],
     unresolved: [],
     evidence: [],
   }
@@ -197,11 +264,46 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
   const phoneShadows = await findMigrationShadowByPhone(pool)
   report.migration_phone_shadow_count = phoneShadows.length
 
+  const installShadows = await findMigrationShadowByInstallInstance(pool)
+  report.migration_install_shadow_count = installShadows.length
+
+  const intelPhoneShadows = await findMigrationShadowByIntelligencePhone(pool)
+  report.migration_intelligence_phone_shadow_count = intelPhoneShadows.length
+
   const orphans = await findOrphanCompletedActivations(pool)
   report.orphan_activation_count = orphans.length
   report.expired_users_ignored_count = await countExpiredSubscriptionOrphans(pool)
 
-  report.affected_users_count = shadows.length + phoneShadows.length + orphans.length
+  report.affected_users_count =
+    shadows.length +
+    phoneShadows.length +
+    installShadows.length +
+    intelPhoneShadows.length +
+    orphans.length
+
+  const pushPair = (shadowDeviceId, sourceDeviceId, matchReason, extra = {}) => {
+    report.migration_pairs.push({
+      old_active_device_id: String(sourceDeviceId || ''),
+      new_vps_device_id: String(shadowDeviceId || ''),
+      match_reason: matchReason,
+      ...extra,
+    })
+  }
+
+  for (const row of shadows) {
+    pushPair(row.shadow_device_id, row.source_device_id, 'fingerprint_trial_shadow')
+  }
+  for (const row of phoneShadows) {
+    pushPair(row.shadow_device_id, row.source_device_id, 'payment_phone_shadow', { phone: row.phone })
+  }
+  for (const row of installShadows) {
+    pushPair(row.shadow_device_id, row.source_device_id, 'install_instance_shadow', {
+      install_instance_id: row.install_instance_id,
+    })
+  }
+  for (const row of intelPhoneShadows) {
+    pushPair(row.shadow_device_id, row.source_device_id, 'intelligence_phone_shadow', { phone: row.phone })
+  }
 
   if (repair) {
     report.repairs.fingerprints_backfilled = await backfillSubscriptionFingerprintsFromTrial(pool)
@@ -227,12 +329,82 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
       if (!target) continue
       try {
         const link = await ensureSubscriptionLinkedForDevice(target, { phone: row.phone })
-        if (link.linked) report.repairs.phone_migrations_recovered += 1
+        if (link.linked) {
+          report.repairs.phone_migrations_recovered += 1
+          pushPair(target, link.recovered_from, link.method || 'payment_phone_shadow')
+        }
       } catch (e) {
         report.unresolved.push({
           type: 'migration_phone_shadow',
           device_id: target,
           source_device_id: row.source_device_id,
+          error: String(e.message || e),
+        })
+      }
+    }
+
+    for (const row of installShadows) {
+      const target = String(row.shadow_device_id || '').trim()
+      if (!target) continue
+      try {
+        const link = await ensureSubscriptionLinkedForDevice(target)
+        if (link.linked) {
+          report.repairs.install_migrations_recovered += 1
+          pushPair(target, link.recovered_from, link.method || 'install_instance_shadow')
+        }
+      } catch (e) {
+        report.unresolved.push({
+          type: 'migration_install_shadow',
+          device_id: target,
+          source_device_id: row.source_device_id,
+          error: String(e.message || e),
+        })
+      }
+    }
+
+    for (const row of intelPhoneShadows) {
+      const target = String(row.shadow_device_id || '').trim()
+      if (!target) continue
+      try {
+        const link = await ensureSubscriptionLinkedForDevice(target, { phone: row.phone })
+        if (link.linked) {
+          report.repairs.intelligence_migrations_recovered += 1
+          pushPair(target, link.recovered_from, link.method || 'intelligence_phone_shadow')
+        }
+      } catch (e) {
+        report.unresolved.push({
+          type: 'migration_intelligence_phone_shadow',
+          device_id: target,
+          source_device_id: row.source_device_id,
+          error: String(e.message || e),
+        })
+      }
+    }
+
+    const { rows: inactiveRows } = await pool.query(
+      `SELECT ir.device_id::text AS device_id
+       FROM device_intelligence_registry ir
+       LEFT JOIN device_subscriptions ds
+         ON ds.device_id = ir.device_id
+        AND ds.status = 'active'
+        AND ds.expires_at > now()
+       WHERE ds.device_id IS NULL
+       ORDER BY ir.last_seen_at DESC NULLS LAST
+       LIMIT 300`,
+    )
+    for (const row of inactiveRows) {
+      const target = String(row.device_id || '').trim()
+      if (!target) continue
+      try {
+        const link = await ensureSubscriptionLinkedForDevice(target)
+        if (link.linked) {
+          report.repairs.auto_link_recovered += 1
+          pushPair(target, link.recovered_from, link.method || 'auto_link')
+        }
+      } catch (e) {
+        report.unresolved.push({
+          type: 'auto_link',
+          device_id: target,
           error: String(e.message || e),
         })
       }
@@ -257,6 +429,8 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
 
   const shadowsAfter = repair ? await findMigrationShadowDevices(pool) : shadows
   const phoneShadowsAfter = repair ? await findMigrationShadowByPhone(pool) : phoneShadows
+  const installShadowsAfter = repair ? await findMigrationShadowByInstallInstance(pool) : installShadows
+  const intelPhoneShadowsAfter = repair ? await findMigrationShadowByIntelligencePhone(pool) : intelPhoneShadows
   const orphansAfter = repair ? await findOrphanCompletedActivations(pool) : orphans
 
   for (const row of shadowsAfter) {
@@ -275,6 +449,30 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
     if (!probe.activeByDevice) {
       report.unresolved.push({
         type: 'migration_phone_shadow_unresolved',
+        shadow_device_id: row.shadow_device_id,
+        source_device_id: row.source_device_id,
+        phone: row.phone,
+      })
+    }
+  }
+
+  for (const row of installShadowsAfter) {
+    const probe = await probeDeviceActive(row.shadow_device_id)
+    if (!probe.activeByDevice) {
+      report.unresolved.push({
+        type: 'migration_install_shadow_unresolved',
+        shadow_device_id: row.shadow_device_id,
+        source_device_id: row.source_device_id,
+        install_instance_id: row.install_instance_id,
+      })
+    }
+  }
+
+  for (const row of intelPhoneShadowsAfter) {
+    const probe = await probeDeviceActive(row.shadow_device_id)
+    if (!probe.activeByDevice) {
+      report.unresolved.push({
+        type: 'migration_intelligence_phone_shadow_unresolved',
         shadow_device_id: row.shadow_device_id,
         source_device_id: row.source_device_id,
         phone: row.phone,
@@ -304,6 +502,9 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
     report.restored_users_count =
       report.repairs.migrations_recovered +
       report.repairs.phone_migrations_recovered +
+      report.repairs.install_migrations_recovered +
+      report.repairs.intelligence_migrations_recovered +
+      report.repairs.auto_link_recovered +
       report.repairs.activations_finalized
   } else {
     report.restored_users_count = Math.max(
@@ -316,6 +517,8 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
     active_subscriptions: report.total_active_subscriptions,
     migration_shadow_remaining: shadowsAfter.length,
     migration_phone_shadow_remaining: phoneShadowsAfter.length,
+    migration_install_shadow_remaining: installShadowsAfter.length,
+    migration_intelligence_phone_shadow_remaining: intelPhoneShadowsAfter.length,
     orphan_activation_remaining: orphansAfter.length,
     expired_users_ignored: report.expired_users_ignored_count,
     missing_fingerprint_remaining: (
