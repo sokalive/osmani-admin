@@ -26,8 +26,14 @@ ln -sf /etc/nginx/sites-available/osmanitv-domains /etc/nginx/sites-enabled/osma
 nginx -t
 systemctl reload nginx
 
+if [[ -f "$ROOT/deploy/contabo/patch-vps-https-env.sh" ]]; then
+  echo "==> Patch VPS .env for branded HTTPS"
+  bash "$ROOT/deploy/contabo/patch-vps-https-env.sh"
+fi
+
 echo "==> verify"
 curl -fsSI "https://api.osmanitv.com" | head -1
 curl -fsS "https://api.osmanitv.com/api/health"
 echo
 node "$ROOT/deploy/contabo/verify-osmanitv-domains.mjs"
+node "$ROOT/deploy/contabo/verify-vps-infrastructure.mjs" || true

@@ -101,6 +101,11 @@ echo "==> Certbot renewal timer"
 systemctl enable certbot.timer 2>/dev/null || true
 systemctl start certbot.timer 2>/dev/null || true
 
+if [[ -f "$ROOT/deploy/contabo/patch-vps-https-env.sh" ]]; then
+  echo "==> Patch VPS .env for branded HTTPS"
+  bash "$ROOT/deploy/contabo/patch-vps-https-env.sh"
+fi
+
 diag
 
 echo "==> HTTPS verification"

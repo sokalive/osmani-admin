@@ -33,6 +33,22 @@ ensure_env_key() {
   fi
 }
 
+upsert_env_key() {
+  local key="$1"
+  local val="$2"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    touch "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+  fi
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$ENV_FILE"
+    echo "    ~ updated ${key}"
+  else
+    echo "${key}=${val}" >> "$ENV_FILE"
+    echo "    + added ${key} to .env"
+  fi
+}
+
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "WARN: creating $ENV_FILE — set DATABASE_URL before production use"
   touch "$ENV_FILE"
@@ -41,10 +57,18 @@ fi
 
 # Non-secrets are also in server/.env.cutover (git); patch .env for legacy installs.
 ensure_env_key BUNNY_CDN_BASE_URL "https://osmanitv.b-cdn.net"
-ensure_env_key BASE_URL "http://144.91.117.90"
-ensure_env_key STREAM_API_BASE_URL "http://144.91.117.90"
 ensure_env_key OSMANI_LOAD_CUTOVER_ENV "1"
 ensure_env_key UPLOAD_DIR "/var/www/osmani-admin-api/server/uploads"
+
+if [[ -f /etc/letsencrypt/live/osmanitv.com/fullchain.pem ]] || [[ "${OSMANI_USE_BRANDED_HTTPS:-}" == "1" ]]; then
+  echo "==> Branded HTTPS public URLs"
+  upsert_env_key BASE_URL "https://api.osmanitv.com"
+  upsert_env_key STREAM_API_BASE_URL "https://api.osmanitv.com"
+  upsert_env_key ADMIN_PUBLIC_URL "https://admin.osmanitv.com"
+else
+  ensure_env_key BASE_URL "http://144.91.117.90"
+  ensure_env_key STREAM_API_BASE_URL "http://144.91.117.90"
+fi
 
 if ! grep -q "^ADMIN_API_TOKEN=" "$ENV_FILE" 2>/dev/null; then
   tok="${ADMIN_API_TOKEN:-${APP_UPDATE_ADMIN_TOKEN:-3030}}"

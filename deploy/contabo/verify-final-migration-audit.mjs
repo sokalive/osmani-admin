@@ -6,7 +6,8 @@
  *   EXPECT_VPS_COMMIT=0a62176 node deploy/contabo/verify-final-migration-audit.mjs
  */
 const RENDER_API = String(process.env.RENDER_API || 'https://osmani-admin-api.onrender.com').replace(/\/$/, '')
-const VPS_API = String(process.env.VPS_API || 'http://144.91.117.90').replace(/\/$/, '')
+const VPS_API = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/$/, '')
+const VPS_ADMIN = String(process.env.VPS_ADMIN || 'https://admin.osmanitv.com').replace(/\/$/, '')
 const RENDER_ADMIN = String(process.env.RENDER_ADMIN || 'https://osmani-admin-mpya.onrender.com').replace(/\/$/, '')
 const RENDER_TV = String(process.env.RENDER_TV || 'https://osmani-tv.onrender.com').replace(/\/$/, '')
 const PROBE_DEVICE = process.env.PROBE_DEVICE || 'migration-audit-probe'
@@ -194,7 +195,7 @@ async function main() {
   await probeService('render-api', RENDER_API, { isApi: true })
   await probeService('vps-api', VPS_API, { isApi: true })
   await probeService('render-admin-mpya', RENDER_ADMIN, { isApi: false })
-  await probeService('vps-admin', VPS_API, { isApi: false })
+  await probeService('vps-admin', VPS_ADMIN, { isApi: false })
   await probeService('render-tv', RENDER_TV, { isApi: false })
 
   const [renderCut, vpsCut] = await Promise.all([
@@ -237,7 +238,13 @@ async function main() {
     const rh = streamApiHosts(rch.body)
     const vh = streamApiHosts(vch.body)
     pass('stream:render-hosts', JSON.stringify(rh))
-    pass('stream:vps-hosts', JSON.stringify(vh))
+    if (VPS_API.startsWith('https://') && vh.proxy_playback_url && !String(vh.proxy_playback_url).includes('144.91.117.90')) {
+      pass('stream:vps-hosts', JSON.stringify(vh))
+    } else if (!VPS_API.startsWith('https://')) {
+      pass('stream:vps-hosts', JSON.stringify(vh))
+    } else {
+      fail('stream:vps-hosts', `expected api.osmanitv.com over HTTPS probe — ${JSON.stringify(vh)}`)
+    }
   } else {
     fail('cutover-status', 'unavailable on one or both hosts')
   }

@@ -5,7 +5,7 @@
  *   node deploy/contabo/verify-cutover.mjs
  *   API_BASE=http://144.91.117.90 node deploy/contabo/verify-cutover.mjs
  */
-const API_BASE = String(process.env.API_BASE || 'http://144.91.117.90').replace(/\/$/, '')
+const API_BASE = String(process.env.API_BASE || 'https://api.osmanitv.com').replace(/\/$/, '')
 const API_PORT = String(process.env.API_PORT || '10001').trim()
 const RENDER_URL = 'https://osmani-admin-api.onrender.com'
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '3030'

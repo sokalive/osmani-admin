@@ -5,7 +5,7 @@
  *   node deploy/contabo/verify-admin-vps.mjs
  *   ADMIN_BASE=http://144.91.117.90 ADMIN_TOKEN=3030 node deploy/contabo/verify-admin-vps.mjs
  */
-const ADMIN_BASE = String(process.env.ADMIN_BASE || 'http://144.91.117.90').replace(/\/$/, '')
+const ADMIN_BASE = String(process.env.ADMIN_BASE || 'https://admin.osmanitv.com').replace(/\/$/, '')
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '3030'
 const RENDER_API = 'https://osmani-admin-api.onrender.com'
 
