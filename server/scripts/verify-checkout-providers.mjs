@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import {
   detectAuraxpayApiStyle,
+  normalizeAuraxpayApiEndpoint,
   resolveAuraxpayCollectPostUrl,
 } from '../src/lib/payments/providers/auraxpay.js'
 
@@ -34,6 +35,15 @@ assert(
 // payments router
 const payments = read('routes/payments.js')
 const restApi = read('routes/restApi.js')
+assert(
+  'create-payment auraxpay branch',
+  payments.includes("checkout.payment_provider === 'auraxpay'") &&
+    payments.includes('handleAuraxpayCreateOrder'),
+)
+assert(
+  'webhooks aurax alias',
+  read('routes/webhooks.js').includes("webhooksRouter.post('/aurax'"),
+)
 assert(
   'payments checkout-providers includes auraxpay',
   payments.includes('auraxpay') &&
@@ -83,6 +93,10 @@ assert(
   read('routes/auraxpaySettings.js').includes("'/set-active-provider'"),
 )
 
+assert(
+  'aurax endpoint normalization',
+  normalizeAuraxpayApiEndpoint('https://api.auraxpay.net') === 'https://api.auraxpay.net/v1',
+)
 const auraxNetCred = { apiEndpoint: 'https://api.auraxpay.net/v1', apiKey: 'test' }
 assert(
   'aurax native collect URL (/v1/payments/collect)',

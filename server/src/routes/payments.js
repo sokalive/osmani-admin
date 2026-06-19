@@ -16,7 +16,7 @@ import {
   createOrder,
   resolveSonicpesaCredentials,
 } from '../lib/payments/providers/sonicpesa.js'
-import { auraxpayPaymentsRouter } from './auraxpayPayments.js'
+import { auraxpayPaymentsRouter, handleAuraxpayCreateOrder } from './auraxpayPayments.js'
 import { sonicpesaPaymentsRouter } from './sonicpesaPayments.js'
 import { hashDeviceFingerprint } from '../billingStore.js'
 import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
@@ -121,6 +121,23 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       : {}
 
     const checkout = await billing.getCheckoutPaymentSettings()
+    if (checkout.payment_provider === 'auraxpay') {
+      const arow = await billing.getAuraxpayRow()
+      const acred = resolveAuraxpayCredentials(arow || {})
+      if (arow?.enabled === true && isAuraxpayConfigured(acred)) {
+        return handleAuraxpayCreateOrder(req, res, {
+          requireEnabled: true,
+          context: 'create-payment',
+        })
+      }
+      console.warn('[create-payment] auraxpay selected but not enabled/configured', {
+        enabled: arow?.enabled === true,
+        configured: isAuraxpayConfigured(acred),
+      })
+      return res.status(503).json({
+        error: 'Aurax Pay is selected as checkout provider but not enabled or configured in admin',
+      })
+    }
     if (checkout.payment_provider === 'sonicpesa') {
       const srow = await billing.getSonicpesaRow()
       const scred = resolveSonicpesaCredentials(srow || {})

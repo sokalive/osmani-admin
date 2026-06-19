@@ -365,13 +365,13 @@ function AuraxPaySettingsPage() {
 
             <div>
               <label className={labelClass()} htmlFor="ax-end">
-                API endpoint (AURAXPAY_ENDPOINT)
+                API endpoint (AURAXPAY_ENDPOINT or AURAXPAY_BASE_URL)
               </label>
               <input
                 id="ax-end"
                 value={draft.apiEndpoint}
                 onChange={(e) => setDraft((d) => ({ ...d, apiEndpoint: e.target.value }))}
-                placeholder="https://api.auraxpay.com"
+                placeholder="https://api.auraxpay.net/v1"
                 className={inputClass()}
               />
             </div>
@@ -440,7 +440,8 @@ function AuraxPaySettingsPage() {
                 className={inputClass()}
               />
               <p className="mt-2 text-xs text-slate-500">
-                POST target for payment events. Optional HMAC: set{' '}
+                POST target for payment events. Alias:{' '}
+                <code className="text-slate-400">/api/webhooks/aurax</code>. Optional HMAC: set{' '}
                 <code className="text-slate-400">AURAXPAY_WEBHOOK_SECRET</code> on the server and send{' '}
                 <code className="text-slate-400">x-auraxpay-signature</code> (hex SHA-256 of raw JSON body).
               </p>

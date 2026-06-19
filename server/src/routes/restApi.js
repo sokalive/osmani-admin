@@ -187,6 +187,8 @@ restApi.get('/', (_req, res) => {
       '/transfer-codes/bulk-delete',
       '/sync/stream',
       '/webhooks/zenopay',
+      '/webhooks/aurax',
+      '/webhooks/auraxpay',
       '/dashboard',
     ],
     runtime: {

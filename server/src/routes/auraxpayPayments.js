@@ -9,6 +9,7 @@ import {
   resolveAuraxpayCollectPostUrl,
   resolveAuraxpayCredentials,
 } from '../lib/payments/providers/auraxpay.js'
+import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
 import { formatPhone } from '../zenopayClient.js'
 
 export const auraxpayPaymentsRouter = Router()
@@ -146,6 +147,7 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
       })
     }
     console.log('[auraxpay] create-order accepted', { context, orderId, providerOrderId })
+    schedulePostPaymentActivationPolls(orderId, deviceId)
     res.status(201).json({
       ok: true,
       provider: 'auraxpay',

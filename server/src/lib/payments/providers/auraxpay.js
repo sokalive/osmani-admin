@@ -32,13 +32,41 @@ export function isAuraxpayConfigured(cred) {
 
 export function resolveAuraxpayCredentials(row) {
   const r = row && typeof row === 'object' ? row : {}
-  const apiEndpoint = String(process.env.AURAXPAY_ENDPOINT || r.api_endpoint || DEFAULT_API_BASE).trim()
+  const rawEndpoint = String(
+    process.env.AURAXPAY_ENDPOINT ||
+      process.env.AURAXPAY_BASE_URL ||
+      r.api_endpoint ||
+      DEFAULT_API_BASE,
+  ).trim()
+  const apiEndpoint = normalizeAuraxpayApiEndpoint(rawEndpoint)
   return {
     apiKey: String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim(),
     accountId: String(process.env.AURAXPAY_ACCOUNT_ID || r.account_id || '').trim(),
-    apiEndpoint: apiEndpoint.replace(/\/+$/, ''),
+    apiEndpoint,
     webhookUrl: String(process.env.AURAXPAY_WEBHOOK_URL || r.webhook_url || '').trim(),
     environment: String(r.environment || 'sandbox').trim(),
+  }
+}
+
+/** Strip collect/status path suffixes; ensure native api.auraxpay.* hosts use /v1 base. */
+export function normalizeAuraxpayApiEndpoint(raw) {
+  let ep = String(raw || '').trim().replace(/\/+$/, '')
+  if (!ep) return ''
+  try {
+    const u = new URL(ep)
+    let pathname = (u.pathname || '/').replace(/\/+$/, '') || ''
+    for (const suffix of KNOWN_COLLECT_PATH_SUFFIXES) {
+      if (pathname.endsWith(suffix)) {
+        pathname = pathname.slice(0, -suffix.length).replace(/\/+$/, '')
+        break
+      }
+    }
+    if (u.hostname.includes('auraxpay') && (!pathname || pathname === '/')) {
+      pathname = '/v1'
+    }
+    return pathname ? `${u.origin}${pathname}` : u.origin
+  } catch {
+    return ep
   }
 }
 
@@ -206,20 +234,25 @@ function maskPhoneForLog(phone) {
   return `${p.slice(0, 6)}***${p.slice(-2)}`
 }
 
-export function isCreateOrderAccepted(httpRes) {
+export function isCreateOrderAccepted(httpRes, { apiStyle } = {}) {
   if (!httpRes?.ok) return false
   const body = httpRes.body && typeof httpRes.body === 'object' ? httpRes.body : {}
+  const errText = String(body.error ?? body.message ?? '')
+    .trim()
+    .toLowerCase()
+  if (errText === 'endpoint not found') return false
   const numericStatus = Number(body.status)
   if (numericStatus === 203) return true
   const result = String(body.result ?? '').trim().toLowerCase()
   if (result === 'dispatched' || result === 'success') return true
   const topStatus = String(body.status ?? '').trim().toLowerCase()
   if (topStatus === 'error' || topStatus === 'failed') return false
-  if (topStatus === 'success') return true
+  if (topStatus === 'success' || topStatus === 'pending' || topStatus === 'initiated') return true
   const data = body.data && typeof body.data === 'object' ? body.data : null
   if (data?.order_id != null && String(data.order_id).trim() !== '') return true
   if (body.order_id != null && String(body.order_id).trim() !== '') return true
-  if (body.success === true) return true
+  if (body.success === true || body.accepted === true) return true
+  if (apiStyle === 'aurax' && !body.error) return true
   return false
 }
 
@@ -504,7 +537,7 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
       nextUrl: tryUrls[tryUrls.indexOf(tryUrl) + 1],
     })
   }
-  const accepted = isCreateOrderAccepted(res)
+  const accepted = isCreateOrderAccepted(res, { apiStyle })
   const normalized = normalizeResponse(res.body, res.status)
   const providerMessage = String(
     res.body?.message ?? res.body?.error ?? res.body?.data?.message ?? '',

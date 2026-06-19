@@ -60,6 +60,7 @@ function isMobileClientApiPath(req) {
   const path = String(req.path || req.url || '')
   return (
     path.startsWith('/api/payments') ||
+    path.startsWith('/api/webhooks') ||
     path.startsWith('/api/subscription') ||
     path.startsWith('/api/payment-status') ||
     path.startsWith('/api/zeno-webhook')

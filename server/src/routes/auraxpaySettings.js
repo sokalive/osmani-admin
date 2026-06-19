@@ -47,7 +47,9 @@ async function rowToApiResponse(row, req) {
   const la = r.last_test_at
   const env = normalizeEnvironment(r.environment)
   const envOverrideActive = {
-    apiEndpoint: Boolean(String(process.env.AURAXPAY_ENDPOINT || '').trim()),
+    apiEndpoint: Boolean(
+      String(process.env.AURAXPAY_ENDPOINT || process.env.AURAXPAY_BASE_URL || '').trim(),
+    ),
     accountId: Boolean(String(process.env.AURAXPAY_ACCOUNT_ID || '').trim()),
     apiKey: Boolean(String(process.env.AURAXPAY_API_KEY || '').trim()),
     webhookUrl: Boolean(String(process.env.AURAXPAY_WEBHOOK_URL || '').trim()),
