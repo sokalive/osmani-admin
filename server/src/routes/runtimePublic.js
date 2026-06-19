@@ -10,6 +10,8 @@ import { getLoadedEnvPaths } from '../loadEnv.js'
 import { getPool } from '../db/pool.js'
 import { UPLOADS_DIR } from '../multerUpload.js'
 import fs from 'node:fs'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { runSubscriptionRestorationAudit } from '../lib/subscriptionRestorationAudit.js'
 
 function legacyAdminTokenOk(req) {
@@ -172,6 +174,38 @@ runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, as
     })
   } catch (e) {
     console.error('[runtime/payment-activation-stats]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Provision branded HTTPS on VPS (admin token). Does not affect Render. */
+runtimePublicRouter.post('/provision-https', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const root = process.env.OSMANI_ADMIN_ROOT || '/var/www/osmani-admin-api'
+    const script = path.join(root, 'deploy/contabo/fix-osmanitv-https.sh')
+    const raw =
+      'https://raw.githubusercontent.com/sokalive/osmani-admin/main/deploy/contabo/fix-osmanitv-https.sh'
+    const env = {
+      ...process.env,
+      OSMANI_ADMIN_ROOT: root,
+      CERTBOT_EMAIL: String(process.env.CERTBOT_EMAIL || 'admin@osmanitv.com').trim(),
+    }
+    const result = fs.existsSync(script)
+      ? spawnSync('bash', [script], { cwd: root, env, encoding: 'utf8', timeout: 600_000 })
+      : spawnSync('bash', ['-c', `curl -fsSL "${raw}" | bash`], { env, encoding: 'utf8', timeout: 600_000 })
+    const output = `${result.stdout || ''}${result.stderr || ''}`.trim()
+    if (result.status !== 0) {
+      return res.status(500).json({
+        ok: false,
+        error: 'provision-https failed',
+        exit_code: result.status ?? 1,
+        output: output.slice(-8000),
+      })
+    }
+    res.json({ ok: true, commit: getServerGitCommit(), output: output.slice(-8000) })
+  } catch (e) {
+    console.error('[runtime/provision-https]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
