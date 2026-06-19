@@ -137,6 +137,7 @@ restApi.get('/', (_req, res) => {
       '/admin/manual-subscription/setup-pin',
       '/admin/panel-diagnostics',
       '/analytics/overview',
+      '/analytics/snapshot',
       '/analytics/channels',
       '/analytics/locations',
       '/analytics/trend',

@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { syncStreamUrl } from '../lib/api'
 
-const ANALYTICS_POLL_MS = 10_000
-const ANALYTICS_SSE_DEBOUNCE_MS = 600
+const ANALYTICS_POLL_MS = 4_000
+const ANALYTICS_SSE_DEBOUNCE_MS = 350
 
 /**
  * Poll analytics + debounced SSE refresh (avoids thundering herd on presence_expired).

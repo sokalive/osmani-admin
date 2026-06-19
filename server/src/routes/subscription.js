@@ -9,6 +9,7 @@ import { getDeviceTrialWatchStatus } from '../lib/trialWatchStore.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
 import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint } from '../lib/subscriptionRecovery.js'
+import { parseChannelIdFromRequest } from '../lib/analyticsPresence.js'
 
 export const subscriptionRouter = Router()
 
@@ -281,8 +282,9 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const hint = String(orderIdHint ?? '').trim()
   const fp = String(fingerprint ?? '').trim()
   const paymentPhone = String(phone ?? '').trim()
+  const channelId = parseChannelIdFromRequest(req)
 
-  await billing.touchLivePresence({ deviceId: d, country }).catch((e) => {
+  await billing.touchLivePresence({ deviceId: d, country, channelId }).catch((e) => {
     console.error('[subscription-verify] touchLivePresence failed:', e)
   })
   liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId: d })
@@ -615,7 +617,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     return
   }
   const country = countryFromRequest(req)
-  void billing.touchLivePresence({ deviceId, country }).catch((e) => {
+  const channelId = parseChannelIdFromRequest(req)
+  void billing.touchLivePresence({ deviceId, country, channelId }).catch((e) => {
     console.error('[subscription-stream] touchLivePresence failed:', e)
   })
   liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
@@ -801,6 +804,10 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
 
   const ping = setInterval(() => {
     res.write(': ping\n\n')
+    void billing.touchLivePresence({ deviceId, country, channelId }).catch((e) => {
+      console.error('[subscription-stream] presence ping failed:', e)
+    })
+    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
   }, 20_000)
 
   req.on('close', () => {

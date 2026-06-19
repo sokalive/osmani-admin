@@ -978,6 +978,7 @@ export const getDashboard = () => apiGet('/dashboard')
 export const putDashboardSettings = (body) => apiPut('/settings/dashboard', body)
 
 export const getAnalyticsOverview = () => apiGet('/analytics/overview')
+export const getAnalyticsSnapshot = () => apiGet('/analytics/snapshot')
 export const getAnalyticsChannels = () => apiGet('/analytics/channels')
 export const getAnalyticsLocations = () => apiGet('/analytics/locations')
 export const getAnalyticsTrend = () => apiGet('/analytics/trend')

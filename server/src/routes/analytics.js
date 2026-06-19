@@ -12,6 +12,7 @@ import {
   aggregateLocationsByCountryCode,
   normalizeLocationPayload,
 } from '../lib/analyticsLocation.js'
+import { TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
 
 export const analyticsRouter = Router()
 
@@ -81,6 +82,146 @@ function parseInstallInstanceIdFromBody(body) {
   )
 }
 
+async function queryOverviewStats(pool) {
+  const onlineNowRaw = await safeQueryScalar(
+    pool,
+    `SELECT COUNT(*)::int AS c
+     FROM live_sessions
+     WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
+    'overview.onlineNow',
+    (r) => numOrZero(r?.c),
+    [LIVE_WINDOW_INTERVAL],
+  )
+  const dauTodayRaw = await safeQueryScalar(
+    pool,
+    `SELECT COUNT(DISTINCT device_id)::int AS c
+     FROM live_sessions
+     WHERE COALESCE(updated_at, started_at, now()) >= date_trunc('day', now())`,
+    'overview.dauToday',
+    (r) => numOrZero(r?.c),
+  )
+  const newUsersTodayRaw = await safeQueryScalar(
+    pool,
+    `SELECT COUNT(*)::int AS c
+     FROM device_subscriptions
+     WHERE started_at >= date_trunc('day', now())`,
+    'overview.newUsersToday',
+    (r) => numOrZero(r?.c),
+  )
+  const revenueTodayRaw = await safeQueryScalar(
+    pool,
+    `SELECT COALESCE(SUM(amount), 0)::numeric AS s
+     FROM transactions
+     WHERE lower(status) = 'completed'
+       AND created_at >= date_trunc('day', now())`,
+    'overview.revenueToday',
+    (r) => numOrZero(r?.s),
+  )
+  const totalInstallsRaw = await safeQueryScalar(
+    pool,
+    `SELECT COUNT(*)::int AS c FROM app_installs`,
+    'overview.totalInstalls',
+    (r) => numOrZero(r?.c),
+  )
+  const degraded =
+    onlineNowRaw === null ||
+    dauTodayRaw === null ||
+    newUsersTodayRaw === null ||
+    revenueTodayRaw === null ||
+    totalInstallsRaw === null
+  return {
+    onlineNow: onlineNowRaw ?? 0,
+    dauToday: dauTodayRaw ?? 0,
+    newUsersToday: newUsersTodayRaw ?? 0,
+    revenueToday: revenueTodayRaw ?? 0,
+    totalInstalls: totalInstallsRaw ?? 0,
+    livePresenceWindowSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
+    sessionPruneSeconds: SESSION_PRUNE_SECONDS,
+    sessionTtlSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
+    degraded,
+  }
+}
+
+async function queryChannelStats(pool) {
+  const { rows } = await pool.query(
+    `SELECT channel_id, COUNT(*)::int AS viewers
+     FROM live_sessions
+     WHERE channel_id IS NOT NULL
+       AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
+     GROUP BY channel_id
+     ORDER BY viewers DESC`,
+    [LIVE_WINDOW_INTERVAL],
+  )
+  const mapped = rows.map((r) => ({
+    channel_id: String(r.channel_id),
+    viewers: Number(r.viewers) || 0,
+  }))
+  return {
+    mostWatched: mapped,
+    top5: mapped.filter((x) => x.viewers >= TOP5_MIN_VIEWERS).slice(0, 5),
+    top5MinViewers: TOP5_MIN_VIEWERS,
+  }
+}
+
+async function queryLocationStats(pool) {
+  const { rows } = await pool.query(
+    `SELECT
+       CASE
+         WHEN country IS NOT NULL AND trim(country) <> '' THEN country
+         ELSE 'Unknown'
+       END AS country,
+       COUNT(*)::int AS users
+     FROM live_sessions
+     WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
+     GROUP BY 1
+     ORDER BY users DESC`,
+    [LIVE_WINDOW_INTERVAL],
+  )
+  return aggregateLocationsByCountryCode(rows)
+}
+
+analyticsRouter.get('/snapshot', async (_req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) {
+      return res.status(200).json({
+        ...OVERVIEW_ZERO,
+        mostWatched: [],
+        top5: [],
+        locations: [],
+        top5MinViewers: TOP5_MIN_VIEWERS,
+        degraded: true,
+        error: 'Database not configured',
+      })
+    }
+    const [overview, channels, locations] = await Promise.all([
+      queryOverviewStats(pool),
+      queryChannelStats(pool),
+      queryLocationStats(pool),
+    ])
+    res.json({
+      ...overview,
+      mostWatched: channels.mostWatched,
+      top5: channels.top5,
+      top5MinViewers: TOP5_MIN_VIEWERS,
+      locations,
+      snapshotAt: new Date().toISOString(),
+      ...(overview.degraded ? { degraded: true } : {}),
+    })
+  } catch (e) {
+    console.error('[analytics/snapshot]', e)
+    res.status(200).json({
+      ...OVERVIEW_ZERO,
+      mostWatched: [],
+      top5: [],
+      locations: [],
+      top5MinViewers: TOP5_MIN_VIEWERS,
+      degraded: true,
+      error: String(e.message || e),
+    })
+  }
+})
+
 analyticsRouter.get('/overview', async (_req, res) => {
   try {
     const pool = getPool()
@@ -92,66 +233,9 @@ analyticsRouter.get('/overview', async (_req, res) => {
         error: 'Database not configured',
       })
     }
-    const onlineNowRaw = await safeQueryScalar(
-      pool,
-      `SELECT COUNT(*)::int AS c
-       FROM live_sessions
-       WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
-      'overview.onlineNow',
-      (r) => numOrZero(r?.c),
-      [LIVE_WINDOW_INTERVAL],
-    )
-    const dauTodayRaw = await safeQueryScalar(
-      pool,
-      `SELECT COUNT(DISTINCT device_id)::int AS c
-       FROM live_sessions
-       WHERE COALESCE(updated_at, started_at, now()) >= date_trunc('day', now())`,
-      'overview.dauToday',
-      (r) => numOrZero(r?.c),
-    )
-    const newUsersTodayRaw = await safeQueryScalar(
-      pool,
-      `SELECT COUNT(*)::int AS c
-       FROM device_subscriptions
-       WHERE started_at >= date_trunc('day', now())`,
-      'overview.newUsersToday',
-      (r) => numOrZero(r?.c),
-    )
-    const revenueTodayRaw = await safeQueryScalar(
-      pool,
-      `SELECT COALESCE(SUM(amount), 0)::numeric AS s
-       FROM transactions
-       WHERE lower(status) = 'completed'
-         AND created_at >= date_trunc('day', now())`,
-      'overview.revenueToday',
-      (r) => numOrZero(r?.s),
-    )
-    const totalInstallsRaw = await safeQueryScalar(
-      pool,
-      `SELECT COUNT(*)::int AS c FROM app_installs`,
-      'overview.totalInstalls',
-      (r) => numOrZero(r?.c),
-    )
-
-    const degraded =
-      onlineNowRaw === null ||
-      dauTodayRaw === null ||
-      newUsersTodayRaw === null ||
-      revenueTodayRaw === null ||
-      totalInstallsRaw === null
-
-    res.json({
-      onlineNow: onlineNowRaw ?? 0,
-      dauToday: dauTodayRaw ?? 0,
-      newUsersToday: newUsersTodayRaw ?? 0,
-      revenueToday: revenueTodayRaw ?? 0,
-      totalInstalls: totalInstallsRaw ?? 0,
-      livePresenceWindowSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
-      sessionPruneSeconds: SESSION_PRUNE_SECONDS,
-      /** @deprecated use livePresenceWindowSeconds */
-      sessionTtlSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
-      ...(degraded ? { degraded: true } : {}),
-    })
+    const stats = await queryOverviewStats(pool)
+    const { degraded, ...body } = stats
+    res.json({ ...body, ...(degraded ? { degraded: true } : {}) })
   } catch (e) {
     console.error('[analytics/overview] fatal:', e)
     res.status(200).json({
@@ -174,24 +258,8 @@ analyticsRouter.get('/channels', async (_req, res) => {
         error: 'Database not configured',
       })
     }
-    const { rows } = await pool.query(
-      `SELECT channel_id, COUNT(*)::int AS viewers
-       FROM live_sessions
-       WHERE channel_id IS NOT NULL
-         AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
-       GROUP BY channel_id
-       ORDER BY viewers DESC`,
-      [LIVE_WINDOW_INTERVAL],
-    )
-    const mapped = rows.map((r) => ({
-      channel_id: String(r.channel_id),
-      viewers: Number(r.viewers) || 0,
-    }))
-    const top5Eligible = mapped.slice(0, 5)
-    res.json({
-      mostWatched: mapped,
-      top5: top5Eligible,
-    })
+    const channels = await queryChannelStats(pool)
+    res.json(channels)
   } catch (e) {
     console.error('[analytics/channels]', e)
     res.status(200).json({
@@ -210,20 +278,7 @@ analyticsRouter.get('/locations', async (_req, res) => {
       console.error('[analytics/locations] DATABASE_URL not set — no database pool')
       return res.status(200).json([])
     }
-    const { rows } = await pool.query(
-      `SELECT
-         CASE
-           WHEN country IS NOT NULL AND trim(country) <> '' THEN country
-           ELSE 'Unknown'
-         END AS country,
-         COUNT(*)::int AS users
-       FROM live_sessions
-       WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
-       GROUP BY 1
-       ORDER BY users DESC`,
-      [LIVE_WINDOW_INTERVAL],
-    )
-    res.json(aggregateLocationsByCountryCode(rows))
+    res.json(await queryLocationStats(pool))
   } catch (e) {
     console.error('[analytics/locations]', e)
     res.status(200).json([])

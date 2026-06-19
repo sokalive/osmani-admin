@@ -9,11 +9,9 @@ import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
 import {
-  getAnalyticsChannels,
-  getAnalyticsLocations,
-  getAnalyticsOverview,
-  getChannels,
+  getAnalyticsSnapshot,
   getAnalyticsTrend,
+  getChannels,
 } from '../lib/api'
 
 const emerald =
@@ -38,18 +36,23 @@ function DashboardPage() {
 
   const load = useCallback(async () => {
     try {
-      const [o, c, l, t, catalog] = await Promise.all([
-        getAnalyticsOverview(),
-        getAnalyticsChannels(),
-        getAnalyticsLocations(),
+      const [snap, t, catalog] = await Promise.all([
+        getAnalyticsSnapshot(),
         getAnalyticsTrend(),
         getChannels(),
       ])
-      setOverview((o && typeof o === 'object' ? o : null) || OVERVIEW_FALLBACK)
-      setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
-      setTopFiveChannels(Array.isArray(c?.top5) ? c.top5 : [])
+      setOverview({
+        onlineNow: snap?.onlineNow,
+        totalInstalls: snap?.totalInstalls,
+        revenueToday: snap?.revenueToday,
+        newUsersToday: snap?.newUsersToday,
+        dauToday: snap?.dauToday,
+        livePresenceWindowSeconds: snap?.livePresenceWindowSeconds,
+      })
+      setChannels(Array.isArray(snap?.mostWatched) ? snap.mostWatched : [])
+      setTopFiveChannels(Array.isArray(snap?.top5) ? snap.top5 : [])
       setChannelCatalog(Array.isArray(catalog) ? catalog : [])
-      setLocations(Array.isArray(l) ? l : [])
+      setLocations(Array.isArray(snap?.locations) ? snap.locations : [])
       setTrend(
         Array.isArray(t)
           ? t.map((x) => ({

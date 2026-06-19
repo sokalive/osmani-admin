@@ -15,11 +15,9 @@ import ResetInstallAnalyticsPanel from '../components/ResetInstallAnalyticsPanel
 import { useToast } from '../context/ToastContext.jsx'
 import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
 import {
-  getAnalyticsChannels,
-  getAnalyticsLocations,
-  getAnalyticsOverview,
-  getChannels,
+  getAnalyticsSnapshot,
   getAnalyticsTrend,
+  getChannels,
 } from '../lib/api'
 import { formatTsh } from '../lib/formatMoney'
 import { useCountUp } from '../hooks/useCountUp'
@@ -63,19 +61,17 @@ function AnalyticsPage() {
   const load = useCallback(async () => {
     try {
       setError('')
-      const [o, c, l, t, catalog] = await Promise.all([
-        getAnalyticsOverview(),
-        getAnalyticsChannels(),
-        getAnalyticsLocations(),
+      const [snap, t, catalog] = await Promise.all([
+        getAnalyticsSnapshot(),
         getAnalyticsTrend(),
         getChannels(),
       ])
-      setOverview(o && typeof o === 'object' ? o : {})
-      setChannels(Array.isArray(c?.mostWatched) ? c.mostWatched : [])
+      setOverview(snap && typeof snap === 'object' ? snap : {})
+      setChannels(Array.isArray(snap?.mostWatched) ? snap.mostWatched : [])
       setChannelCatalog(Array.isArray(catalog) ? catalog : [])
-      setLocations(Array.isArray(l) ? l : [])
+      setLocations(Array.isArray(snap?.locations) ? snap.locations : [])
       setTrend(Array.isArray(t) ? t : [])
-      setIsDegraded(Boolean(o?.degraded || c?.degraded))
+      setIsDegraded(Boolean(snap?.degraded))
       setLastUpdated(new Date())
       setLoaded(true)
     } catch (e) {
