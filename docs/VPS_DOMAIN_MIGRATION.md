@@ -26,16 +26,36 @@ Migrate **branded HTTPS hosts** on Contabo while **Render API** (`osmani-admin-a
 On VPS as root (after DNS propagates):
 
 ```bash
+# Recommended — firewall + ACME + HTTPS vhosts + verification
+curl -fsSL https://raw.githubusercontent.com/sokalive/osmani-admin/main/deploy/contabo/fix-osmanitv-https.sh | bash
+```
+
+Or from repo clone:
+
+```bash
 cd /var/www/osmani-admin-api
 git pull origin main
+CERTBOT_EMAIL=admin@osmanitv.com bash deploy/contabo/fix-osmanitv-https.sh
+```
+
+Legacy script (still works):
+
+```bash
 CERTBOT_EMAIL=admin@osmanitv.com bash deploy/contabo/setup-osmanitv-ssl.sh
 ```
 
-Or full cutover + SSL:
+Full cutover + SSL (runs `fix-osmanitv-https.sh` at end of `apply-cutover.sh`):
 
 ```bash
-OSMANI_SETUP_OSMANITV_SSL=1 bash deploy/contabo/apply-cutover.sh
+bash deploy/contabo/pull-and-apply.sh
 ```
+
+### If port 443 stays closed
+
+1. Contabo panel → **Firewall** → allow **80/tcp** and **443/tcp** inbound.
+2. On VPS: `ss -tulpn | grep 443` — must show `nginx`.
+3. `certbot certificates` — must list `osmanitv.com` SANs.
+4. `nginx -t && systemctl status nginx`
 
 ## Verify
 

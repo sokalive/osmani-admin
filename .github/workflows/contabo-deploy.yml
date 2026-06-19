@@ -34,4 +34,5 @@ jobs:
           script: |
             set -euo pipefail
             cd /var/www/osmani-admin-api
+            export CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@osmanitv.com}"
             bash deploy/contabo/pull-and-apply.sh

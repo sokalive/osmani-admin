@@ -151,13 +151,11 @@ else
   exit 1
 fi
 
-if [[ "${OSMANI_SETUP_OSMANITV_SSL:-}" == "1" ]] || [[ -f /etc/letsencrypt/live/osmanitv.com/fullchain.pem ]]; then
-  if [[ -f "$ROOT/deploy/contabo/setup-osmanitv-ssl.sh" ]]; then
-    echo "==> osmanitv.com branded TLS (VPS testing — Render unchanged)"
-    bash "$ROOT/deploy/contabo/setup-osmanitv-ssl.sh" || {
-      echo "WARN: setup-osmanitv-ssl.sh failed — ensure DNS A records point to this VPS" >&2
-    }
-  fi
+if [[ "${OSMANI_SKIP_OSMANITV_SSL:-}" != "1" ]] && [[ -f "$ROOT/deploy/contabo/fix-osmanitv-https.sh" ]]; then
+  echo "==> osmanitv.com branded TLS (VPS testing — Render unchanged)"
+  CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@osmanitv.com}" bash "$ROOT/deploy/contabo/fix-osmanitv-https.sh" || {
+    echo "WARN: fix-osmanitv-https.sh failed — ensure DNS A records point to this VPS and ports 80/443 are open" >&2
+  }
 fi
 
 echo "==> Post-deploy checks"
