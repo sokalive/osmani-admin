@@ -39,6 +39,11 @@ async function probeSse(base, label) {
     const ok = events.includes('snapshot') && (events.includes('app_modes') || events.includes('app_settings_changed'))
     return { label, base, ok, detail: ok ? 'SSE init events OK' : 'missing snapshot/app_modes', events: [...new Set(events)] }
   } catch (e) {
+    const ok =
+      events.includes('snapshot') && (events.includes('app_modes') || events.includes('app_settings_changed'))
+    if (ok) {
+      return { label, base, ok: true, detail: 'SSE init events OK (stream closed early)', events: [...new Set(events)] }
+    }
     return { label, base, ok: false, detail: String(e.message || e), events }
   } finally {
     clearTimeout(timer)

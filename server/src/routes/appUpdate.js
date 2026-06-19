@@ -316,6 +316,24 @@ function parseVersionCode(value) {
   return Math.trunc(n)
 }
 
+/** Clients at or above published version_code never get SOFT/FORCE prompts (unless force min gate added later). */
+function applyClientVersionDecision(data, clientVersionInput) {
+  const client = parseVersionCode(clientVersionInput)
+  const server = parseVersionCode(data.version_code ?? data.versionCode)
+  if (client > 0 && server > 0 && client >= server) {
+    return { ...data, decision: 'NONE' }
+  }
+  return data
+}
+
+function clientVersionFromRequest(req) {
+  const b = req?.body && typeof req.body === 'object' ? req.body : {}
+  const q = req?.query && typeof req.query === 'object' ? req.query : {}
+  return parseVersionCode(
+    b.version_code ?? b.versionCode ?? q.version_code ?? q.versionCode ?? 0,
+  )
+}
+
 function hostedApkPublicUrl(req, filename) {
   const name = path.basename(String(filename ?? ''))
   if (!name) return ''
@@ -682,7 +700,9 @@ appUpdateRouter.get('/update-check', async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const data = toPublicConfig(await loadRowsByKey(pool), 'update-check:get', req)
+    let data = toPublicConfig(await loadRowsByKey(pool), 'update-check:get', req)
+    const clientCode = clientVersionFromRequest(req)
+    if (clientCode > 0) data = applyClientVersionDecision(data, clientCode)
     return res.json({
       decision: data.decision,
       source: data.source,
@@ -708,7 +728,9 @@ appUpdateRouter.post('/update-check', async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    const data = toPublicConfig(await loadRowsByKey(pool), 'update-check:post', req)
+    let data = toPublicConfig(await loadRowsByKey(pool), 'update-check:post', req)
+    const clientCode = clientVersionFromRequest(req)
+    if (clientCode > 0) data = applyClientVersionDecision(data, clientCode)
     return res.json({
       decision: data.decision,
       source: data.source,
