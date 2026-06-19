@@ -57,6 +57,12 @@ bash deploy/contabo/pull-and-apply.sh
 3. `certbot certificates` — must list `osmanitv.com` SANs.
 4. `nginx -t && systemctl status nginx`
 
+### After nginx config changes only
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sokalive/osmani-admin/main/deploy/contabo/reload-osmanitv-nginx.sh | bash
+```
+
 ## Verify
 
 ```bash

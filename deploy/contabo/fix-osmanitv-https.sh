@@ -105,8 +105,11 @@ diag
 
 echo "==> HTTPS verification"
 fail=0
-for url in "https://api.osmanitv.com" "https://api.osmanitv.com/api/health"; do
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || echo 000)"
+health_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 'https://api.osmanitv.com/api/health' || echo 000)"
+root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 'https://api.osmanitv.com/' || echo 000)"
+for pair in "https://api.osmanitv.com/api/health:${health_code}" "https://api.osmanitv.com/:${root_code}"; do
+  url="${pair%%:*}"
+  code="${pair##*:}"
   if [[ "$code" == "200" ]]; then
     echo "    OK $url → HTTP $code"
   else
