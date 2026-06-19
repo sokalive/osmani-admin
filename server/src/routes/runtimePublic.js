@@ -116,6 +116,8 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
       uploads_file_count: uploadFileCount,
       admin_token_configured: adminTokenConfigured,
       base_url: String(process.env.BASE_URL || '').trim() || null,
+      stream_api_base_url: String(process.env.STREAM_API_BASE_URL || '').trim() || null,
+      admin_public_url: String(process.env.ADMIN_PUBLIC_URL || '').trim() || null,
     })
   } catch (e) {
     console.error('[runtime/cutover-status]', e)

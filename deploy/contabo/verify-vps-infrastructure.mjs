@@ -4,6 +4,8 @@
  *
  *   node deploy/contabo/verify-vps-infrastructure.mjs
  */
+import tls from 'node:tls'
+
 const API = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/$/, '')
 const ADMIN = String(process.env.VPS_ADMIN || 'https://admin.osmanitv.com').replace(/\/$/, '')
 const RENDER_API = String(process.env.RENDER_API || 'https://osmani-admin-api.onrender.com').replace(/\/$/, '')
@@ -38,6 +40,19 @@ function hasCleartextApiUrl(text) {
   return /http:\/\/144\.91\.117\.90/i.test(text) || /http:\/\/api\.osmanitv\.com/i.test(text)
 }
 
+function tlsCertDaysRemaining(host) {
+  return new Promise((resolve, reject) => {
+    const sock = tls.connect(443, host, { servername: host }, () => {
+      const cert = sock.getPeerCertificate()
+      sock.end()
+      const validTo = new Date(cert.valid_to)
+      const days = (validTo.getTime() - Date.now()) / 86_400_000
+      resolve({ days, validTo: validTo.toISOString() })
+    })
+    sock.on('error', reject)
+  })
+}
+
 async function main() {
   console.log('=== VPS infrastructure audit ===\n')
   console.log(`API: ${API}`)
@@ -45,6 +60,18 @@ async function main() {
   console.log(`Render (legacy): ${RENDER_API}\n`)
 
   // --- HTTPS / TLS ---
+  try {
+    const host = new URL(API).hostname
+    const cert = await tlsCertDaysRemaining(host)
+    if (cert.days > 7) {
+      pass('ssl-cert-valid', `${cert.days.toFixed(0)} days remaining (Let's Encrypt auto-renew expected)`)
+    } else {
+      fail('ssl-cert-valid', `${cert.days.toFixed(1)} days remaining`)
+    }
+  } catch (e) {
+    fail('ssl-cert-valid', String(e.message || e))
+  }
+
   const health = await fetchMeta(`${API}/api/health`)
   if (health.res.ok && health.body?.ok === true && API.startsWith('https://')) {
     pass('api-health-https', `HTTP ${health.res.status} commit=${String(health.body.commit || '').slice(0, 12)}`)
@@ -85,6 +112,15 @@ async function main() {
       fail('env-base-url', `${baseUrl} — run patch-vps-https-env.sh on VPS`)
     } else {
       fail('env-base-url', baseUrl || '(unset)')
+    }
+    const streamBase = String(cut.body.stream_api_base_url || cut.body.cdn?.originBaseUrl || '')
+    if (streamBase.startsWith('https://api.osmanitv.com')) {
+      pass('env-stream-api-url', streamBase)
+    } else {
+      fail('env-stream-api-url', streamBase || '(unset)')
+    }
+    if (health.res.ok && health.body?.ok === true) {
+      pass('pm2-api-process', `health OK commit=${String(health.body.commit || '').slice(0, 12)}`)
     }
     if (cut.body.cdn?.cdnEnabled) pass('cdn-bunny', cut.body.cdn.cdnBaseUrl)
     else fail('cdn-bunny', 'cdnEnabled=false')
