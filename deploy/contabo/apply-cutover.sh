@@ -151,6 +151,15 @@ else
   exit 1
 fi
 
+if [[ "${OSMANI_SETUP_OSMANITV_SSL:-}" == "1" ]] || [[ -f /etc/letsencrypt/live/osmanitv.com/fullchain.pem ]]; then
+  if [[ -f "$ROOT/deploy/contabo/setup-osmanitv-ssl.sh" ]]; then
+    echo "==> osmanitv.com branded TLS (VPS testing — Render unchanged)"
+    bash "$ROOT/deploy/contabo/setup-osmanitv-ssl.sh" || {
+      echo "WARN: setup-osmanitv-ssl.sh failed — ensure DNS A records point to this VPS" >&2
+    }
+  fi
+fi
+
 echo "==> Post-deploy checks"
 sleep 3
 curl -fsS "http://127.0.0.1:10001/api/runtime/cutover-status" | head -c 500 || true

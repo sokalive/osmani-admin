@@ -26,6 +26,9 @@ import { streamProxyRouter } from './routes/streamProxy.js'
 const app = express()
 const PORT = Number(process.env.PORT) || 4000
 
+// Behind nginx / Render proxy — required for correct HTTPS URLs and secure cookies.
+app.set('trust proxy', 1)
+
 // --- ALLOWED ORIGINS ---
 // Primary: Android app + native HTTP clients (often no `Origin` — allowed below).
 // Secondary: admin panel + optional browser/WebView runtimes (explicit origins only).
@@ -36,6 +39,12 @@ const allowedOrigins = [
   'https://144.91.117.90',
   'http://admin.osmani.tv',
   'https://admin.osmani.tv',
+  'https://api.osmanitv.com',
+  'https://admin.osmanitv.com',
+  'https://osmanitv.com',
+  'http://api.osmanitv.com',
+  'http://admin.osmanitv.com',
+  'http://osmanitv.com',
   'https://osmani-admin-api.onrender.com',
   'http://osmani-admin-api.onrender.com',
   'https://osmani-tv-web.onrender.com',
