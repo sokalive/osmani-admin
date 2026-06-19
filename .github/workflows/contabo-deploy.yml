@@ -16,8 +16,10 @@ jobs:
     steps:
       - name: Skip when CONTABO_SSH_KEY is not configured
         id: gate
+        env:
+          CONTABO_SSH_KEY: ${{ secrets.CONTABO_SSH_KEY }}
         run: |
-          if [ -z "${{ secrets.CONTABO_SSH_KEY }}" ]; then
+          if [ -z "${CONTABO_SSH_KEY}" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::CONTABO_SSH_KEY not set — skipping VPS deploy. Run pull-and-apply.sh on the VPS console."
           else
@@ -31,8 +33,22 @@ jobs:
           host: 144.91.117.90
           username: root
           key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 30m
           script: |
             set -euo pipefail
             cd /var/www/osmani-admin-api
             export CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@osmanitv.com}"
             bash deploy/contabo/pull-and-apply.sh
+
+      - name: Verify VPS HTTPS endpoints
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.osmanitv.com/api/health" | tee /tmp/vps-health.json
+          curl -fsSI "https://api.osmanitv.com" | head -1 | grep -q "200"
+          curl -fsSI "https://admin.osmanitv.com" | head -1 | grep -q "200"
+          node -e "
+            const h = require('/tmp/vps-health.json');
+            if (!h.ok) { console.error('health not ok', h); process.exit(1); }
+            console.log('VPS commit', String(h.commit || '').slice(0, 12));
+          "

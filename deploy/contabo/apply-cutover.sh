@@ -150,9 +150,17 @@ if command -v pm2 >/dev/null 2>&1; then
   pm2 delete osmani-admin-api 2>/dev/null || true
   pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
   pm2 save
-  sleep 5
-  if ! curl -fsS "http://127.0.0.1:10001/api/health" >/dev/null; then
-    echo "ERROR: API did not respond on :10001 — PM2 logs:" >&2
+  echo "    waiting for API on :10001..."
+  api_ready=0
+  for _ in $(seq 1 30); do
+    if curl -fsS "http://127.0.0.1:10001/api/health" >/dev/null 2>&1; then
+      api_ready=1
+      break
+    fi
+    sleep 2
+  done
+  if [[ "$api_ready" -ne 1 ]]; then
+    echo "ERROR: API did not respond on :10001 within 60s — PM2 logs:" >&2
     pm2 logs osmani-admin-api --lines 40 --nostream || true
     exit 1
   fi
