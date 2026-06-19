@@ -115,6 +115,48 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
         routing_epoch: packet?.payload?.routing_epoch ?? null,
         reason: String(packet.event || 'sync'),
       })
+      send('channels_changed', {
+        v: packet.configVersion,
+        action: packet?.payload?.action ?? null,
+        channelId: packet?.payload?.channelId ?? null,
+        reason: String(packet.event || 'sync'),
+      })
+    }
+    if (topics.includes('config') && packet?.event === 'config.banners_changed') {
+      send('banners_changed', {
+        v: packet.configVersion,
+        action: packet?.payload?.action ?? null,
+        reason: String(packet.event || 'sync'),
+      })
+    }
+    if (topics.includes('config') && packet?.event === 'config.plans_changed') {
+      send('plans_changed', {
+        v: packet.configVersion,
+        action: packet?.payload?.action ?? null,
+        planId: packet?.payload?.planId ?? null,
+        reason: String(packet.event || 'sync'),
+      })
+    }
+    if (topics.includes('config') && packet?.event === 'config.payment_providers_changed') {
+      send('payment_providers_changed', {
+        v: packet.configVersion,
+        action: packet?.payload?.action ?? null,
+        reason: String(packet.event || 'sync'),
+      })
+    }
+    if (topics.includes('analytics') && packet?.event === 'analytics.subscription_updated') {
+      send('subscription_updated', {
+        deviceId: packet?.payload?.deviceId ?? null,
+        orderId: packet?.payload?.orderId ?? null,
+        reason: String(packet.event || 'sync'),
+      })
+    }
+    if (topics.includes('analytics') && packet?.event === 'analytics.transaction_updated') {
+      send('transaction_updated', {
+        orderId: packet?.payload?.orderId ?? null,
+        deviceId: packet?.payload?.deviceId ?? null,
+        reason: String(packet.event || 'sync'),
+      })
     }
     send(packet.event || 'sync', packet)
   }

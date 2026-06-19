@@ -6,11 +6,13 @@ const EVENT_NAMESPACES = {
   'config.channels_changed': ['channels', 'runtime-app-modes'],
   'config.banners_changed': ['banners'],
   'config.plans_changed': ['plans'],
-  'config.payment_providers_changed': ['payment-providers'],
+  'config.payment_providers_changed': ['payment-providers', 'checkout-providers'],
   'config.checkout_payment_provider_changed': ['checkout-providers'],
   'whatsapp_settings_changed': ['whatsapp-settings', 'settings-whatsapp', 'settings-public'],
   'popup_settings_changed': ['settings-popup', 'settings-public'],
   'config.settings_changed': ['runtime-app-modes', 'settings-public'],
+  'config.trial_watch_changed': ['runtime-app-modes'],
+  'server_health_changed': ['runtime-app-modes'],
 }
 
 let wired = false

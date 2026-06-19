@@ -743,10 +743,42 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       console.error('[subscription-stream] app_update immediate push failed:', e)
     }
   }
+  const catalogSyncHandler = (packet) => {
+    const event = String(packet?.event || '')
+    const catalogEvents = new Set([
+      'config.channels_changed',
+      'config.banners_changed',
+      'config.plans_changed',
+      'config.payment_providers_changed',
+    ])
+    if (!catalogEvents.has(event)) return
+    try {
+      const body = JSON.stringify({
+        v: packet.configVersion,
+        event,
+        action: packet?.payload?.action ?? null,
+        reason: event,
+      })
+      res.write(`event: catalog_refresh\ndata: ${body}\n\n`)
+      if (event === 'config.channels_changed') {
+        res.write(`event: channels_catalog\ndata: ${body}\n\n`)
+        res.write(`event: channels_changed\ndata: ${body}\n\n`)
+      }
+      if (event === 'config.banners_changed') {
+        res.write(`event: banners_changed\ndata: ${body}\n\n`)
+      }
+      if (event === 'config.plans_changed') {
+        res.write(`event: plans_changed\ndata: ${body}\n\n`)
+      }
+    } catch (e) {
+      console.error('[subscription-stream] catalog refresh push failed:', e)
+    }
+  }
 
   liveSyncBus.on('sync', modeSyncHandler)
   liveSyncBus.on('sync', trialSyncHandler)
   liveSyncBus.on('sync', appUpdateSyncHandler)
+  liveSyncBus.on('sync', catalogSyncHandler)
 
   const modePoll = setInterval(() => {
     void writeAppModesEvent('poll')
@@ -778,6 +810,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     liveSyncBus.off('sync', modeSyncHandler)
     liveSyncBus.off('sync', trialSyncHandler)
     liveSyncBus.off('sync', appUpdateSyncHandler)
+    liveSyncBus.off('sync', catalogSyncHandler)
     try {
       res.end()
     } catch (e) {
