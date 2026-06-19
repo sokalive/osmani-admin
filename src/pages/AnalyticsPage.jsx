@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -13,12 +13,12 @@ import Topbar from '../components/Topbar'
 import InstallsGrowthChart from '../components/InstallsGrowthChart'
 import ResetInstallAnalyticsPanel from '../components/ResetInstallAnalyticsPanel'
 import { useToast } from '../context/ToastContext.jsx'
+import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
 import {
   getAnalyticsChannels,
   getAnalyticsLocations,
   getAnalyticsOverview,
   getChannels,
-  syncStreamUrl,
   getAnalyticsTrend,
 } from '../lib/api'
 import { formatTsh } from '../lib/formatMoney'
@@ -81,11 +81,6 @@ function AnalyticsPage() {
     } catch (e) {
       showToast('error', e?.message || 'Could not load analytics')
       setError(e?.message || 'Could not load analytics')
-      setOverview({})
-      setChannels([])
-      setChannelCatalog([])
-      setLocations([])
-      setTrend([])
       setLoaded(true)
       setIsDegraded(false)
     } finally {
@@ -93,31 +88,7 @@ function AnalyticsPage() {
     }
   }, [showToast])
 
-  useEffect(() => {
-    load()
-    const id = window.setInterval(load, 3000)
-    return () => window.clearInterval(id)
-  }, [load])
-
-  useEffect(() => {
-    const es = new EventSource(syncStreamUrl(['analytics']))
-    const onSync = () => {
-      void load()
-    }
-    es.addEventListener('snapshot', onSync)
-    es.addEventListener('analytics.install', onSync)
-    es.addEventListener('analytics.install_reset', onSync)
-    es.addEventListener('analytics.reset', onSync)
-    es.addEventListener('analytics.session_start', onSync)
-    es.addEventListener('analytics.session_heartbeat', onSync)
-    es.addEventListener('analytics.session_end', onSync)
-    es.addEventListener('analytics.presence_expired', onSync)
-    es.addEventListener('analytics.transaction_updated', onSync)
-    es.addEventListener('analytics.subscription_updated', onSync)
-    return () => {
-      es.close()
-    }
-  }, [load])
+  useAnalyticsLiveRefresh(load)
 
   const onlineNow = Number(overview?.onlineNow) || 0
   const newUsersToday = Number(overview?.newUsersToday) || 0

@@ -2,7 +2,6 @@ import { Router } from 'express'
 import { getPool } from '../db/pool.js'
 import { tryRecordAppInstall } from '../lib/installAnalytics.js'
 import {
-  cleanupStaleSessions,
   LIVE_PRESENCE_WINDOW_SECONDS,
   livePresenceWindowInterval,
   SESSION_PRUNE_SECONDS,
@@ -93,8 +92,6 @@ analyticsRouter.get('/overview', async (_req, res) => {
         error: 'Database not configured',
       })
     }
-    await cleanupStaleSessions(pool)
-
     const onlineNowRaw = await safeQueryScalar(
       pool,
       `SELECT COUNT(*)::int AS c
@@ -177,7 +174,6 @@ analyticsRouter.get('/channels', async (_req, res) => {
         error: 'Database not configured',
       })
     }
-    await cleanupStaleSessions(pool)
     const { rows } = await pool.query(
       `SELECT channel_id, COUNT(*)::int AS viewers
        FROM live_sessions
@@ -191,7 +187,7 @@ analyticsRouter.get('/channels', async (_req, res) => {
       channel_id: String(r.channel_id),
       viewers: Number(r.viewers) || 0,
     }))
-    const top5Eligible = mapped.filter((x) => Number(x.viewers) >= 10).slice(0, 5)
+    const top5Eligible = mapped.slice(0, 5)
     res.json({
       mostWatched: mapped,
       top5: top5Eligible,
@@ -214,13 +210,16 @@ analyticsRouter.get('/locations', async (_req, res) => {
       console.error('[analytics/locations] DATABASE_URL not set — no database pool')
       return res.status(200).json([])
     }
-    await cleanupStaleSessions(pool)
     const { rows } = await pool.query(
-      `SELECT country, COUNT(*)::int AS users
+      `SELECT
+         CASE
+           WHEN country IS NOT NULL AND trim(country) <> '' THEN country
+           ELSE 'Unknown'
+         END AS country,
+         COUNT(*)::int AS users
        FROM live_sessions
-       WHERE country IS NOT NULL AND trim(country) <> ''
-         AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
-       GROUP BY country
+       WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
+       GROUP BY 1
        ORDER BY users DESC`,
       [LIVE_WINDOW_INTERVAL],
     )
@@ -308,12 +307,11 @@ analyticsRouter.post('/session/start', async (req, res) => {
     }
     const channelId = parseChannelIdFromBody(req.body)
     const country = parseCountryFromBody(req.body, req)
-    await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())
        ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = EXCLUDED.channel_id,
+         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
          country = COALESCE(EXCLUDED.country, live_sessions.country),
          updated_at = now()`,
       [deviceId, channelId, country],
@@ -342,7 +340,6 @@ analyticsRouter.post('/session/heartbeat', async (req, res) => {
     }
     const channelId = parseChannelIdFromBody(req.body)
     const country = parseCountryFromBody(req.body, req)
-    await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())
@@ -396,7 +393,6 @@ analyticsRouter.post('/presence/start', async (req, res) => {
     }
     const channelId = parseChannelIdFromBody(req.body)
     const country = parseCountryFromBody(req.body, req)
-    await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())
@@ -430,7 +426,6 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
     }
     const channelId = parseChannelIdFromBody(req.body)
     const country = parseCountryFromBody(req.body, req)
-    await cleanupStaleSessions(pool)
     await pool.query(
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())

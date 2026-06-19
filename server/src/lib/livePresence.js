@@ -10,13 +10,13 @@ function clampInt(n, min, max) {
   return Math.min(max, Math.max(min, Math.trunc(n)))
 }
 
-/** Rows count as "live" when updated_at is within this window (default 18s, clamp 10–45). */
+/** Rows count as "live" when updated_at is within this window (default 45s, clamp 10–120). */
 export const LIVE_PRESENCE_WINDOW_SECONDS = (() => {
-  const explicit = clampInt(Number(process.env.ANALYTICS_LIVE_PRESENCE_WINDOW_SECONDS), 10, 45)
+  const explicit = clampInt(Number(process.env.ANALYTICS_LIVE_PRESENCE_WINDOW_SECONDS), 10, 120)
   if (explicit != null) return explicit
-  const legacy = clampInt(Number(process.env.ANALYTICS_SESSION_TTL_SECONDS), 10, 45)
+  const legacy = clampInt(Number(process.env.ANALYTICS_SESSION_TTL_SECONDS), 10, 120)
   if (legacy != null) return legacy
-  return 18
+  return 45
 })()
 
 /** DELETE idle rows after this (default max(window+30, 90), min window+5). */
@@ -41,13 +41,21 @@ export function livePresencePruneInterval() {
   return `${SESSION_PRUNE_SECONDS} seconds`
 }
 
+const ADVISORY_LOCK_KEY = 871234001
+
 /**
  * Remove idle live_sessions rows and notify analytics SSE subscribers.
+ * Uses pg advisory lock so only one worker prunes at a time (Render + VPS PM2).
  * @returns {Promise<string[]>} device_ids removed
  */
 export async function cleanupStaleSessions(pool) {
   if (!pool) return []
+  let locked = false
   try {
+    const lockRes = await pool.query('SELECT pg_try_advisory_lock($1) AS ok', [ADVISORY_LOCK_KEY])
+    locked = lockRes.rows[0]?.ok === true
+    if (!locked) return []
+
     const { rows } = await pool.query(
       `DELETE FROM live_sessions
        WHERE COALESCE(updated_at, started_at, now()) < (now() - $1::interval)
@@ -57,9 +65,6 @@ export async function cleanupStaleSessions(pool) {
     const deviceIds = rows.map((r) => String(r.device_id ?? '').trim()).filter(Boolean)
     if (deviceIds.length === 0) return deviceIds
 
-    for (const deviceId of deviceIds) {
-      liveSyncBus.publish('analytics.session_end', { topics: ['analytics'], deviceId })
-    }
     liveSyncBus.publish('analytics.presence_expired', {
       topics: ['analytics'],
       deviceIds,
@@ -69,6 +74,10 @@ export async function cleanupStaleSessions(pool) {
   } catch (e) {
     console.error('[livePresence] cleanupStaleSessions:', e)
     return []
+  } finally {
+    if (locked) {
+      await pool.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_KEY]).catch(() => {})
+    }
   }
 }
 
