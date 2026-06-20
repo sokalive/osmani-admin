@@ -34,8 +34,11 @@ function emitIfActivated(act, orderId) {
 /**
  * Poll ZenoPay order-status for pending txns; complete + activate (same as webhook path).
  * Idempotent for already-completed rows (runs activation repair).
+ * @param {string} orderId
+ * @param {{ forcePoll?: boolean }} [opts] — bypass provider poll throttle (post-payment verify / boost polls)
  */
-export async function reconcileOrderWithZenoPay(orderId) {
+export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
+  const forcePoll = opts?.forcePoll === true
   const oid = String(orderId ?? '').trim()
   const out = {
     orderId: oid,
@@ -95,7 +98,7 @@ export async function reconcileOrderWithZenoPay(orderId) {
     5000,
     Number(process.env.SUBSCRIPTION_RECONCILE_MIN_INTERVAL_MS) || 30_000,
   )
-  if (polledAt) {
+  if (!forcePoll && polledAt) {
     const ageMs = Date.now() - new Date(polledAt).getTime()
     if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < minPollMs) {
       out.phase = 'poll_throttled'

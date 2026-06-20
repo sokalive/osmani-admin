@@ -20,7 +20,7 @@ export function schedulePostPaymentActivationPolls(orderId, deviceId) {
     setTimeout(() => {
       void (async () => {
         try {
-          const rec = await reconcileOrderWithZenoPay(oid)
+          const rec = await reconcileOrderWithZenoPay(oid, { forcePoll: true })
           const fin = await billing.tryFinalizeActivationForDevice(did)
           if (rec?.activation?.activated || fin?.activated) {
             deviceSubscriptionBus.emit('update', { deviceId: did })

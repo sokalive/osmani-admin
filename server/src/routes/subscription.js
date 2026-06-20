@@ -72,9 +72,9 @@ function hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountI
 }
 
 async function shouldReconcileProvidersForVerify(deviceId, orderIdHint, alreadyActive) {
+  if (alreadyActive) return false
   const hint = String(orderIdHint ?? '').trim()
   if (hint) return true
-  if (alreadyActive) return false
   return billing.deviceHasRecentPendingSubscriptionPayment(deviceId)
 }
 
@@ -107,7 +107,7 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
       })
       return
     }
-    await reconcileOrderWithZenoPay(orderId)
+    await reconcileOrderWithZenoPay(orderId, { forcePoll: Boolean(hint) })
   }
 
   if (hint) {
@@ -385,39 +385,71 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   }
 
   const pub = rowToPublicStatus(row)
-  const needsPlans = !pub.active
+  const isActiveNow = pub.active === true
+  const needsPlans = !isActiveNow
 
-  const [
-    txnSummary,
-    modesPayload,
-    securityPolicy,
-    trialStatus,
-    pendingGift,
-    trialWatchSettings,
-    plansRows,
-  ] = await Promise.all([
-    billing.getLatestCompletedSubscriptionTxnSummary(d),
-    loadGlobalAppModesPayload().catch(() => ({
-      ok: false,
-      v: liveSyncBus.snapshot().configVersion,
-      free_mode: false,
-      emergency_mode: false,
-      maintenance_mode: false,
-      server_time_ms: Date.now(),
-    })),
-    import('../lib/deviceSecurityStore.js')
-      .then((m) => m.getPlaybackSecurityPolicy(d))
-      .catch(() => null),
-    getDeviceTrialWatchStatus(d, fp).catch(() => null),
-    billing.getOldestPendingManualGrant(d),
-    loadTrialWatchSettings().catch(() => ({
-      enabled: false,
-      trialMinutes: 30,
-      previewSeconds: 120,
-      previewAfterEnabled: true,
-    })),
-    needsPlans ? billing.listActivePlansForVerify().catch(() => []) : Promise.resolve(null),
-  ])
+  const modesFallback = () => ({
+    ok: false,
+    v: liveSyncBus.snapshot().configVersion,
+    free_mode: false,
+    emergency_mode: false,
+    maintenance_mode: false,
+    server_time_ms: Date.now(),
+  })
+  const trialSettingsFallback = {
+    enabled: false,
+    trialMinutes: 30,
+    previewSeconds: 120,
+    previewAfterEnabled: true,
+  }
+  const trialDisabledPublic = {
+    enabled: false,
+    playbackAllowed: false,
+    playbackGateReason: 'subscription_active',
+    phase: 'disabled',
+  }
+
+  let txnSummary
+  let modesPayload
+  let securityPolicy
+  let trialStatus
+  let pendingGift
+  let trialWatchSettings
+  let plansRows
+
+  if (isActiveNow && !needsMigrationLink) {
+    ;[txnSummary, modesPayload, securityPolicy] = await Promise.all([
+      billing.getLatestCompletedSubscriptionTxnSummary(d),
+      loadGlobalAppModesPayload().catch(() => modesFallback()),
+      import('../lib/deviceSecurityStore.js')
+        .then((m) => m.getPlaybackSecurityPolicy(d))
+        .catch(() => null),
+    ])
+    trialStatus = trialDisabledPublic
+    pendingGift = null
+    trialWatchSettings = trialSettingsFallback
+    plansRows = null
+  } else {
+    ;[
+      txnSummary,
+      modesPayload,
+      securityPolicy,
+      trialStatus,
+      pendingGift,
+      trialWatchSettings,
+      plansRows,
+    ] = await Promise.all([
+      billing.getLatestCompletedSubscriptionTxnSummary(d),
+      loadGlobalAppModesPayload().catch(() => modesFallback()),
+      import('../lib/deviceSecurityStore.js')
+        .then((m) => m.getPlaybackSecurityPolicy(d))
+        .catch(() => null),
+      getDeviceTrialWatchStatus(d, fp).catch(() => null),
+      billing.getOldestPendingManualGrant(d),
+      loadTrialWatchSettings().catch(() => trialSettingsFallback),
+      needsPlans ? billing.listActivePlansForVerify().catch(() => []) : Promise.resolve(null),
+    ])
+  }
 
   const normalized = normalizeVerifyResponse(pub, txnSummary)
   const runtimeModes = appModesForVerify(modesPayload)
