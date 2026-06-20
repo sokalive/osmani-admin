@@ -85,6 +85,8 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
               arow?.last_create_order_response?.error ??
               arow?.last_create_order_response?.message ??
               null,
+            aurax_has_api_key: Boolean(acred.apiKey),
+            aurax_has_account_id: Boolean(acred.accountId),
           }
         : {}),
     })

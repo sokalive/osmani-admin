@@ -39,8 +39,10 @@ export function resolveAuraxpayCredentials(row) {
       DEFAULT_API_BASE,
   ).trim()
   const apiEndpoint = normalizeAuraxpayApiEndpoint(rawEndpoint)
+  const rawKey = String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim()
+  const apiKey = rawKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '')
   return {
-    apiKey: String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim(),
+    apiKey,
     accountId: String(process.env.AURAXPAY_ACCOUNT_ID || r.account_id || '').trim(),
     apiEndpoint,
     webhookUrl: String(process.env.AURAXPAY_WEBHOOK_URL || r.webhook_url || '').trim(),
@@ -859,43 +861,87 @@ export async function testConnection(cred) {
   }
   const apiStyle = detectAuraxpayApiStyle(cred)
   const collectUrl = resolveAuraxpayCollectPostUrl(cred)
+  const url = collectUrl || `${base}${collectPathForStyle(apiStyle, cred)}`
+  const webhookUrl = String(cred.webhookUrl || process.env.AURAXPAY_WEBHOOK_URL || '').trim()
+  const probeBody =
+    apiStyle === 'trawx'
+      ? {
+          code: 101,
+          merchant_order_id: `osm_probe_${Date.now()}`,
+          amount: 1000,
+          currency: 'TZS',
+          merchant_webhook: webhookUrl,
+          product_count: 1,
+          customer_email: 'probe@osmani.tv',
+          customer_name: 'Osmani Probe',
+          customer_phone: '255700000000',
+          customer_userid: cred.accountId || 'probe',
+        }
+      : {
+          phone: '255700000000',
+          amount: 1000,
+          currency: 'TZS',
+          reference: `osm_probe_${Date.now()}`,
+          callback_url: webhookUrl,
+          ...(cred.accountId ? { account_id: cred.accountId } : {}),
+        }
   try {
-    const url = collectUrl || `${base}${collectPathForStyle(apiStyle, cred)}`
-    const ac = new AbortController()
-    const timer = setTimeout(() => ac.abort(), 15_000)
-    const res = await fetch(url, {
-      method: 'OPTIONS',
+    const res = await httpJson(url, {
+      method: 'POST',
       headers: authHeaders(cred, apiStyle),
-      signal: ac.signal,
+      body: probeBody,
     })
-    clearTimeout(timer)
-    if (res.status === 200 || res.status === 204 || res.status === 405) {
+    const providerMessage = String(res.body?.message ?? res.body?.error ?? '').trim()
+    const endpointMissing =
+      res.status === 404 &&
+      providerMessage.toLowerCase() === 'endpoint not found'
+    if (endpointMissing) {
       return {
-        ok: true,
-        message: `Aurax Pay collect URL reachable (${url}, HTTP ${res.status}).`,
+        ok: false,
+        message: `Collect POST route not found (HTTP 404) at ${url}. Check API endpoint / AURAXPAY_COLLECT_URL.`,
         httpStatus: res.status,
         apiStyle,
         collectUrl: url,
+        providerMessage,
       }
     }
-    const probe = await httpJson(base, { method: 'GET', headers: authHeaders(cred, apiStyle) })
-    const authRejected = probe.status === 401 || probe.status === 403
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        message: `API key rejected (HTTP ${res.status}): ${providerMessage || 'Unauthorized'}. Collect URL: ${url}`,
+        httpStatus: res.status,
+        apiStyle,
+        collectUrl: url,
+        providerMessage,
+      }
+    }
+    if (isCreateOrderAccepted(res, { apiStyle })) {
+      return {
+        ok: true,
+        message: `Aurax Pay collect POST accepted (HTTP ${res.status}). USSD push should work. URL: ${url}`,
+        httpStatus: res.status,
+        apiStyle,
+        collectUrl: url,
+        providerMessage: providerMessage || null,
+      }
+    }
     return {
-      ok: probe.ok || authRejected,
-      message: authRejected
-        ? `API reachable; auth rejected (HTTP ${probe.status}) — check API key. Collect URL: ${url}`
-        : probe.ok
-          ? `API reachable (HTTP ${probe.status}). Collect URL: ${url}`
-          : `HTTP ${probe.status}: ${JSON.stringify(probe.body).slice(0, 120)} (collect: ${url})`,
-      httpStatus: probe.status,
+      ok: res.ok,
+      message: res.ok
+        ? `Collect POST reachable (HTTP ${res.status}). URL: ${url}`
+        : `Collect POST returned HTTP ${res.status}: ${providerMessage || JSON.stringify(res.body).slice(0, 120)} (URL: ${url})`,
+      httpStatus: res.status,
       apiStyle,
       collectUrl: url,
+      providerMessage: providerMessage || null,
     }
   } catch (e) {
     return {
       ok: false,
       message: e?.name === 'AbortError' ? 'Request timed out' : String(e.message || e),
       httpStatus: 0,
+      apiStyle,
+      collectUrl: url,
     }
   }
 }
