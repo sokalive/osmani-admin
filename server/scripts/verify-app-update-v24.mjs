@@ -25,10 +25,8 @@ const expectedCatalog = {
 }
 
 function expectedDecisionForClient(v) {
-  if (v === 15) return 'SOFT'
-  if (v >= 16 && v <= 23) return 'NONE'
   if (v >= 24) return 'NONE'
-  return 'NONE'
+  return 'SOFT'
 }
 
 async function fetchJson(base, path, opts = {}) {
@@ -162,10 +160,10 @@ for (const host of HOSTS) {
     fail(`${host.label} POST v23: ${e.message}`)
     return null
   })
-  if (post23 && post23.decision !== 'NONE') {
-    fail(`${host.label} POST v23 decision=${post23.decision}, want NONE`)
+  if (post23 && post23.decision !== 'SOFT') {
+    fail(`${host.label} POST v23 decision=${post23.decision}, want SOFT`)
   } else if (post23) {
-    pass(`${host.label} POST v23 => NONE`)
+    pass(`${host.label} POST v23 => SOFT`)
   }
 
   const sse = await probeSseAppUpdate(host.base)
@@ -183,9 +181,9 @@ for (const host of HOSTS) {
 
 const basePayload = { decision: 'SOFT' }
 for (const c of [
-  { client: 15, want: 'SOFT', reason: 'v15_play_store_cohort' },
-  { client: 16, want: 'NONE', reason: 'vps_ota_migration_cohort' },
-  { client: 23, want: 'NONE', reason: 'vps_ota_migration_cohort' },
+  { client: 15, want: 'SOFT', reason: 'play_store_below_v24' },
+  { client: 20, want: 'SOFT', reason: 'play_store_below_v24' },
+  { client: 23, want: 'SOFT', reason: 'play_store_below_v24' },
   { client: 24, want: 'NONE', reason: 'version_24_plus' },
 ]) {
   const got = applyAppUpdateClientDecision(basePayload, c.client)

@@ -385,15 +385,22 @@ function AuraxPaySettingsPage() {
 
             <div>
               <label className={labelClass()} htmlFor="ax-acct">
-                Account / merchant ID <span className="text-slate-500">(optional — native Aurax Pay)</span>
+                Phone Number / Merchant Phone{' '}
+                <span className="text-slate-500">(AuraxPay account id — e.g. 255XXXXXXXXX)</span>
               </label>
               <input
                 id="ax-acct"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 value={draft.accountId}
                 onChange={(e) => setDraft((d) => ({ ...d, accountId: e.target.value }))}
-                placeholder="Optional merchant identifier"
+                placeholder="255678089174 or 0678089174"
                 className={inputClass()}
               />
+              <p className="mt-1.5 text-xs text-slate-500">
+                Stored as merchant account id for AuraxPay collect API (normalized to 255… digits).
+              </p>
             </div>
 
             <button

@@ -11,8 +11,17 @@ import { loadAppUpdatePublicPayload } from './appUpdate.js'
 import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
 import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint } from '../lib/subscriptionRecovery.js'
 import { parseChannelIdFromRequest } from '../lib/analyticsPresence.js'
+import {
+  getCachedSubscriptionAccess,
+  invalidateSubscriptionAccessCache,
+  setCachedSubscriptionAccess,
+} from '../lib/subscriptionAccessCache.js'
 
 export const subscriptionRouter = Router()
+
+deviceSubscriptionBus.on('update', ({ deviceId }) => {
+  invalidateSubscriptionAccessCache(deviceId)
+})
 
 /** Cross-instance fallback: modes are in Postgres; keep interval Android-friendly (was 2500ms). */
 const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(750, Number(process.env.MODE_SSE_POLL_MS) || 1200))
@@ -74,8 +83,11 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   if (hint) {
     await guardedReconcile(hint)
   } else {
-    const pend = await billing.getLatestPendingTransactionForDevice(d)
-    if (pend?.order_id) await reconcileOrderWithZenoPay(String(pend.order_id))
+    const hasPending = await billing.deviceHasPendingSubscriptionPayment(d)
+    if (hasPending) {
+      const pend = await billing.getLatestPendingTransactionForDevice(d)
+      if (pend?.order_id) await reconcileOrderWithZenoPay(String(pend.order_id))
+    }
   }
 
   const fin = await billing.tryFinalizeActivationForDevice(d)
@@ -285,49 +297,90 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const paymentPhone = String(phone ?? '').trim()
   const channelId = parseChannelIdFromRequest(req)
 
-  await billing.touchLivePresence({ deviceId: d, country, channelId }).catch((e) => {
+  void billing.touchLivePresence({ deviceId: d, country, channelId }).catch((e) => {
     console.error('[subscription-verify] touchLivePresence failed:', e)
   })
   liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId: d })
 
-  await reconcileOrdersForVerify(d, hint)
+  let cached = getCachedSubscriptionAccess(d, fp)
+  let row =
+    cached !== undefined
+      ? cached
+      : await billing.getDeviceSubscriptionAccessState(d, fp)
+  if (cached === undefined) setCachedSubscriptionAccess(d, fp, row)
 
-  const link = await ensureSubscriptionLinkedForDevice(d, {
-    fingerprint: fp || null,
-    phone: paymentPhone || null,
-    legacyDeviceId: legacyDeviceId || null,
-    accountId: accountId || null,
-  }).catch((e) => {
-    console.error('[subscription-verify] ensureSubscriptionLinkedForDevice failed:', e)
-    return { linked: false, reason: 'link_error' }
-  })
-  if (link.linked) {
-    console.log('[subscription-verify] subscription linked', {
-      deviceId: shortRef(d),
-      method: link.method,
-      from: link.recovered_from ? shortRef(link.recovered_from) : undefined,
+  const alreadyActive = row?.active_now === true && row?.blocked_now !== true
+  const needsProviderReconcile = Boolean(hint) || !alreadyActive
+
+  if (needsProviderReconcile) {
+    await reconcileOrdersForVerify(d, hint)
+    invalidateSubscriptionAccessCache(d)
+    row = await billing.getDeviceSubscriptionAccessState(d, fp)
+    setCachedSubscriptionAccess(d, fp, row)
+  } else {
+    void billing.tryFinalizeActivationForDevice(d).catch((e) => {
+      console.error('[subscription-verify] background finalize failed:', e)
     })
-  } else if (fp) {
-    await tagActiveSubscriptionFingerprint(d, fp).catch(() => {})
   }
 
-  const row = await billing.getDeviceSubscriptionAccessState(d, fp)
+  if (!(row?.active_now === true && row?.blocked_now !== true)) {
+    const link = await ensureSubscriptionLinkedForDevice(d, {
+      fingerprint: fp || null,
+      phone: paymentPhone || null,
+      legacyDeviceId: legacyDeviceId || null,
+      accountId: accountId || null,
+    }).catch((e) => {
+      console.error('[subscription-verify] ensureSubscriptionLinkedForDevice failed:', e)
+      return { linked: false, reason: 'link_error' }
+    })
+    if (link.linked) {
+      console.log('[subscription-verify] subscription linked', {
+        deviceId: shortRef(d),
+        method: link.method,
+        from: link.recovered_from ? shortRef(link.recovered_from) : undefined,
+      })
+      invalidateSubscriptionAccessCache(d)
+      row = await billing.getDeviceSubscriptionAccessState(d, fp)
+      setCachedSubscriptionAccess(d, fp, row)
+    } else if (fp) {
+      void tagActiveSubscriptionFingerprint(d, fp).catch(() => {})
+    }
+  }
+
   const pub = rowToPublicStatus(row)
-  const txnSummary = await billing.getLatestCompletedSubscriptionTxnSummary(d)
+
+  const [
+    txnSummary,
+    modesPayload,
+    securityPolicy,
+    trialStatus,
+    pendingGift,
+    trialWatchSettings,
+  ] = await Promise.all([
+    billing.getLatestCompletedSubscriptionTxnSummary(d),
+    loadGlobalAppModesPayload().catch(() => ({
+      ok: false,
+      v: liveSyncBus.snapshot().configVersion,
+      free_mode: false,
+      emergency_mode: false,
+      maintenance_mode: false,
+      server_time_ms: Date.now(),
+    })),
+    import('../lib/deviceSecurityStore.js')
+      .then((m) => m.getPlaybackSecurityPolicy(d))
+      .catch(() => null),
+    getDeviceTrialWatchStatus(d, fp).catch(() => null),
+    billing.getOldestPendingManualGrant(d),
+    loadTrialWatchSettings().catch(() => ({
+      enabled: false,
+      trialMinutes: 30,
+      previewSeconds: 120,
+      previewAfterEnabled: true,
+    })),
+  ])
+
   const normalized = normalizeVerifyResponse(pub, txnSummary)
-  const modesPayload = await loadGlobalAppModesPayload().catch(() => ({
-    ok: false,
-    v: liveSyncBus.snapshot().configVersion,
-    free_mode: false,
-    emergency_mode: false,
-    maintenance_mode: false,
-    server_time_ms: Date.now(),
-  }))
   const runtimeModes = appModesForVerify(modesPayload)
-  const securityPolicy = await import('../lib/deviceSecurityStore.js')
-    .then((m) => m.getPlaybackSecurityPolicy(d))
-    .catch(() => null)
-  const trialStatus = await getDeviceTrialWatchStatus(d, fp).catch(() => null)
   const playbackGate = derivePlaybackGate(pub, modesPayload, securityPolicy, trialStatus)
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
@@ -350,7 +403,6 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     })
   }
 
-  const pendingGift = await billing.getOldestPendingManualGrant(d)
   const manualGift =
     pendingGift != null
       ? {
@@ -365,12 +417,6 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         }
       : null
 
-  const trialWatchSettings = await loadTrialWatchSettings().catch(() => ({
-    enabled: false,
-    trialMinutes: 30,
-    previewSeconds: 120,
-    previewAfterEnabled: true,
-  }))
   const trialWatchPublic = trialWatchSettingsToPublicPayload(
     trialWatchSettings,
     modesPayload?.v ?? liveSyncBus.snapshot().configVersion,

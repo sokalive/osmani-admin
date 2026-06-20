@@ -30,6 +30,7 @@
     "verify:checkout-providers": "node scripts/verify-checkout-providers.mjs",
     "verify:app-update-targeting": "node scripts/verify-app-update-targeting.mjs",
     "verify:analytics-widgets": "node scripts/verify-analytics-widgets.mjs",
+    "verify:subscription-timing": "node scripts/verify-subscription-timing.mjs",
     "verify:sms-integration": "node scripts/verify-sms-integration.mjs"
   },
   "dependencies": {

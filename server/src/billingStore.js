@@ -1167,6 +1167,23 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
 }
 
 /** Latest pending payment for this device (poll provider before subscription-status). */
+export async function deviceHasPendingSubscriptionPayment(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return false
+  const { rows } = await pool.query(
+    `SELECT 1 AS ok
+     FROM transactions
+     WHERE device_id = $1
+       AND status = 'pending'
+       AND plan_id IS NOT NULL
+     LIMIT 1`,
+    [d],
+  )
+  return rows.length > 0
+}
+
+/** Latest pending payment for this device (poll provider before subscription-status). */
 export async function getLatestPendingTransactionForDevice(deviceId) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()

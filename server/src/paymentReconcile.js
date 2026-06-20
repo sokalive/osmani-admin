@@ -90,6 +90,21 @@ export async function reconcileOrderWithZenoPay(orderId) {
   }
 
   const rawPayload = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+  const polledAt = rawPayload.orderStatusPolledAt
+  const minPollMs = Math.max(
+    5000,
+    Number(process.env.SUBSCRIPTION_RECONCILE_MIN_INTERVAL_MS) || 30_000,
+  )
+  if (polledAt) {
+    const ageMs = Date.now() - new Date(polledAt).getTime()
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < minPollMs) {
+      out.phase = 'poll_throttled'
+      out.txnStatusAfter = 'pending'
+      log('provider poll throttled', { orderId: shortId(oid), ageMs, minPollMs })
+      return out
+    }
+  }
+
   if (rawPayload.payment_provider === 'sonicpesa') {
     const srow = await billing.getSonicpesaRow()
     const scred = resolveSonicpesaCredentials(srow || {})

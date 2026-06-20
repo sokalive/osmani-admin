@@ -81,6 +81,9 @@ async function rowToApiResponse(row, req) {
     hasSigningSecret,
     signingSecretMasked: signingSecretMasked || (hasSigningSecret ? '******' : ''),
     accountIdOptional: true,
+    accountIdIsMerchantPhone: true,
+    merchantPhone: accountId,
+    merchant_phone: accountId,
     accountId,
     account_id: accountId,
     webhookUrl,
@@ -143,11 +146,16 @@ auraxpaySettingsRouter.put('/', async (req, res) => {
       return res.status(400).json({ error: 'API endpoint is required when Aurax Pay is enabled' })
     }
 
+    const phoneRaw = String(
+      b.merchantPhone ?? b.merchant_phone ?? b.accountId ?? b.account_id ?? current.account_id ?? '',
+    ).trim()
+    const accountIdNormalized = phoneRaw ? billing.normalizePhoneDigits(phoneRaw) || phoneRaw : ''
+
     const row = await billing.updateAuraxpayRowFull({
       enabled: Boolean(b.enabled ?? current.enabled ?? false),
       environment: normalizeEnvironment(b.environment ?? current.environment ?? 'sandbox'),
       api_endpoint: apiEndpointIn,
-      account_id: String(b.accountId ?? b.account_id ?? current.account_id ?? ''),
+      account_id: accountIdNormalized,
       webhook_url: String(
         b.webhookUrl ?? b.webhook_url ?? current.webhook_url ?? defaultWebhookUrl(req),
       ),
