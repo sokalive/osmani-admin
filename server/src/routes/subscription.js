@@ -172,9 +172,12 @@ function rowToPublicStatus(row) {
   if (!row) {
     return {
       active: false,
+      isActive: false,
       status: null,
       expiresAt: null,
       expires_at: null,
+      blocked: false,
+      blockReason: null,
       ...reminderFieldsFromRow(null),
     }
   }
