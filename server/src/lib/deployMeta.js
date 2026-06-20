@@ -20,6 +20,15 @@ export function getServerGitCommit() {
   }
 }
 
+/** Default public API origin — never Render; VPS uses BASE_URL / request host. */
+export function defaultPublicApiOrigin() {
+  const fromEnv = String(process.env.BASE_URL || process.env.STREAM_API_BASE_URL || '')
+    .trim()
+    .replace(/\/+$/, '')
+  if (fromEnv) return fromEnv
+  return 'https://api.osmanitv.com'
+}
+
 /** Non-secret fingerprint so ops can confirm all instances point at the same DB. */
 export function getDatabaseUrlFingerprint() {
   const u = String(process.env.DATABASE_URL || '').trim()

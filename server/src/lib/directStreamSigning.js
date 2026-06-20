@@ -1,11 +1,12 @@
 import crypto from 'node:crypto'
+import { defaultPublicApiOrigin } from './deployMeta.js'
 import { isBunnyCdnHost } from './cdnAssets.js'
 import { recordTokenValidationFailure } from './streamDeliveryMetrics.js'
 import { normalizeUpstreamHeaders } from './streamUpstreamHeaders.js'
 
 export const STREAM_DIRECT_MOUNT = 'stream-direct'
 
-const DEFAULT_STREAM_API_BASE = 'https://osmani-admin-api.onrender.com'
+const DEFAULT_STREAM_API_BASE = defaultPublicApiOrigin()
 
 function parseStreamApiBaseUrl(raw) {
   const s = String(raw || '').trim().replace(/\/+$/, '')

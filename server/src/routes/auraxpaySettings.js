@@ -9,17 +9,16 @@ import {
   resolveAuraxpayCredentials,
   testConnection as testAuraxpayConnection,
 } from '../lib/payments/providers/auraxpay.js'
+import { defaultPublicApiOrigin } from '../lib/deployMeta.js'
 
 export const auraxpaySettingsRouter = Router()
 
 auraxpaySettingsRouter.use(requireAdminPanelAccess)
 
-const DEFAULT_PUBLIC_API = 'https://osmani-admin-api.onrender.com'
-
 function defaultWebhookUrl(req) {
   const base = (
     process.env.BASE_URL ||
-    DEFAULT_PUBLIC_API ||
+    defaultPublicApiOrigin() ||
     `${req.protocol}://${req.get('host') || ''}`
   ).replace(/\/$/, '')
   return `${base}/api/payments/auraxpay/webhook`

@@ -40,6 +40,10 @@ jobs:
             export CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@osmanitv.com}"
             bash deploy/contabo/pull-and-apply.sh
 
+      - name: Checkout for post-deploy verification
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
       - name: Verify VPS HTTPS endpoints
         if: steps.gate.outputs.skip != 'true'
         run: |
@@ -52,3 +56,5 @@ jobs:
             if (!h.ok) { console.error('health not ok', h); process.exit(1); }
             console.log('VPS commit', String(h.commit || '').slice(0, 12));
           "
+          curl -fsS "https://api.osmanitv.com/api/runtime/cutover-status" | tee /tmp/vps-cutover.json
+          node server/scripts/verify-vps-render-independence.mjs

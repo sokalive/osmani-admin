@@ -8,16 +8,16 @@ import {
   testConnection as testSonicpesaConnection,
 } from '../lib/payments/providers/sonicpesa.js'
 
+import { defaultPublicApiOrigin } from '../lib/deployMeta.js'
+
 export const sonicpesaSettingsRouter = Router()
 
 sonicpesaSettingsRouter.use(requireAdminPanelAccess)
 
-const DEFAULT_PUBLIC_API = 'https://osmani-admin-api.onrender.com'
-
 function defaultWebhookUrl(req) {
   const base = (
     process.env.BASE_URL ||
-    DEFAULT_PUBLIC_API ||
+    defaultPublicApiOrigin() ||
     `${req.protocol}://${req.get('host') || ''}`
   ).replace(/\/$/, '')
   return `${base}/api/payments/sonicpesa/webhook`

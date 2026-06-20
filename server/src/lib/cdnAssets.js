@@ -4,7 +4,9 @@
  * Files remain on disk at UPLOAD_DIR; Bunny pull zone origin = BASE_URL.
  */
 
-const DEFAULT_ORIGIN_BASE = 'https://osmani-admin-api.onrender.com'
+import { defaultPublicApiOrigin } from './deployMeta.js'
+
+const DEFAULT_ORIGIN_BASE = defaultPublicApiOrigin()
 
 const DEFAULT_STATIC_MAX_AGE_SEC = Math.max(
   0,

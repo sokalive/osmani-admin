@@ -209,6 +209,13 @@ if [[ -f "$ROOT/deploy/contabo/verify-admin-vps.mjs" ]]; then
     echo "WARN: verify-admin-vps failed — check admin SPA build" >&2
   }
 fi
+if [[ -f "$API_DIR/scripts/verify-vps-render-independence.mjs" ]]; then
+  echo "==> verify-vps-render-independence.mjs"
+  BASE_URL="${BASE_URL:-https://api.osmanitv.com}" node "$API_DIR/scripts/verify-vps-render-independence.mjs" || {
+    echo "ERROR: verify-vps-render-independence failed" >&2
+    exit 1
+  }
+fi
 for script in verify-cutover.mjs verify-final-migration-audit.mjs; do
   if [[ -f "$ROOT/deploy/contabo/$script" ]]; then
     echo "==> $script"
