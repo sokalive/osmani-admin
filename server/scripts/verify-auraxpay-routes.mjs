@@ -11,6 +11,7 @@ import path from 'node:path'
 import {
   detectAuraxpayApiStyle,
   normalizeAuraxpayApiEndpoint,
+  normalizeAuraxpayCollectUrl,
   resolveAuraxpayCollectPostUrl,
 } from '../src/lib/payments/providers/auraxpay.js'
 
@@ -72,9 +73,22 @@ assert(
   normalizeAuraxpayApiEndpoint('https://api.auraxpay.net') === 'https://api.auraxpay.net/v1',
 )
 assert(
-  'normalize strips embedded collect path from admin endpoint',
-  normalizeAuraxpayApiEndpoint('https://api.auraxpay.net/v1/payments/collect') ===
-    'https://api.auraxpay.net/v1',
+  'legacy AURAXPAY_COLLECT_PATH=/payment/create_order ignored on native host',
+  (() => {
+    const prev = process.env.AURAXPAY_COLLECT_PATH
+    process.env.AURAXPAY_COLLECT_PATH = '/payment/create_order'
+    const out =
+      resolveAuraxpayCollectPostUrl({ apiEndpoint: 'https://api.auraxpay.net/v1', apiKey: 'x' }) ===
+      'https://api.auraxpay.net/v1/payments/collect'
+    if (prev === undefined) delete process.env.AURAXPAY_COLLECT_PATH
+    else process.env.AURAXPAY_COLLECT_PATH = prev
+    return out
+  })(),
+)
+assert(
+  'normalize collect URL missing /v1',
+  normalizeAuraxpayCollectUrl('https://api.auraxpay.net/payments/collect') ===
+    'https://api.auraxpay.net/v1/payments/collect',
 )
 
 async function liveCheck(name, fn) {

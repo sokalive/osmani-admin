@@ -140,6 +140,7 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
         providerMessage: providerMessage || null,
         providerError: ax.body,
         apiStyle: ax.apiStyle || null,
+        collectUrl: ax.collectUrl || null,
         orderId,
         transactionId: tx.id,
         httpStatus: ax.status,

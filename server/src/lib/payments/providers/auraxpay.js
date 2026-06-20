@@ -70,20 +70,89 @@ export function normalizeAuraxpayApiEndpoint(raw) {
   }
 }
 
+function isAuraxpayNativeHost(endpointOrCred) {
+  const ep =
+    typeof endpointOrCred === 'string'
+      ? endpointOrCred
+      : String(endpointOrCred?.apiEndpoint || '').trim()
+  if (!ep) return false
+  try {
+    return new URL(ep).hostname.toLowerCase().includes('auraxpay')
+  } catch {
+    return ep.toLowerCase().includes('auraxpay')
+  }
+}
+
+/** Ensure native api.auraxpay.* collect URLs include /v1 (avoids 404 Endpoint not found). */
+export function normalizeAuraxpayCollectUrl(url) {
+  let s = String(url || '').trim().replace(/\/+$/, '')
+  if (!s) return ''
+  try {
+    const u = new URL(s)
+    if (!u.hostname.toLowerCase().includes('auraxpay')) return s
+    let pathname = (u.pathname || '/').replace(/\/+$/, '') || ''
+    if (pathname === '/payment/create_order' || pathname === '/v1/payment/create_order') {
+      pathname = '/v1/payments/collect'
+    } else if (pathname.startsWith('/payments/') || pathname.startsWith('/payment/')) {
+      if (!pathname.startsWith('/v1/')) pathname = `/v1${pathname.replace(/^\/payment\//, '/payments/')}`
+    } else if (!pathname || pathname === '/') {
+      pathname = `/v1${AURAXPAY_NATIVE_COLLECT_PATH}`
+    }
+    return `${u.origin}${pathname}`
+  } catch {
+    return s
+  }
+}
+
 function apiBase(cred) {
   const ep = String(cred?.apiEndpoint || DEFAULT_API_BASE).trim().replace(/\/+$/, '')
   return ep
 }
 
-function collectPathForStyle(style) {
+function collectPathForStyle(style, cred) {
   const fallback =
     style === 'trawx' ? AURAXPAY_TRAWX_COLLECT_PATH : AURAXPAY_NATIVE_COLLECT_PATH
-  const p = String(process.env.AURAXPAY_COLLECT_PATH || fallback).trim()
+  const configured = String(process.env.AURAXPAY_COLLECT_PATH || '').trim()
+  if (style === 'aurax' && isAuraxpayNativeHost(cred)) {
+    if (!configured || configured === '/payment/create_order' || configured === 'payment/create_order') {
+      if (configured) {
+        console.warn(LOG_PREFIX, 'ignoring legacy AURAXPAY_COLLECT_PATH on native auraxpay host', {
+          configured,
+          using: AURAXPAY_NATIVE_COLLECT_PATH,
+        })
+      }
+      return AURAXPAY_NATIVE_COLLECT_PATH
+    }
+    if (/^https?:\/\//i.test(configured)) return configured
+    const p = configured.startsWith('/') ? configured : `/${configured}`
+    if (p === '/payments/collect' || p === '/payments/create-order') return p
+    console.warn(LOG_PREFIX, 'ignoring non-native AURAXPAY_COLLECT_PATH on auraxpay host', {
+      configured: p,
+      using: AURAXPAY_NATIVE_COLLECT_PATH,
+    })
+    return AURAXPAY_NATIVE_COLLECT_PATH
+  }
+  const p = configured || fallback
   return p.startsWith('/') ? p : `/${p}`
 }
 
-function orderStatusPath() {
-  const p = String(process.env.AURAXPAY_ORDER_STATUS_PATH || '/payment/order_status').trim()
+function orderStatusPath(style, cred) {
+  const nativeDefault = '/payments/status'
+  const legacyDefault = '/payment/order_status'
+  const configured = String(process.env.AURAXPAY_ORDER_STATUS_PATH || '').trim()
+  if (style === 'aurax' && isAuraxpayNativeHost(cred)) {
+    if (!configured || configured === '/payment/order_status' || configured === 'payment/order_status') {
+      return nativeDefault
+    }
+    const p = configured.startsWith('/') ? configured : `/${configured}`
+    if (p.startsWith('/payments/')) return p
+    console.warn(LOG_PREFIX, 'ignoring non-native AURAXPAY_ORDER_STATUS_PATH on auraxpay host', {
+      configured: p,
+      using: nativeDefault,
+    })
+    return nativeDefault
+  }
+  const p = configured || legacyDefault
   return p.startsWith('/') ? p : `/${p}`
 }
 
@@ -97,6 +166,7 @@ function isHttpsUrl(url) {
 
 /** aurax (native api.auraxpay.*) | trawx | zenoapi | sonicpesa-style APIs. */
 export function detectAuraxpayApiStyle(cred) {
+  if (isAuraxpayNativeHost(cred)) return 'aurax'
   const forced = String(process.env.AURAXPAY_API_STYLE || '').trim().toLowerCase()
   if (forced === 'zenopay' || forced === 'zeno') return 'zenopay'
   if (forced === 'sonicpesa' || forced === 'sonic') return 'sonicpesa'
@@ -140,45 +210,41 @@ export function resolveAuraxpayCollectPostUrl(cred) {
   const envFull = String(
     process.env.AURAXPAY_COLLECT_URL || process.env.AURAXPAY_PAYMENT_URL || '',
   ).trim()
-  if (envFull) return envFull.replace(/\/+$/, '')
+  if (envFull) return normalizeAuraxpayCollectUrl(envFull.replace(/\/+$/, ''))
 
   const ep = String(cred?.apiEndpoint || '').trim()
   if (!ep) return ''
 
   const style = detectAuraxpayApiStyle(cred)
   const configured = String(process.env.AURAXPAY_COLLECT_PATH || '').trim()
-  if (/^https?:\/\//i.test(configured)) return configured.replace(/\/+$/, '')
+  if (/^https?:\/\//i.test(configured)) {
+    return normalizeAuraxpayCollectUrl(configured.replace(/\/+$/, ''))
+  }
 
-  const pathSuffix = (
-    configured
-      ? configured.startsWith('/')
-        ? configured
-        : `/${configured}`
-      : collectPathForStyle(style)
-  ).replace(/\/+$/, '')
+  const pathSuffix = collectPathForStyle(style, cred).replace(/\/+$/, '')
 
   try {
     const u = new URL(ep)
     let pathname = (u.pathname || '/').replace(/\/+$/, '') || ''
     for (const suffix of KNOWN_COLLECT_PATH_SUFFIXES) {
       if (pathname.endsWith(suffix)) {
-        return `${u.origin}${pathname}`.replace(/\/+$/, '')
+        return normalizeAuraxpayCollectUrl(`${u.origin}${pathname}`.replace(/\/+$/, ''))
       }
     }
     // Native Aurax: POST https://api.auraxpay.net/v1/payments/collect
     if (style === 'aurax') {
       if (!pathname || pathname === '/') {
-        return `${u.origin}/v1${pathSuffix}`
+        return normalizeAuraxpayCollectUrl(`${u.origin}/v1${pathSuffix}`)
       }
       const base = `${u.origin}${pathname}`.replace(/\/+$/, '')
-      return `${base}${pathSuffix}`
+      return normalizeAuraxpayCollectUrl(`${base}${pathSuffix}`)
     }
     // Trawx white-label: POST {origin}/api/create-order
     if (style === 'trawx') {
       return `${u.origin}${pathSuffix}`
     }
     const base = !pathname || pathname === '/' ? u.origin : `${u.origin}${pathname}`
-    return `${base.replace(/\/+$/, '')}${pathSuffix}`
+    return normalizeAuraxpayCollectUrl(`${base.replace(/\/+$/, '')}${pathSuffix}`)
   } catch {
     return ''
   }
@@ -603,8 +669,20 @@ export async function verifyPayment(cred, orderId) {
     return { ok: false, status: 0, body: { error: 'API endpoint not configured' }, normalized: null }
   }
   const envFull = String(process.env.AURAXPAY_ORDER_STATUS_URL || '').trim()
-  const url = envFull ? envFull.replace(/\/+$/, '') : `${base}${orderStatusPath()}`
-  const payload = { order_id: oid }
+  const apiStyle = detectAuraxpayApiStyle(cred)
+  const statusPath = orderStatusPath(apiStyle, cred)
+  let url = envFull ? envFull.replace(/\/+$/, '') : `${base}${statusPath}`
+  if (apiStyle === 'aurax' && isAuraxpayNativeHost(cred)) {
+    if (
+      !envFull ||
+      url.includes('/payment/order_status') ||
+      url.includes('/payment/create_order')
+    ) {
+      url = `${base}${statusPath}`
+    }
+  }
+  const payload =
+    apiStyle === 'aurax' ? { reference: oid, order_id: oid } : { order_id: oid }
   const res = await httpJson(url, {
     method: 'POST',
     headers: authHeaders(cred),
@@ -767,7 +845,7 @@ export async function testConnection(cred) {
   const apiStyle = detectAuraxpayApiStyle(cred)
   const collectUrl = resolveAuraxpayCollectPostUrl(cred)
   try {
-    const url = collectUrl || `${base}${collectPathForStyle(apiStyle)}`
+    const url = collectUrl || `${base}${collectPathForStyle(apiStyle, cred)}`
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), 15_000)
     const res = await fetch(url, {
