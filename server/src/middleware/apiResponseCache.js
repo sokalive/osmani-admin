@@ -4,7 +4,7 @@ import {
 } from '../lib/apiResponseCache.js'
 
 const TTL = {
-  channels: Math.max(5000, Number(process.env.API_CACHE_CHANNELS_TTL_MS) || 20_000),
+  channels: Math.max(5000, Number(process.env.API_CACHE_CHANNELS_TTL_MS) || 60_000),
   banners: Math.max(5000, Number(process.env.API_CACHE_BANNERS_TTL_MS) || 20_000),
   plans: Math.max(5000, Number(process.env.API_CACHE_PLANS_TTL_MS) || 15_000),
   'payment-providers': Math.max(5000, Number(process.env.API_CACHE_PAYMENT_PROVIDERS_TTL_MS) || 15_000),

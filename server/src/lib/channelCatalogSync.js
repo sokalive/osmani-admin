@@ -1,11 +1,13 @@
 import { liveSyncBus } from './liveSyncBus.js'
 import { invalidateApiCacheNamespace } from './apiResponseCache.js'
 import { loadGlobalAppModesPayload } from '../routes/globalAppSettings.js'
+import { invalidateChannelIdNameMapCache } from '../store.js'
 
 /** Purge catalog + version poll caches so accessType changes are visible on next GET. */
 export function invalidateChannelCatalogCaches() {
   invalidateApiCacheNamespace('channels')
   invalidateApiCacheNamespace('runtime-app-modes')
+  invalidateChannelIdNameMapCache()
 }
 
 /**

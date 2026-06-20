@@ -62,7 +62,18 @@ channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
   const t0 = Date.now()
   try {
     const list = await readChannels()
-    await warmMpingoMetadataCache(list)
+    const skipWarm =
+      String(req.headers['x-osmani-skip-mpingo-warm'] || req.query.lite || '').trim() === '1' ||
+      String(process.env.MPINGO_WARM_ON_CHANNEL_LIST || 'background').toLowerCase() === 'off'
+    if (skipWarm) {
+      /* admin lite / disabled */
+    } else if (String(process.env.MPINGO_WARM_ON_CHANNEL_LIST || 'background').toLowerCase() === 'sync') {
+      await warmMpingoMetadataCache(list)
+    } else {
+      void warmMpingoMetadataCache(list).catch((e) => {
+        console.error('[channels] background mpingo warm failed:', e)
+      })
+    }
     const payload = list.map((c) => {
       const api = channelToResponse(c, req)
       logChannelStreamDiagGet(c, api, {

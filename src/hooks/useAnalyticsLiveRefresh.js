@@ -1,22 +1,26 @@
 import { useEffect, useRef } from 'react'
 import { syncStreamUrl } from '../lib/api'
 
-const ANALYTICS_POLL_MS = 4_000
 const ANALYTICS_SSE_DEBOUNCE_MS = 350
 
 /**
  * Poll analytics + debounced SSE refresh (avoids thundering herd on presence_expired).
+ * @param {() => void | Promise<void>} load
+ * @param {{ pollMs?: number, sse?: boolean }} [opts]
  */
-export function useAnalyticsLiveRefresh(load) {
+export function useAnalyticsLiveRefresh(load, opts = {}) {
+  const pollMs = Math.max(5000, Number(opts.pollMs) || 15_000)
+  const sseEnabled = opts.sse !== false
   const debounceRef = useRef(null)
 
   useEffect(() => {
     void load()
-    const pollId = window.setInterval(() => void load(), ANALYTICS_POLL_MS)
+    const pollId = window.setInterval(() => void load(), pollMs)
     return () => window.clearInterval(pollId)
-  }, [load])
+  }, [load, pollMs])
 
   useEffect(() => {
+    if (!sseEnabled) return undefined
     const es = new EventSource(syncStreamUrl(['analytics']))
     const onSync = () => {
       window.clearTimeout(debounceRef.current)
@@ -39,5 +43,5 @@ export function useAnalyticsLiveRefresh(load) {
       window.clearTimeout(debounceRef.current)
       es.close()
     }
-  }, [load])
+  }, [load, sseEnabled])
 }

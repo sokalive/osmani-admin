@@ -85,6 +85,40 @@ export async function readChannels() {
   return rows.map(rowToChannel)
 }
 
+/** Lightweight id → name map for admin analytics (no stream URLs). */
+let _channelIdNameMapCache = null
+let _channelIdNameMapCacheAt = 0
+const CHANNEL_ID_NAME_MAP_TTL_MS = Math.max(
+  5000,
+  Number(process.env.CHANNEL_ID_NAME_MAP_TTL_MS) || 60_000,
+)
+
+export async function readChannelIdNameMap() {
+  const now = Date.now()
+  if (_channelIdNameMapCache && now - _channelIdNameMapCacheAt < CHANNEL_ID_NAME_MAP_TTL_MS) {
+    return _channelIdNameMapCache
+  }
+  const pool = getPool()
+  if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
+  const { rows } = await pool.query(
+    `SELECT id::text AS id, name FROM channels ORDER BY sort_order ASC, id ASC`,
+  )
+  const map = {}
+  for (const row of rows) {
+    const id = String(row.id ?? '').trim()
+    if (!id) continue
+    map[id] = String(row.name ?? '').trim() || id
+  }
+  _channelIdNameMapCache = map
+  _channelIdNameMapCacheAt = now
+  return map
+}
+
+export function invalidateChannelIdNameMapCache() {
+  _channelIdNameMapCache = null
+  _channelIdNameMapCacheAt = 0
+}
+
 export async function getNextChannelId() {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required for channel storage.')

@@ -1,8 +1,11 @@
 /**
- * Verify update-check: v15–v23 => SOFT/FORCE, v24+ => NONE.
+ * Verify update-check: v15 => SOFT/FORCE when enabled; v16–24 => NONE.
  */
 import {
   APP_UPDATE_NEVER_MIN,
+  APP_UPDATE_POPUP_TARGET_VERSION,
+  APP_UPDATE_VPS_MIGRATION_MAX,
+  APP_UPDATE_VPS_MIGRATION_MIN,
   applyAppUpdateClientDecision,
 } from '../src/lib/appUpdateTargeting.js'
 
@@ -38,11 +41,11 @@ function pass(msg) {
 const baseSoft = { decision: 'SOFT', version_code: 24 }
 
 for (const c of [
-  { v: 15, want: 'SOFT' },
-  { v: 20, want: 'SOFT' },
-  { v: 23, want: 'SOFT' },
+  { v: APP_UPDATE_POPUP_TARGET_VERSION, want: 'SOFT' },
+  { v: APP_UPDATE_VPS_MIGRATION_MIN, want: 'NONE' },
+  { v: APP_UPDATE_VPS_MIGRATION_MAX, want: 'NONE' },
   { v: APP_UPDATE_NEVER_MIN, want: 'NONE' },
-  { v: 14, want: 'SOFT' },
+  { v: 14, want: 'NONE' },
 ]) {
   const got = applyAppUpdateClientDecision(baseSoft, c.v)
   if (got.decision !== c.want) {
@@ -65,11 +68,11 @@ for (const host of HOSTS) {
       return null
     })
     if (!data) continue
-    const want = v >= 24 ? 'NONE' : 'SOFT'
-    if (!['SOFT', 'FORCE'].includes(String(data.decision)) && want !== 'NONE') {
-      if (data.decision !== want) fail(`${host.label} v${v}: decision=${data.decision}, want ${want}`)
-    } else if (data.decision !== want) {
-      fail(`${host.label} v${v}: decision=${data.decision}, want ${want}`)
+    const wantNone = v !== APP_UPDATE_POPUP_TARGET_VERSION
+    if (wantNone && data.decision !== 'NONE') {
+      fail(`${host.label} v${v}: decision=${data.decision}, want NONE`)
+    } else if (!wantNone && !['NONE', 'SOFT', 'FORCE'].includes(String(data.decision))) {
+      fail(`${host.label} v${v}: invalid decision=${data.decision}`)
     } else {
       pass(`${host.label} v${v} => ${data.decision}`)
     }

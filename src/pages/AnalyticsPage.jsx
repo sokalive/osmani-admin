@@ -17,7 +17,6 @@ import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
 import {
   getAnalyticsSnapshot,
   getAnalyticsTrend,
-  getChannels,
 } from '../lib/api'
 import { formatTsh } from '../lib/formatMoney'
 import { useCountUp } from '../hooks/useCountUp'
@@ -49,7 +48,7 @@ function AnalyticsPage() {
   const { showToast } = useToast()
   const [overview, setOverview] = useState({})
   const [channels, setChannels] = useState([])
-  const [channelCatalog, setChannelCatalog] = useState([])
+  const [channelLabels, setChannelLabels] = useState({})
   const [locations, setLocations] = useState([])
   const [trend, setTrend] = useState([])
   const [isLoading, setIsLoading] = useState(true)
@@ -61,14 +60,15 @@ function AnalyticsPage() {
   const load = useCallback(async () => {
     try {
       setError('')
-      const [snap, t, catalog] = await Promise.all([
+      const [snap, t] = await Promise.all([
         getAnalyticsSnapshot(),
         getAnalyticsTrend(),
-        getChannels(),
       ])
       setOverview(snap && typeof snap === 'object' ? snap : {})
       setChannels(Array.isArray(snap?.mostWatched) ? snap.mostWatched : [])
-      setChannelCatalog(Array.isArray(catalog) ? catalog : [])
+      setChannelLabels(
+        snap?.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {},
+      )
       setLocations(Array.isArray(snap?.locations) ? snap.locations : [])
       setTrend(Array.isArray(t) ? t : [])
       setIsDegraded(Boolean(snap?.degraded))
@@ -84,7 +84,7 @@ function AnalyticsPage() {
     }
   }, [showToast])
 
-  useAnalyticsLiveRefresh(load)
+  useAnalyticsLiveRefresh(load, { pollMs: 15_000 })
 
   const onlineNow = Number(overview?.onlineNow) || 0
   const newUsersToday = Number(overview?.newUsersToday) || 0
@@ -123,12 +123,7 @@ function AnalyticsPage() {
 
   const topContent = useMemo(
     () => {
-      const nameById = new Map(
-        (Array.isArray(channelCatalog) ? channelCatalog : []).map((row) => [
-          String(row?.id ?? '').trim(),
-          String(row?.name ?? '').trim(),
-        ]),
-      )
+      const nameById = new Map(Object.entries(channelLabels))
       return (Array.isArray(channels) ? channels : []).slice(0, 8).map((r) => ({
         id: String(r.channel_id ?? ''),
         title:
@@ -138,7 +133,7 @@ function AnalyticsPage() {
         bar: 100,
       }))
     },
-    [channelCatalog, channels],
+    [channelLabels, channels],
   )
 
   const vOnline = useCountUp(onlineNow, { duration: 900 })

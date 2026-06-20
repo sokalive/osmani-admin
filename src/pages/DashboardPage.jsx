@@ -8,11 +8,7 @@ import StatCard from '../components/StatCard'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
-import {
-  getAnalyticsSnapshot,
-  getAnalyticsTrend,
-  getChannels,
-} from '../lib/api'
+import { getAnalyticsSnapshot, getAnalyticsTrend } from '../lib/api'
 
 const emerald =
   'bg-gradient-to-br from-emerald-400/92 via-emerald-500/88 to-emerald-700/90'
@@ -29,18 +25,14 @@ function DashboardPage() {
   const [overview, setOverview] = useState(OVERVIEW_FALLBACK)
   const [channels, setChannels] = useState([])
   const [topFiveChannels, setTopFiveChannels] = useState([])
-  const [channelCatalog, setChannelCatalog] = useState([])
+  const [channelLabels, setChannelLabels] = useState({})
   const [locations, setLocations] = useState([])
   const [trend, setTrend] = useState([])
   const [loaded, setLoaded] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const [snap, t, catalog] = await Promise.all([
-        getAnalyticsSnapshot(),
-        getAnalyticsTrend(),
-        getChannels(),
-      ])
+      const [snap, t] = await Promise.all([getAnalyticsSnapshot(), getAnalyticsTrend()])
       setOverview({
         onlineNow: snap?.onlineNow,
         totalInstalls: snap?.totalInstalls,
@@ -51,7 +43,9 @@ function DashboardPage() {
       })
       setChannels(Array.isArray(snap?.mostWatched) ? snap.mostWatched : [])
       setTopFiveChannels(Array.isArray(snap?.top5) ? snap.top5 : [])
-      setChannelCatalog(Array.isArray(catalog) ? catalog : [])
+      setChannelLabels(
+        snap?.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {},
+      )
       setLocations(Array.isArray(snap?.locations) ? snap.locations : [])
       setTrend(
         Array.isArray(t)
@@ -73,7 +67,7 @@ function DashboardPage() {
     }
   }, [showToast])
 
-  useAnalyticsLiveRefresh(load)
+  useAnalyticsLiveRefresh(load, { pollMs: 15_000 })
 
   const installsFormatted = useMemo(() => {
     const n = Number(overview?.totalInstalls)
@@ -81,16 +75,7 @@ function DashboardPage() {
     return n.toLocaleString('en-TZ')
   }, [overview])
 
-  const channelNameById = useMemo(() => {
-    const m = new Map()
-    for (const row of Array.isArray(channelCatalog) ? channelCatalog : []) {
-      const id = String(row?.id ?? '').trim()
-      const name = String(row?.name ?? '').trim()
-      if (!id) continue
-      m.set(id, name || id)
-    }
-    return m
-  }, [channelCatalog])
+  const channelNameById = useMemo(() => new Map(Object.entries(channelLabels)), [channelLabels])
 
   const mostWatched = useMemo(() => {
     return (Array.isArray(channels) ? channels : []).map((r) => ({

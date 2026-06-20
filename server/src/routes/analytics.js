@@ -13,6 +13,7 @@ import {
   normalizeLocationPayload,
 } from '../lib/analyticsLocation.js'
 import { parseChannelIdFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
+import { readChannelIdNameMap } from '../store.js'
 
 export const analyticsRouter = Router()
 
@@ -77,48 +78,51 @@ function parseInstallInstanceIdFromBody(body) {
 }
 
 async function queryOverviewStats(pool) {
-  const onlineNowRaw = await safeQueryScalar(
-    pool,
-    `SELECT COUNT(*)::int AS c
+  const [onlineNowRaw, dauTodayRaw, newUsersTodayRaw, revenueTodayRaw, totalInstallsRaw] =
+    await Promise.all([
+      safeQueryScalar(
+        pool,
+        `SELECT COUNT(*)::int AS c
      FROM live_sessions
      WHERE channel_id IS NOT NULL
        AND trim(channel_id) <> ''
        AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
-    'overview.onlineNow',
-    (r) => numOrZero(r?.c),
-    [LIVE_WINDOW_INTERVAL],
-  )
-  const dauTodayRaw = await safeQueryScalar(
-    pool,
-    `SELECT COUNT(DISTINCT device_id)::int AS c
+        'overview.onlineNow',
+        (r) => numOrZero(r?.c),
+        [LIVE_WINDOW_INTERVAL],
+      ),
+      safeQueryScalar(
+        pool,
+        `SELECT COUNT(DISTINCT device_id)::int AS c
      FROM live_sessions
      WHERE COALESCE(updated_at, started_at, now()) >= date_trunc('day', now())`,
-    'overview.dauToday',
-    (r) => numOrZero(r?.c),
-  )
-  const newUsersTodayRaw = await safeQueryScalar(
-    pool,
-    `SELECT COUNT(*)::int AS c
+        'overview.dauToday',
+        (r) => numOrZero(r?.c),
+      ),
+      safeQueryScalar(
+        pool,
+        `SELECT COUNT(*)::int AS c
      FROM device_subscriptions
      WHERE started_at >= date_trunc('day', now())`,
-    'overview.newUsersToday',
-    (r) => numOrZero(r?.c),
-  )
-  const revenueTodayRaw = await safeQueryScalar(
-    pool,
-    `SELECT COALESCE(SUM(amount), 0)::numeric AS s
+        'overview.newUsersToday',
+        (r) => numOrZero(r?.c),
+      ),
+      safeQueryScalar(
+        pool,
+        `SELECT COALESCE(SUM(amount), 0)::numeric AS s
      FROM transactions
      WHERE lower(status) = 'completed'
        AND created_at >= date_trunc('day', now())`,
-    'overview.revenueToday',
-    (r) => numOrZero(r?.s),
-  )
-  const totalInstallsRaw = await safeQueryScalar(
-    pool,
-    `SELECT COUNT(*)::int AS c FROM app_installs`,
-    'overview.totalInstalls',
-    (r) => numOrZero(r?.c),
-  )
+        'overview.revenueToday',
+        (r) => numOrZero(r?.s),
+      ),
+      safeQueryScalar(
+        pool,
+        `SELECT COUNT(*)::int AS c FROM app_installs`,
+        'overview.totalInstalls',
+        (r) => numOrZero(r?.c),
+      ),
+    ])
   const degraded =
     onlineNowRaw === null ||
     dauTodayRaw === null ||
@@ -191,16 +195,21 @@ analyticsRouter.get('/snapshot', async (_req, res) => {
         error: 'Database not configured',
       })
     }
-    const [overview, channels, locations] = await Promise.all([
+    const [overview, channels, locations, channelLabels] = await Promise.all([
       queryOverviewStats(pool),
       queryChannelStats(pool),
       queryLocationStats(pool),
+      readChannelIdNameMap().catch((e) => {
+        console.error('[analytics/snapshot] channelLabels:', e)
+        return {}
+      }),
     ])
     res.json({
       ...overview,
       mostWatched: channels.mostWatched,
       top5: channels.top5,
       top5MinViewers: TOP5_MIN_VIEWERS,
+      channelLabels,
       locations,
       snapshotAt: new Date().toISOString(),
       ...(overview.degraded ? { degraded: true } : {}),

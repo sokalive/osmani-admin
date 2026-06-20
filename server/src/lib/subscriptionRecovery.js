@@ -380,6 +380,14 @@ export async function ensureSubscriptionLinkedForDevice(
 
   const resolvedFingerprint = await resolveFingerprintForDevice(d, fingerprint)
   const fpHash = hashDeviceFingerprint(resolvedFingerprint)
+  const explicitPhone = normalizePhoneDigits(phone)
+  const accountDigits = normalizePhoneDigits(accountId)
+  const hasExplicitHints =
+    Boolean(fpHash) ||
+    Boolean(legacyDeviceId || accountId) ||
+    (explicitPhone && explicitPhone.length >= 10) ||
+    (accountDigits && accountDigits.length >= 10)
+
   if (fpHash) {
     const rec = await recoverSubscriptionToDevice(d, fpHash, { reason: 'verify_fingerprint' })
     if (rec.recovered) return { linked: true, method: 'fingerprint', ...rec }
@@ -397,7 +405,6 @@ export async function ensureSubscriptionLinkedForDevice(
   const phoneCandidates = new Set()
   const explicit = normalizePhoneDigits(phone)
   if (explicit && explicit.length >= 10) phoneCandidates.add(explicit)
-  const accountDigits = normalizePhoneDigits(accountId)
   if (accountDigits && accountDigits.length >= 10) phoneCandidates.add(accountDigits)
   for (const p of await collectPaymentPhonesForDevice(d)) phoneCandidates.add(p)
 
@@ -435,6 +442,11 @@ export async function ensureSubscriptionLinkedForDevice(
   if (installSource) {
     const linked = await tryLinkFromSource(d, installSource, fpHash, 'install_instance')
     if (linked.linked) return linked
+  }
+
+  if (!hasExplicitHints) {
+    if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)
+    return { linked: false, reason: 'no_migration_hints' }
   }
 
   if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)

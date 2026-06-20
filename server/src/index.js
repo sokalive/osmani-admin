@@ -18,6 +18,7 @@ import { wireLiveSyncRelay } from './lib/liveSyncRelay.js'
 import { ensureMpingoRoutingStartupSync } from './lib/mpingoRoutingSync.js'
 import { getStreamDeliveryHealthSnapshot } from './lib/streamDelivery.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
+import { apiRequestTimingMiddleware } from './middleware/apiRequestTiming.js'
 import { streamDeliveryReportRouter } from './routes/streamDeliveryReport.js'
 import { streamBunnyPullRouter } from './routes/streamBunnyPull.js'
 import { streamDirectRouter } from './routes/streamDirect.js'
@@ -104,6 +105,7 @@ app.use(applyCors)
 app.options('*', applyCors)
 
 app.use(express.json({ limit: '4mb' }))
+app.use('/api', apiRequestTimingMiddleware)
 
 const staticUploadMaxAgeMs = getStaticUploadCacheMaxAgeSec() * 1000
 
