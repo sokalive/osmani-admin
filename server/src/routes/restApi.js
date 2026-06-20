@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { applySensitiveJsonGetNoStore } from '../middleware/sensitiveApiCacheControl.js'
 import { bannersRouter } from './banners.js'
 import { channelsRouter } from './channels.js'
-import { analyticsRouter } from './analytics.js'
+import { analyticsRouter, handleLiveSessionHeartbeat } from './analytics.js'
 import { analyticsAdminRouter } from './analyticsAdmin.js'
 import { ensureGlobalAppSettingsFile, globalAppSettingsRouter } from './globalAppSettings.js'
 import { ensureJsonFile } from '../lib/jsonFile.js'
@@ -313,6 +313,9 @@ restApi.use('/admin/offer-codes', offerCodesAdminRouter)
 restApi.use('/admin/payments/auraxpay', adminAuraxpayPaymentsRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)
+/** Legacy APK paths (v15–v20) — same handler as POST /analytics/session/heartbeat. */
+restApi.post('/live/ping', handleLiveSessionHeartbeat)
+restApi.post('/session/ping', handleLiveSessionHeartbeat)
 restApi.use('/analytics', analyticsRouter)
 restApi.use('/admin/analytics', analyticsAdminRouter)
 restApi.use('/plans', plansRouter)

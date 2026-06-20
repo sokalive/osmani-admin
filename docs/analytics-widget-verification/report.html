@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Analytics Widget Verification</title>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; background: #0b0f1a; color: #e2e8f0; margin: 0; padding: 24px; }
+    h1 { font-size: 1.5rem; margin: 0 0 8px; }
+    .meta { color: #94a3b8; font-size: 0.85rem; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .panel { background: #0f172a; border: 1px solid #334155; border-radius: 16px; padding: 16px; }
+    .panel h3 { margin: 0 0 12px; color: #fbbf24; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
+    .widgets { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .widget { background: linear-gradient(180deg, #0f172a, #020617); border: 1px solid #475569; border-radius: 12px; padding: 12px; min-height: 160px; }
+    .widget h2 { margin: 0 0 10px; font-size: 0.95rem; }
+    .widget ul { list-style: none; margin: 0; padding: 0; }
+    .widget li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid #1e293b; font-size: 0.85rem; }
+    .pill { background: #7f1d1d; color: #fecaca; border-radius: 999px; padding: 2px 8px; font-size: 0.75rem; white-space: nowrap; }
+    .empty { color: #64748b; font-size: 0.85rem; margin: 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 24px; }
+    th, td { border: 1px solid #334155; padding: 8px; text-align: left; }
+    th { background: #1e293b; }
+    .ok { color: #86efac; }
+    .fail { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <h1>Most Watched &amp; Top 5 — Before / After</h1>
+  <p class="meta">API: https://api.osmanitv.com · Top 5 min viewers: 10 · Generated 2026-06-20T11:38:41.628Z</p>
+  <div class="grid">
+    <div class="panel">
+      <h3>Before (production baseline)</h3>
+      <p class="meta">onlineNow: 0</p>
+      <div class="widgets">
+        <section class="widget"><h2>Most Watched Channels</h2><ul><p class="empty">No active viewers</p></ul></section>
+        <section class="widget"><h2>Top 5 Channels (≥10)</h2><ul><p class="empty">No channel has 10+ viewers</p></ul></section>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>After (synthetic E2E probes)</h3>
+      <p class="meta">onlineNow: 13</p>
+      <div class="widgets">
+        <section class="widget"><h2>Most Watched Channels</h2><ul><li><span class="name">Channel 77</span><span class="pill">10 live</span></li><li><span class="name">Channel 55</span><span class="pill">1 live</span></li><li><span class="name">Channel [object Object]</span><span class="pill">1 live</span></li><li><span class="name">Channel 88</span><span class="pill">1 live</span></li></ul></section>
+        <section class="widget"><h2>Top 5 Channels (≥10)</h2><ul><li><span class="name">Channel 77</span><span class="pill">10 live</span></li></ul></section>
+      </div>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Step</th><th>Result</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>POST /api/analytics/session/heartbeat</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/analytics/session/ping</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/analytics/live/ping</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/live/ping</td><td class="fail">FAIL</td><td>HTTP 404</td></tr><tr><td>POST /api/session/ping</td><td class="fail">FAIL</td><td>HTTP 404</td></tr><tr><td>mostWatched immediate</td><td class="ok">PASS</td><td>channel 88 visible</td></tr><tr><td>all versions aggregate</td><td class="fail">FAIL</td><td>{"channel_id":"55","viewers":1}</td></tr><tr><td>top5 threshold</td><td class="ok">PASS</td><td>10 viewers</td></tr><tr><td>top5 excludes <10</td><td class="ok">PASS</td><td>channel 66 in MW only</td></tr>
+    </tbody>
+  </table>
+</body>
+</html>

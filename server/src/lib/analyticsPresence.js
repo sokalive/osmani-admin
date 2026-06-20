@@ -5,9 +5,23 @@ function parseText(v) {
   return s || null
 }
 
+function channelIdFromNested(value) {
+  if (value == null) return null
+  if (typeof value === 'number' && Number.isFinite(value)) return parseText(value)
+  if (typeof value === 'string') return parseText(value)
+  if (typeof value !== 'object') return null
+  return parseText(
+    value.id ??
+      value.channel_id ??
+      value.channelId ??
+      value.active_channel_id ??
+      value.activeChannelId,
+  )
+}
+
 export function parseChannelIdFromPayload(source) {
   if (!source || typeof source !== 'object') return null
-  return parseText(
+  const direct = parseText(
     source.channel_id ??
       source.channelId ??
       source.active_channel_id ??
@@ -17,9 +31,10 @@ export function parseChannelIdFromPayload(source) {
       source.watching_channel_id ??
       source.watchingChannelId ??
       source.current_channel_id ??
-      source.currentChannelId ??
-      source.channel,
+      source.currentChannelId,
   )
+  if (direct) return direct
+  return channelIdFromNested(source.channel)
 }
 
 export function parseChannelIdFromRequest(req) {

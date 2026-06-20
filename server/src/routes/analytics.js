@@ -143,6 +143,7 @@ async function queryChannelStats(pool) {
     `SELECT channel_id, COUNT(*)::int AS viewers
      FROM live_sessions
      WHERE channel_id IS NOT NULL
+       AND trim(channel_id) <> ''
        AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
      GROUP BY channel_id
      ORDER BY viewers DESC`,
@@ -383,7 +384,8 @@ analyticsRouter.post('/session/start', async (req, res) => {
   }
 })
 
-async function handleLiveSessionHeartbeat(req, res) {
+/** Shared heartbeat for /analytics/session/* and legacy root /session/ping, /live/ping. */
+export async function handleLiveSessionHeartbeat(req, res) {
   try {
     const pool = getPool()
     if (!pool) {

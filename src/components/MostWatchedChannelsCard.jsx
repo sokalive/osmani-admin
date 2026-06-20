@@ -37,22 +37,28 @@ function MostWatchedChannelsCard({ channels, className = 'dashboard-card' }) {
       </div>
 
       <div className="card-content">
-        <ul className="channel-list dashboard-top5-list">
-          {topFive.map((row, index) => {
-            const rank = index + 1
-            return (
-              <li key={row.id} className={rankRowClass(rank)}>
-                <p className="dashboard-top5-title">
-                  <span className="tabular-nums text-white">#{rank}</span>{' '}
-                  <span>{row.name}</span>
-                </p>
-                <p className="dashboard-top5-meta mt-1 tabular-nums">
-                  {row.watchers.toLocaleString()} active live sessions
-                </p>
-              </li>
-            )
-          })}
-        </ul>
+        {topFive.length === 0 ? (
+          <p className="px-1 py-2 text-sm text-slate-500">
+            No channel has 10+ concurrent viewers yet.
+          </p>
+        ) : (
+          <ul className="channel-list dashboard-top5-list">
+            {topFive.map((row, index) => {
+              const rank = index + 1
+              return (
+                <li key={row.id} className={rankRowClass(rank)}>
+                  <p className="dashboard-top5-title">
+                    <span className="tabular-nums text-white">#{rank}</span>{' '}
+                    <span>{row.name}</span>
+                  </p>
+                  <p className="dashboard-top5-meta mt-1 tabular-nums">
+                    {row.watchers.toLocaleString()} active live sessions
+                  </p>
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </div>
     </article>
   )

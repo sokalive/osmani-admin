@@ -23,18 +23,22 @@ function MostWatchedChannelsListCard({ channels, className = 'dashboard-card' })
       </div>
 
       <div className="card-content">
-        <ul className="channel-list dashboard-mwc-list">
-          {sorted.map((row) => (
-            <li key={row.id} className="channel-item dashboard-mwc-row min-h-0">
-              <span className="dashboard-mwc-channel-name min-w-0 flex-1 truncate">
-                {row.name}
-              </span>
-              <span className="watcher-badge dashboard-mwc-watchers-pill shrink-0 tabular-nums">
-                {row.watchers.toLocaleString()} live sessions
-              </span>
-            </li>
-          ))}
-        </ul>
+        {sorted.length === 0 ? (
+          <p className="px-1 py-2 text-sm text-slate-500">No active channel viewers in the last minute.</p>
+        ) : (
+          <ul className="channel-list dashboard-mwc-list">
+            {sorted.map((row) => (
+              <li key={row.id} className="channel-item dashboard-mwc-row min-h-0">
+                <span className="dashboard-mwc-channel-name min-w-0 flex-1 truncate">
+                  {row.name}
+                </span>
+                <span className="watcher-badge dashboard-mwc-watchers-pill shrink-0 tabular-nums">
+                  {row.watchers.toLocaleString()} live sessions
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </article>
   )
