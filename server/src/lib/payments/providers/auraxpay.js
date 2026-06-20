@@ -125,7 +125,13 @@ function collectPathForStyle(style, cred) {
     }
     if (/^https?:\/\//i.test(configured)) return configured
     const p = configured.startsWith('/') ? configured : `/${configured}`
-    if (p === '/payments/collect' || p === '/payments/create-order') return p
+    if (p === '/payments/collect') return p
+    if (p === '/payments/create-order') {
+      console.warn(LOG_PREFIX, 'ignoring /payments/create-order on native auraxpay host', {
+        using: AURAXPAY_NATIVE_COLLECT_PATH,
+      })
+      return AURAXPAY_NATIVE_COLLECT_PATH
+    }
     console.warn(LOG_PREFIX, 'ignoring non-native AURAXPAY_COLLECT_PATH on auraxpay host', {
       configured: p,
       using: AURAXPAY_NATIVE_COLLECT_PATH,
@@ -187,10 +193,16 @@ export function detectAuraxpayApiStyle(cred) {
   return 'aurax'
 }
 
-/** Candidate POST URLs for native Aurax (collect first; create-order kept as fallback). */
+/** Candidate POST URLs for native Aurax (collect only — create-order alias not used on api.auraxpay.*). */
 export function listAuraxNativeCollectCandidateUrls(cred) {
   const primary = resolveAuraxpayCollectPostUrl(cred)
   if (!primary) return []
+  if (isAuraxpayNativeHost(cred)) {
+    const collect = primary.endsWith('/payments/collect')
+      ? primary
+      : normalizeAuraxpayCollectUrl(`${apiBase(cred)}${AURAXPAY_NATIVE_COLLECT_PATH}`)
+    return [collect]
+  }
   const urls = [primary]
   try {
     const u = new URL(primary)
@@ -574,8 +586,10 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
     apiStyle === 'aurax' ? listAuraxNativeCollectCandidateUrls(cred) : [url]
   let res = null
   let usedUrl = url
+  const attemptedUrls = []
   for (const tryUrl of tryUrls) {
     usedUrl = tryUrl
+    attemptedUrls.push(tryUrl)
     console.log(LOG_PREFIX, 'createOrder request', {
       url: tryUrl,
       apiStyle,
@@ -630,6 +644,7 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
     apiStyle,
     providerMessage,
     collectUrl: usedUrl,
+    attemptedUrls,
   }
 }
 

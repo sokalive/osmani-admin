@@ -1768,7 +1768,7 @@ export async function recordSonicpesaWebhookReceived(body) {
 function normalizeCheckoutProvider(raw) {
   const p = String(raw ?? 'zenopay').trim().toLowerCase()
   if (p === 'sonicpesa') return 'sonicpesa'
-  if (p === 'auraxpay') return 'auraxpay'
+  if (p === 'auraxpay' || p === 'aurax') return 'auraxpay'
   return 'zenopay'
 }
 

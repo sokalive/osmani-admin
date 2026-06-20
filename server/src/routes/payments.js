@@ -10,6 +10,7 @@ import {
 } from '../zenopayClient.js'
 import {
   isAuraxpayConfigured,
+  resolveAuraxpayCollectPostUrl,
   resolveAuraxpayCredentials,
 } from '../lib/payments/providers/auraxpay.js'
 import {
@@ -40,6 +41,7 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
     const auraxpay = Boolean(arow?.enabled === true) && auraxConfigured
     /** Admin test checkout — credentials + endpoint only (test before production enable). */
     const auraxpay_test = auraxConfigured
+    const auraxCollectUrl = auraxConfigured ? resolveAuraxpayCollectPostUrl(acred) : null
     const checkout = await billing.getCheckoutPaymentSettings()
     let payment_provider = checkout.payment_provider
     if (payment_provider === 'auraxpay' && !auraxpay) {
@@ -58,6 +60,10 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
       auraxpay_test,
       aurax_enabled: arow?.enabled === true,
       aurax_configured: auraxConfigured,
+      aurax_collect_url: auraxCollectUrl,
+      aurax_api_endpoint: auraxConfigured ? acred.apiEndpoint : null,
+      aurax_last_create_order_url: arow?.last_create_order_url || null,
+      aurax_last_create_order_http_status: arow?.last_create_order_http_status ?? null,
       payment_provider,
     })
     res.json({
@@ -66,7 +72,21 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
       zenopay,
       sonicpesa,
       auraxpay,
+      /** Mobile APK alias — same gate as auraxpay. */
+      aurax: auraxpay,
       auraxpay_test,
+      ...(auraxConfigured
+        ? {
+            aurax_collect_url: auraxCollectUrl,
+            aurax_api_endpoint: acred.apiEndpoint,
+            aurax_last_create_order_url: String(arow?.last_create_order_url ?? '') || null,
+            aurax_last_create_order_http_status: arow?.last_create_order_http_status ?? null,
+            aurax_last_create_order_provider_error:
+              arow?.last_create_order_response?.error ??
+              arow?.last_create_order_response?.message ??
+              null,
+          }
+        : {}),
     })
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) })

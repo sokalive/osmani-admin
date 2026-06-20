@@ -141,6 +141,7 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
         providerError: ax.body,
         apiStyle: ax.apiStyle || null,
         collectUrl: ax.collectUrl || null,
+        attemptedUrls: ax.attemptedUrls || null,
         orderId,
         transactionId: tx.id,
         httpStatus: ax.status,
@@ -152,6 +153,7 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
     res.status(201).json({
       ok: true,
       provider: 'auraxpay',
+      provider_alias: 'aurax',
       orderId,
       provider_order_id: providerOrderId,
       deviceId,
