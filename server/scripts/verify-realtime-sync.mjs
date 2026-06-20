@@ -51,7 +51,7 @@ async function probeSse(base, label) {
   }
 }
 
-async function probeUpdateCheck(base, versionCode) {
+async function probeUpdateCheck(base, versionCode, { expectSoft = true } = {}) {
   const res = await fetch(`${base}/api/update-check`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -59,13 +59,13 @@ async function probeUpdateCheck(base, versionCode) {
     cache: 'no-store',
   })
   const body = await res.json().catch(() => null)
-  const safe =
+  const decision = String(body?.decision ?? '').toUpperCase()
+  const ok =
     res.ok &&
     body &&
-    body.decision === 'NONE' &&
     body.force !== true &&
-    (body.soft !== true || body.decision === 'NONE')
-  return { base, versionCode, ok: safe, body }
+    (expectSoft ? decision === 'SOFT' : decision === 'NONE')
+  return { base, versionCode, ok, body }
 }
 
 async function main() {
@@ -75,14 +75,14 @@ async function main() {
   console.log('SSE Render:', JSON.stringify(renderSse, null, 2))
   console.log('SSE VPS:', JSON.stringify(vpsSse, null, 2))
 
-  const uc20Render = await probeUpdateCheck(RENDER_API, 20)
-  const uc21Render = await probeUpdateCheck(RENDER_API, 21)
-  const uc20Vps = await probeUpdateCheck(VPS_API, 20)
-  const uc21Vps = await probeUpdateCheck(VPS_API, 21)
+  const uc20Render = await probeUpdateCheck(RENDER_API, 20, { expectSoft: true })
+  const uc24Render = await probeUpdateCheck(RENDER_API, 24, { expectSoft: false })
+  const uc20Vps = await probeUpdateCheck(VPS_API, 20, { expectSoft: true })
+  const uc24Vps = await probeUpdateCheck(VPS_API, 24, { expectSoft: false })
   console.log('\nupdate-check v20 Render:', JSON.stringify(uc20Render, null, 2))
-  console.log('\nupdate-check v21 Render:', JSON.stringify(uc21Render, null, 2))
+  console.log('\nupdate-check v24 Render:', JSON.stringify(uc24Render, null, 2))
   console.log('\nupdate-check v20 VPS:', JSON.stringify(uc20Vps, null, 2))
-  console.log('\nupdate-check v21 VPS:', JSON.stringify(uc21Vps, null, 2))
+  console.log('\nupdate-check v24 VPS:', JSON.stringify(uc24Vps, null, 2))
 
   const healthRender = await fetch(`${RENDER_API}/api/health`).then((r) => r.json())
   const healthVps = await fetch(`${VPS_API}/api/health`).then((r) => r.json())
@@ -93,9 +93,9 @@ async function main() {
     renderSse.ok &&
     vpsSse.ok &&
     uc20Render.ok &&
-    uc21Render.ok &&
+    uc24Render.ok &&
     uc20Vps.ok &&
-    uc21Vps.ok
+    uc24Vps.ok
   console.log(`\nRESULT: ${ok ? 'PASS' : 'FAIL'}`)
   process.exit(ok ? 0 : 1)
 }

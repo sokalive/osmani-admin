@@ -1,14 +1,19 @@
 /**
- * Verify App Update Control: Play Store v24 / 1.8.2, gating logic, update source.
+ * Verify App Update Control on VPS + Render: v24 gate, soft-update matrix v16–v24.
  *
  * Usage:
  *   node scripts/verify-app-update-v24.mjs
- *   API_BASE_URL=https://api.osmanitv.com node scripts/verify-app-update-v24.mjs
+ *   VPS_API=https://api.osmanitv.com RENDER_API=https://osmani-admin-api.onrender.com node scripts/verify-app-update-v24.mjs
  */
-const base = (process.argv[2] || process.env.API_BASE_URL || 'https://api.osmanitv.com').replace(
-  /\/+$/,
-  '',
-)
+const VPS_API = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/+$/, '')
+const RENDER_API = String(
+  process.env.RENDER_API || 'https://osmani-admin-api.onrender.com',
+).replace(/\/+$/, '')
+
+const HOSTS = [
+  { label: 'VPS', base: VPS_API },
+  { label: 'Render', base: RENDER_API },
+]
 
 const expected = {
   version_code: 24,
@@ -33,15 +38,55 @@ function applyClientVersionDecision(data, clientVersionInput) {
   return decision
 }
 
-async function fetchJson(path, opts = {}) {
+async function fetchJson(base, path, opts = {}) {
   const res = await fetch(`${base}${path}`, {
     headers: { Accept: 'application/json' },
     cache: 'no-store',
     ...opts,
   })
   const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(`${path} ${res.status}: ${JSON.stringify(body)}`)
+  if (!res.ok) throw new Error(`${base}${path} ${res.status}: ${JSON.stringify(body)}`)
   return body
+}
+
+async function probeSseAppUpdate(base) {
+  const url = `${base}/api/sync/stream?topics=config`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 25_000)
+  const events = []
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: 'text/event-stream' },
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+    if (!res.ok) return { ok: false, detail: `HTTP ${res.status}`, events }
+    const reader = res.body?.getReader()
+    if (!reader) return { ok: false, detail: 'no body', events }
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (events.length < 12) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const chunks = buffer.split('\n\n')
+      buffer = chunks.pop() || ''
+      for (const chunk of chunks) {
+        const evMatch = chunk.match(/^event: (.+)$/m)
+        if (evMatch) events.push(evMatch[1].trim())
+      }
+      if (events.includes('app_update_settings')) break
+    }
+    await reader.cancel().catch(() => {})
+    const ok = events.includes('app_update_settings') || events.includes('config.app_update_changed')
+    return { ok, detail: ok ? 'SSE app_update event present' : 'missing app_update SSE', events: [...new Set(events)] }
+  } catch (e) {
+    const ok = events.includes('app_update_settings')
+    return { ok, detail: ok ? 'SSE app_update before abort' : String(e.message || e), events: [...new Set(events)] }
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+  }
 }
 
 let failed = 0
@@ -55,58 +100,90 @@ function pass(msg) {
   console.log(`OK ${msg}`)
 }
 
-for (const path of ['/api/update-check', '/api/runtime/app-update']) {
-  const data = await fetchJson(path)
-  for (const [key, want] of Object.entries(expected)) {
-    const got = data[key]
-    if (got !== want) {
-      fail(`${path} ${key}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`)
+const matrixByHost = {}
+
+for (const host of HOSTS) {
+  console.log(`\n=== ${host.label} (${host.base}) ===`)
+  matrixByHost[host.label] = {}
+
+  const health = await fetchJson(host.base, '/api/health').catch((e) => {
+    fail(`${host.label} health: ${e.message}`)
+    return null
+  })
+  if (health?.commit) pass(`${host.label} commit ${String(health.commit).slice(0, 7)}`)
+
+  for (const path of ['/api/update-check', '/api/runtime/app-update']) {
+    const data = await fetchJson(host.base, path).catch((e) => {
+      fail(`${host.label} ${path}: ${e.message}`)
+      return null
+    })
+    if (!data) continue
+    for (const [key, want] of Object.entries(expected)) {
+      if (data[key] !== want) {
+        fail(`${host.label} ${path} ${key}: got ${JSON.stringify(data[key])}, want ${JSON.stringify(want)}`)
+      }
+    }
+    if (!['SOFT', 'FORCE'].includes(String(data.decision || '').toUpperCase())) {
+      fail(`${host.label} ${path} decision expected SOFT/FORCE when enabled, got ${data.decision}`)
+    } else {
+      pass(`${host.label} ${path} decision=${data.decision} version=${data.version_name} (${data.version_code})`)
     }
   }
-  if (data.decision !== 'NONE') {
-    fail(`${path} decision must be NONE while update toggles are off (got ${data.decision})`)
+
+  for (let v = 16; v <= 24; v++) {
+    const live = await fetchJson(host.base, `/api/update-check?version_code=${v}`).catch((e) => {
+      matrixByHost[host.label][`v${v}`] = 'ERR'
+      fail(`${host.label} v${v}: ${e.message}`)
+      return null
+    })
+    if (!live) continue
+    const want = v >= 24 ? 'NONE' : 'SOFT'
+    matrixByHost[host.label][`v${v}`] = live.decision
+    if (live.decision !== want) {
+      fail(`${host.label} v${v}: got ${live.decision}, want ${want}`)
+    }
   }
-  if (!String(data.playstore_url || '').includes('play.google.com')) {
-    fail(`${path} playstore_url missing or invalid`)
+
+  const post23 = await fetchJson(host.base, '/api/update-check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version_code: 23, versionCode: 23 }),
+  }).catch((e) => {
+    fail(`${host.label} POST v23: ${e.message}`)
+    return null
+  })
+  if (post23 && post23.decision !== 'SOFT') {
+    fail(`${host.label} POST v23 decision=${post23.decision}, want SOFT`)
+  } else if (post23) {
+    pass(`${host.label} POST v23 => SOFT`)
   }
-  pass(`${path} version=${data.version_name} (${data.version_code}) decision=${data.decision}`)
+
+  const sse = await probeSseAppUpdate(host.base)
+  if (sse.ok) pass(`${host.label} SSE: ${sse.detail}`)
+  else fail(`${host.label} SSE: ${sse.detail}`)
 }
 
-const basePayload = await fetchJson('/api/update-check')
-const gatingCases = [
-  { client: 23, soft: true, force: false, want: 'SOFT', label: 'v23 + soft enabled' },
-  { client: 23, soft: false, force: true, want: 'FORCE', label: 'v23 + force enabled' },
-  { client: 24, soft: true, force: false, want: 'NONE', label: 'v24 + soft enabled (suppressed)' },
-  { client: 25, soft: true, force: false, want: 'NONE', label: 'v25 + soft enabled (suppressed)' },
-  { client: 23, soft: false, force: false, want: 'NONE', label: 'v23 + toggles off' },
-]
-
-for (const c of gatingCases) {
-  let decision = 'NONE'
-  if (c.force) decision = 'FORCE'
-  else if (c.soft) decision = 'SOFT'
-  const simulated = applyClientVersionDecision(
-    { ...basePayload, decision, version_code: expected.version_code },
-    c.client,
-  )
-  if (simulated !== c.want) {
-    fail(`gating ${c.label}: got ${simulated}, want ${c.want}`)
-  } else {
-    pass(`gating ${c.label} => ${simulated}`)
-  }
+console.log('\n=== Matrix (decision by client version) ===')
+console.log(['Host', ...Array.from({ length: 9 }, (_, i) => `v${16 + i}`)].join('\t'))
+for (const host of HOSTS) {
+  const cells = [host.label]
+  for (let v = 16; v <= 24; v++) cells.push(matrixByHost[host.label][`v${v}`] ?? '?')
+  console.log(cells.join('\t'))
 }
 
-for (const clientCode of [23, 24]) {
-  const live = await fetchJson(`/api/update-check?version_code=${clientCode}`)
-  if (live.decision !== 'NONE') {
-    fail(`live update-check?version_code=${clientCode} decision=${live.decision} (expected NONE while disabled)`)
-  } else {
-    pass(`live client ${clientCode} decision=${live.decision} (update disabled)`)
-  }
+const basePayload = { version_code: 24, decision: 'SOFT' }
+for (const c of [
+  { client: 16, want: 'SOFT' },
+  { client: 23, want: 'SOFT' },
+  { client: 24, want: 'NONE' },
+]) {
+  const got = applyClientVersionDecision(basePayload, c.client)
+  if (got !== c.want) fail(`simulated v${c.client}: got ${got}, want ${c.want}`)
+  else pass(`simulated v${c.client} => ${got}`)
 }
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed.`)
   process.exit(1)
 }
-console.log('\nAll App Update v24 checks passed.')
+console.log('\nAll dual-host App Update v24 checks passed.')

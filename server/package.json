@@ -10,6 +10,7 @@
     "migrate-uploads": "node scripts/migrate-uploads.mjs",
     "test:subscription-stacking": "node scripts/test-subscription-stacking.mjs",
     "verify:app-update-v24": "node scripts/verify-app-update-v24.mjs",
+    "verify:app-update-matrix": "node scripts/audit-update-check-matrix.mjs",
     "verify:app-update-v17": "node scripts/verify-app-update-playstore-v17.mjs",
     "verify:banner-payload": "node scripts/verify-banner-admin-payload.mjs",
     "verify:cdn-assets": "node scripts/verify-cdn-asset-urls.mjs",
