@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { runSubscriptionRestorationAudit } from '../lib/subscriptionRestorationAudit.js'
+import { runVpsMigrationAudit } from '../lib/vpsMigrationAudit.js'
 
 function legacyAdminTokenOk(req) {
   const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
@@ -121,6 +122,19 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
     })
   } catch (e) {
     console.error('[runtime/cutover-status]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** VPS migration audit — versionCode × API host matrix (admin token). */
+runtimePublicRouter.get('/vps-migration-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const windowDays = Number(req.query.window_days ?? req.query.days ?? 7)
+    const report = await runVpsMigrationAudit({ windowDays })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/vps-migration-audit]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

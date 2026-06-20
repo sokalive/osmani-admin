@@ -44,6 +44,7 @@ import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { getPool } from '../db/pool.js'
 import { getApiCacheStats } from '../lib/apiResponseCache.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
+import { isTrackedMobilePath, recordClientApiTelemetry } from '../lib/clientApiTelemetry.js'
 
 const FILES = {
   users: 'users.json',
@@ -61,6 +62,14 @@ export const restApi = Router()
 
 /** Admin + mutable JSON reads must not be served from browser HTTP cache after writes. */
 restApi.use(applySensitiveJsonGetNoStore)
+
+/** Record API host + versionCode for VPS migration audit (async, non-blocking). */
+restApi.use((req, res, next) => {
+  if (isTrackedMobilePath(`${req.baseUrl || ''}${req.path || ''}`)) {
+    recordClientApiTelemetry(req)
+  }
+  next()
+})
 
 restApi.get('/', (_req, res) => {
   res.json({

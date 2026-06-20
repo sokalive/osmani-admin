@@ -868,4 +868,7 @@ export async function ensureBillingTables(client) {
 
   const { ensureDeviceIntelligenceTables } = await import('./deviceIntelligenceTables.js')
   await ensureDeviceIntelligenceTables(client)
+
+  const { ensureClientApiTelemetryTable } = await import('../lib/clientApiTelemetry.js')
+  await ensureClientApiTelemetryTable(client)
 }
