@@ -1183,6 +1183,55 @@ export async function deviceHasPendingSubscriptionPayment(deviceId) {
   return rows.length > 0
 }
 
+/** Pending subscription payment started recently (in-flight checkout only). */
+export async function deviceHasRecentPendingSubscriptionPayment(deviceId, maxAgeMinutes = null) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return false
+  const mins = Math.max(
+    5,
+    Math.min(180, Number(maxAgeMinutes ?? process.env.SUBSCRIPTION_PENDING_MAX_AGE_MINUTES) || 45),
+  )
+  const { rows } = await pool.query(
+    `SELECT 1 AS ok
+     FROM transactions
+     WHERE device_id = $1
+       AND status = 'pending'
+       AND plan_id IS NOT NULL
+       AND created_at >= now() - ($2::int * interval '1 minute')
+     LIMIT 1`,
+    [d, mins],
+  )
+  return rows.length > 0
+}
+
+let _verifyPlansCache = null
+let _verifyPlansCacheAt = 0
+const VERIFY_PLANS_TTL_MS = Math.max(5000, Number(process.env.VERIFY_PLANS_CACHE_MS) || 60_000)
+
+/** Lightweight active plans for verify/checkout (no subscriber count join). */
+export async function listActivePlansForVerify() {
+  const now = Date.now()
+  if (_verifyPlansCache && now - _verifyPlansCacheAt < VERIFY_PLANS_TTL_MS) {
+    return _verifyPlansCache
+  }
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT id, name, price, duration_days
+     FROM plans
+     WHERE deleted_at IS NULL AND is_active = true
+     ORDER BY id ASC`,
+  )
+  _verifyPlansCache = rows
+  _verifyPlansCacheAt = now
+  return rows
+}
+
+export function invalidateVerifyPlansCache() {
+  _verifyPlansCache = null
+  _verifyPlansCacheAt = 0
+}
+
 /** Latest pending payment for this device (poll provider before subscription-status). */
 export async function getLatestPendingTransactionForDevice(deviceId) {
   const pool = requirePool()

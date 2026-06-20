@@ -59,6 +59,36 @@ function migrationHintsFromPayload(src) {
   return { legacyDeviceId: legacyDeviceId || null, accountId: accountId || null }
 }
 
+function hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountId }) {
+  const phone = String(paymentPhone ?? '').replace(/\D/g, '')
+  const acct = String(accountId ?? '').replace(/\D/g, '')
+  return (
+    Boolean(String(fp ?? '').trim()) ||
+    Boolean(String(legacyDeviceId ?? '').trim()) ||
+    Boolean(String(accountId ?? '').trim()) ||
+    phone.length >= 10 ||
+    acct.length >= 10
+  )
+}
+
+async function shouldReconcileProvidersForVerify(deviceId, orderIdHint, alreadyActive) {
+  const hint = String(orderIdHint ?? '').trim()
+  if (hint) return true
+  if (alreadyActive) return false
+  return billing.deviceHasRecentPendingSubscriptionPayment(deviceId)
+}
+
+function mapVerifyPlans(rows) {
+  return Array.isArray(rows)
+    ? rows.map((p) => ({
+        id: Number(p.id),
+        name: String(p.name ?? ''),
+        price: Number(p.price) || 0,
+        duration_days: Number(p.duration_days) || 0,
+      }))
+    : []
+}
+
 async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   const d = String(deviceId ?? '').trim()
   const hint = String(orderIdHint ?? '').trim()
@@ -83,7 +113,7 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   if (hint) {
     await guardedReconcile(hint)
   } else {
-    const hasPending = await billing.deviceHasPendingSubscriptionPayment(d)
+    const hasPending = await billing.deviceHasRecentPendingSubscriptionPayment(d)
     if (hasPending) {
       const pend = await billing.getLatestPendingTransactionForDevice(d)
       if (pend?.order_id) await reconcileOrderWithZenoPay(String(pend.order_id))
@@ -310,9 +340,9 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   if (cached === undefined) setCachedSubscriptionAccess(d, fp, row)
 
   const alreadyActive = row?.active_now === true && row?.blocked_now !== true
-  const needsProviderReconcile = Boolean(hint) || !alreadyActive
+  const shouldReconcile = await shouldReconcileProvidersForVerify(d, hint, alreadyActive)
 
-  if (needsProviderReconcile) {
+  if (shouldReconcile) {
     await reconcileOrdersForVerify(d, hint)
     invalidateSubscriptionAccessCache(d)
     row = await billing.getDeviceSubscriptionAccessState(d, fp)
@@ -323,7 +353,11 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     })
   }
 
-  if (!(row?.active_now === true && row?.blocked_now !== true)) {
+  const needsMigrationLink =
+    !(row?.active_now === true && row?.blocked_now !== true) &&
+    hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountId })
+
+  if (needsMigrationLink) {
     const link = await ensureSubscriptionLinkedForDevice(d, {
       fingerprint: fp || null,
       phone: paymentPhone || null,
@@ -348,6 +382,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   }
 
   const pub = rowToPublicStatus(row)
+  const needsPlans = !pub.active
 
   const [
     txnSummary,
@@ -356,6 +391,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     trialStatus,
     pendingGift,
     trialWatchSettings,
+    plansRows,
   ] = await Promise.all([
     billing.getLatestCompletedSubscriptionTxnSummary(d),
     loadGlobalAppModesPayload().catch(() => ({
@@ -377,6 +413,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
       previewSeconds: 120,
       previewAfterEnabled: true,
     })),
+    needsPlans ? billing.listActivePlansForVerify().catch(() => []) : Promise.resolve(null),
   ])
 
   const normalized = normalizeVerifyResponse(pub, txnSummary)
@@ -438,17 +475,9 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   }
 
   if (!pub.active) {
-    const plans = await billing.listPlansWithSubscriberCounts().catch(() => [])
     return {
       ...withGift,
-      plans: Array.isArray(plans)
-        ? plans.map((p) => ({
-            id: Number(p.id),
-            name: String(p.name ?? ''),
-            price: Number(p.price) || 0,
-            duration_days: Number(p.duration_days) || 0,
-          }))
-        : [],
+      plans: mapVerifyPlans(plansRows),
     }
   }
   return withGift

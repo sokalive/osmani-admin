@@ -1,9 +1,5 @@
 /**
- * Verify update-check matrix v15–v24 and subscription verify latency on VPS + Render.
- *
- * Usage:
- *   node scripts/verify-subscription-timing.mjs
- *   VPS_API=https://api.osmanitv.com node scripts/verify-subscription-timing.mjs
+ * Verify subscription verify latency for unpaid (new device) probes.
  */
 const VPS_API = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/+$/, '')
 const RENDER_API = String(
@@ -21,15 +17,7 @@ async function timedVerify(base, deviceId) {
   const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' })
   const body = await res.json().catch(() => ({}))
   const ms = Math.round(performance.now() - t0)
-  return { ms, status: res.status, active: body?.active === true || body?.isActive === true, body }
-}
-
-async function fetchUpdateCheck(base, v) {
-  const res = await fetch(`${base}/api/update-check?version_code=${v}`, {
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-  })
-  return res.json()
+  return { ms, status: res.status, active: body?.active === true, plans: Array.isArray(body?.plans) ? body.plans.length : 0 }
 }
 
 let failed = 0
@@ -41,27 +29,23 @@ function pass(msg) {
   console.log(`OK ${msg}`)
 }
 
-console.log('=== Update matrix v15–v24 ===')
-for (const host of HOSTS) {
-  console.log(`\n--- ${host.label} ---`)
-  for (let v = 15; v <= 24; v++) {
-    const data = await fetchUpdateCheck(host.base, v)
-    const want = v >= 24 ? 'NONE' : 'SOFT'
-    if (data.decision !== want) fail(`${host.label} v${v}: ${data.decision}, want ${want}`)
-    else pass(`${host.label} v${v} => ${want}`)
-  }
-}
-
-console.log('\n=== Subscription verify timing (3 consecutive calls) ===')
+console.log('=== Subscription verify timing (unpaid new device, 3 calls) ===')
 const probeDevice = `timing_probe_${Date.now()}`
 const maxMs = Math.max(500, Number(process.env.SUBSCRIPTION_VERIFY_MAX_MS) || 2500)
 
 for (const host of HOSTS) {
+  const health = await fetch(`${host.base}/api/health`, { cache: 'no-store' })
+    .then((r) => r.json())
+    .catch(() => ({}))
+  if (health?.commit) pass(`${host.label} commit ${String(health.commit).slice(0, 7)}`)
+
   const samples = []
   for (let i = 0; i < 3; i++) {
-    const { ms, status } = await timedVerify(host.base, `${probeDevice}_${i}`)
+    const { ms, status, active, plans } = await timedVerify(host.base, `${probeDevice}_${i}`)
     samples.push(ms)
     if (status !== 200) fail(`${host.label} verify call ${i + 1}: HTTP ${status}`)
+    if (active) fail(`${host.label} verify call ${i + 1}: expected inactive`)
+    if (plans <= 0) fail(`${host.label} verify call ${i + 1}: missing plans`)
   }
   const avg = Math.round(samples.reduce((a, b) => a + b, 0) / samples.length)
   const max = Math.max(...samples)

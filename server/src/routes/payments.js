@@ -24,72 +24,73 @@ import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoos
 
 export const paymentsRouter = Router()
 
+let _checkoutProvidersCache = null
+let _checkoutProvidersCacheAt = 0
+const CHECKOUT_PROVIDERS_CACHE_MS = Math.max(
+  2000,
+  Number(process.env.CHECKOUT_PROVIDERS_CACHE_MS) || 30_000,
+)
+
+async function buildCheckoutProvidersPayload() {
+  const zrow = await billing.getZenopayRow()
+  const zcred = resolveZenopayCredentials(zrow || {})
+  const zenopay = Boolean(zcred.apiEndpoint && zcred.apiKey)
+  const srow = await billing.getSonicpesaRow()
+  const scred = resolveSonicpesaCredentials(srow || {})
+  const sonicpesa = Boolean(srow?.enabled === true) && Boolean(scred.apiKey)
+  const arow = await billing.getAuraxpayRow()
+  const acred = resolveAuraxpayCredentials(arow || {})
+  const auraxConfigured = isAuraxpayConfigured(acred)
+  const auraxpay = Boolean(arow?.enabled === true) && auraxConfigured
+  const auraxpay_test = auraxConfigured
+  const auraxCollectUrl = auraxConfigured ? resolveAuraxpayCollectPostUrl(acred) : null
+  const checkout = await billing.getCheckoutPaymentSettings()
+  let payment_provider = checkout.payment_provider
+  if (payment_provider === 'auraxpay' && !auraxpay) {
+    payment_provider = zenopay ? 'zenopay' : sonicpesa ? 'sonicpesa' : 'zenopay'
+  }
+  if (payment_provider === 'sonicpesa' && !sonicpesa) {
+    payment_provider = zenopay ? 'zenopay' : auraxpay ? 'auraxpay' : 'zenopay'
+  }
+  if (payment_provider === 'zenopay' && !zenopay) {
+    payment_provider = sonicpesa ? 'sonicpesa' : auraxpay ? 'auraxpay' : 'zenopay'
+  }
+  return {
+    ok: true,
+    payment_provider,
+    zenopay,
+    sonicpesa,
+    auraxpay,
+    aurax: auraxpay,
+    auraxpay_test,
+    ...(auraxConfigured
+      ? {
+          aurax_collect_url: auraxCollectUrl,
+          aurax_api_endpoint: acred.apiEndpoint,
+          aurax_last_create_order_url: arow?.last_create_order_url || null,
+          aurax_last_create_order_http_status: arow?.last_create_order_http_status ?? null,
+        }
+      : {}),
+  }
+}
+
 paymentsRouter.get('/checkout-providers', async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
-    const zrow = await billing.getZenopayRow()
-    const zcred = resolveZenopayCredentials(zrow || {})
-    const zenopay = Boolean(zcred.apiEndpoint && zcred.apiKey)
-    const srow = await billing.getSonicpesaRow()
-    const scred = resolveSonicpesaCredentials(srow || {})
-    const sonicpesa =
-      Boolean(srow?.enabled === true) && Boolean(scred.apiKey)
-    const arow = await billing.getAuraxpayRow()
-    const acred = resolveAuraxpayCredentials(arow || {})
-    const auraxConfigured = isAuraxpayConfigured(acred)
-    /** Production / mobile checkout — requires admin Enable switch. */
-    const auraxpay = Boolean(arow?.enabled === true) && auraxConfigured
-    /** Admin test checkout — credentials + endpoint only (test before production enable). */
-    const auraxpay_test = auraxConfigured
-    const auraxCollectUrl = auraxConfigured ? resolveAuraxpayCollectPostUrl(acred) : null
-    const checkout = await billing.getCheckoutPaymentSettings()
-    let payment_provider = checkout.payment_provider
-    if (payment_provider === 'auraxpay' && !auraxpay) {
-      payment_provider = zenopay ? 'zenopay' : sonicpesa ? 'sonicpesa' : 'zenopay'
+    const now = Date.now()
+    if (_checkoutProvidersCache && now - _checkoutProvidersCacheAt < CHECKOUT_PROVIDERS_CACHE_MS) {
+      return res.json(_checkoutProvidersCache)
     }
-    if (payment_provider === 'sonicpesa' && !sonicpesa) {
-      payment_provider = zenopay ? 'zenopay' : auraxpay ? 'auraxpay' : 'zenopay'
-    }
-    if (payment_provider === 'zenopay' && !zenopay) {
-      payment_provider = sonicpesa ? 'sonicpesa' : auraxpay ? 'auraxpay' : 'zenopay'
-    }
+    const payload = await buildCheckoutProvidersPayload()
+    _checkoutProvidersCache = payload
+    _checkoutProvidersCacheAt = now
     console.log('[checkout-providers]', {
-      zenopay,
-      sonicpesa,
-      auraxpay,
-      auraxpay_test,
-      aurax_enabled: arow?.enabled === true,
-      aurax_configured: auraxConfigured,
-      aurax_collect_url: auraxCollectUrl,
-      aurax_api_endpoint: auraxConfigured ? acred.apiEndpoint : null,
-      aurax_last_create_order_url: arow?.last_create_order_url || null,
-      aurax_last_create_order_http_status: arow?.last_create_order_http_status ?? null,
-      payment_provider,
+      zenopay: payload.zenopay,
+      sonicpesa: payload.sonicpesa,
+      auraxpay: payload.auraxpay,
+      payment_provider: payload.payment_provider,
     })
-    res.json({
-      ok: true,
-      payment_provider,
-      zenopay,
-      sonicpesa,
-      auraxpay,
-      /** Mobile APK alias — same gate as auraxpay. */
-      aurax: auraxpay,
-      auraxpay_test,
-      ...(auraxConfigured
-        ? {
-            aurax_collect_url: auraxCollectUrl,
-            aurax_api_endpoint: acred.apiEndpoint,
-            aurax_last_create_order_url: String(arow?.last_create_order_url ?? '') || null,
-            aurax_last_create_order_http_status: arow?.last_create_order_http_status ?? null,
-            aurax_last_create_order_provider_error:
-              arow?.last_create_order_response?.error ??
-              arow?.last_create_order_response?.message ??
-              null,
-            aurax_has_api_key: Boolean(acred.apiKey),
-            aurax_has_account_id: Boolean(acred.accountId),
-          }
-        : {}),
-    })
+    res.json(payload)
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
