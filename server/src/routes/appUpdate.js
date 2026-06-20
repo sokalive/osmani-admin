@@ -677,6 +677,7 @@ appUpdateRouter.post('/settings/app-update/parse-playstore', requireAdminPanelAc
     }
 
     const stored = persist ? toPublicConfig(await loadRowsByKey(pool), 'parse-playstore:stored') : null
+    const storedVersionCode = parseVersionCode(rowsBefore[UPDATE_KEYS.versionCode])
 
     return res.json({
       ok: true,
@@ -684,11 +685,14 @@ appUpdateRouter.post('/settings/app-update/parse-playstore', requireAdminPanelAc
       packageName: meta.packageId,
       title: meta.title,
       versionName: meta.versionName,
+      versionCode: persist ? stored?.versionCode ?? storedVersionCode : storedVersionCode,
       playstoreUrl: playCheck.value,
       persisted: persist,
       updateTitle: persist ? stored?.updateTitle : updateTitle,
       updateMessage: persist ? stored?.updateMessage : updateMessage,
       source: persist ? normalizeUiSource(stored?.source) : 'play',
+      versionCodeNote:
+        'Google Play listings do not expose Android versionCode — set it manually or upload an APK.',
     })
   } catch (e) {
     console.error('[settings/app-update/parse-playstore]', e)

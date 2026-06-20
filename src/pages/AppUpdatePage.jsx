@@ -277,13 +277,19 @@ function AppUpdatePage() {
           playstoreUrl: String(result.playstoreUrl ?? trimmed).trim(),
           versionName: String(result.versionName ?? d.versionName ?? '').trim(),
           packageName: String(result.packageName ?? result.packageId ?? d.packageName ?? '').trim(),
+          versionCode:
+            Number(result.versionCode) > 0
+              ? Math.trunc(Number(result.versionCode))
+              : d.versionCode,
           updateTitle: String(result.updateTitle ?? result.title ?? d.updateTitle ?? '').trim(),
           updateMessage: String(result.updateMessage ?? d.updateMessage ?? '').trim(),
         }))
         await load()
+        const codeLabel =
+          Number(result.versionCode) > 0 ? ` · code ${result.versionCode}` : ''
         const versionLabel = result.versionName
-          ? `v${result.versionName}`
-          : '(version not listed on Play Store — use APK upload for versionCode)'
+          ? `v${result.versionName}${codeLabel}`
+          : '(version name not listed on Play Store — set version code manually or upload APK)'
         showFlash('success', `Play Store: ${result.title || result.packageId} ${versionLabel}`)
       } catch (err) {
         if (requestId !== playStoreParseRef.current) return
@@ -306,6 +312,15 @@ function AppUpdatePage() {
     }, 800)
     return () => window.clearTimeout(timer)
   }, [draft.playstoreUrl, savedSnapshot.playstoreUrl, fetchPlayStoreMetadata])
+
+  const refreshPlayStoreListing = useCallback(() => {
+    const url = draft.playstoreUrl.trim()
+    if (!isLikelyPlayStoreUrl(url)) {
+      showToast('error', 'Enter a valid Google Play Store URL first')
+      return
+    }
+    void fetchPlayStoreMetadata(url)
+  }, [draft.playstoreUrl, fetchPlayStoreMetadata, showToast])
 
   const draftDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(savedSnapshot),
@@ -646,7 +661,18 @@ function AppUpdatePage() {
               </div>
 
               <div>
-                <label className={labelClass()}>Play Store URL</label>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <label className={labelClass()}>Play Store URL</label>
+                  <button
+                    type="button"
+                    onClick={refreshPlayStoreListing}
+                    disabled={playStoreLoading || !isLikelyPlayStoreUrl(draft.playstoreUrl.trim())}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#f5c842] hover:text-[#f5b301] disabled:opacity-40"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${playStoreLoading ? 'animate-spin' : ''}`} aria-hidden />
+                    Refresh listing
+                  </button>
+                </div>
                 <input
                   value={draft.playstoreUrl}
                   onChange={(e) => {
@@ -655,7 +681,7 @@ function AppUpdatePage() {
                   }}
                   onBlur={(e) => {
                     const url = e.target.value.trim()
-                    if (url && url !== savedSnapshot.playstoreUrl.trim() && isLikelyPlayStoreUrl(url)) {
+                    if (url && isLikelyPlayStoreUrl(url)) {
                       void fetchPlayStoreMetadata(url)
                     }
                   }}
@@ -663,7 +689,8 @@ function AppUpdatePage() {
                   placeholder="https://play.google.com/store/apps/details?id=..."
                 />
                 <p className="mt-1.5 text-xs text-slate-500">
-                  Paste a Play Store link to auto-fill app title, package id, and latest version name
+                  Paste or refresh a Play Store link to auto-fill title, package id, and version name.
+                  Version code is not published on Play Store — use Edit version manually or APK upload.
                 </p>
                 {playStoreLoading ? (
                   <p className="mt-2 text-xs text-[#f5c842]">Fetching Play Store listing…</p>

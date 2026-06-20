@@ -56,41 +56,30 @@ export async function ensureBillingTables(client) {
       ('update_apk_url', ''),
       ('update_apk_hash', ''),
       ('update_playstore_url', ''),
-      ('update_version_code', '17'),
-      ('update_version_name', '1.7.0'),
+      ('update_version_code', '24'),
+      ('update_version_name', '1.8.2'),
       ('update_package_name', 'com.burudanitv.app')
     ON CONFLICT (key) DO NOTHING;
   `)
 
-  /** Align runtime/admin with current Play Store production (v17 / 1.7.0). */
-  const playStoreVersion = await client.query(
-    `INSERT INTO app_settings (key, value, updated_at)
-     VALUES ('update_version_code', '17', now())
-     ON CONFLICT (key) DO UPDATE
-       SET value = '17', updated_at = now()
-     WHERE app_settings.value IS DISTINCT FROM '17'
-     RETURNING key`,
-  )
-  if (playStoreVersion.rowCount > 0) {
-    console.log('[startup-migration] update_version_code => 17 (Play Store production)')
-  }
-  for (const [key, value] of [
-    ['update_version_name', '1.7.0'],
-    ['update_package_name', 'com.burudanitv.app'],
-    ['update_source', 'play'],
-  ]) {
-    const r = await client.query(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES ($1, $2, now())
-       ON CONFLICT (key) DO UPDATE
-         SET value = EXCLUDED.value, updated_at = now()
-       WHERE app_settings.value IS DISTINCT FROM EXCLUDED.value
-       RETURNING key`,
-      [key, value],
-    )
-    if (r.rowCount > 0) {
-      console.log(`[startup-migration] ${key} => ${value}`)
-    }
+  /** One-time bump legacy Play Store pins (17/1.7.0 → 24/1.8.2). Never downgrade admin saves. */
+  const playStoreBump = await client.query(`
+    UPDATE app_settings AS vc
+    SET value = '24', updated_at = now()
+    FROM app_settings AS vn
+    WHERE vc.key = 'update_version_code'
+      AND vn.key = 'update_version_name'
+      AND vc.value = '17'
+      AND vn.value = '1.7.0'
+    RETURNING vc.key
+  `)
+  if (playStoreBump.rowCount > 0) {
+    await client.query(`
+      UPDATE app_settings
+      SET value = '1.8.2', updated_at = now()
+      WHERE key = 'update_version_name' AND value = '1.7.0'
+    `)
+    console.log('[startup-migration] Play Store app-update bumped 17/1.7.0 → 24/1.8.2')
   }
 
   await client.query(`
