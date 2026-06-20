@@ -3,6 +3,7 @@ import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
 import { apiResponseCacheNamespace } from '../middleware/apiResponseCache.js'
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
+import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { getCdnHealthSnapshot } from '../lib/cdnAssets.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
@@ -61,13 +62,14 @@ runtimePublicRouter.get('/app-modes', apiResponseCacheNamespace('runtime-app-mod
 })
 
 /** Public OTA app-update flags (installer soft/force/auto-download, APK URL/hash). Same shape as /update-check. */
-runtimePublicRouter.get('/app-update', async (_req, res) => {
+runtimePublicRouter.get('/app-update', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.setHeader('Pragma', 'no-cache')
     res.setHeader('Expires', '0')
     const snap = liveSyncBus.snapshot()
-    res.json(await loadAppUpdatePublicPayload(snap.configVersion))
+    const clientVersion = extractVersionCodeFromRequest(req)
+    res.json(await loadAppUpdatePublicPayload(snap.configVersion, clientVersion))
   } catch (e) {
     console.error('[runtime/app-update]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })

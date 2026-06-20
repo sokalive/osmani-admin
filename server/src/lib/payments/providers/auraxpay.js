@@ -41,8 +41,16 @@ export function resolveAuraxpayCredentials(row) {
   const apiEndpoint = normalizeAuraxpayApiEndpoint(rawEndpoint)
   const rawKey = String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim()
   const apiKey = rawKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '')
+  const signingSecret = String(
+    process.env.AURAXPAY_SIGNING_SECRET ||
+      process.env.AURAXPAY_SECRET_KEY ||
+      process.env.AURAXPAY_WEBHOOK_SECRET ||
+      r.webhook_secret ||
+      '',
+  ).trim()
   return {
     apiKey,
+    signingSecret,
     accountId: String(process.env.AURAXPAY_ACCOUNT_ID || r.account_id || '').trim(),
     apiEndpoint,
     webhookUrl: String(process.env.AURAXPAY_WEBHOOK_URL || r.webhook_url || '').trim(),
@@ -266,12 +274,24 @@ export function resolveAuraxpayCollectPostUrl(cred) {
 
 function authHeaders(cred, style = 'aurax') {
   const apiKey = String(process.env.AURAXPAY_API_KEY || cred.apiKey || '').trim()
+  const signingSecret = String(
+    process.env.AURAXPAY_SIGNING_SECRET ||
+      process.env.AURAXPAY_SECRET_KEY ||
+      process.env.AURAXPAY_WEBHOOK_SECRET ||
+      cred?.signingSecret ||
+      '',
+  ).trim()
   if (style === 'zenopay' || style === 'aurax') {
-    return {
+    const headers = {
       'Content-Type': 'application/json',
       Accept: 'application/json',
       'x-api-key': apiKey,
     }
+    if (signingSecret) {
+      headers['x-signing-secret'] = signingSecret
+      headers['X-SECRET-KEY'] = signingSecret
+    }
+    return headers
   }
   const headers = {
     'Content-Type': 'application/json',
@@ -717,8 +737,14 @@ export function auraxExplicitFailure(body) {
   return normalizeResponse(body).failed
 }
 
-export function verifyWebhookSignature(req, body) {
-  const secret = String(process.env.AURAXPAY_WEBHOOK_SECRET || '').trim()
+export function verifyWebhookSignature(req, body, cred) {
+  const secret = String(
+    process.env.AURAXPAY_SIGNING_SECRET ||
+      process.env.AURAXPAY_SECRET_KEY ||
+      process.env.AURAXPAY_WEBHOOK_SECRET ||
+      cred?.signingSecret ||
+      '',
+  ).trim()
   if (!secret) return true
   const rawSig = String(
     req.headers['x-auraxpay-signature'] ?? req.headers['x-webhook-signature'] ?? '',
@@ -784,7 +810,9 @@ export async function handleWebhook(req, res, deps) {
   const body = req.body && typeof req.body === 'object' ? req.body : {}
   const { billing, liveSyncBus, deviceSubscriptionBus, recordWebhookMeta } = deps
   try {
-    if (!verifyWebhookSignature(req, body)) {
+    const row = await billing.getAuraxpayRow()
+    const cred = resolveAuraxpayCredentials(row || {})
+    if (!verifyWebhookSignature(req, body, cred)) {
       console.warn(LOG_PREFIX, 'webhook invalid signature')
       return res.status(401).type('text/plain').send('invalid signature')
     }

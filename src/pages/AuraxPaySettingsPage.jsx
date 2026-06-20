@@ -19,8 +19,11 @@ function defaultSettings() {
     apiEndpoint: '',
     accountId: '',
     apiKey: '',
+    signingSecret: '',
     hasApiKey: false,
+    hasSigningSecret: false,
     apiKeyMasked: '',
+    signingSecretMasked: '',
     webhookUrl: '',
     lastTestAt: null,
     lastTestOk: null,
@@ -69,6 +72,8 @@ function AuraxPaySettingsPage() {
         environment: String(s?.environment || 'sandbox').toLowerCase(),
         apiEndpoint: s?.apiEndpoint ?? s?.api_endpoint ?? '',
         accountId: s?.accountId ?? s?.account_id ?? '',
+        hasSigningSecret: Boolean(s?.hasSigningSecret),
+        signingSecretMasked: String(s?.signingSecretMasked || ''),
         webhookUrl: s?.webhookUrl ?? s?.webhook_url ?? defaultWebhook,
         hasApiKey: Boolean(s?.hasApiKey),
         apiKeyMasked: String(s?.apiKeyMasked || '******'),
@@ -114,7 +119,8 @@ function AuraxPaySettingsPage() {
       draft.apiEndpoint !== cfg.apiEndpoint ||
       draft.accountId !== cfg.accountId ||
       draft.webhookUrl !== cfg.webhookUrl ||
-      draft.apiKey.trim() !== '',
+      draft.apiKey.trim() !== '' ||
+      draft.signingSecret.trim() !== '',
     [draft, cfg],
   )
 
@@ -144,6 +150,7 @@ function AuraxPaySettingsPage() {
         webhookUrl: draft.webhookUrl.trim() || defaultWebhook,
       }
       if (draft.apiKey.trim()) payload.apiKey = draft.apiKey.trim()
+      if (draft.signingSecret.trim()) payload.signingSecret = draft.signingSecret.trim()
       const saved = await putAuraxpaySettings(payload)
       setCfg(saved)
       setDraft((prev) => ({ ...saved, apiKey: prev.apiKey }))
@@ -378,13 +385,13 @@ function AuraxPaySettingsPage() {
 
             <div>
               <label className={labelClass()} htmlFor="ax-acct">
-                Account / merchant ID (AURAXPAY_ACCOUNT_ID)
+                Account / merchant ID <span className="text-slate-500">(optional — native Aurax Pay)</span>
               </label>
               <input
                 id="ax-acct"
                 value={draft.accountId}
                 onChange={(e) => setDraft((d) => ({ ...d, accountId: e.target.value }))}
-                placeholder="Merchant identifier"
+                placeholder="Optional merchant identifier"
                 className={inputClass()}
               />
             </div>
@@ -422,6 +429,32 @@ function AuraxPaySettingsPage() {
                   {cfg.hasApiKey ? cfg.apiKeyMasked || '******' : maskKey(cfg.apiKey)}
                 </span>
                 {cfg.hasApiKey ? (
+                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+                    Saved
+                  </span>
+                ) : null}
+              </p>
+            </div>
+
+            <div>
+              <label className={labelClass()} htmlFor="ax-sign">
+                Signing secret <span className="text-slate-500">(API + webhook HMAC, masked when saved)</span>
+              </label>
+              <input
+                id="ax-sign"
+                type="password"
+                autoComplete="off"
+                value={draft.signingSecret}
+                onChange={(e) => setDraft((d) => ({ ...d, signingSecret: e.target.value }))}
+                placeholder="AURAXPAY_SIGNING_SECRET / AURAXPAY_WEBHOOK_SECRET"
+                className={inputClass()}
+              />
+              <p className="mt-2 text-xs text-slate-500">
+                Stored preview:{' '}
+                <span className="font-mono text-slate-400">
+                  {cfg.hasSigningSecret ? cfg.signingSecretMasked || '******' : '—'}
+                </span>
+                {cfg.hasSigningSecret ? (
                   <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
                     Saved
                   </span>

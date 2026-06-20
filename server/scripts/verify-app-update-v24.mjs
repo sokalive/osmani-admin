@@ -1,10 +1,12 @@
 /**
- * Verify App Update Control on VPS + Render: v24 gate, soft-update matrix v16–v24.
+ * Verify App Update Control on VPS + Render: v15-only popup, v16–23 VPS cohort, v24+ never.
  *
  * Usage:
  *   node scripts/verify-app-update-v24.mjs
  *   VPS_API=https://api.osmanitv.com RENDER_API=https://osmani-admin-api.onrender.com node scripts/verify-app-update-v24.mjs
  */
+import { applyAppUpdateClientDecision } from '../src/lib/appUpdateTargeting.js'
+
 const VPS_API = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/+$/, '')
 const RENDER_API = String(
   process.env.RENDER_API || 'https://osmani-admin-api.onrender.com',
@@ -15,27 +17,18 @@ const HOSTS = [
   { label: 'Render', base: RENDER_API },
 ]
 
-const expected = {
+const expectedCatalog = {
   version_code: 24,
   version_name: '1.8.2',
   package_name: 'com.burudanitv.app',
   source: 'play',
 }
 
-function parseVersionCode(value) {
-  const n = Number(value)
-  if (!Number.isFinite(n) || n < 0) return 0
-  return Math.trunc(n)
-}
-
-function applyClientVersionDecision(data, clientVersionInput) {
-  const client = parseVersionCode(clientVersionInput)
-  const server = parseVersionCode(data.version_code ?? data.versionCode)
-  let decision = String(data.decision ?? 'NONE').toUpperCase()
-  if (client > 0 && server > 0 && client >= server) {
-    decision = 'NONE'
-  }
-  return decision
+function expectedDecisionForClient(v) {
+  if (v === 15) return 'SOFT'
+  if (v >= 16 && v <= 23) return 'NONE'
+  if (v >= 24) return 'NONE'
+  return 'NONE'
 }
 
 async function fetchJson(base, path, opts = {}) {
@@ -118,30 +111,47 @@ for (const host of HOSTS) {
       return null
     })
     if (!data) continue
-    for (const [key, want] of Object.entries(expected)) {
+    for (const [key, want] of Object.entries(expectedCatalog)) {
       if (data[key] !== want) {
         fail(`${host.label} ${path} ${key}: got ${JSON.stringify(data[key])}, want ${JSON.stringify(want)}`)
       }
     }
-    if (!['SOFT', 'FORCE'].includes(String(data.decision || '').toUpperCase())) {
-      fail(`${host.label} ${path} decision expected SOFT/FORCE when enabled, got ${data.decision}`)
+    const unversionedDecision = String(data.decision || '').toUpperCase()
+    if (unversionedDecision !== 'NONE') {
+      fail(`${host.label} ${path} unversioned decision=${unversionedDecision}, want NONE`)
     } else {
-      pass(`${host.label} ${path} decision=${data.decision} version=${data.version_name} (${data.version_code})`)
+      pass(`${host.label} ${path} unversioned => NONE (catalog v${data.version_name})`)
     }
   }
 
-  for (let v = 16; v <= 24; v++) {
+  for (let v = 15; v <= 24; v++) {
     const live = await fetchJson(host.base, `/api/update-check?version_code=${v}`).catch((e) => {
       matrixByHost[host.label][`v${v}`] = 'ERR'
       fail(`${host.label} v${v}: ${e.message}`)
       return null
     })
     if (!live) continue
-    const want = v >= 24 ? 'NONE' : 'SOFT'
+    const want = expectedDecisionForClient(v)
     matrixByHost[host.label][`v${v}`] = live.decision
     if (live.decision !== want) {
       fail(`${host.label} v${v}: got ${live.decision}, want ${want}`)
+    } else {
+      pass(`${host.label} v${v} => ${want}`)
     }
+  }
+
+  const post15 = await fetchJson(host.base, '/api/update-check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version_code: 15, versionCode: 15 }),
+  }).catch((e) => {
+    fail(`${host.label} POST v15: ${e.message}`)
+    return null
+  })
+  if (post15 && post15.decision !== 'SOFT') {
+    fail(`${host.label} POST v15 decision=${post15.decision}, want SOFT`)
+  } else if (post15) {
+    pass(`${host.label} POST v15 => SOFT`)
   }
 
   const post23 = await fetchJson(host.base, '/api/update-check', {
@@ -152,10 +162,10 @@ for (const host of HOSTS) {
     fail(`${host.label} POST v23: ${e.message}`)
     return null
   })
-  if (post23 && post23.decision !== 'SOFT') {
-    fail(`${host.label} POST v23 decision=${post23.decision}, want SOFT`)
+  if (post23 && post23.decision !== 'NONE') {
+    fail(`${host.label} POST v23 decision=${post23.decision}, want NONE`)
   } else if (post23) {
-    pass(`${host.label} POST v23 => SOFT`)
+    pass(`${host.label} POST v23 => NONE`)
   }
 
   const sse = await probeSseAppUpdate(host.base)
@@ -164,26 +174,27 @@ for (const host of HOSTS) {
 }
 
 console.log('\n=== Matrix (decision by client version) ===')
-console.log(['Host', ...Array.from({ length: 9 }, (_, i) => `v${16 + i}`)].join('\t'))
+console.log(['Host', ...Array.from({ length: 10 }, (_, i) => `v${15 + i}`)].join('\t'))
 for (const host of HOSTS) {
   const cells = [host.label]
-  for (let v = 16; v <= 24; v++) cells.push(matrixByHost[host.label][`v${v}`] ?? '?')
+  for (let v = 15; v <= 24; v++) cells.push(matrixByHost[host.label][`v${v}`] ?? '?')
   console.log(cells.join('\t'))
 }
 
-const basePayload = { version_code: 24, decision: 'SOFT' }
+const basePayload = { decision: 'SOFT' }
 for (const c of [
-  { client: 16, want: 'SOFT' },
-  { client: 23, want: 'SOFT' },
-  { client: 24, want: 'NONE' },
+  { client: 15, want: 'SOFT', reason: 'v15_play_store_cohort' },
+  { client: 16, want: 'NONE', reason: 'vps_ota_migration_cohort' },
+  { client: 23, want: 'NONE', reason: 'vps_ota_migration_cohort' },
+  { client: 24, want: 'NONE', reason: 'version_24_plus' },
 ]) {
-  const got = applyClientVersionDecision(basePayload, c.client)
-  if (got !== c.want) fail(`simulated v${c.client}: got ${got}, want ${c.want}`)
-  else pass(`simulated v${c.client} => ${got}`)
+  const got = applyAppUpdateClientDecision(basePayload, c.client)
+  if (got.decision !== c.want) fail(`simulated v${c.client}: got ${got.decision}, want ${c.want}`)
+  else pass(`simulated v${c.client} => ${got.decision} (${got.update_target_reason})`)
 }
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed.`)
   process.exit(1)
 }
-console.log('\nAll dual-host App Update v24 checks passed.')
+console.log('\nAll dual-host App Update v15–v24 checks passed.')

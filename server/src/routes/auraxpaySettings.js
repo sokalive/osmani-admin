@@ -40,9 +40,11 @@ async function rowToApiResponse(row, req) {
   const accountId = String(r.account_id ?? '').trim()
   const webhookUrl = String(r.webhook_url ?? '').trim() || defaultWebhookUrl(req)
   const hasKey = Boolean(String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim())
+  const hasSigningSecret = Boolean(cred.signingSecret)
   const apiKeyMasked = hasKey
     ? maskSecret(String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim())
     : ''
+  const signingSecretMasked = hasSigningSecret ? maskSecret(cred.signingSecret) : ''
   const la = r.last_test_at
   const env = normalizeEnvironment(r.environment)
   const envOverrideActive = {
@@ -51,6 +53,14 @@ async function rowToApiResponse(row, req) {
     ),
     accountId: Boolean(String(process.env.AURAXPAY_ACCOUNT_ID || '').trim()),
     apiKey: Boolean(String(process.env.AURAXPAY_API_KEY || '').trim()),
+    signingSecret: Boolean(
+      String(
+        process.env.AURAXPAY_SIGNING_SECRET ||
+          process.env.AURAXPAY_SECRET_KEY ||
+          process.env.AURAXPAY_WEBHOOK_SECRET ||
+          '',
+      ).trim(),
+    ),
     webhookUrl: Boolean(String(process.env.AURAXPAY_WEBHOOK_URL || '').trim()),
   }
   const envOverrideAny = Object.values(envOverrideActive).some(Boolean)
@@ -68,6 +78,9 @@ async function rowToApiResponse(row, req) {
     envOverrideAny,
     hasApiKey: hasKey,
     apiKeyMasked: apiKeyMasked || '******',
+    hasSigningSecret,
+    signingSecretMasked: signingSecretMasked || (hasSigningSecret ? '******' : ''),
+    accountIdOptional: true,
     accountId,
     account_id: accountId,
     webhookUrl,
@@ -117,6 +130,13 @@ auraxpaySettingsRouter.put('/', async (req, res) => {
       nextKey === '' ||
       nextKey === '••••••••' ||
       (nextKey.length > 0 && /^[•\u2022\s]+$/.test(nextKey))
+    const nextSecret = String(
+      b.webhookSecret ?? b.webhook_secret ?? b.signingSecret ?? b.signing_secret ?? '',
+    ).trim()
+    const keepSecret =
+      nextSecret === '' ||
+      nextSecret === '••••••••' ||
+      (nextSecret.length > 0 && /^[•\u2022\s]+$/.test(nextSecret))
 
     const apiEndpointIn = String(b.apiEndpoint ?? b.api_endpoint ?? current.api_endpoint ?? '').trim()
     if (!apiEndpointIn && !keepKey && Boolean(b.enabled)) {
@@ -133,6 +153,8 @@ auraxpaySettingsRouter.put('/', async (req, res) => {
       ),
       keep_api_key: keepKey,
       api_key: keepKey ? '' : nextKey,
+      keep_webhook_secret: keepSecret,
+      webhook_secret: keepSecret ? '' : nextSecret,
       last_test_at: b.lastTestAt ?? b.last_test_at ?? current.last_test_at,
       last_test_ok: b.lastTestOk ?? b.last_test_ok ?? current.last_test_ok,
       last_test_message: b.lastTestMessage ?? b.last_test_message ?? current.last_test_message,
@@ -204,6 +226,8 @@ auraxpaySettingsRouter.post('/test', async (req, res) => {
       webhook_url: String(row.webhook_url ?? defaultWebhookUrl(req)),
       keep_api_key: true,
       api_key: '',
+      keep_webhook_secret: true,
+      webhook_secret: '',
       last_test_at: now,
       last_test_ok: result.ok,
       last_test_message: result.message,

@@ -8,6 +8,7 @@ import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 import { getDeviceTrialWatchStatus } from '../lib/trialWatchStore.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
+import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
 import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint } from '../lib/subscriptionRecovery.js'
 import { parseChannelIdFromRequest } from '../lib/analyticsPresence.js'
 
@@ -689,8 +690,9 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   const writeAppUpdateEvent = async (reason) => {
     try {
       const snap = liveSyncBus.snapshot()
+      const clientVersion = extractVersionCodeFromRequest(req)
       const body = JSON.stringify({
-        ...(await loadAppUpdatePublicPayload(snap.configVersion)),
+        ...(await loadAppUpdatePublicPayload(snap.configVersion, clientVersion)),
         reason,
       })
       res.write(`event: app_update_settings\ndata: ${body}\n\n`)

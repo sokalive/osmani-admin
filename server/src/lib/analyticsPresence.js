@@ -12,6 +12,12 @@ export function parseChannelIdFromPayload(source) {
       source.channelId ??
       source.active_channel_id ??
       source.activeChannelId ??
+      source.stream_channel_id ??
+      source.streamChannelId ??
+      source.watching_channel_id ??
+      source.watchingChannelId ??
+      source.current_channel_id ??
+      source.currentChannelId ??
       source.channel,
   )
 }

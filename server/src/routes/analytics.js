@@ -12,7 +12,7 @@ import {
   aggregateLocationsByCountryCode,
   normalizeLocationPayload,
 } from '../lib/analyticsLocation.js'
-import { TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
+import { parseChannelIdFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
 
 export const analyticsRouter = Router()
 
@@ -55,13 +55,7 @@ function parseDeviceId(v) {
 }
 
 function parseChannelIdFromBody(body) {
-  return parseText(
-    body?.channel_id ??
-      body?.channelId ??
-      body?.active_channel_id ??
-      body?.activeChannelId ??
-      body?.channel,
-  )
+  return parseChannelIdFromPayload(body)
 }
 
 function parseCountryFromBody(body, req) {
@@ -87,7 +81,9 @@ async function queryOverviewStats(pool) {
     pool,
     `SELECT COUNT(*)::int AS c
      FROM live_sessions
-     WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
+     WHERE channel_id IS NOT NULL
+       AND trim(channel_id) <> ''
+       AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
     'overview.onlineNow',
     (r) => numOrZero(r?.c),
     [LIVE_WINDOW_INTERVAL],
@@ -366,7 +362,11 @@ analyticsRouter.post('/session/start', async (req, res) => {
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())
        ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+         channel_id = CASE
+           WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
+             THEN EXCLUDED.channel_id
+           ELSE live_sessions.channel_id
+         END,
          country = COALESCE(EXCLUDED.country, live_sessions.country),
          updated_at = now()`,
       [deviceId, channelId, country],
@@ -383,13 +383,13 @@ analyticsRouter.post('/session/start', async (req, res) => {
   }
 })
 
-analyticsRouter.post('/session/heartbeat', async (req, res) => {
+async function handleLiveSessionHeartbeat(req, res) {
   try {
     const pool = getPool()
     if (!pool) {
       return res.status(503).json({ ok: false, error: 'Database not configured' })
     }
-    const deviceId = parseDeviceId(req.body?.device_id)
+    const deviceId = parseDeviceId(req.body?.device_id ?? req.body?.deviceId)
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
@@ -399,7 +399,11 @@ analyticsRouter.post('/session/heartbeat', async (req, res) => {
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())
        ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+         channel_id = CASE
+           WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
+             THEN EXCLUDED.channel_id
+           ELSE live_sessions.channel_id
+         END,
          country = COALESCE(EXCLUDED.country, live_sessions.country),
          updated_at = now()`,
       [deviceId, channelId, country],
@@ -414,7 +418,11 @@ analyticsRouter.post('/session/heartbeat', async (req, res) => {
     console.error('[analytics/session/heartbeat]', e)
     return res.status(500).json({ ok: false, error: String(e.message || e) })
   }
-})
+}
+
+analyticsRouter.post('/session/heartbeat', handleLiveSessionHeartbeat)
+analyticsRouter.post('/session/ping', handleLiveSessionHeartbeat)
+analyticsRouter.post('/live/ping', handleLiveSessionHeartbeat)
 
 analyticsRouter.post('/session/end', async (req, res) => {
   try {
@@ -452,7 +460,11 @@ analyticsRouter.post('/presence/start', async (req, res) => {
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())
        ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+         channel_id = CASE
+           WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
+             THEN EXCLUDED.channel_id
+           ELSE live_sessions.channel_id
+         END,
          country = COALESCE(EXCLUDED.country, live_sessions.country),
          updated_at = now()`,
       [deviceId, channelId, country],
@@ -485,7 +497,11 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
        VALUES ($1, $2, $3, now(), now())
        ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+         channel_id = CASE
+           WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
+             THEN EXCLUDED.channel_id
+           ELSE live_sessions.channel_id
+         END,
          country = COALESCE(EXCLUDED.country, live_sessions.country),
          updated_at = now()`,
       [deviceId, channelId, country],

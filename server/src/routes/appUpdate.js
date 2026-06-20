@@ -2,6 +2,10 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Router } from 'express'
+import {
+  applyAppUpdateClientDecision,
+  clientVersionFromRequest,
+} from '../lib/appUpdateTargeting.js'
 import { getPool } from '../db/pool.js'
 import { isBunnyCdnHost, resolveHostedApkDownloadUrl } from '../lib/cdnAssets.js'
 import { parseApkMetadata } from '../lib/apkMetadata.js'
@@ -199,12 +203,21 @@ export function appUpdateToOtaPayload(data, configVersion = 0) {
   }
 }
 
-export async function loadAppUpdatePublicPayload(configVersion) {
+export async function loadAppUpdatePublicPayload(configVersion, clientVersionCode = 0) {
   const pool = getPool()
   if (!pool) {
-    return appUpdateToOtaPayload(toPublicConfig({ ...DEFAULTS }, 'no-db'), configVersion)
+    const data = applyAppUpdateClientDecision(
+      toPublicConfig({ ...DEFAULTS }, 'no-db'),
+      clientVersionCode,
+    )
+    return appUpdateToOtaPayload(data, configVersion)
   }
-  const data = toPublicConfig(await loadRowsByKey(pool), 'runtime')
+  let data = toPublicConfig(await loadRowsByKey(pool), 'runtime')
+  if (clientVersionCode > 0) {
+    data = applyAppUpdateClientDecision(data, clientVersionCode)
+  } else {
+    data = { ...data, decision: 'NONE', update_target_reason: 'no_client_version' }
+  }
   return appUpdateToOtaPayload(data, configVersion)
 }
 
@@ -316,22 +329,9 @@ function parseVersionCode(value) {
   return Math.trunc(n)
 }
 
-/** Clients at or above published version_code never get SOFT/FORCE prompts (unless force min gate added later). */
+/** @deprecated — use applyAppUpdateClientDecision from lib/appUpdateTargeting.js */
 function applyClientVersionDecision(data, clientVersionInput) {
-  const client = parseVersionCode(clientVersionInput)
-  const server = parseVersionCode(data.version_code ?? data.versionCode)
-  if (client > 0 && server > 0 && client >= server) {
-    return { ...data, decision: 'NONE' }
-  }
-  return data
-}
-
-function clientVersionFromRequest(req) {
-  const b = req?.body && typeof req.body === 'object' ? req.body : {}
-  const q = req?.query && typeof req.query === 'object' ? req.query : {}
-  return parseVersionCode(
-    b.version_code ?? b.versionCode ?? q.version_code ?? q.versionCode ?? 0,
-  )
+  return applyAppUpdateClientDecision(data, clientVersionInput)
 }
 
 function hostedApkPublicUrl(req, filename) {
@@ -706,7 +706,11 @@ appUpdateRouter.get('/update-check', async (req, res) => {
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
     let data = toPublicConfig(await loadRowsByKey(pool), 'update-check:get', req)
     const clientCode = clientVersionFromRequest(req)
-    if (clientCode > 0) data = applyClientVersionDecision(data, clientCode)
+    if (clientCode > 0) {
+      data = applyAppUpdateClientDecision(data, clientCode)
+    } else {
+      data = { ...data, decision: 'NONE', update_target_reason: 'no_client_version' }
+    }
     return res.json({
       decision: data.decision,
       source: data.source,
@@ -721,6 +725,7 @@ appUpdateRouter.get('/update-check', async (req, res) => {
       version_code: data.version_code,
       version_name: data.version_name,
       package_name: data.package_name,
+      ...(data.update_target_reason ? { update_target_reason: data.update_target_reason } : {}),
     })
   } catch (e) {
     console.error('[update-check] GET', e)
@@ -734,7 +739,11 @@ appUpdateRouter.post('/update-check', async (req, res) => {
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
     let data = toPublicConfig(await loadRowsByKey(pool), 'update-check:post', req)
     const clientCode = clientVersionFromRequest(req)
-    if (clientCode > 0) data = applyClientVersionDecision(data, clientCode)
+    if (clientCode > 0) {
+      data = applyAppUpdateClientDecision(data, clientCode)
+    } else {
+      data = { ...data, decision: 'NONE', update_target_reason: 'no_client_version' }
+    }
     return res.json({
       decision: data.decision,
       source: data.source,
@@ -749,6 +758,7 @@ appUpdateRouter.post('/update-check', async (req, res) => {
       version_code: data.version_code,
       version_name: data.version_name,
       package_name: data.package_name,
+      ...(data.update_target_reason ? { update_target_reason: data.update_target_reason } : {}),
     })
   } catch (e) {
     console.error('[update-check] POST', e)

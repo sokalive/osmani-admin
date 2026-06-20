@@ -636,6 +636,9 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE auraxpay_settings ADD COLUMN IF NOT EXISTS last_create_order_response JSONB;
   `)
+  await client.query(`
+    ALTER TABLE auraxpay_settings ADD COLUMN IF NOT EXISTS webhook_secret TEXT NOT NULL DEFAULT '';
+  `)
 
   /** Active checkout gateway for mobile app (zenopay | sonicpesa | auraxpay). */
   await client.query(`

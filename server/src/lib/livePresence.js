@@ -16,7 +16,7 @@ export const LIVE_PRESENCE_WINDOW_SECONDS = (() => {
   if (explicit != null) return explicit
   const legacy = clampInt(Number(process.env.ANALYTICS_SESSION_TTL_SECONDS), 10, 120)
   if (legacy != null) return legacy
-  return 45
+  return 60
 })()
 
 /** DELETE idle rows after this (default max(window+30, 90), min window+5). */

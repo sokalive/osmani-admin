@@ -686,7 +686,11 @@ export async function touchLivePresence({ deviceId, country = null, channelId = 
     `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
      VALUES ($1, $2, $3, now(), now())
      ON CONFLICT (device_id) DO UPDATE SET
-       channel_id = COALESCE(EXCLUDED.channel_id, live_sessions.channel_id),
+       channel_id = CASE
+         WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
+           THEN EXCLUDED.channel_id
+         ELSE live_sessions.channel_id
+       END,
        country = COALESCE(EXCLUDED.country, live_sessions.country),
        updated_at = now()`,
     [d, safeChannel, safeCountry],
@@ -1831,9 +1835,10 @@ export async function updateAuraxpayRowFull(d) {
        account_id = $4,
        webhook_url = $5,
        api_key = CASE WHEN $6::boolean THEN api_key ELSE $7 END,
-       last_test_at = $8::timestamptz,
-       last_test_ok = $9,
-       last_test_message = $10,
+       webhook_secret = CASE WHEN $8::boolean THEN webhook_secret ELSE $9 END,
+       last_test_at = $10::timestamptz,
+       last_test_ok = $11,
+       last_test_message = $12,
        updated_at = now()
      WHERE id = 1
      RETURNING *`,
@@ -1845,6 +1850,8 @@ export async function updateAuraxpayRowFull(d) {
       d.webhook_url,
       Boolean(d.keep_api_key),
       d.api_key ?? '',
+      Boolean(d.keep_webhook_secret),
+      d.webhook_secret ?? '',
       d.last_test_at ?? null,
       d.last_test_ok ?? null,
       d.last_test_message ?? null,
