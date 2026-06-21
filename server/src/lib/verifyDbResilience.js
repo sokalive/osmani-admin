@@ -12,11 +12,11 @@ export class DbPressureError extends Error {
 }
 
 function maxVerifyDbConcurrent() {
-  return Math.max(4, Math.min(40, Number(process.env.VERIFY_DB_MAX_CONCURRENT) || 20))
+  return Math.max(4, Math.min(40, Number(process.env.VERIFY_DB_MAX_CONCURRENT) || 25))
 }
 
 function verifyDbSlotWaitMs() {
-  return Math.max(200, Math.min(60_000, Number(process.env.VERIFY_DB_SLOT_WAIT_MS) || 8000))
+  return Math.max(200, Math.min(120_000, Number(process.env.VERIFY_DB_SLOT_WAIT_MS) || 30000))
 }
 
 let verifyDbInFlight = 0

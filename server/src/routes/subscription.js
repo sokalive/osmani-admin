@@ -20,7 +20,6 @@ import {
 import {
   canUseInactiveVerifyFallback,
   isDbTimeoutOrPressureError,
-  isVerifySlotPressureError,
   withVerifyDbSlot,
 } from '../lib/verifyDbResilience.js'
 import { coalesceVerifyAccessLoad } from '../lib/verifyAccessSingleflight.js'
@@ -400,7 +399,7 @@ function verifyFallbackContext({ deviceId, orderIdHint, fingerprint, phone, lega
 
 async function maybeInactiveVerifyFallback(req, ctx, err) {
   if (!canUseInactiveVerifyFallback(ctx)) return null
-  if (!isVerifySlotPressureError(err) && !isDbTimeoutOrPressureError(err)) return null
+  if (!isDbTimeoutOrPressureError(err)) return null
   try {
     return await buildInactiveVerifyFallbackResponse(req, ctx.deviceId || '')
   } catch (fallbackErr) {
