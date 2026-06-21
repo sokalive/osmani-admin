@@ -16,6 +16,12 @@ import {
   invalidateSubscriptionAccessCache,
   setCachedSubscriptionAccess,
 } from '../lib/subscriptionAccessCache.js'
+import {
+  canUseInactiveVerifyFallback,
+  isDbTimeoutOrPressureError,
+  isVerifyDbPressure,
+  withVerifyDbSlot,
+} from '../lib/verifyDbResilience.js'
 
 export const subscriptionRouter = Router()
 
@@ -317,6 +323,91 @@ function derivePlaybackGate(pub, modesPayload, securityPolicy = null, trialStatu
   }
 }
 
+function modesFallbackPayload() {
+  return {
+    ok: false,
+    v: liveSyncBus.snapshot().configVersion,
+    free_mode: false,
+    emergency_mode: false,
+    maintenance_mode: false,
+    server_time_ms: Date.now(),
+  }
+}
+
+const trialSettingsFallbackPayload = {
+  enabled: false,
+  trialMinutes: 30,
+  previewSeconds: 120,
+  previewAfterEnabled: true,
+}
+
+const trialDisabledPublicPayload = {
+  enabled: false,
+  playbackAllowed: false,
+  playbackGateReason: 'subscription_active',
+  phase: 'disabled',
+}
+
+/**
+ * Safe HTTP 200 inactive verify when DB is saturated — never used for paid/migration/payment hints.
+ */
+async function buildInactiveVerifyFallbackResponse(req, deviceId) {
+  const pub = rowToPublicStatus(null)
+  const modesPayload = await loadGlobalAppModesPayload().catch(() => modesFallbackPayload())
+  const plansRows = await billing.listActivePlansForVerify().catch(() => [])
+  const normalized = normalizeVerifyResponse(pub, null)
+  const runtimeModes = appModesForVerify(modesPayload)
+  const playbackGate = derivePlaybackGate(pub, modesPayload, null, null)
+  const trialWatchPublic = trialWatchSettingsToPublicPayload(
+    trialSettingsFallbackPayload,
+    modesPayload?.v ?? liveSyncBus.snapshot().configVersion,
+  )
+  const withGift = {
+    ...normalized,
+    ...runtimeModes,
+    manualGift: null,
+    trial_watch: null,
+    trialWatch: null,
+    trial_watch_settings: trialWatchPublic,
+    trialWatchSettings: trialWatchPublic,
+    playbackAllowed: playbackGate.playbackAllowed,
+    playbackGateReason: playbackGate.playbackGateReason,
+    limitedPlayback: playbackGate.limitedPlayback === true,
+    securityLevel: playbackGate.securityLevel ?? null,
+    securityBypass: playbackGate.securityBypass === true,
+    plans: mapVerifyPlans(plansRows),
+  }
+  console.warn('[subscription-verify-fallback]', {
+    deviceId: shortRef(deviceId),
+    path: req.path || req.url || '',
+    pool_pressure: isVerifyDbPressure(),
+  })
+  return withGift
+}
+
+function verifyFallbackContext({ deviceId, orderIdHint, fingerprint, phone, legacyDeviceId, accountId }) {
+  const cached = getCachedSubscriptionAccess(deviceId, fingerprint)
+  return {
+    orderIdHint,
+    fingerprint,
+    legacyDeviceId,
+    accountId,
+    paymentPhone: phone,
+    cachedAccessRow: cached !== undefined ? cached : null,
+  }
+}
+
+async function maybeInactiveVerifyFallback(req, ctx, err) {
+  if (!isDbTimeoutOrPressureError(err)) return null
+  if (!canUseInactiveVerifyFallback(ctx)) return null
+  try {
+    return await buildInactiveVerifyFallbackResponse(req, ctx.deviceId || '')
+  } catch (fallbackErr) {
+    console.error('[subscription-verify-fallback] failed:', fallbackErr)
+    return null
+  }
+}
+
 /**
  * Shared path for GET /subscription-status and POST /subscription/verify:
  * presence touch, reconcile + activate, then access state + plans.
@@ -329,6 +420,14 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const fp = String(fingerprint ?? '').trim()
   const paymentPhone = String(phone ?? '').trim()
   const channelId = parseChannelIdFromRequest(req)
+  const fallbackCtx = verifyFallbackContext({
+    deviceId: d,
+    orderIdHint: hint,
+    fingerprint: fp,
+    phone: paymentPhone,
+    legacyDeviceId,
+    accountId,
+  })
   const timing = {
     deviceId: shortRef(d),
     hint: hint ? shortRef(hint) : null,
@@ -342,28 +441,62 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
 
   const tAccess0 = Date.now()
   let cached = getCachedSubscriptionAccess(d, fp)
-  let row =
-    cached !== undefined
-      ? cached
-      : await billing.getDeviceSubscriptionAccessStateFast(d)
-  if (row == null && cached === undefined) {
-    row = await billing.getDeviceSubscriptionAccessState(d, fp)
+  let row = cached !== undefined ? cached : null
+  let accessSnapshot = null
+
+  if (cached === undefined) {
+    if (
+      canUseInactiveVerifyFallback(fallbackCtx) &&
+      isVerifyDbPressure()
+    ) {
+      timing.access_cache_hit = false
+      timing.access_fast_path = true
+      timing.access_pressure_fallback = true
+      return buildInactiveVerifyFallbackResponse(req, d)
+    }
+    try {
+      accessSnapshot = await withVerifyDbSlot(() => billing.getVerifyAccessSnapshot(d))
+      row = accessSnapshot.row
+    } catch (e) {
+      const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
+      if (fb) {
+        timing.access_pressure_fallback = true
+        return fb
+      }
+      throw e
+    }
+    setCachedSubscriptionAccess(d, fp, row)
   }
-  if (cached === undefined) setCachedSubscriptionAccess(d, fp, row)
   timing.access_ms = Date.now() - tAccess0
   timing.access_cache_hit = cached !== undefined
   timing.access_fast_path = cached !== undefined || row != null
 
   const alreadyActive = row?.active_now === true && row?.blocked_now !== true
   timing.already_active = alreadyActive
-  const pollDecision = alreadyActive
-    ? { poll: false, reason: 'already_active' }
-    : await billing.shouldProviderPollForVerify(d, hint)
+  let pollDecision = { poll: false, reason: 'already_active' }
+  if (!alreadyActive) {
+    try {
+      pollDecision = await withVerifyDbSlot(() =>
+        billing.resolveVerifyPollDecision(d, hint, accessSnapshot),
+      )
+    } catch (e) {
+      const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
+      if (fb) {
+        timing.access_pressure_fallback = true
+        return fb
+      }
+      pollDecision = { poll: false, reason: 'poll_skipped_db_pressure' }
+    }
+  }
   timing.poll_decision = pollDecision
 
   if (pollDecision.poll) {
     const tRec0 = Date.now()
-    await reconcileOrdersForVerify(d, hint)
+    try {
+      await withVerifyDbSlot(() => reconcileOrdersForVerify(d, hint))
+    } catch (e) {
+      console.warn('[subscription-verify] reconcile skipped:', e?.message || e)
+    }
     timing.reconcile_ms = Date.now() - tRec0
     timing.provider_polled = true
     invalidateSubscriptionAccessCache(d)
@@ -385,10 +518,15 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
 
   if (inactiveNow && fp) {
     const tFp0 = Date.now()
-    const fastLink = await tryFastFingerprintRecovery(d, fp).catch((e) => {
-      console.error('[subscription-verify] fast fingerprint recovery failed:', e)
-      return { linked: false, reason: 'link_error' }
-    })
+    let fastLink = { linked: false, reason: 'skipped' }
+    try {
+      fastLink = await withVerifyDbSlot(() => tryFastFingerprintRecovery(d, fp))
+    } catch (e) {
+      if (!isDbTimeoutOrPressureError(e)) {
+        console.error('[subscription-verify] fast fingerprint recovery failed:', e)
+      }
+      fastLink = { linked: false, reason: 'link_error' }
+    }
     timing.fast_fp_recovery_ms = Date.now() - tFp0
     if (fastLink.linked) {
       console.log('[subscription-verify] fast fingerprint recovery', {
@@ -410,15 +548,22 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
 
   if (needsMigrationLink) {
     const tLink0 = Date.now()
-    const link = await ensureSubscriptionLinkedForDevice(d, {
-      fingerprint: fp || null,
-      phone: paymentPhone || null,
-      legacyDeviceId: legacyDeviceId || null,
-      accountId: accountId || null,
-    }).catch((e) => {
-      console.error('[subscription-verify] ensureSubscriptionLinkedForDevice failed:', e)
-      return { linked: false, reason: 'link_error' }
-    })
+    let link = { linked: false, reason: 'skipped' }
+    try {
+      link = await withVerifyDbSlot(() =>
+        ensureSubscriptionLinkedForDevice(d, {
+          fingerprint: fp || null,
+          phone: paymentPhone || null,
+          legacyDeviceId: legacyDeviceId || null,
+          accountId: accountId || null,
+        }),
+      )
+    } catch (e) {
+      if (!isDbTimeoutOrPressureError(e)) {
+        console.error('[subscription-verify] ensureSubscriptionLinkedForDevice failed:', e)
+      }
+      link = { linked: false, reason: 'link_error' }
+    }
     if (link.linked) {
       console.log('[subscription-verify] subscription linked', {
         deviceId: shortRef(d),
@@ -751,6 +896,22 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
     res.json(bodyOut)
   } catch (e) {
     console.error('[subscription-status]', e)
+    const deviceId = String(req.query.device_id ?? '').trim()
+    const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
+    const migration = migrationHintsFromPayload(req.query)
+    const fb = await maybeInactiveVerifyFallback(
+      req,
+      verifyFallbackContext({
+        deviceId,
+        orderIdHint: String(req.query.order_id ?? '').trim(),
+        fingerprint: fp,
+        phone: String(req.query.payment_phone ?? req.query.phone ?? '').trim(),
+        legacyDeviceId: migration.legacyDeviceId,
+        accountId: migration.accountId,
+      }),
+      e,
+    )
+    if (fb) return res.json(fb)
     res.status(500).json({ error: String(e.message || e) })
   }
 })
@@ -803,6 +964,25 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
     res.json(bodyOut)
   } catch (e) {
     console.error('[subscription/verify]', e)
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(b.device_id ?? b.deviceId ?? '').trim()
+    const fp = String(
+      b.device_fingerprint ?? b.fingerprint ?? b.deviceFingerprint ?? req.headers['x-device-fingerprint'] ?? '',
+    ).trim()
+    const migration = migrationHintsFromPayload(b)
+    const fb = await maybeInactiveVerifyFallback(
+      req,
+      verifyFallbackContext({
+        deviceId,
+        orderIdHint: String(b.order_id ?? b.orderId ?? '').trim(),
+        fingerprint: fp,
+        phone: String(b.payment_phone ?? b.phone ?? b.paymentPhone ?? '').trim(),
+        legacyDeviceId: migration.legacyDeviceId,
+        accountId: migration.accountId,
+      }),
+      e,
+    )
+    if (fb) return res.json(fb)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

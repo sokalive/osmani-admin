@@ -18,7 +18,7 @@ function poolMaxConnections() {
   const n = Number(process.env.PG_POOL_MAX)
   if (Number.isFinite(n) && n >= 1) return Math.min(30, Math.trunc(n))
   // VPS (Contabo): more headroom; Render starter stays conservative.
-  return isVpsProduction() ? 15 : 8
+  return isVpsProduction() ? 18 : 8
 }
 
 function poolOptions() {

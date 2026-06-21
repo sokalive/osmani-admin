@@ -44,6 +44,9 @@ import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { getPool } from '../db/pool.js'
 import { getApiCacheStats } from '../lib/apiResponseCache.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
+import { getPoolStats } from '../db/pool.js'
+import { readPgConnectionStats } from '../lib/pgConnectionStats.js'
+import { getVerifyDbStats } from '../lib/verifyDbResilience.js'
 import { isTrackedMobilePath, recordClientApiTelemetry } from '../lib/clientApiTelemetry.js'
 
 const FILES = {
@@ -221,7 +224,23 @@ restApi.get('/health', (_req, res) => {
   ) {
     body.api_cache = getApiCacheStats()
   }
+  if (String(process.env.PG_POOL_STATS || '').trim() === '1') {
+    body.pool = getPoolStats()
+    body.verify_db = getVerifyDbStats()
+  }
   res.json(body)
+})
+
+restApi.get('/health/db', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
+  const pg = await readPgConnectionStats()
+  res.json({
+    ok: pg.ok === true,
+    time: new Date().toISOString(),
+    commit: getServerGitCommit(),
+    pg,
+    verify_db: getVerifyDbStats(),
+  })
 })
 
 /** Admin-only: DB fingerprint + sample rows to verify read/write same Postgres as UI. */

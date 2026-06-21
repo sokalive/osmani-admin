@@ -15,9 +15,13 @@ export async function warmApiCaches() {
     await ensureBillingStorage()
     const { loadAppUpdatePublicPayload } = await import('../routes/appUpdate.js')
     const { loadGlobalAppModesPayload } = await import('../routes/globalAppSettings.js')
-    await Promise.all([loadAppUpdatePublicPayload(0, 0), loadGlobalAppModesPayload()])
+    await Promise.all([
+      loadAppUpdatePublicPayload(0, 0),
+      loadGlobalAppModesPayload(),
+      import('../billingStore.js').then((m) => m.listActivePlansForVerify()),
+    ])
     const ms = Date.now() - t0
-    console.log('[warm-cache] app_update + global_modes preloaded', { ms })
+    console.log('[warm-cache] app_update + global_modes + plans preloaded', { ms })
     return { ok: true, ms }
   } catch (e) {
     console.warn('[warm-cache] failed:', e?.message || e)

@@ -611,6 +611,131 @@ export async function getDeviceSubscriptionAccessStateFast(deviceId) {
 }
 
 /**
+ * Single round-trip for verify premium gate: subscription row + latest recent pending txn.
+ * Always returns one logical row (subscription fields may be null).
+ */
+export async function getVerifyAccessSnapshot(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return { row: null, pendingTxn: null }
+  const mins = verifyPendingMaxAgeMinutes()
+  const { rows } = await pool.query(
+    `SELECT
+       ds.device_id,
+       ds.status,
+       ds.expires_at,
+       ds.started_at,
+       ds.updated_at,
+       ds.transaction_id,
+       (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
+       COALESCE(ds.manual_admin_blocked, false) AS blocked_now,
+       CASE WHEN COALESCE(ds.manual_admin_blocked, false) THEN 'admin_blocked' ELSE NULL END AS block_reason,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
+         ELSE 0::bigint
+       END AS remaining_seconds,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 3600.0)::int)
+         ELSE 0
+       END AS remaining_hours,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
+         ELSE 0
+       END AS remaining_days,
+       (
+         ds.expires_at IS NOT NULL
+         AND ds.expires_at > now()
+         AND ds.expires_at <= now() + interval '48 hours'
+       ) AS near_expiry,
+       pend.order_id AS pending_order_id,
+       pend.status AS pending_status,
+       pend.created_at AS pending_created_at,
+       pend.device_id AS pending_device_id,
+       pend.raw_payload AS pending_raw_payload
+     FROM (SELECT $1::text AS device_id) req
+     LEFT JOIN device_subscriptions ds ON ds.device_id = req.device_id
+     LEFT JOIN LATERAL (
+       SELECT t.order_id, t.status, t.created_at, t.device_id, t.raw_payload
+       FROM transactions t
+       WHERE t.device_id = req.device_id
+         AND t.status = 'pending'
+         AND t.plan_id IS NOT NULL
+         AND t.created_at >= now() - ($2::int * interval '1 minute')
+       ORDER BY t.created_at DESC
+       LIMIT 1
+     ) pend ON true`,
+    [d, mins],
+  )
+  const snap = rows[0]
+  if (!snap) return { row: null, pendingTxn: null }
+  const row = snap.device_id
+    ? {
+        device_id: snap.device_id,
+        status: snap.status,
+        expires_at: snap.expires_at,
+        started_at: snap.started_at,
+        updated_at: snap.updated_at,
+        transaction_id: snap.transaction_id,
+        active_now: snap.active_now === true,
+        blocked_now: snap.blocked_now === true,
+        block_reason: snap.block_reason,
+        remaining_seconds: snap.remaining_seconds,
+        remaining_hours: snap.remaining_hours,
+        remaining_days: snap.remaining_days,
+        near_expiry: snap.near_expiry === true,
+      }
+    : null
+  const pendingTxn = snap.pending_order_id
+    ? {
+        order_id: snap.pending_order_id,
+        status: snap.pending_status,
+        created_at: snap.pending_created_at,
+        device_id: snap.pending_device_id,
+        raw_payload: snap.pending_raw_payload,
+      }
+    : null
+  return { row, pendingTxn }
+}
+
+/** Poll decision using snapshot pending txn when possible (avoids extra pending lookups). */
+export async function resolveVerifyPollDecision(deviceId, orderIdHint, snapshot = null) {
+  const d = String(deviceId ?? '').trim()
+  const hint = String(orderIdHint ?? '').trim()
+  if (hint) return shouldProviderPollOrderForVerify(d, hint)
+  const pend = snapshot?.pendingTxn
+  if (!pend?.order_id) return { poll: false, reason: 'no_recent_pending' }
+  const txnDev = txnDeviceIdForVerify(pend)
+  if (txnDev && txnDev !== d) {
+    return { poll: false, reason: 'pending_device_mismatch' }
+  }
+  const status = String(pend.status ?? '')
+  if (status !== 'pending') {
+    return { poll: false, reason: `pending_${status || 'unknown'}` }
+  }
+  const ageMin = transactionCreatedAgeMinutes(pend)
+  const maxMin = verifyPendingMaxAgeMinutes()
+  if (ageMin > maxMin) {
+    return {
+      poll: false,
+      reason: 'pending_stale',
+      age_min: Math.round(ageMin),
+      max_age_min: maxMin,
+    }
+  }
+  const raw = pend.raw_payload && typeof pend.raw_payload === 'object' ? pend.raw_payload : {}
+  return {
+    poll: true,
+    reason: 'recent_pending',
+    age_min: Math.round(ageMin),
+    provider: String(raw.payment_provider ?? 'zenopay'),
+    order_id: String(pend.order_id),
+  }
+}
+
+/**
  * Server-authoritative access check using PostgreSQL NOW() (never device time).
  */
 export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = null) {
