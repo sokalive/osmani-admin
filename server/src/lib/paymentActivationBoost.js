@@ -1,6 +1,7 @@
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import * as billing from '../billingStore.js'
 import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
+import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
 
 const DEFAULT_DELAYS_MS = String(process.env.PAYMENT_ACTIVATION_POLL_MS || '2000,5000,12000,25000')
   .split(',')
@@ -23,6 +24,7 @@ export function schedulePostPaymentActivationPolls(orderId, deviceId) {
           const rec = await reconcileOrderWithZenoPay(oid, { forcePoll: true })
           const fin = await billing.tryFinalizeActivationForDevice(did)
           if (rec?.activation?.activated || fin?.activated) {
+            invalidateSubscriptionAccessCache(did)
             deviceSubscriptionBus.emit('update', { deviceId: did })
           }
         } catch (e) {

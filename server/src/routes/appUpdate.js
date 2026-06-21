@@ -223,6 +223,7 @@ export async function loadAppUpdatePublicPayload(configVersion, clientVersionCod
 }
 
 function publishAppUpdateChanged(action, decisionData, extra = {}) {
+  invalidateAppSettingsCache()
   const snap = liveSyncBus.snapshot()
   const app_update = appUpdateToOtaPayload(decisionData, snap.configVersion)
   liveSyncBus.publish('config.app_update_changed', {
@@ -257,6 +258,10 @@ async function ensureAppSettingsTable(pool) {
 
 async function loadRowsByKey(pool) {
   await ensureAppSettingsTable(pool)
+  const now = Date.now()
+  if (_appSettingsCache && now - _appSettingsCacheAt < APP_SETTINGS_CACHE_MS) {
+    return _appSettingsCache
+  }
   const { rows } = await pool.query(
     `SELECT key, value
      FROM app_settings
@@ -268,7 +273,21 @@ async function loadRowsByKey(pool) {
   for (const [k, v] of Object.entries(DEFAULTS)) {
     if (!(k in byKey)) byKey[k] = v
   }
+  _appSettingsCache = byKey
+  _appSettingsCacheAt = now
   return byKey
+}
+
+let _appSettingsCache = null
+let _appSettingsCacheAt = 0
+const APP_SETTINGS_CACHE_MS = Math.max(
+  2000,
+  Math.min(30_000, Number(process.env.APP_SETTINGS_CACHE_MS) || 8000),
+)
+
+export function invalidateAppSettingsCache() {
+  _appSettingsCache = null
+  _appSettingsCacheAt = 0
 }
 
 function requireAdminToken(req, res, next) {

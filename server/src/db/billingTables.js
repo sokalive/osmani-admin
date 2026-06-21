@@ -374,6 +374,20 @@ export async function ensureBillingTables(client) {
     ON device_subscriptions (fingerprint_hash)
     WHERE fingerprint_hash IS NOT NULL;
   `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_subscriptions_status_expires_idx
+    ON device_subscriptions (status, expires_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transactions_device_pending_sub_idx
+    ON transactions (device_id, created_at DESC)
+    WHERE status = 'pending' AND plan_id IS NOT NULL;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transactions_device_completed_sub_idx
+    ON transactions (device_id, created_at DESC)
+    WHERE status = 'completed' AND plan_id IS NOT NULL;
+  `)
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS transfer_codes (

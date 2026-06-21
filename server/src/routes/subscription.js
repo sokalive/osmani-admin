@@ -9,7 +9,7 @@ import { getDeviceTrialWatchStatus } from '../lib/trialWatchStore.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
 import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
-import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint } from '../lib/subscriptionRecovery.js'
+import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint, tryFastFingerprintRecovery } from '../lib/subscriptionRecovery.js'
 import { parseChannelIdFromRequest } from '../lib/analyticsPresence.js'
 import {
   getCachedSubscriptionAccess,
@@ -345,10 +345,14 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   let row =
     cached !== undefined
       ? cached
-      : await billing.getDeviceSubscriptionAccessState(d, fp)
+      : await billing.getDeviceSubscriptionAccessStateFast(d)
+  if (row == null && cached === undefined) {
+    row = await billing.getDeviceSubscriptionAccessState(d, fp)
+  }
   if (cached === undefined) setCachedSubscriptionAccess(d, fp, row)
   timing.access_ms = Date.now() - tAccess0
   timing.access_cache_hit = cached !== undefined
+  timing.access_fast_path = cached !== undefined || row != null
 
   const alreadyActive = row?.active_now === true && row?.blocked_now !== true
   timing.already_active = alreadyActive
@@ -363,7 +367,8 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     timing.reconcile_ms = Date.now() - tRec0
     timing.provider_polled = true
     invalidateSubscriptionAccessCache(d)
-    row = await billing.getDeviceSubscriptionAccessState(d, fp)
+    row = (await billing.getDeviceSubscriptionAccessStateFast(d)) ??
+      (await billing.getDeviceSubscriptionAccessState(d, fp))
     setCachedSubscriptionAccess(d, fp, row)
   } else {
     timing.skip_poll_reason = pollDecision.reason
@@ -372,8 +377,35 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     })
   }
 
+  const inactiveNow = !(row?.active_now === true && row?.blocked_now !== true)
+  const explicitMigration =
+    Boolean(String(legacyDeviceId ?? '').trim()) ||
+    Boolean(String(accountId ?? '').trim()) ||
+    String(paymentPhone ?? '').replace(/\D/g, '').length >= 10
+
+  if (inactiveNow && fp) {
+    const tFp0 = Date.now()
+    const fastLink = await tryFastFingerprintRecovery(d, fp).catch((e) => {
+      console.error('[subscription-verify] fast fingerprint recovery failed:', e)
+      return { linked: false, reason: 'link_error' }
+    })
+    timing.fast_fp_recovery_ms = Date.now() - tFp0
+    if (fastLink.linked) {
+      console.log('[subscription-verify] fast fingerprint recovery', {
+        deviceId: shortRef(d),
+        from: fastLink.recovered_from ? shortRef(fastLink.recovered_from) : undefined,
+      })
+      invalidateSubscriptionAccessCache(d)
+      row =
+        (await billing.getDeviceSubscriptionAccessStateFast(d)) ??
+        (await billing.getDeviceSubscriptionAccessState(d, fp))
+      setCachedSubscriptionAccess(d, fp, row)
+    }
+  }
+
   const needsMigrationLink =
     !(row?.active_now === true && row?.blocked_now !== true) &&
+    explicitMigration &&
     hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountId })
 
   if (needsMigrationLink) {
@@ -450,6 +482,17 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     pendingGift = null
     trialWatchSettings = trialSettingsFallback
     plansRows = null
+  } else if (!isActiveNow) {
+    ;[modesPayload, plansRows] = await Promise.all([
+      loadGlobalAppModesPayload().catch(() => modesFallback()),
+      needsPlans ? billing.listActivePlansForVerify().catch(() => []) : Promise.resolve(null),
+    ])
+    txnSummary = null
+    securityPolicy = null
+    trialStatus = null
+    pendingGift = null
+    trialWatchSettings = trialSettingsFallback
+    timing.inactive_fast_path = true
   } else {
     ;[
       txnSummary,

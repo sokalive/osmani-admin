@@ -565,6 +565,52 @@ export async function getDeviceSubscriptionByDeviceId(deviceId) {
 }
 
 /**
+ * Hot-path subscription lookup (verify / premium gate) — no admin/intelligence joins.
+ */
+export async function getDeviceSubscriptionAccessStateFast(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT
+       ds.device_id,
+       ds.status,
+       ds.expires_at,
+       ds.started_at,
+       ds.updated_at,
+       ds.transaction_id,
+       (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
+       COALESCE(ds.manual_admin_blocked, false) AS blocked_now,
+       CASE WHEN COALESCE(ds.manual_admin_blocked, false) THEN 'admin_blocked' ELSE NULL END AS block_reason,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
+         ELSE 0::bigint
+       END AS remaining_seconds,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 3600.0)::int)
+         ELSE 0
+       END AS remaining_hours,
+       CASE
+         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
+         ELSE 0
+       END AS remaining_days,
+       (
+         ds.expires_at IS NOT NULL
+         AND ds.expires_at > now()
+         AND ds.expires_at <= now() + interval '48 hours'
+       ) AS near_expiry
+     FROM device_subscriptions ds
+     WHERE ds.device_id = $1
+     LIMIT 1`,
+    [d],
+  )
+  return rows[0] ?? null
+}
+
+/**
  * Server-authoritative access check using PostgreSQL NOW() (never device time).
  */
 export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = null) {
@@ -1076,6 +1122,9 @@ export async function upsertDeviceSubscriptionActive(
     void import('./lib/smsSubscriptionHooks.js')
       .then((m) => m.notifySubscriptionActivated({ deviceId: d, orderId: oid, expiresAt }))
       .catch((err) => console.warn('[sms] activation notify failed:', err))
+    void import('./lib/subscriptionAccessCache.js')
+      .then((m) => m.invalidateSubscriptionAccessCache(d))
+      .catch(() => {})
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)

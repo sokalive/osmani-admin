@@ -1623,10 +1623,13 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
       `SELECT device_id, expires_at, status
        FROM device_subscriptions
        WHERE fingerprint_hash = $1
+         AND status = 'active'
+         AND expires_at > now()
+         AND device_id <> $2
        ORDER BY updated_at DESC
        LIMIT 1
        FOR UPDATE`,
-      [fpHash],
+      [fpHash, deviceId],
     )
     const row = rows[0]
     if (!row) {
@@ -1654,7 +1657,9 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
       await client.query(
         `UPDATE device_subscriptions
          SET status = 'pending', updated_at = now()
-         WHERE device_id = $1`,
+         WHERE device_id = $1
+           AND status = 'active'
+           AND expires_at > now()`,
         [recoveredFrom],
       )
     }

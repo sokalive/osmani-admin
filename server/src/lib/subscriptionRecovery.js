@@ -36,6 +36,46 @@ function requirePool() {
   return pool
 }
 
+const FULL_MIGRATION_COOLDOWN_MS = Math.max(
+  15_000,
+  Number(process.env.SUBSCRIPTION_FULL_MIGRATION_COOLDOWN_MS) || 60_000,
+)
+
+/** @type {Map<string, number>} */
+const fullMigrationAttemptAt = new Map()
+
+function hasExplicitMigrationHints({ phone, legacyDeviceId, accountId }) {
+  const phoneDigits = normalizePhoneDigits(phone)
+  const acctDigits = normalizePhoneDigits(accountId)
+  return (
+    Boolean(String(legacyDeviceId ?? '').trim()) ||
+    Boolean(String(accountId ?? '').trim()) ||
+    (phoneDigits && phoneDigits.length >= 10) ||
+    (acctDigits && acctDigits.length >= 10)
+  )
+}
+
+function shouldRunFullMigrationScan(deviceId, hints) {
+  if (hasExplicitMigrationHints(hints)) return true
+  const d = String(deviceId ?? '').trim()
+  if (!d) return false
+  const last = fullMigrationAttemptAt.get(d) || 0
+  if (Date.now() - last < FULL_MIGRATION_COOLDOWN_MS) return false
+  fullMigrationAttemptAt.set(d, Date.now())
+  return true
+}
+
+/** Fast VPS APK reinstall path — fingerprint-only recovery (single transaction). */
+export async function tryFastFingerprintRecovery(deviceId, fingerprint) {
+  const fpHash = hashDeviceFingerprint(fingerprint)
+  if (!fpHash) return { linked: false, reason: 'no_fingerprint' }
+  const rec = await recoverSubscriptionToDevice(deviceId, fpHash, { reason: 'verify_fast_fingerprint' })
+  if (rec.recovered) {
+    return { linked: true, method: 'fingerprint', ...rec }
+  }
+  return { linked: false, reason: rec.reason || 'no_match' }
+}
+
 /**
  * Find an active subscription row recoverable for this hardware fingerprint.
  * Matches direct fingerprint_hash on device_subscriptions OR trial registry rows with same fingerprint.
@@ -102,7 +142,11 @@ export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reas
     )
     if (sourceDeviceId && sourceDeviceId !== target) {
       await client.query(
-        `UPDATE device_subscriptions SET status = 'pending', updated_at = now() WHERE device_id = $1`,
+        `UPDATE device_subscriptions
+         SET status = 'pending', updated_at = now()
+         WHERE device_id = $1
+           AND status = 'active'
+           AND expires_at > now()`,
         [sourceDeviceId],
       )
     }
@@ -171,7 +215,11 @@ export async function migrateSubscriptionFromSourceDevice(targetDeviceId, source
       [target, row.expires_at, row.transaction_id || `recovery:${source}`, hash],
     )
     await client.query(
-      `UPDATE device_subscriptions SET status = 'pending', updated_at = now() WHERE device_id = $1`,
+      `UPDATE device_subscriptions
+       SET status = 'pending', updated_at = now()
+       WHERE device_id = $1
+         AND status = 'active'
+         AND expires_at > now()`,
       [source],
     )
     await client.query('COMMIT')
@@ -313,7 +361,7 @@ async function findUniqueActiveDeviceIdForPhoneCluster(phones, excludeDeviceId) 
   const exclude = String(excludeDeviceId ?? '').trim()
   const sources = new Set()
   for (const phone of phones) {
-    const sourceId = await findActiveDeviceIdForPaymentPhone(phone, {})
+    const sourceId = await findActiveDeviceIdForPaymentPhone(phone, { proofDeviceId: exclude })
     if (sourceId && sourceId !== exclude) sources.add(sourceId)
   }
   if (sources.size !== 1) return null
@@ -382,15 +430,20 @@ export async function ensureSubscriptionLinkedForDevice(
   const fpHash = hashDeviceFingerprint(resolvedFingerprint)
   const explicitPhone = normalizePhoneDigits(phone)
   const accountDigits = normalizePhoneDigits(accountId)
-  const hasExplicitHints =
-    Boolean(fpHash) ||
-    Boolean(legacyDeviceId || accountId) ||
-    (explicitPhone && explicitPhone.length >= 10) ||
-    (accountDigits && accountDigits.length >= 10)
+  const explicitHints = hasExplicitMigrationHints({
+    phone,
+    legacyDeviceId,
+    accountId,
+  })
 
   if (fpHash) {
     const rec = await recoverSubscriptionToDevice(d, fpHash, { reason: 'verify_fingerprint' })
     if (rec.recovered) return { linked: true, method: 'fingerprint', ...rec }
+  }
+
+  if (!shouldRunFullMigrationScan(d, { phone, legacyDeviceId, accountId }) && !explicitHints) {
+    if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)
+    return { linked: false, reason: 'migration_throttled' }
   }
 
   const legacyHints = [legacyDeviceId, accountId].filter(Boolean)
@@ -432,20 +485,21 @@ export async function ensureSubscriptionLinkedForDevice(
     }
   }
 
-  const androidSource = await findActiveDeviceIdBySharedAndroidId(d)
-  if (androidSource) {
-    const linked = await tryLinkFromSource(d, androidSource, fpHash, 'android_id')
-    if (linked.linked) return linked
+  if (explicitHints) {
+    const androidSource = await findActiveDeviceIdBySharedAndroidId(d)
+    if (androidSource) {
+      const linked = await tryLinkFromSource(d, androidSource, fpHash, 'android_id')
+      if (linked.linked) return linked
+    }
+
+    const installSource = await findActiveDeviceIdBySharedInstallInstance(d)
+    if (installSource) {
+      const linked = await tryLinkFromSource(d, installSource, fpHash, 'install_instance')
+      if (linked.linked) return linked
+    }
   }
 
-  const installSource = await findActiveDeviceIdBySharedInstallInstance(d)
-  if (installSource) {
-    const linked = await tryLinkFromSource(d, installSource, fpHash, 'install_instance')
-    if (linked.linked) return linked
-  }
-
-  if (!hasExplicitHints) {
-    if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)
+  if (!explicitHints && !fpHash) {
     return { linked: false, reason: 'no_migration_hints' }
   }
 
