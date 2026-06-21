@@ -1,5 +1,5 @@
 /**
- * Verify App Update Control on VPS + Render: v15-only popup, v16–23 VPS cohort, v24+ never.
+ * Verify App Update Control on VPS + Render: v15–v23 popup when enabled; v24+ never.
  *
  * Usage:
  *   node scripts/verify-app-update-v24.mjs

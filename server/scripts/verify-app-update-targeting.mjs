@@ -1,13 +1,11 @@
 /**
- * Verify update-check: v15 => SOFT/FORCE when enabled; v16–24 => NONE.
+ * Verify update-check: v15–v23 => SOFT/FORCE when enabled; v24+ => NONE.
  */
 import {
   APP_UPDATE_NEVER_MIN,
-  APP_UPDATE_POPUP_TARGET_VERSION,
-  APP_UPDATE_VPS_MIGRATION_MAX,
-  APP_UPDATE_VPS_MIGRATION_MIN,
   applyAppUpdateClientDecision,
 } from '../src/lib/appUpdateTargeting.js'
+import { validateApkUploadVersionCode } from '../src/lib/appUpdateUploadValidation.js'
 
 const VPS_API = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/+$/, '')
 const RENDER_API = String(
@@ -41,17 +39,56 @@ function pass(msg) {
 const baseSoft = { decision: 'SOFT', version_code: 24 }
 
 for (const c of [
-  { v: APP_UPDATE_POPUP_TARGET_VERSION, want: 'SOFT' },
-  { v: APP_UPDATE_VPS_MIGRATION_MIN, want: 'NONE' },
-  { v: APP_UPDATE_VPS_MIGRATION_MAX, want: 'NONE' },
+  { v: 15, want: 'SOFT' },
+  { v: 16, want: 'SOFT' },
+  { v: 20, want: 'SOFT' },
+  { v: 23, want: 'SOFT' },
   { v: APP_UPDATE_NEVER_MIN, want: 'NONE' },
-  { v: 14, want: 'NONE' },
+  { v: 14, want: 'SOFT' },
 ]) {
   const got = applyAppUpdateClientDecision(baseSoft, c.v)
   if (got.decision !== c.want) {
     fail(`simulated v${c.v}: decision=${got.decision}, want ${c.want}`)
   } else {
     pass(`simulated v${c.v} => ${got.decision} (${got.update_target_reason})`)
+  }
+}
+
+for (const c of [
+  {
+    label: 'reupload v24 stable package',
+    meta: { versionCode: 24, packageName: 'com.burudanitv.app' },
+    stored: 24,
+    wantOk: true,
+    wantReupload: true,
+  },
+  {
+    label: 'downgrade v23',
+    meta: { versionCode: 23, packageName: 'com.burudanitv.app' },
+    stored: 24,
+    wantOk: false,
+  },
+  {
+    label: 'reupload v24 wrong package',
+    meta: { versionCode: 24, packageName: 'com.other.app' },
+    stored: 24,
+    wantOk: false,
+  },
+  {
+    label: 'upgrade v25',
+    meta: { versionCode: 25, packageName: 'com.burudanitv.app' },
+    stored: 24,
+    wantOk: true,
+    wantReupload: false,
+  },
+]) {
+  const got = validateApkUploadVersionCode(c.meta, c.stored)
+  if (got.ok !== c.wantOk) {
+    fail(`${c.label}: ok=${got.ok}, want ${c.wantOk}`)
+  } else if (got.ok && Boolean(got.reupload) !== Boolean(c.wantReupload)) {
+    fail(`${c.label}: reupload=${got.reupload}, want ${c.wantReupload}`)
+  } else {
+    pass(`${c.label} => ${got.ok ? (got.reupload ? 'reupload' : 'upgrade') : 'rejected'}`)
   }
 }
 
@@ -68,13 +105,15 @@ for (const host of HOSTS) {
       return null
     })
     if (!data) continue
-    const wantNone = v !== APP_UPDATE_POPUP_TARGET_VERSION
+    const wantNone = v >= APP_UPDATE_NEVER_MIN
     if (wantNone && data.decision !== 'NONE') {
       fail(`${host.label} v${v}: decision=${data.decision}, want NONE`)
+    } else if (!wantNone && data.decision === 'NONE' && data.update_target_reason === 'vps_ota_migration_cohort') {
+      fail(`${host.label} v${v}: still blocked by vps_ota_migration_cohort`)
     } else if (!wantNone && !['NONE', 'SOFT', 'FORCE'].includes(String(data.decision))) {
       fail(`${host.label} v${v}: invalid decision=${data.decision}`)
     } else {
-      pass(`${host.label} v${v} => ${data.decision}`)
+      pass(`${host.label} v${v} => ${data.decision}${data.update_target_reason ? ` (${data.update_target_reason})` : ''}`)
     }
   }
 }

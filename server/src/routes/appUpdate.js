@@ -14,6 +14,7 @@ import { fetchPlayStoreMetadata, parsePlayStorePackageId } from '../lib/playStor
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+import { validateApkUploadVersionCode } from '../lib/appUpdateUploadValidation.js'
 
 export const appUpdateRouter = Router()
 
@@ -407,7 +408,7 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
     const incomingVersionCode = parseVersionCode(body.versionCode)
     if (incomingVersionCode > 0 && incomingVersionCode < storedVersionCode) {
       return res.status(400).json({
-        error: `versionCode must be greater than current (${storedVersionCode})`,
+        error: `versionCode must not be less than current (${storedVersionCode})`,
       })
     }
 
@@ -532,12 +533,19 @@ appUpdateRouter.post('/settings/app-update/upload-apk', requireAdminPanelAccess,
 
         const rowsBefore = await loadRowsByKey(pool)
         const currentCode = parseVersionCode(rowsBefore[UPDATE_KEYS.versionCode])
-        if (meta.versionCode <= currentCode) {
+        const versionCheck = validateApkUploadVersionCode(meta, currentCode)
+        if (!versionCheck.ok) {
           return res.status(400).json({
             ok: false,
-            error: `APK versionCode must be greater than current (${currentCode}). Uploaded: ${meta.versionCode}`,
-            currentVersionCode: currentCode,
-            uploadedVersionCode: meta.versionCode,
+            error: versionCheck.error,
+            currentVersionCode: versionCheck.currentVersionCode,
+            uploadedVersionCode: versionCheck.uploadedVersionCode,
+          })
+        }
+        if (versionCheck.reupload) {
+          console.info('[app-update] same-version APK re-upload allowed', {
+            versionCode: versionCheck.uploadedVersionCode,
+            packageName: meta.packageName,
           })
         }
 
