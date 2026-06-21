@@ -1183,15 +1183,91 @@ export async function deviceHasPendingSubscriptionPayment(deviceId) {
   return rows.length > 0
 }
 
+/** Max age (minutes) for in-flight checkout provider polls during subscription verify. */
+export function verifyPendingMaxAgeMinutes(maxAgeMinutes = null) {
+  const raw =
+    maxAgeMinutes ??
+    process.env.SUBSCRIPTION_VERIFY_PENDING_MAX_AGE_MINUTES ??
+    process.env.SUBSCRIPTION_PENDING_MAX_AGE_MINUTES ??
+    15
+  return Math.max(5, Math.min(180, Number(raw) || 15))
+}
+
+function transactionCreatedAgeMinutes(txn) {
+  if (!txn?.created_at) return Infinity
+  const created = txn.created_at instanceof Date ? txn.created_at : new Date(txn.created_at)
+  const ms = Date.now() - created.getTime()
+  return Number.isFinite(ms) && ms >= 0 ? ms / 60_000 : Infinity
+}
+
+function txnDeviceIdForVerify(txn) {
+  if (!txn) return ''
+  let dev = String(txn.device_id ?? '').trim()
+  if (!dev) {
+    const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+    dev = String(raw.device_id ?? '').trim()
+  }
+  return dev
+}
+
+/**
+ * Whether verify should poll SonicPesa/ZenoPay for a specific order_id hint.
+ * Skips stale, completed, failed, or foreign-device orders (premium gate fast path).
+ */
+export async function shouldProviderPollOrderForVerify(deviceId, orderId) {
+  const d = String(deviceId ?? '').trim()
+  const oid = String(orderId ?? '').trim()
+  if (!d || !oid) return { poll: false, reason: 'missing_ids' }
+  const txn = await getTransactionByOrderId(oid)
+  if (!txn) return { poll: false, reason: 'hint_txn_not_found' }
+  const txnDev = txnDeviceIdForVerify(txn)
+  if (txnDev && txnDev !== d) {
+    return { poll: false, reason: 'hint_device_mismatch' }
+  }
+  const status = String(txn.status ?? '')
+  if (status !== 'pending') {
+    return { poll: false, reason: `hint_txn_${status || 'unknown'}` }
+  }
+  const ageMin = transactionCreatedAgeMinutes(txn)
+  const maxMin = verifyPendingMaxAgeMinutes()
+  if (ageMin > maxMin) {
+    return {
+      poll: false,
+      reason: 'hint_pending_stale',
+      age_min: Math.round(ageMin),
+      max_age_min: maxMin,
+    }
+  }
+  const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+  return {
+    poll: true,
+    reason: 'hint_recent_pending',
+    age_min: Math.round(ageMin),
+    provider: String(raw.payment_provider ?? 'zenopay'),
+    order_id: oid,
+  }
+}
+
+/** Provider poll decision for subscription verify / premium channel gate. */
+export async function shouldProviderPollForVerify(deviceId, orderIdHint) {
+  const d = String(deviceId ?? '').trim()
+  const hint = String(orderIdHint ?? '').trim()
+  if (hint) return shouldProviderPollOrderForVerify(d, hint)
+  const maxMin = verifyPendingMaxAgeMinutes()
+  if (!(await deviceHasRecentPendingSubscriptionPayment(d, maxMin))) {
+    return { poll: false, reason: 'no_recent_pending' }
+  }
+  const pend = await getLatestRecentPendingTransactionForDevice(d, maxMin)
+  if (!pend?.order_id) return { poll: false, reason: 'no_recent_pending_row' }
+  return shouldProviderPollOrderForVerify(d, String(pend.order_id))
+}
+
 /** Pending subscription payment started recently (in-flight checkout only). */
 export async function deviceHasRecentPendingSubscriptionPayment(deviceId, maxAgeMinutes = null) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return false
-  const mins = Math.max(
-    5,
-    Math.min(180, Number(maxAgeMinutes ?? process.env.SUBSCRIPTION_PENDING_MAX_AGE_MINUTES) || 45),
-  )
+  const mins = verifyPendingMaxAgeMinutes(maxAgeMinutes)
   const { rows } = await pool.query(
     `SELECT 1 AS ok
      FROM transactions
@@ -1246,6 +1322,26 @@ export async function getLatestPendingTransactionForDevice(deviceId) {
      ORDER BY created_at DESC
      LIMIT 1`,
     [d],
+  )
+  return rows[0] ?? null
+}
+
+/** Latest pending subscription txn within verify poll window (avoids stale pending rows). */
+export async function getLatestRecentPendingTransactionForDevice(deviceId, maxAgeMinutes = null) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const mins = verifyPendingMaxAgeMinutes(maxAgeMinutes)
+  const { rows } = await pool.query(
+    `SELECT *
+     FROM transactions
+     WHERE device_id = $1
+       AND status = 'pending'
+       AND plan_id IS NOT NULL
+       AND created_at >= now() - ($2::int * interval '1 minute')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [d, mins],
   )
   return rows[0] ?? null
 }

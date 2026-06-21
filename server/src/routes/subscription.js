@@ -71,11 +71,8 @@ function hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountI
   )
 }
 
-async function shouldReconcileProvidersForVerify(deviceId, orderIdHint, alreadyActive) {
-  if (alreadyActive) return false
-  const hint = String(orderIdHint ?? '').trim()
-  if (hint) return true
-  return billing.deviceHasRecentPendingSubscriptionPayment(deviceId)
+function verifySlowLogThresholdMs() {
+  return Math.max(500, Number(process.env.SUBSCRIPTION_VERIFY_SLOW_MS) || 1500)
 }
 
 function mapVerifyPlans(rows) {
@@ -111,12 +108,14 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   }
 
   if (hint) {
-    await guardedReconcile(hint)
+    const hintPoll = await billing.shouldProviderPollOrderForVerify(d, hint)
+    if (hintPoll.poll) {
+      await guardedReconcile(hint)
+    }
   } else {
-    const hasPending = await billing.deviceHasRecentPendingSubscriptionPayment(d)
-    if (hasPending) {
-      const pend = await billing.getLatestPendingTransactionForDevice(d)
-      if (pend?.order_id) await reconcileOrderWithZenoPay(String(pend.order_id))
+    const pend = await billing.getLatestRecentPendingTransactionForDevice(d)
+    if (pend?.order_id) {
+      await reconcileOrderWithZenoPay(String(pend.order_id))
     }
   }
 
@@ -323,34 +322,51 @@ function derivePlaybackGate(pub, modesPayload, securityPolicy = null, trialStatu
  * presence touch, reconcile + activate, then access state + plans.
  */
 async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint, phone = null, legacyDeviceId = null, accountId = null }) {
+  const verifyT0 = Date.now()
   const country = countryFromRequest(req)
   const d = String(deviceId ?? '').trim()
   const hint = String(orderIdHint ?? '').trim()
   const fp = String(fingerprint ?? '').trim()
   const paymentPhone = String(phone ?? '').trim()
   const channelId = parseChannelIdFromRequest(req)
+  const timing = {
+    deviceId: shortRef(d),
+    hint: hint ? shortRef(hint) : null,
+    path: req.path || req.url || '',
+  }
 
   void billing.touchLivePresence({ deviceId: d, country, channelId }).catch((e) => {
     console.error('[subscription-verify] touchLivePresence failed:', e)
   })
   liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId: d })
 
+  const tAccess0 = Date.now()
   let cached = getCachedSubscriptionAccess(d, fp)
   let row =
     cached !== undefined
       ? cached
       : await billing.getDeviceSubscriptionAccessState(d, fp)
   if (cached === undefined) setCachedSubscriptionAccess(d, fp, row)
+  timing.access_ms = Date.now() - tAccess0
+  timing.access_cache_hit = cached !== undefined
 
   const alreadyActive = row?.active_now === true && row?.blocked_now !== true
-  const shouldReconcile = await shouldReconcileProvidersForVerify(d, hint, alreadyActive)
+  timing.already_active = alreadyActive
+  const pollDecision = alreadyActive
+    ? { poll: false, reason: 'already_active' }
+    : await billing.shouldProviderPollForVerify(d, hint)
+  timing.poll_decision = pollDecision
 
-  if (shouldReconcile) {
+  if (pollDecision.poll) {
+    const tRec0 = Date.now()
     await reconcileOrdersForVerify(d, hint)
+    timing.reconcile_ms = Date.now() - tRec0
+    timing.provider_polled = true
     invalidateSubscriptionAccessCache(d)
     row = await billing.getDeviceSubscriptionAccessState(d, fp)
     setCachedSubscriptionAccess(d, fp, row)
   } else {
+    timing.skip_poll_reason = pollDecision.reason
     void billing.tryFinalizeActivationForDevice(d).catch((e) => {
       console.error('[subscription-verify] background finalize failed:', e)
     })
@@ -361,6 +377,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountId })
 
   if (needsMigrationLink) {
+    const tLink0 = Date.now()
     const link = await ensureSubscriptionLinkedForDevice(d, {
       fingerprint: fp || null,
       phone: paymentPhone || null,
@@ -382,11 +399,14 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     } else if (fp) {
       void tagActiveSubscriptionFingerprint(d, fp).catch(() => {})
     }
+    timing.migration_ms = Date.now() - tLink0
+    timing.migration_linked = link?.linked === true
   }
 
   const pub = rowToPublicStatus(row)
   const isActiveNow = pub.active === true
   const needsPlans = !isActiveNow
+  timing.active_result = isActiveNow
 
   const modesFallback = () => ({
     ok: false,
@@ -417,6 +437,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   let trialWatchSettings
   let plansRows
 
+  const tParallel0 = Date.now()
   if (isActiveNow && !needsMigrationLink) {
     ;[txnSummary, modesPayload, securityPolicy] = await Promise.all([
       billing.getLatestCompletedSubscriptionTxnSummary(d),
@@ -450,6 +471,8 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
       needsPlans ? billing.listActivePlansForVerify().catch(() => []) : Promise.resolve(null),
     ])
   }
+  timing.parallel_fetch_ms = Date.now() - tParallel0
+  timing.active_fast_path = isActiveNow && !needsMigrationLink
 
   const normalized = normalizeVerifyResponse(pub, txnSummary)
   const runtimeModes = appModesForVerify(modesPayload)
@@ -507,6 +530,27 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     limitedPlayback: playbackGate.limitedPlayback === true,
     securityLevel: playbackGate.securityLevel ?? null,
     securityBypass: playbackGate.securityBypass === true,
+  }
+
+  timing.total_ms = Date.now() - verifyT0
+  const slowThreshold = verifySlowLogThresholdMs()
+  if (timing.total_ms >= slowThreshold || timing.provider_polled) {
+    const logFn = timing.total_ms >= slowThreshold ? console.warn : console.log
+    const tag = timing.total_ms >= slowThreshold ? '[subscription-verify-slow]' : '[subscription-verify-timing]'
+    logFn(tag, {
+      ...timing,
+      sonicpesa: pollDecision.provider === 'sonicpesa' || timing.poll_decision?.provider === 'sonicpesa',
+      slow_reason:
+        timing.total_ms >= slowThreshold
+          ? timing.reconcile_ms >= 1000
+            ? 'provider_reconcile'
+            : timing.parallel_fetch_ms >= 1000
+              ? 'parallel_db_fetch'
+              : timing.access_ms >= 800
+                ? 'subscription_access_query'
+                : 'overall_latency'
+          : undefined,
+    })
   }
 
   if (!pub.active) {
