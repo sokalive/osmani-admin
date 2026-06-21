@@ -5,18 +5,24 @@ import { poolQuery } from './dbQuery.js'
 import { getPool, getPoolStats } from '../db/pool.js'
 
 export async function findSampleActiveDeviceId() {
+  const ids = await findSampleActiveDeviceIds(1)
+  return ids[0] ?? null
+}
+
+export async function findSampleActiveDeviceIds(limit = 10) {
   const pool = getPool()
-  if (!pool) return null
+  if (!pool) return []
+  const n = Math.max(1, Math.min(500, Math.trunc(Number(limit) || 10)))
   const { rows } = await poolQuery(
     `SELECT device_id
      FROM device_subscriptions
      WHERE status = 'active' AND expires_at > now()
      ORDER BY expires_at DESC
-     LIMIT 1`,
-    [],
-    { label: 'sample_active_device', timeoutMs: 3000 },
+     LIMIT $1`,
+    [n],
+    { label: 'sample_active_devices', timeoutMs: 5000 },
   )
-  return rows[0]?.device_id ? String(rows[0].device_id) : null
+  return rows.map((r) => String(r.device_id ?? '')).filter(Boolean)
 }
 
 export async function readPgConnectionStats() {

@@ -13,6 +13,7 @@ import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint, tr
 import { parseChannelIdFromRequest } from '../lib/analyticsPresence.js'
 import {
   getCachedSubscriptionAccess,
+  getStaleCachedSubscriptionAccess,
   invalidateSubscriptionAccessCache,
   setCachedSubscriptionAccess,
 } from '../lib/subscriptionAccessCache.js'
@@ -22,6 +23,7 @@ import {
   isVerifySlotPressureError,
   withVerifyDbSlot,
 } from '../lib/verifyDbResilience.js'
+import { coalesceVerifyAccessLoad } from '../lib/verifyAccessSingleflight.js'
 
 export const subscriptionRouter = Router()
 
@@ -445,15 +447,23 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
 
   if (cached === undefined) {
     try {
-      accessSnapshot = await withVerifyDbSlot(() => billing.getVerifyAccessSnapshot(d))
+      accessSnapshot = await withVerifyDbSlot(() =>
+        coalesceVerifyAccessLoad(d, () => billing.getVerifyAccessSnapshot(d)),
+      )
       row = accessSnapshot.row
     } catch (e) {
-      const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
-      if (fb) {
-        timing.access_pressure_fallback = true
-        return fb
+      const staleActive = getStaleCachedSubscriptionAccess(d, fp)
+      if (staleActive?.active_now === true && staleActive?.blocked_now !== true) {
+        row = staleActive
+        timing.stale_active_cache = true
+      } else {
+        const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
+        if (fb) {
+          timing.access_pressure_fallback = true
+          return fb
+        }
+        throw e
       }
-      throw e
     }
     setCachedSubscriptionAccess(d, fp, row)
   }
@@ -606,13 +616,20 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
 
   const tParallel0 = Date.now()
   if (isActiveNow && !needsMigrationLink) {
-    ;[txnSummary, modesPayload, securityPolicy] = await Promise.all([
-      billing.getLatestCompletedSubscriptionTxnSummary(d),
-      loadGlobalAppModesPayload().catch(() => modesFallback()),
-      import('../lib/deviceSecurityStore.js')
-        .then((m) => m.getPlaybackSecurityPolicy(d))
-        .catch(() => null),
-    ])
+    if (timing.access_cache_hit) {
+      modesPayload = await loadGlobalAppModesPayload().catch(() => modesFallback())
+      txnSummary = null
+      securityPolicy = null
+      timing.active_zero_db = true
+    } else {
+      ;[txnSummary, modesPayload, securityPolicy] = await Promise.all([
+        billing.getLatestCompletedSubscriptionTxnSummary(d).catch(() => null),
+        loadGlobalAppModesPayload().catch(() => modesFallback()),
+        import('../lib/deviceSecurityStore.js')
+          .then((m) => m.getPlaybackSecurityPolicy(d))
+          .catch(() => null),
+      ])
+    }
     trialStatus = trialDisabledPublic
     pendingGift = null
     trialWatchSettings = trialSettingsFallback

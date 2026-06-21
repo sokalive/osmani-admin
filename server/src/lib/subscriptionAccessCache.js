@@ -5,6 +5,15 @@ const DEFAULT_TTL_MS = Math.max(
   500,
   Math.min(15_000, Number(process.env.SUBSCRIPTION_ACCESS_CACHE_MS) || 3000),
 )
+const ACTIVE_TTL_MS = Math.max(
+  DEFAULT_TTL_MS,
+  Math.min(60_000, Number(process.env.SUBSCRIPTION_ACCESS_CACHE_ACTIVE_MS) || 30_000),
+)
+
+function ttlForRow(row) {
+  if (row?.active_now === true && row?.blocked_now !== true) return ACTIVE_TTL_MS
+  return DEFAULT_TTL_MS
+}
 
 /** @type {Map<string, { expiresAt: number, row: object|null }>} */
 const cache = new Map()
@@ -25,12 +34,19 @@ export function getCachedSubscriptionAccess(deviceId, fingerprint) {
   return hit.row
 }
 
-export function setCachedSubscriptionAccess(deviceId, fingerprint, row, ttlMs = DEFAULT_TTL_MS) {
+/** Returns last cached row even if TTL expired — for stale-active fallback only. */
+export function getStaleCachedSubscriptionAccess(deviceId, fingerprint) {
+  const hit = cache.get(cacheKey(deviceId, fingerprint))
+  return hit?.row
+}
+
+export function setCachedSubscriptionAccess(deviceId, fingerprint, row, ttlMs) {
   const d = String(deviceId ?? '').trim()
   if (!d) return
+  const ttl = ttlMs != null ? ttlMs : ttlForRow(row)
   cache.set(cacheKey(deviceId, fingerprint), {
     row: row ?? null,
-    expiresAt: Date.now() + ttlMs,
+    expiresAt: Date.now() + ttl,
   })
 }
 

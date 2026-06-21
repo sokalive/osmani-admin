@@ -45,8 +45,9 @@ import { getPool } from '../db/pool.js'
 import { getApiCacheStats } from '../lib/apiResponseCache.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
 import { getPoolStats } from '../db/pool.js'
-import { readPgConnectionStats, findSampleActiveDeviceId } from '../lib/pgConnectionStats.js'
+import { readPgConnectionStats, findSampleActiveDeviceId, findSampleActiveDeviceIds } from '../lib/pgConnectionStats.js'
 import { getVerifyDbStats } from '../lib/verifyDbResilience.js'
+import { readProcessCapacityStats } from '../lib/processCapacityStats.js'
 import { isTrackedMobilePath, recordClientApiTelemetry } from '../lib/clientApiTelemetry.js'
 
 const FILES = {
@@ -240,9 +241,12 @@ restApi.get('/health/db', async (_req, res) => {
     commit: getServerGitCommit(),
     pg,
     verify_db: getVerifyDbStats(),
+    process: readProcessCapacityStats(),
   }
   if (String(process.env.BENCHMARK_SAMPLE_DEVICE || '').trim() === '1') {
     body.sample_active_device_id = await findSampleActiveDeviceId()
+    const sampleLimit = Math.min(500, Math.max(1, Number(process.env.BENCHMARK_SAMPLE_DEVICE_LIMIT) || 200))
+    body.sample_active_device_ids = await findSampleActiveDeviceIds(sampleLimit)
   }
   res.json(body)
 })
