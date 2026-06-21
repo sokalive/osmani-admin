@@ -19,7 +19,7 @@ import {
 import {
   canUseInactiveVerifyFallback,
   isDbTimeoutOrPressureError,
-  isVerifyDbPressure,
+  isVerifySlotPressureError,
   withVerifyDbSlot,
 } from '../lib/verifyDbResilience.js'
 
@@ -380,7 +380,6 @@ async function buildInactiveVerifyFallbackResponse(req, deviceId) {
   console.warn('[subscription-verify-fallback]', {
     deviceId: shortRef(deviceId),
     path: req.path || req.url || '',
-    pool_pressure: isVerifyDbPressure(),
   })
   return withGift
 }
@@ -398,8 +397,8 @@ function verifyFallbackContext({ deviceId, orderIdHint, fingerprint, phone, lega
 }
 
 async function maybeInactiveVerifyFallback(req, ctx, err) {
-  if (!isDbTimeoutOrPressureError(err)) return null
   if (!canUseInactiveVerifyFallback(ctx)) return null
+  if (!isVerifySlotPressureError(err) && !isDbTimeoutOrPressureError(err)) return null
   try {
     return await buildInactiveVerifyFallbackResponse(req, ctx.deviceId || '')
   } catch (fallbackErr) {
@@ -445,15 +444,6 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   let accessSnapshot = null
 
   if (cached === undefined) {
-    if (
-      canUseInactiveVerifyFallback(fallbackCtx) &&
-      isVerifyDbPressure()
-    ) {
-      timing.access_cache_hit = false
-      timing.access_fast_path = true
-      timing.access_pressure_fallback = true
-      return buildInactiveVerifyFallbackResponse(req, d)
-    }
     try {
       accessSnapshot = await withVerifyDbSlot(() => billing.getVerifyAccessSnapshot(d))
       row = accessSnapshot.row

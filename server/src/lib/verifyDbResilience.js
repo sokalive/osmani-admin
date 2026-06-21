@@ -42,9 +42,17 @@ export function isDbTimeoutOrPressureError(err) {
     msg.includes('timeout exceeded when trying to connect') ||
     msg.includes('query_timeout') ||
     msg.includes('db_pressure') ||
+    msg.includes('verify_db_slot_wait') ||
     msg.includes('connection terminated') ||
     msg.includes('too many clients')
   )
+}
+
+/** Fallback only for slot-queue pressure — not arbitrary query timeouts (may hide paid state). */
+export function isVerifySlotPressureError(err) {
+  if (err instanceof DbPressureError) return true
+  const msg = String(err?.message || err || '').toLowerCase()
+  return msg.includes('verify_db_slot_wait')
 }
 
 /**

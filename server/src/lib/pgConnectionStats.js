@@ -11,7 +11,7 @@ export async function findSampleActiveDeviceId() {
     `SELECT device_id
      FROM device_subscriptions
      WHERE status = 'active' AND expires_at > now()
-     ORDER BY updated_at DESC
+     ORDER BY expires_at DESC
      LIMIT 1`,
     [],
     { label: 'sample_active_device', timeoutMs: 3000 },
