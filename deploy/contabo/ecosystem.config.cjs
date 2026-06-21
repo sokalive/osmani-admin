@@ -34,6 +34,20 @@ const pm2Env = {
   ...fileEnv,
 }
 
+const VPS_POOL_DEFAULTS = {
+  OSMANI_VPS: '1',
+  PG_POOL_MAX: '15',
+  PG_POOL_CONNECT_TIMEOUT_MS: '5000',
+  PG_QUERY_TIMEOUT_MS: '8000',
+  APP_SETTINGS_CACHE_MS: '30000',
+  GLOBAL_MODES_CACHE_MS: '15000',
+  SUBSCRIPTION_ACCESS_CACHE_MS: '5000',
+  PG_POOL_STATS: '1',
+}
+for (const [key, val] of Object.entries(VPS_POOL_DEFAULTS)) {
+  if (!String(pm2Env[key] ?? '').trim()) pm2Env[key] = val
+}
+
 for (const key of SECRET_ENV_KEYS) {
   const val = String(fileEnv[key] ?? '').trim()
   if (val) pm2Env[key] = val

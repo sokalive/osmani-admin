@@ -6,7 +6,8 @@ import {
   applyAppUpdateClientDecision,
   clientVersionFromRequest,
 } from '../lib/appUpdateTargeting.js'
-import { getPool } from '../db/pool.js'
+import { getPool, getPoolStats } from '../db/pool.js'
+import { poolQuery } from '../lib/dbQuery.js'
 import { isBunnyCdnHost, resolveHostedApkDownloadUrl } from '../lib/cdnAssets.js'
 import { parseApkMetadata } from '../lib/apkMetadata.js'
 import { APK_UPLOADS_DIR, uploadApkFile } from '../lib/apkUploadMulter.js'
@@ -213,7 +214,13 @@ export async function loadAppUpdatePublicPayload(configVersion, clientVersionCod
     )
     return appUpdateToOtaPayload(data, configVersion)
   }
-  let data = toPublicConfig(await loadRowsByKey(pool), 'runtime')
+  let data
+  try {
+    data = toPublicConfig(await loadRowsByKey(pool), 'runtime')
+  } catch (e) {
+    console.error('[app-update] loadAppUpdatePublicPayload fallback', e?.message || e)
+    data = toPublicConfig({ ...DEFAULTS, ...(_appSettingsCache || {}) }, 'runtime-stale')
+  }
   if (clientVersionCode > 0) {
     data = applyAppUpdateClientDecision(data, clientVersionCode)
   } else {
@@ -237,52 +244,71 @@ function publishAppUpdateChanged(action, decisionData, extra = {}) {
   return app_update
 }
 
-async function ensureAppSettingsTable(pool) {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS app_settings (
+let _appSettingsTableReady = false
+
+async function ensureAppSettingsTableOnce(pool) {
+  if (_appSettingsTableReady) return
+  await poolQuery(
+    `CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT '',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `)
+    );`,
+    [],
+    { label: 'app_settings_ddl', timeoutMs: 15_000 },
+  )
   const rows = Object.entries(DEFAULTS)
   for (const [key, value] of rows) {
-    await pool.query(
+    await poolQuery(
       `INSERT INTO app_settings (key, value)
        VALUES ($1, $2)
        ON CONFLICT (key) DO NOTHING`,
       [key, value],
+      { label: 'app_settings_seed' },
     )
   }
+  _appSettingsTableReady = true
 }
 
 async function loadRowsByKey(pool) {
-  await ensureAppSettingsTable(pool)
   const now = Date.now()
   if (_appSettingsCache && now - _appSettingsCacheAt < APP_SETTINGS_CACHE_MS) {
     return _appSettingsCache
   }
-  const { rows } = await pool.query(
-    `SELECT key, value
-     FROM app_settings
-     WHERE key = ANY($1::text[])`,
-    [Object.values(UPDATE_KEYS)],
-  )
-  const byKey = {}
-  for (const row of rows) byKey[String(row.key)] = String(row.value ?? '')
-  for (const [k, v] of Object.entries(DEFAULTS)) {
-    if (!(k in byKey)) byKey[k] = v
+  try {
+    await ensureAppSettingsTableOnce(pool)
+    const { rows } = await poolQuery(
+      `SELECT key, value
+       FROM app_settings
+       WHERE key = ANY($1::text[])`,
+      [Object.values(UPDATE_KEYS)],
+      { label: 'app_settings_read' },
+    )
+    const byKey = {}
+    for (const row of rows) byKey[String(row.key)] = String(row.value ?? '')
+    for (const [k, v] of Object.entries(DEFAULTS)) {
+      if (!(k in byKey)) byKey[k] = v
+    }
+    _appSettingsCache = byKey
+    _appSettingsCacheAt = now
+    return byKey
+  } catch (e) {
+    if (_appSettingsCache) {
+      console.warn('[app-update] DB read failed — serving stale app_settings cache', {
+        error: String(e?.message || e),
+        pool: getPoolStats(),
+      })
+      return _appSettingsCache
+    }
+    throw e
   }
-  _appSettingsCache = byKey
-  _appSettingsCacheAt = now
-  return byKey
 }
 
 let _appSettingsCache = null
 let _appSettingsCacheAt = 0
 const APP_SETTINGS_CACHE_MS = Math.max(
   2000,
-  Math.min(30_000, Number(process.env.APP_SETTINGS_CACHE_MS) || 8000),
+  Math.min(120_000, Number(process.env.APP_SETTINGS_CACHE_MS) || 30_000),
 )
 
 export function invalidateAppSettingsCache() {
@@ -381,7 +407,7 @@ async function upsertSetting(pool, key, value) {
 }
 
 async function writeSettingsMap(pool, map) {
-  await ensureAppSettingsTable(pool)
+  await ensureAppSettingsTableOnce(pool)
   for (const [key, value] of Object.entries(map)) {
     await upsertSetting(pool, key, value)
   }
@@ -459,7 +485,7 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       [UPDATE_KEYS.packageName]: text(body.packageName, 256),
     }
 
-    await ensureAppSettingsTable(pool)
+    await ensureAppSettingsTableOnce(pool)
     let writes = 0
     for (const [key, value] of Object.entries(next)) {
       const result = await pool.query(
@@ -727,69 +753,60 @@ appUpdateRouter.post('/settings/app-update/parse-playstore', requireAdminPanelAc
   }
 })
 
+function updateCheckJsonFromOta(ota) {
+  const o = ota && typeof ota === 'object' ? ota : {}
+  return {
+    decision: o.decision,
+    source: o.source,
+    apk_url: o.apk_url,
+    apk_sha256: o.apk_sha256,
+    playstore_url: o.playstore_url,
+    auto_download: o.auto_download,
+    server_time: o.server_time,
+    notice: o.notice,
+    update_title: o.update_title,
+    update_message: o.update_message,
+    version_code: o.version_code,
+    version_name: o.version_name,
+    package_name: o.package_name,
+    ...(o.update_target_reason ? { update_target_reason: o.update_target_reason } : {}),
+  }
+}
+
+async function buildUpdateCheckResponse(req) {
+  const clientCode = clientVersionFromRequest(req)
+  const snap = liveSyncBus.snapshot()
+  const ota = await loadAppUpdatePublicPayload(snap.configVersion, clientCode)
+  return updateCheckJsonFromOta(ota)
+}
+
 appUpdateRouter.get('/update-check', async (req, res) => {
   try {
-    const pool = getPool()
-    if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    let data = toPublicConfig(await loadRowsByKey(pool), 'update-check:get', req)
-    const clientCode = clientVersionFromRequest(req)
-    if (clientCode > 0) {
-      data = applyAppUpdateClientDecision(data, clientCode)
-    } else {
-      data = { ...data, decision: 'NONE', update_target_reason: 'no_client_version' }
-    }
-    return res.json({
-      decision: data.decision,
-      source: data.source,
-      apk_url: data.apk_url,
-      apk_sha256: data.apk_sha256,
-      playstore_url: data.playstore_url,
-      auto_download: data.auto_download,
-      server_time: data.server_time,
-      notice: data.notice,
-      update_title: data.update_title,
-      update_message: data.update_message,
-      version_code: data.version_code,
-      version_name: data.version_name,
-      package_name: data.package_name,
-      ...(data.update_target_reason ? { update_target_reason: data.update_target_reason } : {}),
-    })
+    if (!getPool()) return res.status(503).json({ error: 'Database not configured' })
+    return res.json(await buildUpdateCheckResponse(req))
   } catch (e) {
     console.error('[update-check] GET', e)
-    return res.status(500).json({ error: String(e.message || e) })
+    const clientCode = clientVersionFromRequest(req)
+    const stale = applyAppUpdateClientDecision(
+      toPublicConfig({ ...DEFAULTS }, 'update-check:stale'),
+      clientCode,
+    )
+    return res.json(updateCheckJsonFromOta(appUpdateToOtaPayload(stale, 0)))
   }
 })
 
 appUpdateRouter.post('/update-check', async (req, res) => {
   try {
-    const pool = getPool()
-    if (!pool) return res.status(503).json({ error: 'Database not configured' })
-    let data = toPublicConfig(await loadRowsByKey(pool), 'update-check:post', req)
-    const clientCode = clientVersionFromRequest(req)
-    if (clientCode > 0) {
-      data = applyAppUpdateClientDecision(data, clientCode)
-    } else {
-      data = { ...data, decision: 'NONE', update_target_reason: 'no_client_version' }
-    }
-    return res.json({
-      decision: data.decision,
-      source: data.source,
-      apk_url: data.apk_url,
-      apk_sha256: data.apk_sha256,
-      playstore_url: data.playstore_url,
-      auto_download: data.auto_download,
-      server_time: data.server_time,
-      notice: data.notice,
-      update_title: data.update_title,
-      update_message: data.update_message,
-      version_code: data.version_code,
-      version_name: data.version_name,
-      package_name: data.package_name,
-      ...(data.update_target_reason ? { update_target_reason: data.update_target_reason } : {}),
-    })
+    if (!getPool()) return res.status(503).json({ error: 'Database not configured' })
+    return res.json(await buildUpdateCheckResponse(req))
   } catch (e) {
     console.error('[update-check] POST', e)
-    return res.status(500).json({ error: String(e.message || e) })
+    const clientCode = clientVersionFromRequest(req)
+    const stale = applyAppUpdateClientDecision(
+      toPublicConfig({ ...DEFAULTS }, 'update-check:stale'),
+      clientCode,
+    )
+    return res.json(updateCheckJsonFromOta(appUpdateToOtaPayload(stale, 0)))
   }
 })
 

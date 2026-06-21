@@ -245,6 +245,10 @@ async function main() {
     )
     await ensureAllApiDataFiles()
 
+    void import('./lib/warmApiCaches.js')
+      .then((m) => m.warmApiCaches())
+      .catch((e) => console.warn('[warm-cache] startup:', e?.message || e))
+
     if (process.env.AUTO_RECONCILE_UNBLOCKED_PLAYBACK !== '0') {
       const { reconcileUnblockedPlaybackAccess } = await import(
         './lib/deviceSecurityPlaybackAudit.js'
