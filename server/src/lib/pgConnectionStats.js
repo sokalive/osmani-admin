@@ -4,6 +4,21 @@
 import { poolQuery } from './dbQuery.js'
 import { getPool, getPoolStats } from '../db/pool.js'
 
+export async function findSampleActiveDeviceId() {
+  const pool = getPool()
+  if (!pool) return null
+  const { rows } = await poolQuery(
+    `SELECT device_id
+     FROM device_subscriptions
+     WHERE status = 'active' AND expires_at > now()
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [],
+    { label: 'sample_active_device', timeoutMs: 3000 },
+  )
+  return rows[0]?.device_id ? String(rows[0].device_id) : null
+}
+
 export async function readPgConnectionStats() {
   const pool = getPool()
   if (!pool) {

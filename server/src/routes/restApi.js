@@ -45,7 +45,7 @@ import { getPool } from '../db/pool.js'
 import { getApiCacheStats } from '../lib/apiResponseCache.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
 import { getPoolStats } from '../db/pool.js'
-import { readPgConnectionStats } from '../lib/pgConnectionStats.js'
+import { readPgConnectionStats, findSampleActiveDeviceId } from '../lib/pgConnectionStats.js'
 import { getVerifyDbStats } from '../lib/verifyDbResilience.js'
 import { isTrackedMobilePath, recordClientApiTelemetry } from '../lib/clientApiTelemetry.js'
 
@@ -234,13 +234,17 @@ restApi.get('/health', (_req, res) => {
 restApi.get('/health/db', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
   const pg = await readPgConnectionStats()
-  res.json({
+  const body = {
     ok: pg.ok === true,
     time: new Date().toISOString(),
     commit: getServerGitCommit(),
     pg,
     verify_db: getVerifyDbStats(),
-  })
+  }
+  if (String(process.env.BENCHMARK_SAMPLE_DEVICE || '').trim() === '1') {
+    body.sample_active_device_id = await findSampleActiveDeviceId()
+  }
+  res.json(body)
 })
 
 /** Admin-only: DB fingerprint + sample rows to verify read/write same Postgres as UI. */

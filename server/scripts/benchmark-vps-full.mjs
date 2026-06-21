@@ -6,7 +6,7 @@
  *   VPS_API=https://api.osmanitv.com PAID_DEVICE_ID=abc123 node scripts/benchmark-vps-full.mjs
  */
 const VPS = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/+$/, '')
-const PAID_DEVICE_ID = String(process.env.PAID_DEVICE_ID || '').trim()
+let PAID_DEVICE_ID = String(process.env.PAID_DEVICE_ID || '').trim()
 const TARGET_MS = 2000
 
 async function timed(path, opts = {}) {
@@ -118,6 +118,10 @@ async function main() {
   const dbHealth = await timed('/api/health/db')
   if (dbHealth.ok) {
     console.log('DB stats:', JSON.stringify(dbHealth.json?.pg || {}, null, 0))
+    if (!PAID_DEVICE_ID && dbHealth.json?.sample_active_device_id) {
+      PAID_DEVICE_ID = String(dbHealth.json.sample_active_device_id).trim()
+      console.log('Using sample_active_device_id from /api/health/db for paid probes')
+    }
   }
 
   const warm1 = await sequentialPass('warm-pass-1')
