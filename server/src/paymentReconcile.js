@@ -187,7 +187,7 @@ export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
   if (rawPayload.payment_provider === 'auraxpay') {
     const arow = await billing.getAuraxpayRow()
     const acred = resolveAuraxpayCredentials(arow || {})
-    const verifyId = String(rawPayload.provider_order_id ?? txn.external_id ?? oid).trim()
+    const verifyId = String(oid).trim()
     const z = await auraxpayGetOrderStatus(acred, verifyId)
     out.providerHttpOk = z.ok === true
     log('auraxpay order-status', {

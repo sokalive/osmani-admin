@@ -12,6 +12,7 @@ import {
   detectAuraxpayApiStyle,
   normalizeAuraxpayApiEndpoint,
   normalizeAuraxpayCollectUrl,
+  listAuraxNativeCollectCandidateUrls,
   resolveAuraxpayCollectPostUrl,
 } from '../src/lib/payments/providers/auraxpay.js'
 
@@ -67,6 +68,17 @@ assert(
   detectAuraxpayApiStyle(cred) === 'aurax' &&
     resolveAuraxpayCollectPostUrl(cred) === 'https://api.auraxpay.net/v1/payments/collect',
   resolveAuraxpayCollectPostUrl(cred),
+)
+assert(
+  'native fallback URLs',
+  (() => {
+    const urls = listAuraxNativeCollectCandidateUrls(cred)
+    return (
+      urls.length === 2 &&
+      urls[0] === 'https://api.auraxpay.net/v1/payments/collect' &&
+      urls[1] === 'https://api.auraxpay.net/v1/payments/create-order'
+    )
+  })(),
 )
 assert(
   'normalize strips wrong .com host path and adds /v1',

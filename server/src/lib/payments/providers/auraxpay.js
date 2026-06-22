@@ -9,6 +9,7 @@ import {
   webhookSuccess,
 } from '../../../handlers/zenoPayWebhook.js'
 import { formatPhone } from '../../../zenopayClient.js'
+import { invalidateSubscriptionAccessCache } from '../../../lib/subscriptionAccessCache.js'
 
 const DEFAULT_API_BASE = ''
 const LOG_PREFIX = '[auraxpay]'
@@ -30,6 +31,18 @@ export function isAuraxpayConfigured(cred) {
   return Boolean(String(c.apiKey ?? '').trim()) && Boolean(String(c.apiEndpoint ?? '').trim())
 }
 
+/** Merchant account id is the payout phone — normalize to 255XXXXXXXXX. */
+export function normalizeAuraxpayAccountId(raw) {
+  let p = String(raw ?? '')
+    .trim()
+    .replace(/\D/g, '')
+  if (!p) return ''
+  if (p.startsWith('0')) p = `255${p.slice(1)}`
+  if (!p.startsWith('255') && p.length === 9) p = `255${p}`
+  if (/^255\d{9}$/.test(p)) return p
+  return p
+}
+
 export function resolveAuraxpayCredentials(row) {
   const r = row && typeof row === 'object' ? row : {}
   const rawEndpoint = String(
@@ -48,10 +61,12 @@ export function resolveAuraxpayCredentials(row) {
       r.webhook_secret ||
       '',
   ).trim()
+  const accountRaw = String(process.env.AURAXPAY_ACCOUNT_ID || r.account_id || '').trim()
+  const accountId = accountRaw ? normalizeAuraxpayAccountId(accountRaw) : ''
   return {
     apiKey,
     signingSecret,
-    accountId: String(process.env.AURAXPAY_ACCOUNT_ID || r.account_id || '').trim(),
+    accountId,
     apiEndpoint,
     webhookUrl: String(process.env.AURAXPAY_WEBHOOK_URL || r.webhook_url || '').trim(),
     environment: String(r.environment || 'sandbox').trim(),
@@ -203,15 +218,17 @@ export function detectAuraxpayApiStyle(cred) {
   return 'aurax'
 }
 
-/** Candidate POST URLs for native Aurax (collect only — create-order alias not used on api.auraxpay.*). */
+/** Candidate POST URLs for native Aurax (collect first; create-order fallback on 404). */
 export function listAuraxNativeCollectCandidateUrls(cred) {
   const primary = resolveAuraxpayCollectPostUrl(cred)
   if (!primary) return []
   if (isAuraxpayNativeHost(cred)) {
+    const base = apiBase(cred).replace(/\/+$/, '')
     const collect = primary.endsWith('/payments/collect')
       ? primary
-      : normalizeAuraxpayCollectUrl(`${apiBase(cred)}${AURAXPAY_NATIVE_COLLECT_PATH}`)
-    return [collect]
+      : normalizeAuraxpayCollectUrl(`${base}${AURAXPAY_NATIVE_COLLECT_PATH}`)
+    const createOrder = normalizeAuraxpayCollectUrl(`${base}/payments/create-order`)
+    return [...new Set([collect, createOrder].filter(Boolean))]
   }
   const urls = [primary]
   try {
@@ -228,11 +245,30 @@ export function listAuraxNativeCollectCandidateUrls(cred) {
   return [...new Set(urls.map((x) => x.replace(/\/+$/, '')))]
 }
 
+function isLegacyNativeAuraxCollectUrl(url) {
+  const lower = String(url || '').toLowerCase()
+  return (
+    lower.includes('/payment/create_order') ||
+    lower.includes('/payments/create-order') ||
+    lower.includes('/api/create-order')
+  )
+}
+
 export function resolveAuraxpayCollectPostUrl(cred) {
   const envFull = String(
     process.env.AURAXPAY_COLLECT_URL || process.env.AURAXPAY_PAYMENT_URL || '',
   ).trim()
-  if (envFull) return normalizeAuraxpayCollectUrl(envFull.replace(/\/+$/, ''))
+  if (envFull) {
+    const normalized = normalizeAuraxpayCollectUrl(envFull.replace(/\/+$/, ''))
+    if (isAuraxpayNativeHost(cred) && isLegacyNativeAuraxCollectUrl(normalized)) {
+      console.warn(LOG_PREFIX, 'ignoring legacy AURAXPAY_COLLECT_URL on native auraxpay host', {
+        configured: envFull,
+        using: AURAXPAY_NATIVE_COLLECT_PATH,
+      })
+    } else {
+      return normalized
+    }
+  }
 
   const ep = String(cred?.apiEndpoint || '').trim()
   if (!ep) return ''
@@ -291,6 +327,13 @@ function authHeaders(cred, style = 'aurax') {
       headers['x-signing-secret'] = signingSecret
       headers['X-SECRET-KEY'] = signingSecret
     }
+    const accountId = normalizeAuraxpayAccountId(
+      String(process.env.AURAXPAY_ACCOUNT_ID || cred?.accountId || '').trim(),
+    )
+    if (accountId) {
+      headers['X-Account-Id'] = accountId
+      headers['X-Merchant-Id'] = accountId
+    }
     return headers
   }
   const headers = {
@@ -301,7 +344,9 @@ function authHeaders(cred, style = 'aurax') {
   }
   const secretKey = String(process.env.AURAXPAY_SECRET_KEY || '').trim()
   if (secretKey) headers['X-SECRET-KEY'] = secretKey
-  const accountId = String(process.env.AURAXPAY_ACCOUNT_ID || cred.accountId || '').trim()
+  const accountId = normalizeAuraxpayAccountId(
+    String(process.env.AURAXPAY_ACCOUNT_ID || cred.accountId || '').trim(),
+  )
   if (accountId) {
     headers['X-Account-Id'] = accountId
     headers['X-Merchant-Id'] = accountId
@@ -360,7 +405,9 @@ export function buildCreateOrderPayload(cred, { phone, amount, orderId, currency
   const apiStyle = detectAuraxpayApiStyle(cred)
   const amountInt = Math.round(Number(amount))
   const merchantRef = String(orderId ?? '').trim()
-  const accountId = String(process.env.AURAXPAY_ACCOUNT_ID || cred?.accountId || '').trim()
+  const accountId = normalizeAuraxpayAccountId(
+    String(process.env.AURAXPAY_ACCOUNT_ID || cred?.accountId || '').trim(),
+  )
   const webhookUrl = String(process.env.AURAXPAY_WEBHOOK_URL || cred?.webhookUrl || '').trim()
 
   if (apiStyle === 'zenopay') {
@@ -464,7 +511,9 @@ export function normalizeResponse(raw, httpStatus = 0) {
   ).trim()
   const message = String(body.message ?? data.message ?? '').trim()
   const succeeded =
-    ['SUCCESS', 'COMPLETED', 'PAID', 'APPROVED'].includes(paymentStatus.toUpperCase()) ||
+    ['SUCCESS', 'COMPLETED', 'PAID', 'APPROVED', 'SUCCEED', 'SUCCESSFUL'].includes(
+      paymentStatus.toUpperCase(),
+    ) ||
     webhookSuccess(body)
   const failed =
     ['FAILED', 'DECLINED', 'CANCELLED', 'REJECTED', 'USERCANCELLED'].includes(
@@ -498,7 +547,9 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
   }
   const built = buildCreateOrderPayload(cred, { phone, amount, orderId, currency })
   const { payload, buyerPhone: bp, amountInt, merchantRef, apiStyle } = built
-  const accountId = String(process.env.AURAXPAY_ACCOUNT_ID || cred?.accountId || '').trim()
+  const accountId = normalizeAuraxpayAccountId(
+    String(process.env.AURAXPAY_ACCOUNT_ID || cred?.accountId || '').trim(),
+  )
   const webhookUrl = String(process.env.AURAXPAY_WEBHOOK_URL || cred?.webhookUrl || '').trim()
 
   if (apiStyle === 'zenopay') {
@@ -574,6 +625,20 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
         httpOk: false,
         status: 0,
         body: { error: 'amount must be at least 1000 TZS for Aurax mobile money' },
+        normalized: null,
+        requestPayload: payload,
+        apiStyle,
+      }
+    }
+    if (apiStyle === 'aurax' && (!accountId || !/^255\d{9}$/.test(accountId))) {
+      return {
+        ok: false,
+        httpOk: false,
+        status: 0,
+        body: {
+          error:
+            'account_id (merchant phone 255XXXXXXXXX) is required — set Merchant Account ID in Aurax Pay settings or AURAXPAY_ACCOUNT_ID',
+        },
         normalized: null,
         requestPayload: payload,
         apiStyle,
@@ -864,6 +929,7 @@ export async function handleWebhook(req, res, deps) {
         order_id: merchantOrderId,
       })
       if (!act.skipped && act.deviceId) {
+        invalidateSubscriptionAccessCache(act.deviceId)
         deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
         liveSyncBus.publish('analytics.subscription_updated', {
           topics: ['analytics'],
