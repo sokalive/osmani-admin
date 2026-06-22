@@ -1,7 +1,7 @@
 /**
  * Verify-path DB resilience: concurrency slots + safe inactive fallback under pool pressure.
  */
-import { getPoolStats } from '../db/pool.js'
+import { getPoolStats, isVpsProduction, poolMaxConnections } from '../db/pool.js'
 
 export class DbPressureError extends Error {
   constructor(message = 'db_pressure') {
@@ -12,7 +12,12 @@ export class DbPressureError extends Error {
 }
 
 function maxVerifyDbConcurrent() {
-  return Math.max(4, Math.min(40, Number(process.env.VERIFY_DB_MAX_CONCURRENT) || 25))
+  const configured = Math.max(4, Math.min(40, Number(process.env.VERIFY_DB_MAX_CONCURRENT) || 25))
+  if (isVpsProduction()) return configured
+  // Render starter pool (max 8): cap verify slots so LISTEN relay + routes keep headroom.
+  const poolMax = getPoolStats().max || poolMaxConnections()
+  const ceiling = Math.max(2, poolMax - 2)
+  return Math.min(configured, ceiling)
 }
 
 function verifyDbSlotWaitMs() {

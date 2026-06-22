@@ -16,6 +16,11 @@ import {
 import { wireApiCacheInvalidation } from './lib/apiCacheInvalidation.js'
 import { wireLiveSyncRelay } from './lib/liveSyncRelay.js'
 import { ensureMpingoRoutingStartupSync } from './lib/mpingoRoutingSync.js'
+import {
+  isRenderRuntime,
+  markStartupFailed,
+  markStartupReady,
+} from './lib/startupReadiness.js'
 import { getStreamDeliveryHealthSnapshot } from './lib/streamDelivery.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
 import { apiRequestTimingMiddleware } from './middleware/apiRequestTiming.js'
@@ -230,10 +235,60 @@ app.use((err, req, res, _next) => {
 })
 
 // --- START SERVER ---
+const STARTUP_DEFERRED_RETRIES = isRenderRuntime() ? 8 : 3
+const STARTUP_RETRY_BASE_MS = isRenderRuntime() ? 2000 : 1000
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function runDeferredStartup() {
+  for (let attempt = 1; attempt <= STARTUP_DEFERRED_RETRIES; attempt++) {
+    try {
+      await wireLiveSyncRelay()
+      await ensureAllApiDataFiles()
+      markStartupReady()
+
+      void import('./lib/warmApiCaches.js')
+        .then((m) => m.warmApiCaches())
+        .catch((e) => console.warn('[warm-cache] startup:', e?.message || e))
+
+      if (process.env.AUTO_RECONCILE_UNBLOCKED_PLAYBACK !== '0') {
+        const { reconcileUnblockedPlaybackAccess } = await import(
+          './lib/deviceSecurityPlaybackAudit.js'
+        )
+        reconcileUnblockedPlaybackAccess({ emitUpdates: true })
+          .then((out) => {
+            console.log('[security] auto reconcile unblocked playback:', {
+              scanned: out.devices_scanned,
+              manual_cleared: out.manual_admin_blocked_cleared,
+              intelligence: out.intelligence_unblocked,
+              post_affected: out.post_reconcile?.total_affected,
+            })
+          })
+          .catch((e) => console.error('[security] auto reconcile failed:', e))
+      }
+
+      console.log('[startup] deferred init complete')
+      return
+    } catch (err) {
+      markStartupFailed(err)
+      console.error(
+        `[startup] deferred init attempt ${attempt}/${STARTUP_DEFERRED_RETRIES} failed:`,
+        err?.message || err,
+      )
+      if (attempt === STARTUP_DEFERRED_RETRIES) {
+        console.error('[startup] FATAL: deferred init exhausted retries')
+        process.exit(1)
+      }
+      await sleep(STARTUP_RETRY_BASE_MS * attempt)
+    }
+  }
+}
+
 async function main() {
   try {
     wireApiCacheInvalidation()
-    await wireLiveSyncRelay()
     ensureMpingoRoutingStartupSync()
     assertUploadStorageReady()
     logUploadStorageDiagnostics()
@@ -243,30 +298,11 @@ async function main() {
         ? `[cdn] Bunny enabled → ${cdnHealth.cdnBaseUrl} (origin fallback ${cdnHealth.originBaseUrl})`
         : '[cdn] Bunny not configured — static images served from API origin (set BUNNY_CDN_BASE_URL)',
     )
-    await ensureAllApiDataFiles()
-
-    void import('./lib/warmApiCaches.js')
-      .then((m) => m.warmApiCaches())
-      .catch((e) => console.warn('[warm-cache] startup:', e?.message || e))
-
-    if (process.env.AUTO_RECONCILE_UNBLOCKED_PLAYBACK !== '0') {
-      const { reconcileUnblockedPlaybackAccess } = await import(
-        './lib/deviceSecurityPlaybackAudit.js'
-      )
-      reconcileUnblockedPlaybackAccess({ emitUpdates: true })
-        .then((out) => {
-          console.log('[security] auto reconcile unblocked playback:', {
-            scanned: out.devices_scanned,
-            manual_cleared: out.manual_admin_blocked_cleared,
-            intelligence: out.intelligence_unblocked,
-            post_affected: out.post_reconcile?.total_affected,
-          })
-        })
-        .catch((e) => console.error('[security] auto reconcile failed:', e))
-    }
 
     const server = app.listen(PORT, () => {
-      console.log(`🚀 API listening on port ${PORT}`)
+      console.log(
+        `🚀 API listening on port ${PORT}${isRenderRuntime() ? ' (Render early bind)' : ''}`,
+      )
     })
 
     server.on('error', (err) => {
@@ -277,6 +313,8 @@ async function main() {
       }
       process.exit(1)
     })
+
+    void runDeferredStartup()
   } catch (err) {
     console.error('❌ Failed to start server:', err)
     process.exit(1)

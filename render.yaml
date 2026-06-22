@@ -40,6 +40,7 @@ services:
     branch: main
     buildCommand: npm ci
     startCommand: npm start
+    healthCheckPath: /api/health
     envVars:
       - key: UPLOAD_DIR
         value: /var/render/media
@@ -54,6 +55,9 @@ services:
         value: "0"
       - key: PG_POOL_MAX
         value: "8"
+      # Render pool max 8 — keep verify slots below pool headroom (LISTEN relay holds 1 client).
+      - key: VERIFY_DB_MAX_CONCURRENT
+        value: "6"
       - key: STREAM_DELIVERY_MODE
         value: hybrid
       - key: DIRECT_STREAM_SIGNING_ENABLED

@@ -6,7 +6,7 @@ if (!process.env.DATABASE_URL) {
   console.warn('⚠️  DATABASE_URL is not set — channel routes will fail until PostgreSQL is configured.')
 }
 
-function isVpsProduction() {
+export function isVpsProduction() {
   return (
     String(process.env.OSMANI_VPS || '').trim() === '1' ||
     /api\.osmanitv\.com/i.test(String(process.env.BASE_URL || '')) ||
@@ -14,7 +14,7 @@ function isVpsProduction() {
   )
 }
 
-function poolMaxConnections() {
+export function poolMaxConnections() {
   const n = Number(process.env.PG_POOL_MAX)
   if (Number.isFinite(n) && n >= 1) return Math.min(30, Math.trunc(n))
   // VPS (Contabo): more headroom; Render starter stays conservative.
