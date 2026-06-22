@@ -5,6 +5,8 @@ import { Router } from 'express'
 import {
   applyAppUpdateClientDecision,
   clientVersionFromRequest,
+  enrichAppUpdateClientFields,
+  resolveAppUpdateDecision,
 } from '../lib/appUpdateTargeting.js'
 import { getPool, getPoolStats } from '../db/pool.js'
 import { poolQuery } from '../lib/dbQuery.js'
@@ -127,12 +129,13 @@ function toPublicConfig(rowsByKey, tag = 'decision', req = null) {
     console.warn('[app-update] rejected hash format during decision generation')
   }
 
-  let decision = 'NONE'
-  if (force) {
-    decision = 'FORCE'
-  } else if (soft) {
-    decision = 'SOFT'
-  }
+  let decision = resolveAppUpdateDecision({
+    soft,
+    force,
+    autoDownload,
+    versionCode,
+    hasAnyUrl,
+  })
   const fallbackNotice =
     decision === 'FORCE' && !hasAnyUrl
       ? 'Update source not configured'
@@ -149,12 +152,13 @@ function toPublicConfig(rowsByKey, tag = 'decision', req = null) {
     source,
     soft,
     force,
+    autoDownload,
     decision,
     hasAnyUrl,
     fallbackActivated: Boolean(fallbackNotice),
   })
 
-  return {
+  return enrichAppUpdateClientFields({
     decision,
     source,
     apk_url: apkUrl,
@@ -180,12 +184,12 @@ function toPublicConfig(rowsByKey, tag = 'decision', req = null) {
     versionCode,
     versionName,
     packageName,
-  }
+  })
 }
 
 /** Public OTA payload (same fields as GET /update-check) for runtime + SSE. */
 export function appUpdateToOtaPayload(data, configVersion = 0) {
-  const d = data && typeof data === 'object' ? data : {}
+  const d = enrichAppUpdateClientFields(data && typeof data === 'object' ? data : {})
   return {
     ok: true,
     v: Number(configVersion) || 0,
@@ -195,6 +199,12 @@ export function appUpdateToOtaPayload(data, configVersion = 0) {
     apk_sha256: isValidSha256(d.apk_sha256 ?? d.sha256) ? normalizeHash(d.apk_sha256 ?? d.sha256) : '',
     playstore_url: text(d.playstore_url ?? d.playstoreUrl, 4000),
     auto_download: d.auto_download === true || d.autoDownload === true,
+    cancelable: d.cancelable === true,
+    dismissible: d.dismissible === true,
+    force_update: d.force_update === true,
+    soft_update: d.soft_update === true,
+    update_mode: String(d.update_mode ?? d.decision ?? 'none').toLowerCase(),
+    force: d.force === true,
     server_time: String(d.server_time ?? new Date().toISOString()),
     notice: text(d.notice, 4000),
     update_title: text(d.update_title ?? d.updateTitle, 256),
@@ -202,6 +212,9 @@ export function appUpdateToOtaPayload(data, configVersion = 0) {
     version_code: parseVersionCode(d.version_code ?? d.versionCode),
     version_name: text(d.version_name ?? d.versionName, 64),
     package_name: text(d.package_name ?? d.packageName, 256),
+    ...(d.update_target_reason
+      ? { update_target_reason: String(d.update_target_reason) }
+      : {}),
   }
 }
 
@@ -762,6 +775,12 @@ function updateCheckJsonFromOta(ota) {
     apk_sha256: o.apk_sha256,
     playstore_url: o.playstore_url,
     auto_download: o.auto_download,
+    cancelable: o.cancelable,
+    dismissible: o.dismissible,
+    force_update: o.force_update,
+    soft_update: o.soft_update,
+    update_mode: o.update_mode,
+    force: o.force,
     server_time: o.server_time,
     notice: o.notice,
     update_title: o.update_title,
