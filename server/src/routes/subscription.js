@@ -421,13 +421,21 @@ async function maybeActiveVerifyFallback(req, deviceId, fingerprint, err) {
   const stale =
     getCachedSubscriptionAccess(deviceId, fingerprint) ??
     getStaleCachedSubscriptionAccess(deviceId, fingerprint)
-  if (!(stale?.active_now === true && stale?.blocked_now !== true)) return null
+  if (!isAccessRowActive(stale)) return null
   try {
     return await buildActiveVerifyFallbackFromCache(req, deviceId, stale)
   } catch (fallbackErr) {
     console.error('[subscription-verify-active-fallback] failed:', fallbackErr)
     return null
   }
+}
+
+function isAccessRowActive(row) {
+  return (
+    row?.active_now === true &&
+    row?.blocked_now !== true &&
+    String(row?.status ?? '').toLowerCase() === 'active'
+  )
 }
 
 function verifyFallbackContext({ deviceId, orderIdHint, fingerprint, phone, legacyDeviceId, accountId }) {
@@ -497,7 +505,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
       row = accessSnapshot.row
     } catch (e) {
       const staleActive = getStaleCachedSubscriptionAccess(d, fp)
-      if (staleActive?.active_now === true && staleActive?.blocked_now !== true) {
+      if (isAccessRowActive(staleActive)) {
         row = staleActive
         timing.stale_active_cache = true
       } else {
@@ -515,7 +523,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   timing.access_cache_hit = cached !== undefined
   timing.access_fast_path = cached !== undefined || row != null
 
-  const alreadyActive = row?.active_now === true && row?.blocked_now !== true
+  const alreadyActive = isAccessRowActive(row)
   timing.already_active = alreadyActive
   let pollDecision = { poll: false, reason: 'already_active' }
   if (!alreadyActive) {
@@ -554,7 +562,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     })
   }
 
-  const inactiveNow = !(row?.active_now === true && row?.blocked_now !== true)
+  const inactiveNow = !isAccessRowActive(row)
   const explicitMigration =
     Boolean(String(legacyDeviceId ?? '').trim()) ||
     Boolean(String(accountId ?? '').trim()) ||
@@ -586,7 +594,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   }
 
   const needsMigrationLink =
-    !(row?.active_now === true && row?.blocked_now !== true) &&
+    !isAccessRowActive(row) &&
     explicitMigration &&
     hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountId })
 
@@ -625,7 +633,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   }
 
   const pub = rowToPublicStatus(row)
-  const isActiveNow = pub.active === true
+  const isActiveNow = isAccessRowActive(row)
   const needsPlans = !isActiveNow
   timing.active_result = isActiveNow
 

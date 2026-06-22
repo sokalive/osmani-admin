@@ -20,6 +20,12 @@ export async function coalesceVerifyAccessLoad(deviceId, loader) {
   return p
 }
 
+export function clearVerifyAccessInflightForDevice(deviceId) {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return
+  inflight.delete(d)
+}
+
 export function clearVerifyAccessInflight() {
   inflight.clear()
 }

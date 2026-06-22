@@ -23,6 +23,22 @@ function cacheKey(deviceId, fingerprint) {
   return `${String(deviceId ?? '').trim()}|${fp}`
 }
 
+function sanitizeAccessCacheRow(row) {
+  if (!row) return row
+  const status = String(row.status ?? '').toLowerCase()
+  if (status !== 'active') {
+    return {
+      ...row,
+      active_now: false,
+      remaining_seconds: 0,
+      remaining_hours: 0,
+      remaining_days: 0,
+      near_expiry: false,
+    }
+  }
+  return row
+}
+
 export function getCachedSubscriptionAccess(deviceId, fingerprint) {
   const key = cacheKey(deviceId, fingerprint)
   const hit = cache.get(key)
@@ -31,13 +47,13 @@ export function getCachedSubscriptionAccess(deviceId, fingerprint) {
     cache.delete(key)
     return undefined
   }
-  return hit.row
+  return sanitizeAccessCacheRow(hit.row)
 }
 
 /** Returns last cached row even if TTL expired — for stale-active fallback only. */
 export function getStaleCachedSubscriptionAccess(deviceId, fingerprint) {
   const hit = cache.get(cacheKey(deviceId, fingerprint))
-  return hit?.row
+  return sanitizeAccessCacheRow(hit?.row)
 }
 
 export function setCachedSubscriptionAccess(deviceId, fingerprint, row, ttlMs) {

@@ -6,6 +6,7 @@ import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { ensureSubscriptionLinkedForDevice } from '../lib/subscriptionRecovery.js'
+import { notifySubscriptionTransferred, toAccessCacheRow } from '../lib/subscriptionTransferNotify.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const deviceSecurityRouter = Router()
@@ -412,8 +413,25 @@ async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId,
       metadata: { source_device_id: src, target_device_id: tgt },
     })
     await client.query('COMMIT')
-    deviceSubscriptionBus.emit('update', { deviceId: src })
-    deviceSubscriptionBus.emit('update', { deviceId: tgt })
+    notifySubscriptionTransferred({
+      sourceDeviceId: src,
+      targetDeviceId: tgt,
+      sourceRow: toAccessCacheRow(
+        { device_id: src, status: 'pending', expires_at: sub.expires_at, active_now: false },
+        src,
+      ),
+      targetRow: toAccessCacheRow(
+        {
+          device_id: tgt,
+          status: 'active',
+          expires_at: sub.expires_at,
+          active_now: true,
+          transaction_id: `force:${code}`,
+        },
+        tgt,
+      ),
+      reason: 'admin_force_transfer',
+    })
     emitSync('transfer_completed', {
       source_device_id: src,
       target_device_id: tgt,
@@ -1479,8 +1497,13 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
       },
     })
     await client.query('COMMIT')
-    deviceSubscriptionBus.emit('update', { deviceId: sourceDeviceId })
-    deviceSubscriptionBus.emit('update', { deviceId: targetDeviceId })
+    notifySubscriptionTransferred({
+      sourceDeviceId,
+      targetDeviceId,
+      sourceRow: sourceAfter,
+      targetRow: targetAfter,
+      reason: 'transfer_confirm',
+    })
     emitSync('transfer_completed', {
       source_device_id: sourceDeviceId,
       target_device_id: targetDeviceId,
@@ -1675,10 +1698,38 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
     })
     await client.query('COMMIT')
     if (recoveredFrom && recoveredFrom !== deviceId) {
-      deviceSubscriptionBus.emit('update', { deviceId: recoveredFrom })
+      notifySubscriptionTransferred({
+        sourceDeviceId: recoveredFrom,
+        targetDeviceId: deviceId,
+        sourceRow: {
+          device_id: recoveredFrom,
+          status: 'pending',
+          expires_at: row.expires_at,
+          active_now: false,
+        },
+        targetRow: {
+          device_id: deviceId,
+          status: 'active',
+          expires_at: row.expires_at,
+          active_now: true,
+          transaction_id: `recovery:${recoveredFrom}`,
+        },
+        reason: 'recovery',
+      })
+    } else {
+      notifySubscriptionTransferred({
+        targetDeviceId: deviceId,
+        targetRow: {
+          device_id: deviceId,
+          status: 'active',
+          expires_at: row.expires_at,
+          active_now: true,
+          transaction_id: `recovery:${recoveredFrom}`,
+        },
+        reason: 'recovery',
+      })
     }
     emitSync('transfer_completed', { source_device_id: row.device_id, target_device_id: deviceId, reason: 'recovery' })
-    deviceSubscriptionBus.emit('update', { deviceId })
     if (recoveredFrom && recoveredFrom !== deviceId) {
       emitSync('subscription_revoked', { device_id: recoveredFrom, reason: 'recovery' })
     }
@@ -1716,7 +1767,15 @@ deviceSecurityRouter.post('/subscription/revoke', async (req, res) => {
       detail: `Revoked subscription for ${deviceId}`,
       metadata: { device_id: deviceId },
     })
-    deviceSubscriptionBus.emit('update', { deviceId })
+    notifySubscriptionTransferred({
+      targetDeviceId: deviceId,
+      targetRow: {
+        device_id: deviceId,
+        status: 'pending',
+        active_now: false,
+      },
+      reason: 'revoke',
+    })
     emitSync('subscription_revoked', { device_id: deviceId })
     emitSync('security_logs_changed', { action: 'revoke', device_id: deviceId })
     return res.json({ ok: true, device_id: deviceId })

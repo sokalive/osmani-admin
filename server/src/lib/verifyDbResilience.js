@@ -97,7 +97,9 @@ export function canUseInactiveVerifyFallback({
   if (String(fingerprint ?? '').trim()) return false
 
   const row = cachedAccessRow
-  if (row?.active_now === true && row?.blocked_now !== true) return false
+  if (row?.active_now === true && row?.blocked_now !== true && String(row?.status ?? '').toLowerCase() === 'active') {
+    return false
+  }
 
   return true
 }

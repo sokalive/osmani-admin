@@ -1,6 +1,5 @@
 import { getPool } from '../db/pool.js'
-import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
-import { liveSyncBus } from './liveSyncBus.js'
+import { notifySubscriptionTransferred } from './subscriptionTransferNotify.js'
 import {
   findActiveDeviceIdForPaymentPhone,
   getDeviceSubscriptionAccessState,
@@ -152,15 +151,26 @@ export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reas
     }
     await client.query('COMMIT')
 
-    if (sourceDeviceId && sourceDeviceId !== target) {
-      deviceSubscriptionBus.emit('update', { deviceId: sourceDeviceId })
-    }
-    deviceSubscriptionBus.emit('update', { deviceId: target })
-    liveSyncBus.publish('analytics.subscription_updated', {
-      topics: ['analytics'],
-      deviceId: target,
-      orderId: `recovery:${sourceDeviceId}`,
-      reason,
+    notifySubscriptionTransferred({
+      sourceDeviceId: sourceDeviceId !== target ? sourceDeviceId : '',
+      targetDeviceId: target,
+      sourceRow:
+        sourceDeviceId && sourceDeviceId !== target
+          ? {
+              device_id: sourceDeviceId,
+              status: 'pending',
+              expires_at: row.expires_at,
+              active_now: false,
+            }
+          : null,
+      targetRow: {
+        device_id: target,
+        status: 'active',
+        expires_at: row.expires_at,
+        active_now: true,
+        transaction_id: row.transaction_id || `recovery:${sourceDeviceId}`,
+      },
+      reason: 'recovery',
     })
 
     console.log('[subscription-recover]', {
@@ -223,12 +233,22 @@ export async function migrateSubscriptionFromSourceDevice(targetDeviceId, source
       [source],
     )
     await client.query('COMMIT')
-    deviceSubscriptionBus.emit('update', { deviceId: source })
-    deviceSubscriptionBus.emit('update', { deviceId: target })
-    liveSyncBus.publish('analytics.subscription_updated', {
-      topics: ['analytics'],
-      deviceId: target,
-      orderId: `recovery:${source}`,
+    notifySubscriptionTransferred({
+      sourceDeviceId: source,
+      targetDeviceId: target,
+      sourceRow: {
+        device_id: source,
+        status: 'pending',
+        expires_at: row.expires_at,
+        active_now: false,
+      },
+      targetRow: {
+        device_id: target,
+        status: 'active',
+        expires_at: row.expires_at,
+        active_now: true,
+        transaction_id: row.transaction_id || `recovery:${source}`,
+      },
       reason: 'verify_payment_phone',
     })
     return { recovered: true, recovered_from: source, recovered_to: target }
