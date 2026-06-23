@@ -6,6 +6,7 @@ services:
   - type: web
     name: osmani-admin-mpya
     runtime: static
+    autoDeploy: true
     repo: https://github.com/sokalive/osmani-admin.git
     branch: main
     buildCommand: npm ci && npm run build

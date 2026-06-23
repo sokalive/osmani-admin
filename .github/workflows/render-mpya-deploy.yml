@@ -1,0 +1,30 @@
+# Render legacy admin static site (osmani-admin-mpya) — does not use Contabo deploy.
+name: Deploy Render Admin (mpya)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'render.yaml'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - 'index.html'
+      - 'public/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render osmani-admin-mpya deploy hook
+        env:
+          RENDER_MPYA_DEPLOY_HOOK: ${{ secrets.RENDER_MPYA_DEPLOY_HOOK }}
+        run: |
+          if [ -z "${RENDER_MPYA_DEPLOY_HOOK}" ]; then
+            echo "::notice::RENDER_MPYA_DEPLOY_HOOK not configured — enable auto-deploy in Render dashboard or add deploy hook secret."
+            exit 0
+          fi
+          curl -fsSL -X POST "${RENDER_MPYA_DEPLOY_HOOK}"
+          echo "Triggered Render osmani-admin-mpya deploy"
