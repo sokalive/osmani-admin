@@ -11,6 +11,10 @@ import { fileURLToPath } from 'node:url'
 import { parseChannelIdFromPayload, TOP5_MIN_VIEWERS } from '../src/lib/analyticsPresence.js'
 
 const BASE = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/+$/, '')
+const RENDER_API = String(process.env.RENDER_API || 'https://osmani-admin-api.onrender.com').replace(
+  /\/+$/,
+  '',
+)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPORT_DIR = path.resolve(__dirname, '../../docs/analytics-widget-verification')
 const REPORT_HTML = path.join(REPORT_DIR, 'report.html')
@@ -40,8 +44,8 @@ async function snapshot() {
   return body
 }
 
-async function heartbeat(route, payload) {
-  const { status, body } = await fetchJson(`${BASE}${route}`, {
+async function heartbeat(route, payload, apiBase = BASE) {
+  const { status, body } = await fetchJson(`${apiBase}${route}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -49,7 +53,7 @@ async function heartbeat(route, payload) {
   return { status, body, route }
 }
 
-async function sessionEnd(deviceId) {
+async function sessionEnd(deviceId, apiBase = BASE) {
   await fetchJson(`${BASE}/api/analytics/session/end`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -276,6 +280,95 @@ async function main() {
     evidence.steps.push({ step: 'top5 excludes <10', ok: false, detail: 'unexpected top5 membership' })
   }
 
+  // Combined Render (v16–v23) + VPS (v24): 5 devices each on channel 99
+  const comboChannel = '99'
+  const comboDevices = []
+  for (let i = 0; i < 5; i++) {
+    const renderDev = `${PREFIX}render_combo_${i}`
+    const vpsDev = `${PREFIX}vps_combo_${i}`
+    comboDevices.push(renderDev, vpsDev)
+    const r1 = await heartbeat(
+      '/api/analytics/session/heartbeat',
+      { device_id: renderDev, channel_id: comboChannel, country: 'TZ' },
+      RENDER_API,
+    )
+    const r2 = await heartbeat(
+      '/api/analytics/session/heartbeat',
+      { device_id: vpsDev, channel_id: comboChannel, country: 'TZ' },
+      BASE,
+    )
+    if (r1.status !== 200 || r2.status !== 200) {
+      fail(`combined host heartbeat render=${r1.status} vps=${r2.status}`)
+    }
+  }
+  const snapCombo = await snapshot()
+  const ch99 = snapCombo.mostWatched?.find((x) => String(x.channel_id) === comboChannel)
+  if (ch99 && ch99.viewers >= 10) {
+    pass(`combined Render+VPS channel ${comboChannel} viewers=${ch99.viewers}`)
+    evidence.steps.push({
+      step: 'Render+VPS combined aggregate',
+      ok: true,
+      detail: `viewers=${ch99.viewers}`,
+    })
+  } else {
+    fail(`combined channel ${comboChannel} viewers=${ch99?.viewers ?? 0}, want >=10`)
+    evidence.steps.push({
+      step: 'Render+VPS combined aggregate',
+      ok: false,
+      detail: JSON.stringify(ch99),
+    })
+  }
+
+  // channel_name-only payload (v24 presence style)
+  const nameProbe = `${PREFIX}name_only`
+  const channelsRes = await fetchJson(`${BASE}/api/channels`)
+  const sampleChannel = Array.isArray(channelsRes.body)
+    ? channelsRes.body.find((c) => c?.id != null && c?.name)
+    : null
+  if (sampleChannel) {
+    await heartbeat('/api/analytics/presence/heartbeat', {
+      device_id: nameProbe,
+      channel_name: String(sampleChannel.name),
+      country: 'TZ',
+    })
+    const snapName = await snapshot()
+    const chNamed = snapName.mostWatched?.find(
+      (x) => String(x.channel_id) === String(sampleChannel.id),
+    )
+    if (chNamed && chNamed.viewers >= 1) {
+      pass(`channel_name resolves to id ${sampleChannel.id}`)
+      evidence.steps.push({
+        step: 'channel_name resolution',
+        ok: true,
+        detail: String(sampleChannel.name),
+      })
+    } else {
+      fail(`channel_name not counted for id ${sampleChannel.id}`)
+      evidence.steps.push({ step: 'channel_name resolution', ok: false, detail: 'missing' })
+    }
+    comboDevices.push(nameProbe)
+  } else {
+    fail('could not load channels for channel_name test')
+  }
+
+  const locSum = (snapCombo.locations || []).reduce((a, r) => a + (Number(r.users) || 0), 0)
+  const mwSum = (snapCombo.mostWatched || []).reduce((a, r) => a + (Number(r.viewers) || 0), 0)
+  if (mwSum <= locSum) {
+    pass(`watching tally consistent (mostWatched sum ${mwSum} <= locations sum ${locSum})`)
+    evidence.steps.push({
+      step: 'locations vs mostWatched consistency',
+      ok: true,
+      detail: `mw=${mwSum} loc=${locSum}`,
+    })
+  } else {
+    fail(`mostWatched sum ${mwSum} exceeds locations sum ${locSum}`)
+    evidence.steps.push({
+      step: 'locations vs mostWatched consistency',
+      ok: false,
+      detail: `mw=${mwSum} loc=${locSum}`,
+    })
+  }
+
   // Cleanup probe devices
   const cleanupIds = [
     probeDevice,
@@ -283,8 +376,12 @@ async function main() {
     v24Device,
     lowDevice,
     ...top5Devices,
+    ...comboDevices,
   ]
-  for (const id of cleanupIds) await sessionEnd(id)
+  for (const id of cleanupIds) {
+    await sessionEnd(id, BASE)
+    await sessionEnd(id, RENDER_API).catch(() => {})
+  }
 
   fs.mkdirSync(REPORT_DIR, { recursive: true })
   fs.writeFileSync(REPORT_HTML, buildReportHtml(), 'utf8')

@@ -26,21 +26,21 @@
 </head>
 <body>
   <h1>Most Watched &amp; Top 5 — Before / After</h1>
-  <p class="meta">API: https://api.osmanitv.com · Top 5 min viewers: 10 · Generated 2026-06-20T11:38:41.628Z</p>
+  <p class="meta">API: https://api.osmanitv.com · Top 5 min viewers: 10 · Generated 2026-06-23T06:06:51.559Z</p>
   <div class="grid">
     <div class="panel">
       <h3>Before (production baseline)</h3>
-      <p class="meta">onlineNow: 0</p>
+      <p class="meta">onlineNow: 3</p>
       <div class="widgets">
-        <section class="widget"><h2>Most Watched Channels</h2><ul><p class="empty">No active viewers</p></ul></section>
+        <section class="widget"><h2>Most Watched Channels</h2><ul><li><span class="name">Channel 4</span><span class="pill">1 live</span></li><li><span class="name">Channel 11</span><span class="pill">1 live</span></li><li><span class="name">Channel 1</span><span class="pill">1 live</span></li></ul></section>
         <section class="widget"><h2>Top 5 Channels (≥10)</h2><ul><p class="empty">No channel has 10+ viewers</p></ul></section>
       </div>
     </div>
     <div class="panel">
       <h3>After (synthetic E2E probes)</h3>
-      <p class="meta">onlineNow: 13</p>
+      <p class="meta">onlineNow: 16</p>
       <div class="widgets">
-        <section class="widget"><h2>Most Watched Channels</h2><ul><li><span class="name">Channel 77</span><span class="pill">10 live</span></li><li><span class="name">Channel 55</span><span class="pill">1 live</span></li><li><span class="name">Channel [object Object]</span><span class="pill">1 live</span></li><li><span class="name">Channel 88</span><span class="pill">1 live</span></li></ul></section>
+        <section class="widget"><h2>Most Watched Channels</h2><ul><li><span class="name">Channel 77</span><span class="pill">10 live</span></li><li><span class="name">Channel 55</span><span class="pill">2 live</span></li><li><span class="name">Channel 11</span><span class="pill">1 live</span></li><li><span class="name">Channel 1</span><span class="pill">1 live</span></li><li><span class="name">Channel 88</span><span class="pill">1 live</span></li><li><span class="name">Channel 4</span><span class="pill">1 live</span></li></ul></section>
         <section class="widget"><h2>Top 5 Channels (≥10)</h2><ul><li><span class="name">Channel 77</span><span class="pill">10 live</span></li></ul></section>
       </div>
     </div>
@@ -48,7 +48,7 @@
   <table>
     <thead><tr><th>Step</th><th>Result</th><th>Detail</th></tr></thead>
     <tbody>
-      <tr><td>POST /api/analytics/session/heartbeat</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/analytics/session/ping</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/analytics/live/ping</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/live/ping</td><td class="fail">FAIL</td><td>HTTP 404</td></tr><tr><td>POST /api/session/ping</td><td class="fail">FAIL</td><td>HTTP 404</td></tr><tr><td>mostWatched immediate</td><td class="ok">PASS</td><td>channel 88 visible</td></tr><tr><td>all versions aggregate</td><td class="fail">FAIL</td><td>{"channel_id":"55","viewers":1}</td></tr><tr><td>top5 threshold</td><td class="ok">PASS</td><td>10 viewers</td></tr><tr><td>top5 excludes <10</td><td class="ok">PASS</td><td>channel 66 in MW only</td></tr>
+      <tr><td>POST /api/analytics/session/heartbeat</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/analytics/session/ping</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/analytics/live/ping</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/live/ping</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>POST /api/session/ping</td><td class="ok">PASS</td><td>HTTP 200</td></tr><tr><td>mostWatched immediate</td><td class="ok">PASS</td><td>channel 88 visible</td></tr><tr><td>all versions aggregate</td><td class="ok">PASS</td><td>viewers=2</td></tr><tr><td>top5 threshold</td><td class="ok">PASS</td><td>10 viewers</td></tr><tr><td>top5 excludes <10</td><td class="ok">PASS</td><td>channel 66 in MW only</td></tr><tr><td>Render+VPS combined aggregate</td><td class="ok">PASS</td><td>viewers=10</td></tr><tr><td>channel_name resolution</td><td class="ok">PASS</td><td>Azam 1 HD</td></tr><tr><td>locations vs mostWatched consistency</td><td class="ok">PASS</td><td>mw=27 loc=31</td></tr>
     </tbody>
   </table>
 </body>

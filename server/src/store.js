@@ -2,7 +2,7 @@
  * Channel persistence — PostgreSQL (replaces previous JSON file storage).
  * Legacy JSON implementation is preserved as a comment block at the end of this file.
  */
-import { normalizePlayerType } from './channelNormalize.js'
+import { invalidateChannelAnalyticsIndex } from './lib/channelAnalyticsNormalize.js'
 import { ensureChannelsTable } from './db/channelsTable.js'
 import { getPool } from './db/pool.js'
 
@@ -117,6 +117,7 @@ export async function readChannelIdNameMap() {
 export function invalidateChannelIdNameMapCache() {
   _channelIdNameMapCache = null
   _channelIdNameMapCacheAt = 0
+  invalidateChannelAnalyticsIndex()
 }
 
 export async function getNextChannelId() {

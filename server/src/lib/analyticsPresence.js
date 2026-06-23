@@ -10,13 +10,39 @@ function channelIdFromNested(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return parseText(value)
   if (typeof value === 'string') return parseText(value)
   if (typeof value !== 'object') return null
-  return parseText(
-    value.id ??
-      value.channel_id ??
-      value.channelId ??
-      value.active_channel_id ??
-      value.activeChannelId,
+  return (
+    parseText(
+      value.id ??
+        value.channel_id ??
+        value.channelId ??
+        value.active_channel_id ??
+        value.activeChannelId,
+    ) ||
+    parseText(value.name ?? value.channel_name ?? value.channelName)
   )
+}
+
+export function parseChannelNameFromPayload(source) {
+  if (!source || typeof source !== 'object') return null
+  const direct = parseText(
+    source.channel_name ??
+      source.channelName ??
+      source.watching_channel_name ??
+      source.watchingChannelName,
+  )
+  if (direct) return direct
+  const ch = source.channel
+  if (ch && typeof ch === 'object') {
+    return parseText(ch.name ?? ch.channel_name ?? ch.channelName)
+  }
+  return null
+}
+
+export function parseChannelRefFromPayload(source) {
+  return {
+    channelId: parseChannelIdFromPayload(source),
+    channelName: parseChannelNameFromPayload(source),
+  }
 }
 
 export function parseChannelIdFromPayload(source) {
@@ -31,7 +57,13 @@ export function parseChannelIdFromPayload(source) {
       source.watching_channel_id ??
       source.watchingChannelId ??
       source.current_channel_id ??
-      source.currentChannelId,
+      source.currentChannelId ??
+      source.stream_id ??
+      source.streamId ??
+      source.selected_channel_id ??
+      source.selectedChannelId ??
+      source.playing_channel_id ??
+      source.playingChannelId,
   )
   if (direct) return direct
   return channelIdFromNested(source.channel)
@@ -40,7 +72,30 @@ export function parseChannelIdFromPayload(source) {
 export function parseChannelIdFromRequest(req) {
   const q = req?.query && typeof req.query === 'object' ? req.query : {}
   const b = req?.body && typeof req.body === 'object' ? req.body : {}
-  return parseChannelIdFromPayload(q) || parseChannelIdFromPayload(b)
+  const headers = req?.headers && typeof req.headers === 'object' ? req.headers : {}
+  const fromHeader = parseText(
+    headers['x-channel-id'] ??
+      headers['x-active-channel-id'] ??
+      headers['x-watching-channel-id'],
+  )
+  return (
+    fromHeader ||
+    parseChannelIdFromPayload(q) ||
+    parseChannelIdFromPayload(b) ||
+    parseChannelIdFromPayload(headers)
+  )
+}
+
+export function parseChannelRefFromRequest(req) {
+  const q = req?.query && typeof req.query === 'object' ? req.query : {}
+  const b = req?.body && typeof req.body === 'object' ? req.body : {}
+  const merged = { ...q, ...b }
+  const ref = parseChannelRefFromPayload(merged)
+  if (!ref.channelId && !ref.channelName) {
+    const hId = parseChannelIdFromRequest(req)
+    if (hId) ref.channelId = hId
+  }
+  return ref
 }
 
 /** Top 5 widget minimum concurrent viewers (default 10). */

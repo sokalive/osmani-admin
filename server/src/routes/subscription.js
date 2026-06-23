@@ -10,7 +10,7 @@ import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../li
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
 import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
 import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint, tryFastFingerprintRecovery } from '../lib/subscriptionRecovery.js'
-import { parseChannelIdFromRequest } from '../lib/analyticsPresence.js'
+import { parseChannelRefFromRequest } from '../lib/analyticsPresence.js'
 import {
   getCachedSubscriptionAccess,
   getStaleCachedSubscriptionAccess,
@@ -472,7 +472,9 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const hint = String(orderIdHint ?? '').trim()
   const fp = String(fingerprint ?? '').trim()
   const paymentPhone = String(phone ?? '').trim()
-  const channelId = parseChannelIdFromRequest(req)
+  const channelRef = parseChannelRefFromRequest(req)
+  const channelId = channelRef.channelId
+  const channelName = channelRef.channelName
   const fallbackCtx = verifyFallbackContext({
     deviceId: d,
     orderIdHint: hint,
@@ -487,7 +489,7 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     path: req.path || req.url || '',
   }
 
-  void billing.touchLivePresence({ deviceId: d, country, channelId }).catch((e) => {
+  void billing.touchLivePresence({ deviceId: d, country, channelId, channelName }).catch((e) => {
     console.error('[subscription-verify] touchLivePresence failed:', e)
   })
   liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId: d })
@@ -1058,8 +1060,10 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     return
   }
   const country = countryFromRequest(req)
-  const channelId = parseChannelIdFromRequest(req)
-  void billing.touchLivePresence({ deviceId, country, channelId }).catch((e) => {
+  const channelRef = parseChannelRefFromRequest(req)
+  const channelId = channelRef.channelId
+  const channelName = channelRef.channelName
+  void billing.touchLivePresence({ deviceId, country, channelId, channelName }).catch((e) => {
     console.error('[subscription-stream] touchLivePresence failed:', e)
   })
   liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
@@ -1246,9 +1250,17 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
 
   const ping = setInterval(() => {
     res.write(': ping\n\n')
-    void billing.touchLivePresence({ deviceId, country, channelId }).catch((e) => {
-      console.error('[subscription-stream] presence ping failed:', e)
-    })
+    const liveRef = parseChannelRefFromRequest(req)
+    void billing
+      .touchLivePresence({
+        deviceId,
+        country,
+        channelId: liveRef.channelId,
+        channelName: liveRef.channelName,
+      })
+      .catch((e) => {
+        console.error('[subscription-stream] presence ping failed:', e)
+      })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
   }, 20_000)
 

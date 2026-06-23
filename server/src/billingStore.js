@@ -5,6 +5,7 @@ import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
 import { getPool } from './db/pool.js'
 import { normalizeLocationPayload } from './lib/analyticsLocation.js'
+import { upsertLiveSession } from './lib/liveSessionStore.js'
 
 export async function ensureBillingStorage() {
   const pool = getPool()
@@ -846,30 +847,19 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
 }
 
 /** Touch live presence row so analytics can reflect app-open presence immediately. */
-export async function touchLivePresence({ deviceId, country = null, channelId = null }) {
+export async function touchLivePresence({ deviceId, country = null, channelId = null, channelName = null }) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return null
   const rawLab = normalizeLocationPayload({ country: country ?? '' })
   const safeCountry = rawLab ? sanitizePresenceText(rawLab, 120) : null
-  const safeChannel = sanitizePresenceText(channelId, 128)
-  await pool.query(
-    `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
-     VALUES ($1, $2, $3, now(), now())
-     ON CONFLICT (device_id) DO UPDATE SET
-       channel_id = CASE
-         WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
-           THEN EXCLUDED.channel_id
-         ELSE live_sessions.channel_id
-       END,
-       country = COALESCE(EXCLUDED.country, live_sessions.country),
-       updated_at = now()`,
-    [d, safeChannel, safeCountry],
-  )
-  void tryRecordAppInstall(pool, d, '').catch((e) => {
-    console.error('[touchLivePresence] tryRecordAppInstall failed:', e)
+  const out = await upsertLiveSession(pool, {
+    deviceId: d,
+    channelId: sanitizePresenceText(channelId, 128),
+    channelName: sanitizePresenceText(channelName, 128),
+    country: safeCountry,
   })
-  return { deviceId: d, country: safeCountry, channelId: safeChannel }
+  return { deviceId: d, country: safeCountry, channelId: out.channelId }
 }
 
 /** Legacy durations for older manual grants / offer codes. */

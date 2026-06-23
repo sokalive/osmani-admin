@@ -12,7 +12,8 @@ import {
   aggregateLocationsByCountryCode,
   normalizeLocationPayload,
 } from '../lib/analyticsLocation.js'
-import { parseChannelIdFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
+import { parseChannelRefFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
+import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
 import { readChannelIdNameMap } from '../store.js'
 
 export const analyticsRouter = Router()
@@ -55,8 +56,9 @@ function parseDeviceId(v) {
   return s.slice(0, 128)
 }
 
-function parseChannelIdFromBody(body) {
-  return parseChannelIdFromPayload(body)
+
+function parseChannelRefFromBody(body) {
+  return parseChannelRefFromPayload(body && typeof body === 'object' ? body : {})
 }
 
 function parseCountryFromBody(body, req) {
@@ -144,11 +146,24 @@ async function queryOverviewStats(pool) {
 
 async function queryChannelStats(pool) {
   const { rows } = await pool.query(
-    `SELECT channel_id, COUNT(*)::int AS viewers
-     FROM live_sessions
-     WHERE channel_id IS NOT NULL
-       AND trim(channel_id) <> ''
-       AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
+    `WITH active AS (
+       SELECT ls.device_id, trim(ls.channel_id) AS raw_channel_id
+       FROM live_sessions ls
+       WHERE ls.channel_id IS NOT NULL
+         AND trim(ls.channel_id) <> ''
+         AND COALESCE(ls.updated_at, ls.started_at, now()) >= (now() - $1::interval)
+     ),
+     normalized AS (
+       SELECT a.device_id,
+         COALESCE(c.id::text, a.raw_channel_id) AS channel_id
+       FROM active a
+       LEFT JOIN channels c ON (
+         c.id::text = a.raw_channel_id
+         OR lower(trim(c.name)) = lower(a.raw_channel_id)
+       )
+     )
+     SELECT channel_id, COUNT(*)::int AS viewers
+     FROM normalized
      GROUP BY channel_id
      ORDER BY viewers DESC`,
     [LIVE_WINDOW_INTERVAL],
@@ -366,24 +381,14 @@ analyticsRouter.post('/session/start', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    const channelId = parseChannelIdFromBody(req.body)
+    const channelRef = parseChannelRefFromBody(req.body)
     const country = parseCountryFromBody(req.body, req)
-    await pool.query(
-      `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
-       VALUES ($1, $2, $3, now(), now())
-       ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = CASE
-           WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
-             THEN EXCLUDED.channel_id
-           ELSE live_sessions.channel_id
-         END,
-         country = COALESCE(EXCLUDED.country, live_sessions.country),
-         updated_at = now()`,
-      [deviceId, channelId, country],
-    )
-    const iid = parseInstallInstanceIdFromBody(req.body)
-    void tryRecordAppInstall(pool, deviceId, iid).catch((e) => {
-      console.error('[analytics/session/start] tryRecordAppInstall:', e)
+    await upsertLiveSession(pool, {
+      deviceId,
+      channelId: channelRef.channelId,
+      channelName: channelRef.channelName,
+      country,
+      installBody: req.body,
     })
     liveSyncBus.publish('analytics.session_start', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
@@ -404,24 +409,14 @@ export async function handleLiveSessionHeartbeat(req, res) {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    const channelId = parseChannelIdFromBody(req.body)
+    const channelRef = parseChannelRefFromBody(req.body)
     const country = parseCountryFromBody(req.body, req)
-    await pool.query(
-      `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
-       VALUES ($1, $2, $3, now(), now())
-       ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = CASE
-           WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
-             THEN EXCLUDED.channel_id
-           ELSE live_sessions.channel_id
-         END,
-         country = COALESCE(EXCLUDED.country, live_sessions.country),
-         updated_at = now()`,
-      [deviceId, channelId, country],
-    )
-    const iidHb = parseInstallInstanceIdFromBody(req.body)
-    void tryRecordAppInstall(pool, deviceId, iidHb).catch((e) => {
-      console.error('[analytics/session/heartbeat] tryRecordAppInstall:', e)
+    await upsertLiveSession(pool, {
+      deviceId,
+      channelId: channelRef.channelId,
+      channelName: channelRef.channelName,
+      country,
+      installBody: req.body,
     })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
@@ -445,7 +440,7 @@ analyticsRouter.post('/session/end', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    await pool.query(`DELETE FROM live_sessions WHERE device_id = $1`, [deviceId])
+    await removeLiveSession(pool, deviceId)
     liveSyncBus.publish('analytics.session_end', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
@@ -465,24 +460,14 @@ analyticsRouter.post('/presence/start', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    const channelId = parseChannelIdFromBody(req.body)
+    const channelRef = parseChannelRefFromBody(req.body)
     const country = parseCountryFromBody(req.body, req)
-    await pool.query(
-      `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
-       VALUES ($1, $2, $3, now(), now())
-       ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = CASE
-           WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
-             THEN EXCLUDED.channel_id
-           ELSE live_sessions.channel_id
-         END,
-         country = COALESCE(EXCLUDED.country, live_sessions.country),
-         updated_at = now()`,
-      [deviceId, channelId, country],
-    )
-    const iidPs = parseInstallInstanceIdFromBody(req.body)
-    void tryRecordAppInstall(pool, deviceId, iidPs).catch((e) => {
-      console.error('[analytics/presence/start] tryRecordAppInstall:', e)
+    await upsertLiveSession(pool, {
+      deviceId,
+      channelId: channelRef.channelId,
+      channelName: channelRef.channelName,
+      country,
+      installBody: req.body,
     })
     liveSyncBus.publish('analytics.session_start', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
@@ -502,24 +487,14 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    const channelId = parseChannelIdFromBody(req.body)
+    const channelRef = parseChannelRefFromBody(req.body)
     const country = parseCountryFromBody(req.body, req)
-    await pool.query(
-      `INSERT INTO live_sessions (device_id, channel_id, country, started_at, updated_at)
-       VALUES ($1, $2, $3, now(), now())
-       ON CONFLICT (device_id) DO UPDATE SET
-         channel_id = CASE
-           WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
-             THEN EXCLUDED.channel_id
-           ELSE live_sessions.channel_id
-         END,
-         country = COALESCE(EXCLUDED.country, live_sessions.country),
-         updated_at = now()`,
-      [deviceId, channelId, country],
-    )
-    const iidPh = parseInstallInstanceIdFromBody(req.body)
-    void tryRecordAppInstall(pool, deviceId, iidPh).catch((e) => {
-      console.error('[analytics/presence/heartbeat] tryRecordAppInstall:', e)
+    await upsertLiveSession(pool, {
+      deviceId,
+      channelId: channelRef.channelId,
+      channelName: channelRef.channelName,
+      country,
+      installBody: req.body,
     })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
@@ -539,7 +514,7 @@ analyticsRouter.post('/presence/stop', async (req, res) => {
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    await pool.query(`DELETE FROM live_sessions WHERE device_id = $1`, [deviceId])
+    await removeLiveSession(pool, deviceId)
     liveSyncBus.publish('analytics.session_end', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
