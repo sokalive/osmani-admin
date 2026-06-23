@@ -18,6 +18,7 @@ import { wireLiveSyncRelay } from './lib/liveSyncRelay.js'
 import { ensureMpingoRoutingStartupSync } from './lib/mpingoRoutingSync.js'
 import {
   isRenderRuntime,
+  isStartupReady,
   markStartupFailed,
   markStartupReady,
 } from './lib/startupReadiness.js'
@@ -242,12 +243,42 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function runDeferredStartup() {
-  for (let attempt = 1; attempt <= STARTUP_DEFERRED_RETRIES; attempt++) {
+let deferredStartupBackgroundTimer = null
+
+function scheduleDeferredStartupBackgroundRetry() {
+  if (deferredStartupBackgroundTimer) return
+  const delayMs = Math.max(15_000, Number(process.env.STARTUP_BACKGROUND_RETRY_MS) || 30_000)
+  console.error(
+    `[startup] Render: keeping HTTP listener alive; background deferred init retry in ${delayMs}ms`,
+  )
+  deferredStartupBackgroundTimer = setInterval(() => {
+    void runDeferredStartup({ background: true })
+  }, delayMs)
+  if (typeof deferredStartupBackgroundTimer.unref === 'function') {
+    deferredStartupBackgroundTimer.unref()
+  }
+}
+
+async function runDeferredStartup({ background = false } = {}) {
+  if (background && isStartupReady()) {
+    if (deferredStartupBackgroundTimer) {
+      clearInterval(deferredStartupBackgroundTimer)
+      deferredStartupBackgroundTimer = null
+    }
+    return
+  }
+
+  const maxAttempts = background ? 1 : STARTUP_DEFERRED_RETRIES
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       await wireLiveSyncRelay()
       await ensureAllApiDataFiles()
       markStartupReady()
+
+      if (deferredStartupBackgroundTimer) {
+        clearInterval(deferredStartupBackgroundTimer)
+        deferredStartupBackgroundTimer = null
+      }
 
       void import('./lib/warmApiCaches.js')
         .then((m) => m.warmApiCaches())
@@ -273,15 +304,19 @@ async function runDeferredStartup() {
       return
     } catch (err) {
       markStartupFailed(err)
-      console.error(
-        `[startup] deferred init attempt ${attempt}/${STARTUP_DEFERRED_RETRIES} failed:`,
-        err?.message || err,
-      )
-      if (attempt === STARTUP_DEFERRED_RETRIES) {
+      const label = background ? 'background' : `attempt ${attempt}/${maxAttempts}`
+      console.error(`[startup] deferred init ${label} failed:`, err?.message || err)
+      if (!background && attempt === STARTUP_DEFERRED_RETRIES) {
+        if (isRenderRuntime()) {
+          scheduleDeferredStartupBackgroundRetry()
+          return
+        }
         console.error('[startup] FATAL: deferred init exhausted retries')
         process.exit(1)
       }
-      await sleep(STARTUP_RETRY_BASE_MS * attempt)
+      if (!background) {
+        await sleep(STARTUP_RETRY_BASE_MS * attempt)
+      }
     }
   }
 }

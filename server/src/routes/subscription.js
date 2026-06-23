@@ -450,6 +450,17 @@ function verifyFallbackContext({ deviceId, orderIdHint, fingerprint, phone, lega
   }
 }
 
+async function respondSafeInactiveAfterVerifyError(req, res, deviceId, label, err) {
+  try {
+    const body = await buildInactiveVerifyFallbackResponse(req, deviceId)
+    console.warn(`[${label}] safe inactive HTTP 200 after error:`, err?.message || err)
+    return res.json(body)
+  } catch (buildErr) {
+    console.error(`[${label}] safe inactive build failed:`, buildErr)
+    return res.status(500).json({ error: String(err?.message || err) })
+  }
+}
+
 async function maybeInactiveVerifyFallback(req, ctx, err) {
   if (!canUseInactiveVerifyFallback(ctx)) return null
   if (!isDbTimeoutOrPressureError(err)) return null
@@ -975,7 +986,7 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
       e,
     )
     if (fb) return res.json(fb)
-    res.status(500).json({ error: String(e.message || e) })
+    return respondSafeInactiveAfterVerifyError(req, res, deviceId, 'subscription-status', e)
   }
 })
 
@@ -1048,7 +1059,7 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
       e,
     )
     if (fb) return res.json(fb)
-    res.status(500).json({ error: String(e.message || e) })
+    return respondSafeInactiveAfterVerifyError(req, res, deviceId, 'subscription/verify', e)
   }
 })
 
