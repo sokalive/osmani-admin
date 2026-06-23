@@ -37,6 +37,37 @@ function parseListQuery(req) {
   }
 }
 
+function wantsPaginatedUsersList(req) {
+  if (String(req.query.legacy ?? '') === '1') return false
+  if (String(req.query.format ?? '') === 'paginated') return true
+  return req.query.page != null || req.query.limit != null
+}
+
+function mapLegacyDeviceUsers(rows) {
+  const now = Date.now()
+  return rows.map((r) => {
+    const exp = r.expires_at instanceof Date ? r.expires_at : new Date(String(r.expires_at))
+    const expiresAt = exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toISOString() : null
+    const startedAtDate = r.started_at instanceof Date ? r.started_at : new Date(String(r.started_at))
+    const startedAt =
+      startedAtDate instanceof Date && !Number.isNaN(startedAtDate.getTime())
+        ? startedAtDate.toISOString()
+        : null
+    const remainingMs = expiresAt != null ? Math.max(0, new Date(expiresAt).getTime() - now) : 0
+    const active =
+      r.status === 'active' && expiresAt != null && new Date(expiresAt).getTime() > now
+    return {
+      device_id: String(r.device_id ?? ''),
+      phone_number: String(r.phone_number ?? ''),
+      plan_id: r.plan_id != null ? Number(r.plan_id) : null,
+      status: active ? 'active' : 'expired',
+      started_at: startedAt,
+      expires_at: expiresAt,
+      remaining: remainingMs,
+    }
+  })
+}
+
 usersRouter.get('/summary', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
@@ -84,34 +115,9 @@ usersRouter.get('/failed-payments', requireAdminPanelAccess, async (req, res) =>
 usersRouter.get('/', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
-    if (String(req.query.legacy ?? '') === '1') {
+    if (!wantsPaginatedUsersList(req)) {
       const rows = await billing.listDeviceUsers()
-      const now = Date.now()
-      return res.json(
-        rows.map((r) => {
-          const exp = r.expires_at instanceof Date ? r.expires_at : new Date(String(r.expires_at))
-          const expiresAt = exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toISOString() : null
-          const startedAtDate =
-            r.started_at instanceof Date ? r.started_at : new Date(String(r.started_at))
-          const startedAt =
-            startedAtDate instanceof Date && !Number.isNaN(startedAtDate.getTime())
-              ? startedAtDate.toISOString()
-              : null
-          const remainingMs =
-            expiresAt != null ? Math.max(0, new Date(expiresAt).getTime() - now) : 0
-          const active =
-            r.status === 'active' && expiresAt != null && new Date(expiresAt).getTime() > now
-          return {
-            device_id: String(r.device_id ?? ''),
-            phone_number: String(r.phone_number ?? ''),
-            plan_id: r.plan_id != null ? Number(r.plan_id) : null,
-            status: active ? 'active' : 'expired',
-            started_at: startedAt,
-            expires_at: expiresAt,
-            remaining: remainingMs,
-          }
-        }),
-      )
+      return res.json(mapLegacyDeviceUsers(rows))
     }
     const out = await listAdminAllSubscriptions(parseListQuery(req))
     res.json({ ok: true, ...out })

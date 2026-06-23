@@ -16,6 +16,10 @@ services:
       - key: VITE_API_BASE_URL
         value: https://osmani-admin-api.onrender.com
     routes:
+      # Static host has no Node /api — proxy API paths to Render Node service (legacy admin SPA).
+      - type: redirect
+        source: /api/*
+        destination: https://osmani-admin-api.onrender.com/api/:splat
       - type: rewrite
         source: /*
         destination: /index.html
