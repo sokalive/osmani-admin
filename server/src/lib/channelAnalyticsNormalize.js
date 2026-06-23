@@ -2,7 +2,6 @@
  * Canonical channel id for live_sessions analytics (numeric id as string).
  * Maps legacy name/slug payloads and v15–v24 field variants to channels.id.
  */
-import { invalidateChannelIdNameMapCache } from '../store.js'
 
 function parseText(v) {
   const s = String(v ?? '').trim()
@@ -19,7 +18,6 @@ const INDEX_TTL_MS = Math.max(
 export function invalidateChannelAnalyticsIndex() {
   _indexCache = null
   _indexCacheAt = 0
-  invalidateChannelIdNameMapCache()
 }
 
 /**
