@@ -1,5 +1,12 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
+import {
+  getAdminUsersSummary,
+  listAdminActivePaidUsers,
+  listAdminAllSubscriptions,
+  listAdminExpiringSoonUsers,
+  listAdminFailedPayments,
+} from '../lib/adminUsersList.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
@@ -17,38 +24,100 @@ function notifyDeviceSubscription(deviceId, orderId) {
   })
 }
 
-usersRouter.get('/', requireAdminPanelAccess, async (_req, res) => {
+function parseListQuery(req) {
+  return {
+    page: req.query.page,
+    limit: req.query.limit,
+    search: String(req.query.search ?? req.query.q ?? '').trim(),
+    sort: String(req.query.sort ?? 'newest').trim(),
+    planId: req.query.plan_id ?? req.query.planId ?? 'all',
+    provider: String(req.query.provider ?? 'all').trim().toLowerCase(),
+    status: String(req.query.status ?? 'all').trim().toLowerCase(),
+    within: String(req.query.within ?? '7d').trim(),
+  }
+}
+
+usersRouter.get('/summary', requireAdminPanelAccess, async (_req, res) => {
   try {
-    const rows = await billing.listDeviceUsers()
-    const now = Date.now()
-    res.json(
-      rows.map((r) => {
-        const exp = r.expires_at instanceof Date ? r.expires_at : new Date(String(r.expires_at))
-        const expiresAt = exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toISOString() : null
-        const startedAtDate =
-          r.started_at instanceof Date ? r.started_at : new Date(String(r.started_at))
-        const startedAt =
-          startedAtDate instanceof Date && !Number.isNaN(startedAtDate.getTime())
-            ? startedAtDate.toISOString()
-            : null
-        const remainingMs =
-          expiresAt != null ? Math.max(0, new Date(expiresAt).getTime() - now) : 0
-        const active =
-          r.status === 'active' && expiresAt != null && new Date(expiresAt).getTime() > now
-        return {
-          device_id: String(r.device_id ?? ''),
-          phone_number: String(r.phone_number ?? ''),
-          plan_id: r.plan_id != null ? Number(r.plan_id) : null,
-          status: active ? 'active' : 'expired',
-          started_at: startedAt,
-          expires_at: expiresAt,
-          remaining: remainingMs,
-        }
-      }),
-    )
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    const summary = await getAdminUsersSummary()
+    res.json({ ok: true, summary })
+  } catch (e) {
+    console.error('[users] GET /summary failed:', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+usersRouter.get('/active', requireAdminPanelAccess, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    const out = await listAdminActivePaidUsers(parseListQuery(req))
+    res.json({ ok: true, ...out })
+  } catch (e) {
+    console.error('[users] GET /active failed:', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+usersRouter.get('/expiring', requireAdminPanelAccess, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    const out = await listAdminExpiringSoonUsers(parseListQuery(req))
+    res.json({ ok: true, ...out })
+  } catch (e) {
+    console.error('[users] GET /expiring failed:', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+usersRouter.get('/failed-payments', requireAdminPanelAccess, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    const out = await listAdminFailedPayments(parseListQuery(req))
+    res.json({ ok: true, ...out })
+  } catch (e) {
+    console.error('[users] GET /failed-payments failed:', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+usersRouter.get('/', requireAdminPanelAccess, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    if (String(req.query.legacy ?? '') === '1') {
+      const rows = await billing.listDeviceUsers()
+      const now = Date.now()
+      return res.json(
+        rows.map((r) => {
+          const exp = r.expires_at instanceof Date ? r.expires_at : new Date(String(r.expires_at))
+          const expiresAt = exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toISOString() : null
+          const startedAtDate =
+            r.started_at instanceof Date ? r.started_at : new Date(String(r.started_at))
+          const startedAt =
+            startedAtDate instanceof Date && !Number.isNaN(startedAtDate.getTime())
+              ? startedAtDate.toISOString()
+              : null
+          const remainingMs =
+            expiresAt != null ? Math.max(0, new Date(expiresAt).getTime() - now) : 0
+          const active =
+            r.status === 'active' && expiresAt != null && new Date(expiresAt).getTime() > now
+          return {
+            device_id: String(r.device_id ?? ''),
+            phone_number: String(r.phone_number ?? ''),
+            plan_id: r.plan_id != null ? Number(r.plan_id) : null,
+            status: active ? 'active' : 'expired',
+            started_at: startedAt,
+            expires_at: expiresAt,
+            remaining: remainingMs,
+          }
+        }),
+      )
+    }
+    const out = await listAdminAllSubscriptions(parseListQuery(req))
+    res.json({ ok: true, ...out })
   } catch (e) {
     console.error('[users] GET / failed:', e)
-    res.status(500).json({ error: String(e.message || e) })
+    res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
 
@@ -162,4 +231,3 @@ usersRouter.delete('/:device_id', requireAdminPanelAccess, async (req, res) => {
     res.status(500).json({ error: String(e.message || e) })
   }
 })
-

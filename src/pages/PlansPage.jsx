@@ -5,7 +5,7 @@ import FlashMessage from '../components/FlashMessage'
 import ToggleSwitch from '../components/ToggleSwitch'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
-import { deletePlan, getPlans, getUsers, postPlan, putPlan } from '../lib/api'
+import { deletePlan, getPlans, getUsersLegacy, postPlan, putPlan } from '../lib/api'
 import { formatTsh } from '../lib/formatMoney'
 
 const EXPIRY_TYPES = [
@@ -68,7 +68,12 @@ function expiryLabel(type) {
 
 function countActiveSubs(planId, users) {
   const now = Date.now()
-  return users.filter((u) => u.planId === planId && new Date(u.expiryDate).getTime() > now).length
+  return users.filter(
+    (u) =>
+      Number(u.plan_id) === Number(planId) &&
+      u.status === 'active' &&
+      new Date(u.expires_at).getTime() > now,
+  ).length
 }
 
 const editBtnClass =
@@ -81,7 +86,7 @@ function PlansPage() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [p, u] = await Promise.all([getPlans(), getUsers()])
+      const [p, u] = await Promise.all([getPlans(), getUsersLegacy()])
       setPlans(Array.isArray(p) ? p : [])
       setUsers(Array.isArray(u) ? u : [])
     } catch (e) {

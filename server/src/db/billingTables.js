@@ -388,6 +388,21 @@ export async function ensureBillingTables(client) {
     ON transactions (device_id, created_at DESC)
     WHERE status = 'completed' AND plan_id IS NOT NULL;
   `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transactions_phone_idx
+    ON transactions (phone)
+    WHERE phone IS NOT NULL AND trim(phone) <> '';
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transactions_status_created_admin_idx
+    ON transactions (status, created_at DESC)
+    WHERE plan_id IS NOT NULL;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_subscriptions_active_expires_idx
+    ON device_subscriptions (expires_at ASC)
+    WHERE status = 'active';
+  `)
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS transfer_codes (

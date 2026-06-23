@@ -202,7 +202,38 @@ export const putPlan = (id, body) => adminApiPut(`/plans/${encodeURIComponent(id
 export const deletePlan = (id) => adminApiDelete(`/plans/${encodeURIComponent(id)}`)
 
 /** --- Users --- (admin-only; drives subscription rows — Android notified via SSE + subscription-stream) */
-export const getUsers = () => adminApiGet('/users')
+function usersListQuery(params = {}) {
+  const q = new URLSearchParams()
+  if (params.page != null) q.set('page', String(params.page))
+  if (params.limit != null) q.set('limit', String(params.limit))
+  if (params.search) q.set('search', String(params.search))
+  if (params.sort) q.set('sort', String(params.sort))
+  if (params.plan_id != null && params.plan_id !== 'all') q.set('plan_id', String(params.plan_id))
+  if (params.provider && params.provider !== 'all') q.set('provider', String(params.provider))
+  if (params.status && params.status !== 'all') q.set('status', String(params.status))
+  if (params.within) q.set('within', String(params.within))
+  return q.toString()
+}
+
+export const getUsersSummary = () => adminApiGet('/users/summary')
+export const getUsersActive = (params = {}) => {
+  const qs = usersListQuery(params)
+  return adminApiGet(qs ? `/users/active?${qs}` : '/users/active')
+}
+export const getUsersExpiring = (params = {}) => {
+  const qs = usersListQuery(params)
+  return adminApiGet(qs ? `/users/expiring?${qs}` : '/users/expiring')
+}
+export const getUsersFailedPayments = (params = {}) => {
+  const qs = usersListQuery(params)
+  return adminApiGet(qs ? `/users/failed-payments?${qs}` : '/users/failed-payments')
+}
+export const getUsers = (params = {}) => {
+  const qs = usersListQuery(params)
+  return adminApiGet(qs ? `/users?${qs}` : '/users')
+}
+/** Full list for legacy admin screens (e.g. Plans subscriber counts). Prefer paginated getUsers. */
+export const getUsersLegacy = () => adminApiGet('/users?legacy=1')
 export const postUser = (body) => adminApiPost('/users', body)
 export const putUser = (id, body) => adminApiPut(`/users/${encodeURIComponent(id)}`, body)
 export const deleteUser = (id, { force = false } = {}) => {
