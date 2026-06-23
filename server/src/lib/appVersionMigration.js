@@ -52,21 +52,38 @@ function classifyDevice({ sawLegacy, sawV24, maxLegacyCode }) {
   return { status: 'unknown', maxLegacyCode: 0 }
 }
 
-/**
- * @param {{ search?: string, limit?: number, offset?: number }} opts
- */
-export async function queryAppVersionMigrationStats(opts = {}) {
-  const pool = getPool()
-  if (!pool) {
-    return { ok: false, error: 'Database not configured' }
+function summarizeMigrationDevices(classifiedDevices) {
+  const allDevices = classifiedDevices
+  const legacyPopulation = allDevices.filter((d) => d.sawLegacy)
+  const updatedToV24 = legacyPopulation.filter((d) => d.status === 'updated_to_v24')
+  const legacyNotUpdated = legacyPopulation.filter((d) => d.status === 'legacy_not_updated')
+  const brandNewV24 = allDevices.filter((d) => d.status === 'brand_new_v24')
+  const migrationPopulation = allDevices.filter((d) => d.sawLegacy || d.sawV24)
+
+  const byLegacyVersion = emptyByVersion()
+  for (const d of legacyPopulation) {
+    const v = d.maxLegacyCode
+    if (v >= LEGACY_MIN && v <= LEGACY_MAX) {
+      byLegacyVersion[`v${v}`] = (byLegacyVersion[`v${v}`] || 0) + 1
+    }
   }
 
+  const totalUniqueDevices = migrationPopulation.length
+
+  return {
+    legacyNotUpdated: legacyNotUpdated.length,
+    updatedToV24: updatedToV24.length,
+    totalLegacyPopulation: legacyPopulation.length,
+    brandNewV24: brandNewV24.length,
+    totalUniqueDevices,
+    byLegacyVersion,
+    migrationPopulation,
+  }
+}
+
+async function buildMigrationDeviceMap(pool) {
   await ensureClientApiTelemetryTable(pool)
   await ensureDeviceIntelligenceTables(pool)
-
-  const search = String(opts.search ?? '').trim()
-  const limit = Math.min(100, Math.max(1, Number(opts.limit) || 25))
-  const offset = Math.max(0, Number(opts.offset) || 0)
 
   const { rows: telemetryRows } = await pool.query(
     `SELECT
@@ -151,25 +168,54 @@ export async function queryAppVersionMigrationStats(opts = {}) {
     absorbVersion(row.device_id, versionCodeFromAppVersionString(row.app_version))
   }
 
-  const allDevices = [...deviceMap.values()].map((d) => {
+  return [...deviceMap.values()].map((d) => {
     const { status, maxLegacyCode } = classifyDevice(d)
     return { ...d, status, maxLegacyCode }
   })
+}
 
-  const legacyPopulation = allDevices.filter((d) => d.sawLegacy)
-  const updatedToV24 = legacyPopulation.filter((d) => d.status === 'updated_to_v24')
-  const legacyNotUpdated = legacyPopulation.filter((d) => d.status === 'legacy_not_updated')
-  const brandNewV24 = allDevices.filter((d) => d.status === 'brand_new_v24')
-
-  const byLegacyVersion = emptyByVersion()
-  for (const d of legacyPopulation) {
-    const v = d.maxLegacyCode
-    if (v >= LEGACY_MIN && v <= LEGACY_MAX) {
-      byLegacyVersion[`v${v}`] = (byLegacyVersion[`v${v}`] || 0) + 1
-    }
+/** Shared migration population counts (unique device_id). */
+export async function queryMigrationDevicePopulationSummary() {
+  const pool = getPool()
+  if (!pool) {
+    return { ok: false, error: 'Database not configured' }
   }
 
-  let filtered = allDevices.filter((d) => d.sawLegacy || d.sawV24)
+  const allDevices = await buildMigrationDeviceMap(pool)
+  const classified = allDevices.map((d) => ({ ...d, ...classifyDevice(d) }))
+  const summary = summarizeMigrationDevices(classified)
+
+  return {
+    ok: true,
+    summary: {
+      legacyNotUpdated: summary.legacyNotUpdated,
+      updatedToV24: summary.updatedToV24,
+      totalLegacyPopulation: summary.totalLegacyPopulation,
+      brandNewV24: summary.brandNewV24,
+      totalUniqueDevices: summary.totalUniqueDevices,
+      byLegacyVersion: summary.byLegacyVersion,
+    },
+  }
+}
+
+/**
+ * @param {{ search?: string, limit?: number, offset?: number }} opts
+ */
+export async function queryAppVersionMigrationStats(opts = {}) {
+  const pool = getPool()
+  if (!pool) {
+    return { ok: false, error: 'Database not configured' }
+  }
+
+  const search = String(opts.search ?? '').trim()
+  const limit = Math.min(100, Math.max(1, Number(opts.limit) || 25))
+  const offset = Math.max(0, Number(opts.offset) || 0)
+
+  const allDevices = await buildMigrationDeviceMap(pool)
+  const classified = allDevices.map((d) => ({ ...d, ...classifyDevice(d) }))
+  const summary = summarizeMigrationDevices(classified)
+
+  let filtered = summary.migrationPopulation
   if (search) {
     const q = search.toLowerCase()
     filtered = filtered.filter(
@@ -197,11 +243,12 @@ export async function queryAppVersionMigrationStats(opts = {}) {
   return {
     ok: true,
     summary: {
-      legacyNotUpdated: legacyNotUpdated.length,
-      updatedToV24: updatedToV24.length,
-      totalLegacyPopulation: legacyPopulation.length,
-      brandNewV24: brandNewV24.length,
-      byLegacyVersion,
+      legacyNotUpdated: summary.legacyNotUpdated,
+      updatedToV24: summary.updatedToV24,
+      totalLegacyPopulation: summary.totalLegacyPopulation,
+      brandNewV24: summary.brandNewV24,
+      totalUniqueDevices: summary.totalUniqueDevices,
+      byLegacyVersion: summary.byLegacyVersion,
     },
     pagination: {
       total: filtered.length,

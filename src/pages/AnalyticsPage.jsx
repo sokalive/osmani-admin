@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import InstallsGrowthChart from '../components/InstallsGrowthChart'
+import { LiveLocationRowList, normalizePlaceRows } from '../components/LiveUserLocationsCard'
 import ResetInstallAnalyticsPanel from '../components/ResetInstallAnalyticsPanel'
 import { useToast } from '../context/ToastContext.jsx'
 import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
@@ -142,15 +143,7 @@ function AnalyticsPage() {
   const vRev = useCountUp(revenueTodayValue, { duration: 1000 })
   const vInstalls = useCountUp(totalInstallsBase, { duration: 1200 })
 
-  const topLocations = useMemo(
-    () =>
-      (Array.isArray(locations) ? locations : []).slice(0, 8).map((r) => ({
-        countryCode: r.countryCode ?? '',
-        country: String(r.country || r.countryName || 'Unknown'),
-        users: Number(r.users) || 0,
-      })),
-    [locations],
-  )
+  const topLocations = useMemo(() => normalizePlaceRows(locations), [locations])
 
   return (
     <>
@@ -273,26 +266,10 @@ function AnalyticsPage() {
               <Globe className="h-5 w-5 text-cyan-300" />
               Live locations
             </h2>
-            <p className="mt-1 text-sm text-slate-500">Active users grouped by country</p>
-            <ul className="mt-5 space-y-3">
-              {topLocations.length === 0 ? (
-                <li className="text-sm text-slate-500">
-                  {isLoading && !loaded ? 'Loading live locations...' : 'No active location data yet.'}
-                </li>
-              ) : (
-                topLocations.map((row) => (
-                  <li
-                    key={row.countryCode || row.country || row.users}
-                    className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2"
-                  >
-                    <span className="text-sm text-slate-200">{row.country}</span>
-                    <span className="text-sm font-semibold tabular-nums text-cyan-200">
-                      {row.users === 1 ? '1 User' : `${row.users.toLocaleString('en-TZ')} Users`}
-                    </span>
-                  </li>
-                ))
-              )}
-            </ul>
+            <p className="mt-1 text-sm text-slate-500">Active users grouped by city or region</p>
+            <div className="mt-5">
+              <LiveLocationRowList rows={topLocations} />
+            </div>
           </section>
         </div>
 

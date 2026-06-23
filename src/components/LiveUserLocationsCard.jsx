@@ -3,7 +3,7 @@ import { MapPin } from 'lucide-react'
 import { aggregateLocationsByPlace } from '../../server/src/lib/analyticsLocation.js'
 
 /** Regional-indicator pair → flag emoji (ISO 3166-1 alpha-2). */
-function flagEmoji(countryCode) {
+export function flagEmoji(countryCode) {
   const code = (countryCode || '').toUpperCase()
   if (code.length !== 2) return '🌐'
   const A = 0x1f1e6
@@ -15,16 +15,75 @@ function flagEmoji(countryCode) {
   }
 }
 
-function userCountLabel(n) {
+export function userCountLabel(n) {
   const count = Math.max(0, Math.floor(Number(n) || 0))
   if (count <= 0) return ''
   if (count === 1) return '1 User'
   return `${count} Users`
 }
 
-function normalizePlaceRows(locations) {
-  return aggregateLocationsByPlace(Array.isArray(locations) ? locations : []).filter(
-    (row) => row.users > 0,
+/** Accept API place rows or raw SQL buckets; never roll up to country-only. */
+export function normalizePlaceRows(locations) {
+  const list = Array.isArray(locations) ? locations : []
+  if (
+    list.length > 0 &&
+    list.every((row) => row && (row.placeName != null || row.location != null))
+  ) {
+    return list
+      .filter((row) => Number(row.users) > 0)
+      .map((row) => ({
+        countryCode: row.countryCode || '',
+        placeName: row.placeName || row.location || 'Unknown Location',
+        users: Number(row.users) || 0,
+        location: row.location || row.country || row.placeName || 'Unknown Location',
+      }))
+  }
+  return aggregateLocationsByPlace(
+    list.map((row) => ({
+      country: row.country ?? row.location ?? row.placeName ?? '',
+      users: row.users,
+    })),
+  ).filter((row) => row.users > 0)
+}
+
+export function LiveLocationRowList({ rows, scroll = true, className = '' }) {
+  if (!rows.length) {
+    return <p className="py-2 text-sm text-slate-500">No active location data yet.</p>
+  }
+  return (
+    <ul
+      className={`live-locations-list ${scroll ? 'live-locations-list--scroll' : ''} ${className}`.trim()}
+    >
+      {rows.map((row) => {
+        const isUnknown = !row.countryCode || row.placeName === 'Unknown Location'
+        const code = row.countryCode || ''
+        const place = row.placeName || 'Unknown Location'
+        const rowKey = row.location || `${code}|${place}|${row.users}`
+        return (
+          <li key={rowKey} className="live-location-row">
+            <span className="live-location-primary">
+              <span
+                className="inline-flex shrink-0 items-center justify-center leading-none"
+                style={{ fontSize: '18px' }}
+                aria-hidden
+              >
+                {flagEmoji(row.countryCode)}
+              </span>
+              {!isUnknown ? (
+                <>
+                  <span className="live-location-code">{code}</span>
+                  <span className="live-location-sep" aria-hidden>
+                    —
+                  </span>
+                </>
+              ) : null}
+              <span className="live-location-name">{place}</span>
+            </span>
+            <span className="live-location-count">{userCountLabel(row.users)}</span>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
@@ -52,41 +111,7 @@ function LiveUserLocationsCard({ locations, totalOnline = 0, className = 'dashbo
           Total Online Users:{' '}
           <span className="font-bold tabular-nums text-white">{total.toLocaleString('en-US')}</span>
         </p>
-        {rows.length === 0 ? (
-          <p className="py-2 text-sm text-slate-500">No active location data yet.</p>
-        ) : (
-          <ul className="live-locations-list live-locations-list--scroll">
-            {rows.map((row) => {
-              const isUnknown = !row.countryCode || row.placeName === 'Unknown Location'
-              const code = row.countryCode || ''
-              const place = row.placeName || 'Unknown Location'
-              const rowKey = row.location || `${code}|${place}`
-              return (
-                <li key={rowKey} className="live-location-row">
-                  <span className="live-location-primary">
-                    <span
-                      className="inline-flex shrink-0 items-center justify-center leading-none"
-                      style={{ fontSize: '18px' }}
-                      aria-hidden
-                    >
-                      {flagEmoji(row.countryCode)}
-                    </span>
-                    {!isUnknown ? (
-                      <>
-                        <span className="live-location-code">{code}</span>
-                        <span className="live-location-sep" aria-hidden>
-                          —
-                        </span>
-                      </>
-                    ) : null}
-                    <span className="live-location-name">{place}</span>
-                  </span>
-                  <span className="live-location-count">{userCountLabel(row.users)}</span>
-                </li>
-              )
-            })}
-          </ul>
-        )}
+        <LiveLocationRowList rows={rows} />
       </div>
     </article>
   )

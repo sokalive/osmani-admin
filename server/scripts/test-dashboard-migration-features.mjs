@@ -4,6 +4,7 @@
  */
 import {
   aggregateLocationsByPlace,
+  isCountryNameOnlyPlace,
   UNKNOWN_LOCATION,
 } from '../src/lib/analyticsLocation.js'
 import {
@@ -44,6 +45,15 @@ const merged = aggregateLocationsByPlace([
   { country: 'TZ • Moshi', users: 2 },
 ])
 assert(merged.length === 1 && merged[0].users === 4, 'merge same place')
+
+const countryOnly = aggregateLocationsByPlace([{ country: 'TZ • Tanzania', users: 7 }])
+assert(
+  countryOnly.length === 1 &&
+    countryOnly[0].placeName === UNKNOWN_LOCATION &&
+    countryOnly[0].users === 7,
+  'country-only label becomes Unknown Location',
+)
+assert(isCountryNameOnlyPlace('TZ', 'Tanzania'), 'detect country-only place')
 
 const legacyBlocked = applyChannelPlaybackGate(
   { requireUpdateBeforeChannelPlayback: true },

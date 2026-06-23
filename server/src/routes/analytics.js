@@ -13,6 +13,7 @@ import {
   normalizeLocationPayload,
 } from '../lib/analyticsLocation.js'
 import { parseChannelRefFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
+import { queryMigrationDevicePopulationSummary } from '../lib/appVersionMigration.js'
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
 import { readChannelIdNameMap } from '../store.js'
 
@@ -26,6 +27,7 @@ const OVERVIEW_ZERO = {
   newUsersToday: 0,
   revenueToday: 0,
   totalInstalls: 0,
+  totalUniqueDevices: 0,
 }
 
 const LIVE_WINDOW_INTERVAL = livePresenceWindowInterval()
@@ -80,8 +82,14 @@ function parseInstallInstanceIdFromBody(body) {
 }
 
 async function queryOverviewStats(pool) {
-  const [onlineNowRaw, dauTodayRaw, newUsersTodayRaw, revenueTodayRaw, totalInstallsRaw] =
-    await Promise.all([
+  const [
+    onlineNowRaw,
+    dauTodayRaw,
+    newUsersTodayRaw,
+    revenueTodayRaw,
+    totalInstallsRaw,
+    migrationSummary,
+  ] = await Promise.all([
       safeQueryScalar(
         pool,
         `SELECT COUNT(*)::int AS c
@@ -124,7 +132,15 @@ async function queryOverviewStats(pool) {
         'overview.totalInstalls',
         (r) => numOrZero(r?.c),
       ),
+      queryMigrationDevicePopulationSummary().catch((e) => {
+        console.error('[analytics] overview.totalUniqueDevices:', e)
+        return { ok: false }
+      }),
     ])
+  const totalUniqueDevices =
+    migrationSummary?.ok && migrationSummary.summary
+      ? numOrZero(migrationSummary.summary.totalUniqueDevices)
+      : 0
   const degraded =
     onlineNowRaw === null ||
     dauTodayRaw === null ||
@@ -137,6 +153,7 @@ async function queryOverviewStats(pool) {
     newUsersToday: newUsersTodayRaw ?? 0,
     revenueToday: revenueTodayRaw ?? 0,
     totalInstalls: totalInstallsRaw ?? 0,
+    totalUniqueDevices,
     livePresenceWindowSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
     sessionPruneSeconds: SESSION_PRUNE_SECONDS,
     sessionTtlSeconds: LIVE_PRESENCE_WINDOW_SECONDS,

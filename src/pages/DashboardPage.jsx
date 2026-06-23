@@ -15,7 +15,7 @@ const emerald =
 
 const OVERVIEW_FALLBACK = {
   onlineNow: 0,
-  totalInstalls: 0,
+  totalUniqueDevices: 0,
   revenueToday: 0,
   newUsersToday: 0,
 }
@@ -35,7 +35,7 @@ function DashboardPage() {
       const [snap, t] = await Promise.all([getAnalyticsSnapshot(), getAnalyticsTrend()])
       setOverview({
         onlineNow: snap?.onlineNow,
-        totalInstalls: snap?.totalInstalls,
+        totalUniqueDevices: snap?.totalUniqueDevices,
         revenueToday: snap?.revenueToday,
         newUsersToday: snap?.newUsersToday,
         dauToday: snap?.dauToday,
@@ -69,8 +69,8 @@ function DashboardPage() {
 
   useAnalyticsLiveRefresh(load, { pollMs: 15_000 })
 
-  const installsFormatted = useMemo(() => {
-    const n = Number(overview?.totalInstalls)
+  const uniqueDevicesFormatted = useMemo(() => {
+    const n = Number(overview?.totalUniqueDevices)
     if (!Number.isFinite(n) || n <= 0) return '0'
     return n.toLocaleString('en-TZ')
   }, [overview])
@@ -102,8 +102,8 @@ function DashboardPage() {
     {
       gradientClass: emerald,
       className: 'dashboard-card',
-      title: 'Total App Installs',
-      value: installsFormatted,
+      title: 'Total Unique Devices',
+      value: uniqueDevicesFormatted,
       icon: Activity,
     },
   ]

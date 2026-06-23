@@ -292,6 +292,16 @@ export function parsePlaceFromStoredLabel(raw) {
   return titlePlace(s)
 }
 
+/** True when stored place is only the country name (no city/region resolved). */
+export function isCountryNameOnlyPlace(countryCode, placeName) {
+  const code = String(countryCode || '').slice(0, 2).toUpperCase()
+  const place = String(placeName || '').trim()
+  if (!code || !place) return false
+  const countryName = countryNameForCode(code)
+  if (countryName === UNKNOWN_LOCATION) return false
+  return place.toLowerCase() === countryName.toLowerCase()
+}
+
 /**
  * Dashboard rows grouped by country + city/region (not rolled up to country only).
  * Returns `{ countryCode, placeName, users, country, location }` sorted by users desc.
@@ -307,6 +317,9 @@ export function aggregateLocationsByPlace(rows) {
     if (!placeName && code) {
       const countryOnly = countryNameForCode(code)
       placeName = countryOnly !== UNKNOWN_LOCATION ? countryOnly : ''
+    }
+    if (isCountryNameOnlyPlace(code, placeName)) {
+      placeName = UNKNOWN_LOCATION
     }
     if (!placeName) placeName = UNKNOWN_LOCATION
     const countryCode = placeName === UNKNOWN_LOCATION ? '' : code
