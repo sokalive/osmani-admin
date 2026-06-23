@@ -9,7 +9,7 @@ import {
 } from '../lib/livePresence.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import {
-  aggregateLocationsByCountryCode,
+  aggregateLocationsByPlace,
   normalizeLocationPayload,
 } from '../lib/analyticsLocation.js'
 import { parseChannelRefFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
@@ -193,7 +193,7 @@ async function queryLocationStats(pool) {
      ORDER BY users DESC`,
     [LIVE_WINDOW_INTERVAL],
   )
-  return aggregateLocationsByCountryCode(rows)
+  return aggregateLocationsByPlace(rows)
 }
 
 analyticsRouter.get('/snapshot', async (_req, res) => {

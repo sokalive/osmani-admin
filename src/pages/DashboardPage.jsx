@@ -118,7 +118,10 @@ function DashboardPage() {
             <StatCard key={`top-${section1Cards[0].title}`} {...section1Cards[0]} />
             <MostWatchedChannelsListCard channels={mostWatched} />
             <MostWatchedChannelsCard channels={topFiveEligible} />
-            <LiveUserLocationsCard locations={locations} />
+            <LiveUserLocationsCard
+              locations={locations}
+              totalOnline={Number(overview?.onlineNow) || 0}
+            />
           </section>
         </div>
         <LiveUsersTrendSection points={trend} />

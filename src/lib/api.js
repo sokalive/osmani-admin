@@ -924,7 +924,16 @@ export const postSmsSend = (body) => adminApiPost('/admin/sms/send', body)
 
 export const getAppUpdateSettings = () => adminApiGet('/settings/app-update')
 export const putAppUpdateSettings = (body) => adminApiPut('/settings/app-update', body)
-export const getUpdateCheck = () => apiGet('/update-check')
+export const getUpdateCheck = (versionCode) =>
+  apiGet(`/update-check${versionCode != null ? `?version_code=${encodeURIComponent(versionCode)}` : ''}`)
+export const getAppVersionMigrationStats = ({ search = '', limit = 25, offset = 0 } = {}) => {
+  const q = new URLSearchParams()
+  if (search) q.set('q', search)
+  if (limit != null) q.set('limit', String(limit))
+  if (offset != null) q.set('offset', String(offset))
+  const qs = q.toString()
+  return adminApiGet(`/admin/app-version-migration/stats${qs ? `?${qs}` : ''}`)
+}
 
 /** Fetch title, versionName, and package id from a Google Play Store listing URL. */
 export const postAppUpdateParsePlayStore = (url, { persist = true } = {}) =>

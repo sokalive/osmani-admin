@@ -58,7 +58,8 @@ export async function ensureBillingTables(client) {
       ('update_playstore_url', ''),
       ('update_version_code', '24'),
       ('update_version_name', '1.8.2'),
-      ('update_package_name', 'com.burudanitv.app')
+      ('update_package_name', 'com.burudanitv.app'),
+      ('update_require_before_channel', 'false')
     ON CONFLICT (key) DO NOTHING;
   `)
 

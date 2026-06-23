@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { MapPin } from 'lucide-react'
-import { aggregateLocationsByCountryCode } from '../../server/src/lib/analyticsLocation.js'
+import { aggregateLocationsByPlace } from '../../server/src/lib/analyticsLocation.js'
 
 /** Regional-indicator pair → flag emoji (ISO 3166-1 alpha-2). */
 function flagEmoji(countryCode) {
@@ -22,18 +22,18 @@ function userCountLabel(n) {
   return `${count} Users`
 }
 
-function normalizeAggregatedRows(locations) {
-  const aggregated = aggregateLocationsByCountryCode(
-    Array.isArray(locations) ? locations : [],
+function normalizePlaceRows(locations) {
+  return aggregateLocationsByPlace(Array.isArray(locations) ? locations : []).filter(
+    (row) => row.users > 0,
   )
-  return aggregated.filter((row) => row.users > 0)
 }
 
 /**
  * Same footprint as other `.dashboard-card` tiles — header fixed, list scrolls inside.
  */
-function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
-  const rows = useMemo(() => normalizeAggregatedRows(locations), [locations])
+function LiveUserLocationsCard({ locations, totalOnline = 0, className = 'dashboard-card' }) {
+  const rows = useMemo(() => normalizePlaceRows(locations), [locations])
+  const total = Math.max(0, Math.floor(Number(totalOnline) || 0))
 
   return (
     <article
@@ -48,15 +48,21 @@ function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
       </div>
 
       <div className="card-content">
+        <p className="live-locations-total mb-3 text-sm font-semibold text-slate-300">
+          Total Online Users:{' '}
+          <span className="font-bold tabular-nums text-white">{total.toLocaleString('en-US')}</span>
+        </p>
         {rows.length === 0 ? (
           <p className="py-2 text-sm text-slate-500">No active location data yet.</p>
         ) : (
-          <ul className="live-locations-list">
+          <ul className="live-locations-list live-locations-list--scroll">
             {rows.map((row) => {
-              const code = row.countryCode || '—'
-              const name = row.countryName || 'Unknown Location'
+              const isUnknown = !row.countryCode || row.placeName === 'Unknown Location'
+              const code = row.countryCode || ''
+              const place = row.placeName || 'Unknown Location'
+              const rowKey = row.location || `${code}|${place}`
               return (
-                <li key={row.countryCode || row.countryName} className="live-location-row">
+                <li key={rowKey} className="live-location-row">
                   <span className="live-location-primary">
                     <span
                       className="inline-flex shrink-0 items-center justify-center leading-none"
@@ -65,11 +71,15 @@ function LiveUserLocationsCard({ locations, className = 'dashboard-card' }) {
                     >
                       {flagEmoji(row.countryCode)}
                     </span>
-                    <span className="live-location-code">{code}</span>
-                    <span className="live-location-sep" aria-hidden>
-                      —
-                    </span>
-                    <span className="live-location-name">{name}</span>
+                    {!isUnknown ? (
+                      <>
+                        <span className="live-location-code">{code}</span>
+                        <span className="live-location-sep" aria-hidden>
+                          —
+                        </span>
+                      </>
+                    ) : null}
+                    <span className="live-location-name">{place}</span>
                   </span>
                   <span className="live-location-count">{userCountLabel(row.users)}</span>
                 </li>

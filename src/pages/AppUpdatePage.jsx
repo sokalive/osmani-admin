@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, RefreshCw, Smartphone, Store, Upload } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
+import AppVersionMigrationCard from '../components/AppVersionMigrationCard'
 import ToggleSwitch from '../components/ToggleSwitch'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
@@ -27,6 +28,7 @@ function defaultCfg() {
     versionCode: 0,
     versionName: '',
     packageName: '',
+    requireUpdateBeforeChannelPlayback: false,
   }
 }
 
@@ -110,6 +112,9 @@ function normalizeSettingsPayload(settings, runtime) {
     versionCode: Number.isFinite(versionCodeNum) && versionCodeNum > 0 ? Math.trunc(versionCodeNum) : 0,
     versionName: String(body.versionName ?? body.version_name ?? runtimeBody.version_name ?? '').trim(),
     packageName: String(body.packageName ?? body.package_name ?? runtimeBody.package_name ?? '').trim(),
+    requireUpdateBeforeChannelPlayback:
+      body.requireUpdateBeforeChannelPlayback === true ||
+      body.require_update_before_channel_playback === true,
   }
 }
 
@@ -450,8 +455,18 @@ function AppUpdatePage() {
                   checked={draft.autoDownload}
                   onChange={(v) => setDraft((d) => ({ ...d, autoDownload: v }))}
                 />
+                <ModeToggleRow
+                  title="Require Update Before Watching Channels"
+                  description="Block channel playback for v16–v23 until they update to v24 (v24 users are not affected)"
+                  checked={draft.requireUpdateBeforeChannelPlayback}
+                  onChange={(v) =>
+                    setDraft((d) => ({ ...d, requireUpdateBeforeChannelPlayback: v }))
+                  }
+                />
               </div>
             </section>
+
+            <AppVersionMigrationCard />
 
             <section className={cardClass()}>
               <h2 className="mb-1 text-lg font-bold text-white">Update Source</h2>

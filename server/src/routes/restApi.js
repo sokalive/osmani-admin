@@ -38,6 +38,7 @@ import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { runtimePublicRouter } from './runtimePublic.js'
 import { usersIntelligencePublicRouter } from './usersIntelligencePublic.js'
 import { usersIntelligenceAdminRouter } from './usersIntelligenceAdmin.js'
+import { appVersionMigrationAdminRouter } from './appVersionMigrationAdmin.js'
 import { trialWatchSettingsRouter } from './trialWatchSettings.js'
 import { trialWatchRouter } from './trialWatch.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
@@ -285,6 +286,7 @@ restApi.get('/admin/panel-diagnostics', requireAdminPanelAccess, async (_req, re
 restApi.use('/runtime', runtimePublicRouter)
 restApi.use('/users-intelligence', usersIntelligencePublicRouter)
 restApi.use('/admin/users-intelligence', usersIntelligenceAdminRouter)
+restApi.use('/admin/app-version-migration', appVersionMigrationAdminRouter)
 restApi.use(deviceSecurityReportsRouter)
 
 restApi.post('/zeno-webhook', handleZenoPayWebhook)

@@ -15,6 +15,31 @@ export const APP_UPDATE_NEVER_MIN = Math.max(
   parseVersionCode(process.env.APP_UPDATE_NEVER_MIN) || 24,
 )
 
+export const CHANNEL_PLAYBACK_BLOCK_TITLE =
+  'Huwezi kutazama channel hii hadi ufanye update'
+export const CHANNEL_PLAYBACK_BLOCK_MESSAGE =
+  'Bonyeza UPDATE kupata toleo jipya. Baada ya update, utaendelea kutumia Osmani TV kwenye mfumo mpya.'
+
+/**
+ * When admin enables channel gate, only clients below APP_UPDATE_NEVER_MIN receive block flags.
+ * @param {Record<string, unknown>} data
+ * @param {unknown} clientVersionInput
+ */
+export function applyChannelPlaybackGate(data, clientVersionInput) {
+  const base = data && typeof data === 'object' ? data : {}
+  const client = parseVersionCode(clientVersionInput)
+  const adminEnabled =
+    base.requireUpdateBeforeChannelPlayback === true ||
+    base.require_update_before_channel_playback === true
+  const active = adminEnabled && client > 0 && client < APP_UPDATE_NEVER_MIN
+  return {
+    ...base,
+    require_update_before_channel_playback: active,
+    channel_playback_block_title: active ? CHANNEL_PLAYBACK_BLOCK_TITLE : '',
+    channel_playback_block_message: active ? CHANNEL_PLAYBACK_BLOCK_MESSAGE : '',
+  }
+}
+
 /**
  * Admin flags → public decision. Auto Download is non-cancelable (same as Force Update).
  * @param {{ soft?: boolean, force?: boolean, autoDownload?: boolean, versionCode?: number, hasAnyUrl?: boolean }} opts

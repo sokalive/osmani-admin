@@ -4,6 +4,7 @@ import path from 'node:path'
 import { Router } from 'express'
 import {
   applyAppUpdateClientDecision,
+  applyChannelPlaybackGate,
   clientVersionFromRequest,
   enrichAppUpdateClientFields,
   resolveAppUpdateDecision,
@@ -34,6 +35,7 @@ const UPDATE_KEYS = {
   versionCode: 'update_version_code',
   versionName: 'update_version_name',
   packageName: 'update_package_name',
+  requireBeforeChannel: 'update_require_before_channel',
 }
 
 const DEFAULTS = {
@@ -49,6 +51,7 @@ const DEFAULTS = {
   [UPDATE_KEYS.versionCode]: '0',
   [UPDATE_KEYS.versionName]: '',
   [UPDATE_KEYS.packageName]: '',
+  [UPDATE_KEYS.requireBeforeChannel]: 'false',
 }
 
 const VERIFY_MAX_APK_BYTES = Math.max(
@@ -117,6 +120,9 @@ function toPublicConfig(rowsByKey, tag = 'decision', req = null) {
   const versionCode = parseVersionCode(rowsByKey[UPDATE_KEYS.versionCode] ?? DEFAULTS[UPDATE_KEYS.versionCode])
   const versionName = text(rowsByKey[UPDATE_KEYS.versionName] ?? DEFAULTS[UPDATE_KEYS.versionName], 64)
   const packageName = text(rowsByKey[UPDATE_KEYS.packageName] ?? DEFAULTS[UPDATE_KEYS.packageName], 256)
+  const requireUpdateBeforeChannelPlayback = asBool(
+    rowsByKey[UPDATE_KEYS.requireBeforeChannel] ?? DEFAULTS[UPDATE_KEYS.requireBeforeChannel],
+  )
   const hasAnyUrl = Boolean(apkUrlRaw || playstoreUrlRaw)
   const apkUrl = resolveHostedApkDownloadUrl(
     source === 'apk' ? pickFirstNonEmpty(apkUrlRaw, playstoreUrlRaw) : text(apkUrlRaw, 4000),
@@ -184,6 +190,7 @@ function toPublicConfig(rowsByKey, tag = 'decision', req = null) {
     versionCode,
     versionName,
     packageName,
+    requireUpdateBeforeChannelPlayback,
   })
 }
 
@@ -215,6 +222,11 @@ export function appUpdateToOtaPayload(data, configVersion = 0) {
     ...(d.update_target_reason
       ? { update_target_reason: String(d.update_target_reason) }
       : {}),
+    require_update_before_channel_playback:
+      d.require_update_before_channel_playback === true ||
+      d.requireUpdateBeforeChannelPlayback === true,
+    channel_playback_block_title: text(d.channel_playback_block_title, 256),
+    channel_playback_block_message: text(d.channel_playback_block_message, 4000),
   }
 }
 
@@ -236,8 +248,16 @@ export async function loadAppUpdatePublicPayload(configVersion, clientVersionCod
   }
   if (clientVersionCode > 0) {
     data = applyAppUpdateClientDecision(data, clientVersionCode)
+    data = applyChannelPlaybackGate(data, clientVersionCode)
   } else {
-    data = { ...data, decision: 'NONE', update_target_reason: 'no_client_version' }
+    data = {
+      ...data,
+      decision: 'NONE',
+      update_target_reason: 'no_client_version',
+      require_update_before_channel_playback: false,
+      channel_playback_block_title: '',
+      channel_playback_block_message: '',
+    }
   }
   return appUpdateToOtaPayload(data, configVersion)
 }
@@ -444,6 +464,7 @@ appUpdateRouter.get('/settings/app-update', requireAdminPanelAccess, async (_req
       versionCode: data.versionCode,
       versionName: data.versionName,
       packageName: data.packageName,
+      requireUpdateBeforeChannelPlayback: data.requireUpdateBeforeChannelPlayback,
     })
   } catch (e) {
     console.error('[settings/app-update] GET', e)
@@ -496,6 +517,9 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       ),
       [UPDATE_KEYS.versionName]: text(body.versionName, 64),
       [UPDATE_KEYS.packageName]: text(body.packageName, 256),
+      [UPDATE_KEYS.requireBeforeChannel]: String(
+        Boolean(body.requireUpdateBeforeChannelPlayback),
+      ),
     }
 
     await ensureAppSettingsTableOnce(pool)
@@ -556,6 +580,7 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       versionCode: stored.versionCode,
       versionName: stored.versionName,
       packageName: stored.packageName,
+      requireUpdateBeforeChannelPlayback: stored.requireUpdateBeforeChannelPlayback,
     })
   } catch (e) {
     console.error('[settings/app-update] PUT', e)
@@ -789,6 +814,9 @@ function updateCheckJsonFromOta(ota) {
     version_name: o.version_name,
     package_name: o.package_name,
     ...(o.update_target_reason ? { update_target_reason: o.update_target_reason } : {}),
+    require_update_before_channel_playback: o.require_update_before_channel_playback === true,
+    channel_playback_block_title: o.channel_playback_block_title || '',
+    channel_playback_block_message: o.channel_playback_block_message || '',
   }
 }
 
@@ -806,8 +834,11 @@ appUpdateRouter.get('/update-check', async (req, res) => {
   } catch (e) {
     console.error('[update-check] GET', e)
     const clientCode = clientVersionFromRequest(req)
-    const stale = applyAppUpdateClientDecision(
-      toPublicConfig({ ...DEFAULTS }, 'update-check:stale'),
+    const stale = applyChannelPlaybackGate(
+      applyAppUpdateClientDecision(
+        toPublicConfig({ ...DEFAULTS }, 'update-check:stale'),
+        clientCode,
+      ),
       clientCode,
     )
     return res.json(updateCheckJsonFromOta(appUpdateToOtaPayload(stale, 0)))
@@ -821,8 +852,11 @@ appUpdateRouter.post('/update-check', async (req, res) => {
   } catch (e) {
     console.error('[update-check] POST', e)
     const clientCode = clientVersionFromRequest(req)
-    const stale = applyAppUpdateClientDecision(
-      toPublicConfig({ ...DEFAULTS }, 'update-check:stale'),
+    const stale = applyChannelPlaybackGate(
+      applyAppUpdateClientDecision(
+        toPublicConfig({ ...DEFAULTS }, 'update-check:stale'),
+        clientCode,
+      ),
       clientCode,
     )
     return res.json(updateCheckJsonFromOta(appUpdateToOtaPayload(stale, 0)))

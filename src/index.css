@@ -232,6 +232,24 @@ body {
   padding: 0;
 }
 
+.live-locations-list--scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
+
+.live-locations-list--scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.live-locations-list--scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
 .live-location-row {
   display: flex;
   align-items: center;

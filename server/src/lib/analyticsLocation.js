@@ -273,6 +273,65 @@ export function countryNameForCode(code) {
   return COUNTRY_NAME[c] || c
 }
 
+/** Place label after ISO code from stored `CC • place` (city/region/country fallback). */
+export function parsePlaceFromStoredLabel(raw) {
+  const s = tidy(String(raw ?? ''))
+  if (!s || /^unknown\b/i.test(s)) return ''
+  const bullet = /^([A-Za-z]{2})\s*[•·]\s*(.+)$/u.exec(s)
+  if (bullet) {
+    const place = titlePlace(bullet[2])
+    if (!place || ispOrProviderLike(place)) return ''
+    return place
+  }
+  if (ispOrProviderLike(s)) return ''
+  const c = coerceCompositeLabel(s)
+  if (c && c !== UNKNOWN_LOCATION) {
+    const m = /^([A-Z]{2})\s*[•·]\s*(.+)$/u.exec(c)
+    if (m) return titlePlace(m[2])
+  }
+  return titlePlace(s)
+}
+
+/**
+ * Dashboard rows grouped by country + city/region (not rolled up to country only).
+ * Returns `{ countryCode, placeName, users, country, location }` sorted by users desc.
+ * `country` / `location` are `CC — Place` or `Unknown Location` for legacy consumers.
+ */
+export function aggregateLocationsByPlace(rows) {
+  const cityMerged = mergeLocationBucketsByNormalizedLabel(rows)
+  const acc = new Map()
+  for (const { country: rawLabel, users } of cityMerged) {
+    const label = sanitizeStoredLocationDisplay(rawLabel)
+    const code = parseCountryCodeFromStoredLabel(label)
+    let placeName = parsePlaceFromStoredLabel(label)
+    if (!placeName && code) {
+      const countryOnly = countryNameForCode(code)
+      placeName = countryOnly !== UNKNOWN_LOCATION ? countryOnly : ''
+    }
+    if (!placeName) placeName = UNKNOWN_LOCATION
+    const countryCode = placeName === UNKNOWN_LOCATION ? '' : code
+    const key = countryCode ? `${countryCode}|${placeName}` : UNKNOWN_LOCATION
+    const prev = acc.get(key) || { countryCode, placeName, users: 0 }
+    prev.users += users
+    acc.set(key, prev)
+  }
+  return [...acc.values()]
+    .map(({ countryCode, placeName, users }) => {
+      const location =
+        countryCode && placeName !== UNKNOWN_LOCATION
+          ? `${countryCode} — ${placeName}`
+          : placeName
+      return {
+        countryCode,
+        placeName,
+        users,
+        country: location,
+        location,
+      }
+    })
+    .sort((a, b) => b.users - a.users || String(a.location).localeCompare(String(b.location)))
+}
+
 /**
  * Roll city/region rows up to country for dashboard widgets.
  * Returns `{ countryCode, countryName, users, country }` sorted by users desc.
