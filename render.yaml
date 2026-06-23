@@ -10,6 +10,10 @@ services:
     branch: main
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
+    envVars:
+      # Static site has no /api proxy (/* → index.html). Point admin UI at Render Node API.
+      - key: VITE_API_BASE_URL
+        value: https://osmani-admin-api.onrender.com
     routes:
       - type: rewrite
         source: /*
