@@ -159,7 +159,7 @@ export async function fetchOneSignalSubscriptionDiagnostics() {
   }
 
   out.analysis.push(
-    'Backend broadcast omits target_channel: OneSignal docs require target_channel for include_aliases and for SMS/RCS with segments; push segment broadcasts use included_segments only (matches typical dashboard push sends).',
+    'Backend broadcast includes target_channel: push with included_segments (matches OneSignal create-message API).',
   )
 
   return out

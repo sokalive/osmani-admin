@@ -59,7 +59,7 @@ const baseBody = buildProductionOneSignalBody({
   title: 'T',
   message: 'M',
 })
-assert(!baseBody.data && baseBody.included_segments[0] === 'Total Subscriptions', 'base push body')
+assert(baseBody.target_channel === 'push' && !baseBody.data && baseBody.included_segments[0] === 'Total Subscriptions', 'base push body')
 
 const dataBody = buildProductionOneSignalBody({
   appId: 'app',

@@ -3,8 +3,7 @@
  * @see https://documentation.onesignal.com/reference/create-notification
  *
  * POST https://api.onesignal.com/notifications
- * Body: included_segments ["Total Subscriptions"] + headings/contents (no target_channel).
- * target_channel is required for include_aliases and SMS/RCS+segments, not for push segment broadcasts.
+ * Body: target_channel push + included_segments ["Total Subscriptions"].
  */
 
 const ONESIGNAL_API_URL = 'https://api.onesignal.com/notifications'
@@ -51,6 +50,7 @@ function formatOneSignalFailure(httpStatus, raw) {
 export function buildProductionOneSignalBody({ appId, title, message, imageUrl, data }) {
   const body = {
     app_id: appId,
+    target_channel: 'push',
     included_segments: [PRODUCTION_SEGMENT],
     headings: { en: String(title).trim() },
     contents: { en: String(message).trim() },
@@ -128,6 +128,9 @@ export async function sendOneSignalNotification(opts, logMeta = {}) {
     httpStatus: res.status,
     ok: res.ok,
     requestPayload,
+    recipients: Number(raw?.recipients ?? raw.successful ?? 0) || 0,
+    failed: Number(raw?.failed ?? 0) || 0,
+    errored: Number(raw?.errored ?? 0) || 0,
     rawOneSignalResponse: raw,
   })
 
