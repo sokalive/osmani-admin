@@ -2,6 +2,7 @@
  * Channel persistence — PostgreSQL (replaces previous JSON file storage).
  * Legacy JSON implementation is preserved as a comment block at the end of this file.
  */
+import { normalizePlayerType } from './channelNormalize.js'
 import { invalidateChannelAnalyticsIndex } from './lib/channelAnalyticsNormalize.js'
 import { ensureChannelsTable } from './db/channelsTable.js'
 import { getPool } from './db/pool.js'
