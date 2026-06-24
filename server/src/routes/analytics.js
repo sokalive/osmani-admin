@@ -4,13 +4,15 @@ import { tryRecordAppInstall } from '../lib/installAnalytics.js'
 import {
   LIVE_PRESENCE_WINDOW_SECONDS,
   livePresenceWindowInterval,
+  liveSessionActiveWhere,
   SESSION_PRUNE_SECONDS,
   startLivePresenceJanitor,
 } from '../lib/livePresence.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import {
   aggregateLocationsByPlace,
-  normalizeLocationPayload,
+  resolveLocationLabel,
+  sumLocationsOnline,
 } from '../lib/analyticsLocation.js'
 import { parseChannelRefFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
 import { queryMigrationDevicePopulationSummary } from '../lib/appVersionMigration.js'
@@ -63,8 +65,8 @@ function parseChannelRefFromBody(body) {
   return parseChannelRefFromPayload(body && typeof body === 'object' ? body : {})
 }
 
-function parseCountryFromBody(body, req) {
-  return normalizeLocationPayload(body, req)
+async function parseCountryFromBody(body, req) {
+  return resolveLocationLabel(body, req)
 }
 
 function parseInstallInstanceId(v) {
@@ -94,9 +96,7 @@ async function queryOverviewStats(pool) {
         pool,
         `SELECT COUNT(*)::int AS c
      FROM live_sessions
-     WHERE channel_id IS NOT NULL
-       AND trim(channel_id) <> ''
-       AND COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)`,
+     WHERE ${liveSessionActiveWhere()}`,
         'overview.onlineNow',
         (r) => numOrZero(r?.c),
         [LIVE_WINDOW_INTERVAL],
@@ -168,7 +168,7 @@ async function queryChannelStats(pool) {
        FROM live_sessions ls
        WHERE ls.channel_id IS NOT NULL
          AND trim(ls.channel_id) <> ''
-         AND COALESCE(ls.updated_at, ls.started_at, now()) >= (now() - $1::interval)
+         AND ${liveSessionActiveWhere('ls')}
      ),
      normalized AS (
        SELECT a.device_id,
@@ -205,7 +205,7 @@ async function queryLocationStats(pool) {
        END AS country,
        COUNT(*)::int AS users
      FROM live_sessions
-     WHERE COALESCE(updated_at, started_at, now()) >= (now() - $1::interval)
+     WHERE ${liveSessionActiveWhere()}
      GROUP BY 1
      ORDER BY users DESC`,
     [LIVE_WINDOW_INTERVAL],
@@ -236,8 +236,11 @@ analyticsRouter.get('/snapshot', async (_req, res) => {
         return {}
       }),
     ])
+    const locationsOnline = sumLocationsOnline(locations)
     res.json({
       ...overview,
+      onlineNow: locationsOnline > 0 ? locationsOnline : overview.onlineNow,
+      locationsOnline,
       mostWatched: channels.mostWatched,
       top5: channels.top5,
       top5MinViewers: TOP5_MIN_VIEWERS,
@@ -399,7 +402,7 @@ analyticsRouter.post('/session/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelRef = parseChannelRefFromBody(req.body)
-    const country = parseCountryFromBody(req.body, req)
+    const country = await parseCountryFromBody(req.body, req)
     await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
@@ -427,7 +430,7 @@ export async function handleLiveSessionHeartbeat(req, res) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelRef = parseChannelRefFromBody(req.body)
-    const country = parseCountryFromBody(req.body, req)
+    const country = await parseCountryFromBody(req.body, req)
     await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
@@ -478,7 +481,7 @@ analyticsRouter.post('/presence/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelRef = parseChannelRefFromBody(req.body)
-    const country = parseCountryFromBody(req.body, req)
+    const country = await parseCountryFromBody(req.body, req)
     await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
@@ -505,7 +508,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelRef = parseChannelRefFromBody(req.body)
-    const country = parseCountryFromBody(req.body, req)
+    const country = await parseCountryFromBody(req.body, req)
     await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,

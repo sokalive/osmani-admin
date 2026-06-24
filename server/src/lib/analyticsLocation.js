@@ -1,5 +1,7 @@
 /** Human-readable Live User Location labels — store + GET normalization. */
 
+import { extractClientIp, lookupIpGeo } from './ipGeoLookup.js'
+
 export const UNKNOWN_LOCATION = 'Unknown Location'
 
 /** ISO 3166-1 alpha-2 → readable country fallback when city absent */
@@ -13,6 +15,10 @@ const COUNTRY_NAME = Object.freeze({
   ZA: 'South Africa',
   US: 'United States',
   GB: 'United Kingdom',
+  FR: 'France',
+  DE: 'Germany',
+  CN: 'China',
+  IN: 'India',
 })
 
 /** Reverse lookup: "tanzania" → TZ (for clients that send country name without ISO). */
@@ -50,35 +56,8 @@ export function enrichLocationBodyFromRequest(body, req) {
     hdr('x-geo-region') ||
     hdr('x-app-geo-region')
 
-  const hasCc = () => {
-    const raw = tidy(b.country_code ?? b.countryCode ?? b.country_iso ?? '')
-    return /^[a-z]{2}$/iu.test(raw.slice(0, 2))
-  }
-  const hasPlace = () => {
-    const sources = [
-      b.city,
-      b.region,
-      b.locality,
-      b.cityName,
-      b.adminArea,
-      b.geo_city,
-      b.geoCity,
-      b.place,
-      b.placeName,
-      b.regionName,
-      b.region_name,
-      b.admin_area,
-      b.adminAreaLevel1,
-      b.admin_area_level_1,
-      b.state,
-      b.province,
-      b.division,
-      b.subdivision,
-      b.localityName,
-      b.locality_name,
-    ].map(tidy)
-    return Boolean(sources.find((p) => p && !ispOrProviderLike(p)))
-  }
+  const hasCc = () => hasCountryCodeInBody(b)
+  const hasPlace = () => hasResolvedPlaceInBody(b)
 
   if (!hasCc() && /^[a-z]{2}$/iu.test(hdrCc.slice(0, 2))) {
     b.country_code = hdrCc.slice(0, 2).toUpperCase()
@@ -93,11 +72,90 @@ export function enrichLocationBodyFromRequest(body, req) {
   return b
 }
 
+/**
+ * IP geolocation fallback after client body + proxy headers (city → region → country).
+ * @param {Record<string, unknown>} body
+ * @param {import('express').Request | null | undefined} req
+ */
+export async function enrichLocationBodyFromIp(body, req) {
+  let b = enrichLocationBodyFromRequest(body && typeof body === 'object' ? body : {}, req)
+  const needsCc = !hasCountryCodeInBody(b)
+  const needsCity = !hasCityInBody(b)
+  const needsRegion = !hasRegionInBody(b)
+  if (!needsCc && !needsCity && !needsRegion) return b
+
+  const geo = await lookupIpGeo(extractClientIp(req))
+  if (!geo.ok) return b
+
+  if (needsCc && geo.countryCode) b.country_code = geo.countryCode
+  if (needsCity && geo.city) b.city = geo.city
+  else if (needsRegion && geo.region) b.region = geo.region
+  return b
+}
+
+/** Sum users across place rows (matches live_sessions row count when grouped). */
+export function sumLocationsOnline(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  return list.reduce((sum, row) => sum + (Number(row?.users) || 0), 0)
+}
+
 function tidy(s) {
   return String(s ?? '')
     .replace(/[_/+]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+const CITY_BODY_KEYS = [
+  'city',
+  'locality',
+  'cityName',
+  'geo_city',
+  'geoCity',
+  'place',
+  'placeName',
+  'localityName',
+  'locality_name',
+]
+
+const REGION_BODY_KEYS = [
+  'region',
+  'adminArea',
+  'regionName',
+  'region_name',
+  'admin_area',
+  'adminAreaLevel1',
+  'admin_area_level_1',
+  'state',
+  'province',
+  'division',
+  'subdivision',
+]
+
+function pickBodyField(b, keys) {
+  const body = b && typeof b === 'object' ? b : {}
+  for (const key of keys) {
+    const value = tidy(body[key])
+    if (value && !ispOrProviderLike(value)) return value
+  }
+  return ''
+}
+
+function hasCountryCodeInBody(b) {
+  const raw = tidy(b?.country_code ?? b?.countryCode ?? b?.country_iso ?? '')
+  return /^[a-z]{2}$/iu.test(raw.slice(0, 2))
+}
+
+function hasCityInBody(b) {
+  return Boolean(pickBodyField(b, CITY_BODY_KEYS))
+}
+
+function hasRegionInBody(b) {
+  return Boolean(pickBodyField(b, REGION_BODY_KEYS))
+}
+
+function hasResolvedPlaceInBody(b) {
+  return hasCityInBody(b) || hasRegionInBody(b)
 }
 
 function ispOrProviderLike(s) {
@@ -170,29 +228,7 @@ export function normalizeLocationPayload(body = {}, req = null) {
       ? ccRaw.slice(0, 2).toUpperCase()
       : ''
 
-  const placeSources = [
-    b.city,
-    b.region,
-    b.locality,
-    b.cityName,
-    b.adminArea,
-    b.geo_city,
-    b.geoCity,
-    b.place,
-    b.placeName,
-    b.regionName,
-    b.region_name,
-    b.admin_area,
-    b.adminAreaLevel1,
-    b.admin_area_level_1,
-    b.state,
-    b.province,
-    b.division,
-    b.subdivision,
-    b.localityName,
-    b.locality_name,
-  ].map(tidy)
-  let place = placeSources.find((p) => p && !ispOrProviderLike(p)) || ''
+  let place = pickBodyField(b, CITY_BODY_KEYS) || pickBodyField(b, REGION_BODY_KEYS)
 
   const legacyCountry = tidy(b.country ?? '')
   /** Body already formatted */
@@ -233,6 +269,12 @@ export function normalizeLocationPayload(body = {}, req = null) {
 
   const maxLen = 120
   return out.slice(0, maxLen).trimEnd() || null
+}
+
+/** Client body → proxy headers → IP geo → normalized `CC • place` label. */
+export async function resolveLocationLabel(body = {}, req = null) {
+  const enriched = await enrichLocationBodyFromIp(body, req)
+  return normalizeLocationPayload(enriched, req)
 }
 
 /** Sanitize persisted value for `/analytics/locations` responses. */

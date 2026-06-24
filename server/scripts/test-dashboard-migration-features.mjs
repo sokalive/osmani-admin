@@ -5,6 +5,8 @@
 import {
   aggregateLocationsByPlace,
   isCountryNameOnlyPlace,
+  normalizeLocationPayload,
+  sumLocationsOnline,
   UNKNOWN_LOCATION,
 } from '../src/lib/analyticsLocation.js'
 import {
@@ -54,6 +56,38 @@ assert(
   'country-only label becomes Unknown Location',
 )
 assert(isCountryNameOnlyPlace('TZ', 'Tanzania'), 'detect country-only place')
+
+const displayRows = aggregateLocationsByPlace([
+  { country: 'TZ • Dar es Salaam', users: 1 },
+  { country: 'FR • Paris', users: 2 },
+])
+assert(
+  displayRows.some((r) => r.location === 'TZ — Dar es Salaam' && r.users === 1),
+  'TZ — Dar es Salaam display',
+)
+assert(
+  displayRows.some((r) => r.location === 'FR — Paris' && r.users === 2),
+  'FR — Paris display',
+)
+
+const onlineRows = aggregateLocationsByPlace([
+  { country: 'Unknown', users: 3 },
+  { country: 'TZ • Dar es Salaam', users: 1 },
+])
+assert(sumLocationsOnline(onlineRows) === 4, 'locations sum equals online total')
+
+const cityBeforeRegion = normalizeLocationPayload({
+  country_code: 'TZ',
+  city: 'Moshi',
+  region: 'Kilimanjaro',
+})
+assert(cityBeforeRegion === 'TZ • Moshi', 'city preferred over region')
+
+const regionOnly = normalizeLocationPayload({
+  country_code: 'KE',
+  region: 'Mombasa',
+})
+assert(regionOnly === 'KE • Mombasa', 'region used when city absent')
 
 const legacyBlocked = applyChannelPlaybackGate(
   { requireUpdateBeforeChannelPlayback: true },

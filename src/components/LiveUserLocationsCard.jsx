@@ -92,7 +92,11 @@ export function LiveLocationRowList({ rows, scroll = true, className = '' }) {
  */
 function LiveUserLocationsCard({ locations, totalOnline = 0, className = 'dashboard-card' }) {
   const rows = useMemo(() => normalizePlaceRows(locations), [locations])
-  const total = Math.max(0, Math.floor(Number(totalOnline) || 0))
+  const rowTotal = useMemo(
+    () => rows.reduce((sum, row) => sum + (Number(row.users) || 0), 0),
+    [rows],
+  )
+  const total = rowTotal > 0 ? rowTotal : Math.max(0, Math.floor(Number(totalOnline) || 0))
 
   return (
     <article

@@ -37,6 +37,12 @@ export function livePresenceWindowInterval() {
   return `${LIVE_PRESENCE_WINDOW_SECONDS} seconds`
 }
 
+/** SQL predicate: row counts as live for dashboard presence widgets. */
+export function liveSessionActiveWhere(alias = '') {
+  const p = alias ? `${alias}.` : ''
+  return `COALESCE(${p}updated_at, ${p}started_at, now()) >= (now() - $1::interval)`
+}
+
 export function livePresencePruneInterval() {
   return `${SESSION_PRUNE_SECONDS} seconds`
 }
