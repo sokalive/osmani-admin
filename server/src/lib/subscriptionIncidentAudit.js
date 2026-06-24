@@ -168,6 +168,7 @@ async function probeVerifyAccess(deviceId) {
 export async function runSubscriptionIncidentAudit(opts = {}) {
   const repair = opts.repair === true
   const reconcileBlocks = opts.reconcileBlocks !== false
+  const skipSlowAutoLink = opts.skipSlowAutoLink !== false
   const pool = requirePool()
 
   const before = {
@@ -206,7 +207,10 @@ export async function runSubscriptionIncidentAudit(opts = {}) {
     if (reconcileBlocks && before.incorrectly_suspended.length > 0) {
       reconcileReport = await reconcileUnblockedPlaybackAccess({ emitUpdates: true })
     }
-    restorationReport = await runSubscriptionRestorationAudit({ repair: true })
+    restorationReport = await runSubscriptionRestorationAudit({
+      repair: true,
+      skipAutoLink: skipSlowAutoLink,
+    })
   } else {
     restorationReport = await runSubscriptionRestorationAudit({ repair: false })
   }

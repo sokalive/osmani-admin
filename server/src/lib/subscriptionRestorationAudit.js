@@ -221,6 +221,7 @@ async function probeDeviceActive(deviceId, fingerprintHash = null) {
  */
 export async function runSubscriptionRestorationAudit(opts = {}) {
   const repair = opts.repair === true
+  const skipAutoLink = opts.skipAutoLink === true
   const pool = requirePool()
   const report = {
     ok: true,
@@ -416,7 +417,9 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
       }
     }
 
-    const { rows: inactiveRows } = await pool.query(
+    const { rows: inactiveRows } = skipAutoLink
+      ? { rows: [] }
+      : await pool.query(
       `SELECT ir.device_id::text AS device_id
        FROM device_intelligence_registry ir
        LEFT JOIN device_subscriptions ds
