@@ -206,6 +206,44 @@ runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdmin
   }
 })
 
+/** Directed single-pair migration (telemetry-aware recovery; avoids install_instance ping-pong). */
+runtimePublicRouter.post('/subscription-shadow-migrate', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const target = String(b.target_device_id ?? b.target ?? req.query.target ?? '').trim()
+    const source = String(b.source_device_id ?? b.source ?? req.query.source ?? '').trim()
+    if (!target || !source) {
+      return res.status(400).json({ ok: false, error: 'target_device_id and source_device_id are required' })
+    }
+    const { migrateSubscriptionFromSourceDevice } = await import('../lib/subscriptionRecovery.js')
+    const { getDeviceSubscriptionAccessState } = await import('../billingStore.js')
+    const probe = async (deviceId) => {
+      const row = await getDeviceSubscriptionAccessState(deviceId, null)
+      return row?.active_now === true && row?.blocked_now !== true
+    }
+    if (await probe(target)) {
+      return res.json({ ok: true, skipped: 'target_already_active', target, source, commit: getServerGitCommit() })
+    }
+    if (!(await probe(source))) {
+      return res.status(409).json({ ok: false, error: 'source_not_active', target, source })
+    }
+    const mig = await migrateSubscriptionFromSourceDevice(target, source)
+    const verifyActive = await probe(target)
+    res.json({
+      ok: mig.recovered === true && verifyActive,
+      target,
+      source,
+      recovered: mig.recovered === true,
+      verify_active: verifyActive,
+      commit: getServerGitCommit(),
+    })
+  } catch (e) {
+    console.error('[runtime/subscription-shadow-migrate]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Payment activation timing stats from completed transactions (last 7 days). */
 runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, async (_req, res) => {
   try {

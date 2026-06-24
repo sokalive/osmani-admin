@@ -107,6 +107,17 @@ export async function findIncorrectlyRevokedMigrationShadows(pool = requirePool(
      FROM shadow
      INNER JOIN device_subscriptions ds_src
        ON ds_src.device_id = shadow.source_device_id
+     WHERE NOT EXISTS (
+       SELECT 1 FROM device_subscriptions ds_ok
+       WHERE ds_ok.device_id = shadow.shadow_device_id
+         AND ds_ok.status = 'active'
+         AND ds_ok.expires_at > now()
+     )
+     AND EXISTS (
+       SELECT 1 FROM client_api_telemetry tel
+       WHERE tel.device_id = shadow.shadow_device_id
+         AND tel.created_at > now() - interval '14 days'
+     )
      ORDER BY shadow_device_id`,
   )
   return rows
