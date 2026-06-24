@@ -356,6 +356,7 @@ function AppUpdatePage() {
         softUpdate: draft.softUpdate === true,
         forceUpdate: draft.forceUpdate === true,
         autoDownload: draft.autoDownload === true,
+        requireUpdateBeforeChannelPlayback: draft.requireUpdateBeforeChannelPlayback === true,
         source: draft.source,
         apkUrl: draft.apkUrl.trim(),
         sha256: draft.sha256.trim(),

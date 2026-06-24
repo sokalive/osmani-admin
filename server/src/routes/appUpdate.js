@@ -518,7 +518,12 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
       [UPDATE_KEYS.versionName]: text(body.versionName, 64),
       [UPDATE_KEYS.packageName]: text(body.packageName, 256),
       [UPDATE_KEYS.requireBeforeChannel]: String(
-        Boolean(body.requireUpdateBeforeChannelPlayback),
+        body.requireUpdateBeforeChannelPlayback !== undefined
+          ? Boolean(body.requireUpdateBeforeChannelPlayback)
+          : asBool(
+              rowsBefore[UPDATE_KEYS.requireBeforeChannel] ??
+                DEFAULTS[UPDATE_KEYS.requireBeforeChannel],
+            ),
       ),
     }
 
@@ -564,6 +569,7 @@ appUpdateRouter.put('/settings/app-update', requireAdminPanelAccess, async (req,
         sha256: stored.sha256,
         playstoreUrl: stored.playstoreUrl,
         decision: stored.decision,
+        requireUpdateBeforeChannelPlayback: stored.requireUpdateBeforeChannelPlayback,
       }),
     )
 
