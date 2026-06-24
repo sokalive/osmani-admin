@@ -197,7 +197,12 @@ echo
 curl -fsS "http://127.0.0.1/api/health" | head -c 200 || true
 echo
 
-if [[ -f "$API_DIR/scripts/run-subscription-repair.mjs" ]]; then
+if [[ -f "$API_DIR/scripts/subscription-incident-recovery.mjs" ]]; then
+  echo "==> subscription incident recovery (audit + repair)"
+  (cd "$API_DIR" && node scripts/subscription-incident-recovery.mjs) || {
+    echo "WARN: subscription incident recovery reported unresolved users — check audit output" >&2
+  }
+elif [[ -f "$API_DIR/scripts/run-subscription-repair.mjs" ]]; then
   echo "==> subscription restoration repair"
   (cd "$API_DIR" && node scripts/run-subscription-repair.mjs) || {
     echo "WARN: subscription repair reported unresolved users — check audit output" >&2
