@@ -1,0 +1,25 @@
+# Render Node API (osmani-admin-api) — legacy APK backend; separate from Contabo VPS.
+name: Deploy Render API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'render.yaml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render osmani-admin-api deploy hook
+        env:
+          RENDER_API_DEPLOY_HOOK: ${{ secrets.RENDER_API_DEPLOY_HOOK }}
+        run: |
+          if [ -z "${RENDER_API_DEPLOY_HOOK}" ]; then
+            echo "::notice::RENDER_API_DEPLOY_HOOK not configured — enable auto-deploy in Render dashboard or add deploy hook secret."
+            exit 0
+          fi
+          curl -fsSL -X POST "${RENDER_API_DEPLOY_HOOK}"
+          echo "Triggered Render osmani-admin-api deploy"
