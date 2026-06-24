@@ -165,6 +165,32 @@ runtimePublicRouter.post('/subscription-restoration-repair', requireLegacyAdminT
   }
 })
 
+/** Read-only incident audit (suspended/revoked shadows + restoration counts). */
+runtimePublicRouter.get('/subscription-incident-audit', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runSubscriptionIncidentAudit } = await import('../lib/subscriptionIncidentAudit.js')
+    const report = await runSubscriptionIncidentAudit({ repair: false })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-incident-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Repair wrongly denied paid users + migration shadows. */
+runtimePublicRouter.post('/subscription-incident-repair', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runSubscriptionIncidentAudit } = await import('../lib/subscriptionIncidentAudit.js')
+    const report = await runSubscriptionIncidentAudit({ repair: true, reconcileBlocks: true })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-incident-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Payment activation timing stats from completed transactions (last 7 days). */
 runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, async (_req, res) => {
   try {

@@ -505,18 +505,16 @@ export async function ensureSubscriptionLinkedForDevice(
     }
   }
 
-  if (explicitHints) {
-    const androidSource = await findActiveDeviceIdBySharedAndroidId(d)
-    if (androidSource) {
-      const linked = await tryLinkFromSource(d, androidSource, fpHash, 'android_id')
-      if (linked.linked) return linked
-    }
+  const androidSource = await findActiveDeviceIdBySharedAndroidId(d)
+  if (androidSource) {
+    const linked = await tryLinkFromSource(d, androidSource, fpHash, 'android_id')
+    if (linked.linked) return linked
+  }
 
-    const installSource = await findActiveDeviceIdBySharedInstallInstance(d)
-    if (installSource) {
-      const linked = await tryLinkFromSource(d, installSource, fpHash, 'install_instance')
-      if (linked.linked) return linked
-    }
+  const installSource = await findActiveDeviceIdBySharedInstallInstance(d)
+  if (installSource) {
+    const linked = await tryLinkFromSource(d, installSource, fpHash, 'install_instance')
+    if (linked.linked) return linked
   }
 
   if (!explicitHints && !fpHash) {

@@ -25,6 +25,8 @@ function cacheKey(deviceId, fingerprint) {
 
 function sanitizeAccessCacheRow(row) {
   if (!row) return row
+  // Never downgrade a row the cache already marked active — avoids false revoke under pressure.
+  if (row.active_now === true && row.blocked_now !== true) return row
   const status = String(row.status ?? '').toLowerCase()
   if (status !== 'active') {
     return {

@@ -7,6 +7,7 @@ import {
 import {
   recoverSubscriptionToDevice,
   ensureSubscriptionLinkedForDevice,
+  migrateSubscriptionFromSourceDevice,
 } from './subscriptionRecovery.js'
 
 function requirePool() {
@@ -326,13 +327,28 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
 
     for (const row of phoneShadows) {
       const target = String(row.shadow_device_id || '').trim()
+      const source = String(row.source_device_id || '').trim()
       if (!target) continue
       try {
-        const link = await ensureSubscriptionLinkedForDevice(target, { phone: row.phone })
-        if (link.linked) {
-          report.repairs.phone_migrations_recovered += 1
-          pushPair(target, link.recovered_from, link.method || 'payment_phone_shadow')
+        let linked = false
+        let recoveredFrom = source
+        if (source) {
+          const mig = await migrateSubscriptionFromSourceDevice(target, source)
+          if (mig.recovered) {
+            report.repairs.phone_migrations_recovered += 1
+            linked = true
+            recoveredFrom = mig.recovered_from || source
+          }
         }
+        if (!linked) {
+          const link = await ensureSubscriptionLinkedForDevice(target, { phone: row.phone })
+          if (link.linked) {
+            report.repairs.phone_migrations_recovered += 1
+            linked = true
+            recoveredFrom = link.recovered_from || source
+          }
+        }
+        if (linked) pushPair(target, recoveredFrom, 'payment_phone_shadow')
       } catch (e) {
         report.unresolved.push({
           type: 'migration_phone_shadow',
@@ -345,12 +361,31 @@ export async function runSubscriptionRestorationAudit(opts = {}) {
 
     for (const row of installShadows) {
       const target = String(row.shadow_device_id || '').trim()
+      const source = String(row.source_device_id || '').trim()
       if (!target) continue
       try {
-        const link = await ensureSubscriptionLinkedForDevice(target)
-        if (link.linked) {
-          report.repairs.install_migrations_recovered += 1
-          pushPair(target, link.recovered_from, link.method || 'install_instance_shadow')
+        let linked = false
+        let recoveredFrom = source
+        if (source) {
+          const mig = await migrateSubscriptionFromSourceDevice(target, source)
+          if (mig.recovered) {
+            report.repairs.install_migrations_recovered += 1
+            linked = true
+            recoveredFrom = mig.recovered_from || source
+          }
+        }
+        if (!linked) {
+          const link = await ensureSubscriptionLinkedForDevice(target)
+          if (link.linked) {
+            report.repairs.install_migrations_recovered += 1
+            linked = true
+            recoveredFrom = link.recovered_from || source
+          }
+        }
+        if (linked) {
+          pushPair(target, recoveredFrom, 'install_instance_shadow', {
+            install_instance_id: row.install_instance_id,
+          })
         }
       } catch (e) {
         report.unresolved.push({

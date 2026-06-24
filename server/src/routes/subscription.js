@@ -430,6 +430,29 @@ async function maybeActiveVerifyFallback(req, deviceId, fingerprint, err) {
   }
 }
 
+/** Never downgrade paid users: cache → stale cache → fast DB before any inactive verify body. */
+async function tryLastResortActiveVerifyFallback(req, deviceId, fingerprint) {
+  const fp = String(fingerprint ?? '').trim()
+  const cached = getCachedSubscriptionAccess(deviceId, fp)
+  if (isAccessRowActive(cached)) {
+    return buildActiveVerifyFallbackFromCache(req, deviceId, cached)
+  }
+  const stale = getStaleCachedSubscriptionAccess(deviceId, fp)
+  if (isAccessRowActive(stale)) {
+    return buildActiveVerifyFallbackFromCache(req, deviceId, stale)
+  }
+  try {
+    const fast = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
+    if (isAccessRowActive(fast)) {
+      setCachedSubscriptionAccess(deviceId, fp, fast)
+      return buildActiveVerifyFallbackFromCache(req, deviceId, fast)
+    }
+  } catch (e) {
+    console.warn('[subscription-verify-last-resort-active] fast lookup failed:', e?.message || e)
+  }
+  return null
+}
+
 function isAccessRowActive(row) {
   return (
     row?.active_now === true &&
@@ -450,7 +473,12 @@ function verifyFallbackContext({ deviceId, orderIdHint, fingerprint, phone, lega
   }
 }
 
-async function respondSafeInactiveAfterVerifyError(req, res, deviceId, label, err) {
+async function respondSafeInactiveAfterVerifyError(req, res, deviceId, fingerprint, label, err) {
+  const activeFb = await tryLastResortActiveVerifyFallback(req, deviceId, fingerprint)
+  if (activeFb) {
+    console.warn(`[${label}] last-resort active fallback after error:`, err?.message || err)
+    return res.json(activeFb)
+  }
   try {
     const body = await buildInactiveVerifyFallbackResponse(req, deviceId)
     console.warn(`[${label}] safe inactive HTTP 200 after error:`, err?.message || err)
@@ -522,6 +550,11 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         row = staleActive
         timing.stale_active_cache = true
       } else {
+        const lastResort = await tryLastResortActiveVerifyFallback(req, d, fp)
+        if (lastResort) {
+          timing.last_resort_active = true
+          return lastResort
+        }
         const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
         if (fb) {
           timing.access_pressure_fallback = true
@@ -986,7 +1019,7 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
       e,
     )
     if (fb) return res.json(fb)
-    return respondSafeInactiveAfterVerifyError(req, res, deviceId, 'subscription-status', e)
+    return respondSafeInactiveAfterVerifyError(req, res, deviceId, fp, 'subscription-status', e)
   }
 })
 
@@ -1059,7 +1092,7 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
       e,
     )
     if (fb) return res.json(fb)
-    return respondSafeInactiveAfterVerifyError(req, res, deviceId, 'subscription/verify', e)
+    return respondSafeInactiveAfterVerifyError(req, res, deviceId, fp, 'subscription/verify', e)
   }
 })
 
@@ -1108,7 +1141,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         const payload = toSsePayload(row)
         res.write(`event: snapshot\ndata: ${JSON.stringify(payload)}\n\n`)
       } catch (e) {
-        console.error('[subscription-stream] snapshot failed:', e)
+        // Never push inactive/revoked-shaped SSE on DB errors — client will keep last verify state.
+        console.error('[subscription-stream] snapshot skipped on error:', e)
       }
     })()
   }
@@ -1253,7 +1287,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
       res.write(`event: device_subscription\ndata: ${JSON.stringify(toSsePayload(row))}\n\n`)
     } catch (e) {
-      console.error('[subscription-stream] device_subscription event failed:', e)
+      // Skip SSE push on read failure — avoids defaulting clients to revoked/inactive.
+      console.error('[subscription-stream] device_subscription skipped on error:', e)
     }
   }
 
