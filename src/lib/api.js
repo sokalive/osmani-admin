@@ -259,6 +259,29 @@ export const getUsers = (params = {}) => {
 }
 /** Full list for legacy admin screens (e.g. Plans subscriber counts). Prefer paginated getUsers. */
 export const getUsersLegacy = () => adminApiGet('/users?legacy=1')
+
+function customerInvestigationQuery(params = {}) {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    const s = String(v ?? '').trim()
+    if (s) q.set(k, s)
+  }
+  return q.toString()
+}
+
+export const investigateCustomer = (params = {}) => {
+  const qs = customerInvestigationQuery(params)
+  return adminApiGet(qs ? `/admin/customer-investigation/investigate?${qs}` : '/admin/customer-investigation/investigate')
+}
+export const customerInvestigationReconcile = (body) =>
+  adminApiPost('/admin/customer-investigation/actions/reconcile', body)
+export const customerInvestigationRefreshSubscription = (body) =>
+  adminApiPost('/admin/customer-investigation/actions/refresh-subscription', body)
+export const customerInvestigationForceActivate = (body) =>
+  adminApiPost('/admin/customer-investigation/actions/force-activate', body)
+export const customerInvestigationForceTransfer = (body) =>
+  adminApiPost('/admin/customer-investigation/actions/force-transfer', body)
+
 export const postUser = (body) => adminApiPost('/users', body)
 export const putUser = (id, body) => adminApiPut(`/users/${encodeURIComponent(id)}`, body)
 export const deleteUser = (id, { force = false } = {}) => {

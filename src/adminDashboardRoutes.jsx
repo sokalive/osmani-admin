@@ -18,6 +18,7 @@ import ServerHealthPage from './pages/ServerHealthPage'
 import TransferCodesPage from './pages/TransferCodesPage'
 import ManualSubscriptionPage from './pages/ManualSubscriptionPage'
 import TransactionsPage from './pages/TransactionsPage'
+import CustomerInvestigationPage from './pages/CustomerInvestigationPage'
 import UsersPage from './pages/UsersPage'
 import UsersIntelligencePage from './pages/UsersIntelligencePage'
 import UsersIntelligenceDetailPage from './pages/UsersIntelligenceDetailPage'
@@ -38,6 +39,7 @@ export const dashboardRouteElements = [
   <Route key="plans" path="plans" element={<PlansPage />} />,
   <Route key="transactions" path="transactions" element={<TransactionsPage />} />,
   <Route key="users" path="users" element={<UsersPage />} />,
+  <Route key="customer-investigation" path="customer-investigation" element={<CustomerInvestigationPage />} />,
   <Route key="users-intelligence" path="users-intelligence" element={<UsersIntelligencePage />} />,
   <Route
     key="users-intelligence-detail"

@@ -350,7 +350,7 @@ async function checkTransferLimits(pool, sourceDeviceId, cooldownMinutes, dailyL
 }
 
 /** Shared admin force transfer by device IDs. Emits SSE + subscription bus after commit. */
-async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId, targetFpHash, actor, auditExtra }) {
+export async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId, targetFpHash, actor, auditExtra }) {
   const src = text(sourceDeviceId, 128)
   const tgt = text(targetDeviceId, 128)
   if (!src || !tgt) return { ok: false, status: 400, error: 'source_device_id and target_device_id are required' }

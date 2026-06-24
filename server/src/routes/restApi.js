@@ -35,6 +35,7 @@ import { beemSettingsRouter } from './beemSettings.js'
 import { smsAdminRouter } from './smsAdmin.js'
 import './smsScheduler.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
+import { customerInvestigationRouter } from './customerInvestigation.js'
 import { runtimePublicRouter } from './runtimePublic.js'
 import { usersIntelligencePublicRouter } from './usersIntelligencePublic.js'
 import { usersIntelligenceAdminRouter } from './usersIntelligenceAdmin.js'
@@ -283,6 +284,7 @@ restApi.get('/admin/panel-diagnostics', requireAdminPanelAccess, async (_req, re
   }
 })
 
+restApi.use('/admin/customer-investigation', customerInvestigationRouter)
 restApi.use('/runtime', runtimePublicRouter)
 restApi.use('/users-intelligence', usersIntelligencePublicRouter)
 restApi.use('/admin/users-intelligence', usersIntelligenceAdminRouter)
