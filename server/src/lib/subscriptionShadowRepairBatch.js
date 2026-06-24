@@ -22,19 +22,30 @@ async function probeActive(deviceId) {
 }
 
 function dedupeShadowPairs(rows) {
-  const pairByTarget = new Map()
+  const pairByKey = new Map()
   const rank = { install_instance_shadow: 2, payment_phone_shadow: 1, fingerprint_trial_shadow: 0 }
   for (const row of rows) {
-    const target = String(row.device_id || row.shadow_device_id || '').trim()
-    const source = String(row.source_device_id || '').trim()
+    const a = String(row.device_id || row.shadow_device_id || '').trim()
+    const b = String(row.source_device_id || '').trim()
     const reason = String(row.match_reason || '')
-    if (!target || !source) continue
-    const prev = pairByTarget.get(target)
+    if (!a || !b || a === b) continue
+    const key = [a, b].sort().join('|')
+    const prev = pairByKey.get(key)
     if (!prev || (rank[reason] ?? 0) > (rank[prev.reason] ?? 0)) {
-      pairByTarget.set(target, { target, source, reason })
+      pairByKey.set(key, { a, b, reason })
     }
   }
-  return [...pairByTarget.values()]
+  return [...pairByKey.values()]
+}
+
+/** Pick inactive user device as migration target; active paid device as source (prevents install_instance ping-pong). */
+async function resolveMigrationDirection(pair, probeActive) {
+  const aActive = await probeActive(pair.a)
+  const bActive = await probeActive(pair.b)
+  if (aActive && bActive) return null
+  if (aActive && !bActive) return { target: pair.b, source: pair.a, reason: pair.reason }
+  if (!aActive && bActive) return { target: pair.a, source: pair.b, reason: pair.reason }
+  return { target: pair.a, source: pair.b, reason: pair.reason }
 }
 
 /**
@@ -52,7 +63,12 @@ export async function runDirectShadowRepairBatch(opts = {}) {
   }
 
   const pairs = dedupeShadowPairs(await findIncorrectlyRevokedMigrationShadows(pool))
-  const batch = pairs.slice(0, shadowLimit)
+  const resolved = []
+  for (const pair of pairs) {
+    const dir = await resolveMigrationDirection(pair, probeActive)
+    if (dir) resolved.push(dir)
+  }
+  const batch = resolved.slice(0, shadowLimit)
   const migrated = []
   const failed = []
 
@@ -60,6 +76,10 @@ export async function runDirectShadowRepairBatch(opts = {}) {
     try {
       if (await probeActive(target)) {
         migrated.push({ device_id: target, source_device_id: source, reason, method: 'already_active' })
+        continue
+      }
+      if (!(await probeActive(source))) {
+        failed.push({ device_id: target, source_device_id: source, reason, error: 'source_not_active' })
         continue
       }
       const mig = await migrateSubscriptionFromSourceDevice(target, source)
@@ -107,7 +127,15 @@ export async function runDirectShadowRepairBatch(opts = {}) {
     ok: after.shadows === 0 && after.suspended === 0 && failed.length === 0,
     before,
     after,
-    remaining_unique_shadows: dedupeShadowPairs(await findIncorrectlyRevokedMigrationShadows(pool)).length,
+    remaining_unique_shadows: (await (async () => {
+      const raw = dedupeShadowPairs(await findIncorrectlyRevokedMigrationShadows(pool))
+      let n = 0
+      for (const pair of raw) {
+        const dir = await resolveMigrationDirection(pair, probeActive)
+        if (dir && !(await probeActive(dir.target))) n += 1
+      }
+      return n
+    })()),
     batch_size: batch.length,
     migrated,
     orphans_finalized: orphansFinalized,
