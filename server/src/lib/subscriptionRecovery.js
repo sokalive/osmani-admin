@@ -128,6 +128,22 @@ export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reas
     }
 
     const sourceDeviceId = String(row.device_id || '').trim()
+    const txnId = String(row.transaction_id || `recovery:${sourceDeviceId}`).trim()
+    const freedSourceTxnId = `moved:${sourceDeviceId}:${txnId}`.slice(0, 240)
+
+    if (sourceDeviceId && sourceDeviceId !== target) {
+      await client.query(
+        `UPDATE device_subscriptions
+         SET status = 'pending',
+             transaction_id = $2,
+             updated_at = now()
+         WHERE device_id = $1
+           AND status = 'active'
+           AND expires_at > now()`,
+        [sourceDeviceId, freedSourceTxnId],
+      )
+    }
+
     await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
        VALUES ($1, 'active', $2, now(), $3, now(), $4)
@@ -137,18 +153,8 @@ export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reas
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          fingerprint_hash = EXCLUDED.fingerprint_hash`,
-      [target, row.expires_at, row.transaction_id || `recovery:${sourceDeviceId}`, hash],
+      [target, row.expires_at, txnId, hash],
     )
-    if (sourceDeviceId && sourceDeviceId !== target) {
-      await client.query(
-        `UPDATE device_subscriptions
-         SET status = 'pending', updated_at = now()
-         WHERE device_id = $1
-           AND status = 'active'
-           AND expires_at > now()`,
-        [sourceDeviceId],
-      )
-    }
     await client.query('COMMIT')
 
     notifySubscriptionTransferred({
@@ -168,7 +174,7 @@ export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reas
         status: 'active',
         expires_at: row.expires_at,
         active_now: true,
-        transaction_id: row.transaction_id || `recovery:${sourceDeviceId}`,
+        transaction_id: txnId,
       },
       reason: 'recovery',
     })
@@ -213,6 +219,19 @@ export async function migrateSubscriptionFromSourceDevice(targetDeviceId, source
       return { recovered: false, reason: 'source_not_active' }
     }
     const hash = fpHash || String(row.fingerprint_hash || '').trim() || null
+    const txnId = String(row.transaction_id || `recovery:${source}`).trim()
+    const freedSourceTxnId = `moved:${source}:${txnId}`.slice(0, 240)
+
+    await client.query(
+      `UPDATE device_subscriptions
+       SET status = 'pending',
+           transaction_id = $2,
+           updated_at = now()
+       WHERE device_id = $1
+         AND status = 'active'
+         AND expires_at > now()`,
+      [source, freedSourceTxnId],
+    )
     await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
        VALUES ($1, 'active', $2, now(), $3, now(), $4)
@@ -222,15 +241,7 @@ export async function migrateSubscriptionFromSourceDevice(targetDeviceId, source
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
-      [target, row.expires_at, row.transaction_id || `recovery:${source}`, hash],
-    )
-    await client.query(
-      `UPDATE device_subscriptions
-       SET status = 'pending', updated_at = now()
-       WHERE device_id = $1
-         AND status = 'active'
-         AND expires_at > now()`,
-      [source],
+      [target, row.expires_at, txnId, hash],
     )
     await client.query('COMMIT')
     notifySubscriptionTransferred({
@@ -247,7 +258,7 @@ export async function migrateSubscriptionFromSourceDevice(targetDeviceId, source
         status: 'active',
         expires_at: row.expires_at,
         active_now: true,
-        transaction_id: row.transaction_id || `recovery:${source}`,
+        transaction_id: txnId,
       },
       reason: 'verify_payment_phone',
     })
