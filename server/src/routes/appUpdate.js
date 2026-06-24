@@ -222,9 +222,7 @@ export function appUpdateToOtaPayload(data, configVersion = 0) {
     ...(d.update_target_reason
       ? { update_target_reason: String(d.update_target_reason) }
       : {}),
-    require_update_before_channel_playback:
-      d.require_update_before_channel_playback === true ||
-      d.requireUpdateBeforeChannelPlayback === true,
+    require_update_before_channel_playback: d.require_update_before_channel_playback === true,
     channel_playback_block_title: text(d.channel_playback_block_title, 256),
     channel_playback_block_message: text(d.channel_playback_block_message, 4000),
   }

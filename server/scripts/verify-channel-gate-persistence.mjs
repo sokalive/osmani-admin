@@ -17,14 +17,20 @@ async function fetchJson(url, opts = {}) {
 
 async function adminGet(base, path) {
   return fetchJson(`${base}/api${path}`, {
-    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    headers: {
+      'X-Admin-Token': TOKEN,
+      'Content-Type': 'application/json',
+    },
   })
 }
 
 async function adminPut(base, path, payload) {
   return fetchJson(`${base}/api${path}`, {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    headers: {
+      'X-Admin-Token': TOKEN,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(payload),
   })
 }
