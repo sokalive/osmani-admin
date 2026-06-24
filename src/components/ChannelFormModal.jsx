@@ -14,6 +14,7 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
   )
   const [thumbnailFile, setThumbnailFile] = useState(null)
   const [thumbnailPreview, setThumbnailPreview] = useState(null)
+  const [instructionVideoFile, setInstructionVideoFile] = useState(null)
 
   useEffect(() => {
     if (!isOpen) return
@@ -21,11 +22,13 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
       setForm(channelToForm(channel))
       setThumbnailFile(null)
       setThumbnailPreview(channel.thumbnailUrl ?? null)
+      setInstructionVideoFile(null)
     }
     if (variant === 'add') {
       setForm(emptyFormState())
       setThumbnailFile(null)
       setThumbnailPreview(null)
+      setInstructionVideoFile(null)
     }
   }, [isOpen, variant, channel])
 
@@ -67,11 +70,18 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
     setThumbnailPreview(URL.createObjectURL(file))
   }
 
+  function handleInstructionVideoChange(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setInstructionVideoFile(file)
+  }
+
   function handleSubmit(e) {
     e.preventDefault()
     const name = form.name.trim()
     const streamUrl = form.streamUrlPrimary.trim()
-    if (!name || !streamUrl) return
+    const instruction = Boolean(form.isInstructionVideo)
+    if (!name || (!instruction && !streamUrl)) return
 
     onSubmit({
       ...form,
@@ -84,6 +94,7 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
       userAgent: form.userAgent.trim(),
       thumbnailFile,
       thumbnailPreviewUrl: thumbnailPreview,
+      instructionVideoFile,
     })
   }
 
@@ -139,6 +150,8 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
               updateField={updateField}
               thumbnailPreview={thumbnailPreview}
               onThumbnailChange={handleThumbnailChange}
+              instructionVideoFile={instructionVideoFile}
+              onInstructionVideoChange={handleInstructionVideoChange}
             />
           </div>
 

@@ -4,6 +4,7 @@ import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../li
 import { apiResponseCacheNamespace } from '../middleware/apiResponseCache.js'
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
 import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
+import { parseVersionCode, APP_UPDATE_NEVER_MIN } from '../lib/appUpdateTargeting.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { getCdnHealthSnapshot } from '../lib/cdnAssets.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
@@ -72,6 +73,52 @@ runtimePublicRouter.get('/app-update', async (req, res) => {
     res.json(await loadAppUpdatePublicPayload(snap.configVersion, clientVersion))
   } catch (e) {
     console.error('[runtime/app-update]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/**
+ * Account screen update metadata — additive; does not change popup force/soft/auto behavior.
+ */
+runtimePublicRouter.get('/account-update', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    res.setHeader('Pragma', 'no-cache')
+    res.setHeader('Expires', '0')
+    const snap = liveSyncBus.snapshot()
+    const installedVersionCode = extractVersionCodeFromRequest(req)
+    const ota = await loadAppUpdatePublicPayload(snap.configVersion, installedVersionCode)
+    const latestVersionCode = parseVersionCode(ota.version_code)
+    const hasNewerCatalog =
+      installedVersionCode > 0 && latestVersionCode > 0 && installedVersionCode < latestVersionCode
+    const updatePromptAvailable = String(ota.decision ?? 'NONE').toUpperCase() !== 'NONE'
+    res.json({
+      ok: true,
+      v: snap.configVersion,
+      installed_version_code: installedVersionCode,
+      installedVersionCode,
+      latest_version_code: latestVersionCode,
+      latestVersionCode,
+      update_available: hasNewerCatalog,
+      updateAvailable: hasNewerCatalog,
+      update_prompt_available: updatePromptAvailable,
+      updatePromptAvailable,
+      apk_url: ota.apk_url ?? '',
+      apkUrl: ota.apk_url ?? '',
+      apk_sha256: ota.apk_sha256 ?? '',
+      playstore_url: ota.playstore_url ?? '',
+      version_name: ota.version_name ?? '',
+      versionName: ota.version_name ?? '',
+      package_name: ota.package_name ?? '',
+      decision: ota.decision ?? 'NONE',
+      update_target_reason: ota.update_target_reason ?? '',
+      updateTargetReason: ota.update_target_reason ?? '',
+      targeting_below_v24: installedVersionCode > 0 && installedVersionCode < APP_UPDATE_NEVER_MIN,
+      targeting_v24_plus: installedVersionCode >= APP_UPDATE_NEVER_MIN,
+      server_time: new Date().toISOString(),
+    })
+  } catch (e) {
+    console.error('[runtime/account-update]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

@@ -219,3 +219,39 @@ export const uploadNotificationImage = multer({
     ),
   },
 })
+
+const instructionVideoStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    ensureUploadsDir()
+    cb(null, UPLOADS_DIR)
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase() || '.mp4'
+    const safeExt = ['.mp4', '.webm', '.mkv', '.mov'].includes(ext) ? ext : '.mp4'
+    const channelId = String(req.params?.id ?? 'video').replace(/\D/g, '') || 'video'
+    const name = `instruction-video-${channelId}-${Date.now()}${safeExt}`
+    cb(null, name)
+  },
+})
+
+function instructionVideoFilter(_req, file, cb) {
+  const mime = String(file?.mimetype || '').toLowerCase()
+  const allowed = new Set(['video/mp4', 'video/webm', 'video/quicktime', 'video/x-matroska'])
+  if (!allowed.has(mime) && !mime.startsWith('video/')) {
+    cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Only video uploads are allowed'))
+    return
+  }
+  cb(null, true)
+}
+
+/** Instruction channel video — multipart field `video` */
+export const uploadInstructionVideo = multer({
+  storage: instructionVideoStorage,
+  fileFilter: instructionVideoFilter,
+  limits: {
+    fileSize: Math.max(
+      10 * 1024 * 1024,
+      Number(process.env.INSTRUCTION_VIDEO_MAX_BYTES) || 250 * 1024 * 1024,
+    ),
+  },
+})

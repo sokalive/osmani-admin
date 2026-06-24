@@ -2,6 +2,8 @@
  * Paginated admin reads for Users / Subscriptions (read-only; no payment/verify logic).
  */
 import { getPool } from '../db/pool.js'
+import { appendAdminPhoneDeviceSearch } from './phoneSearch.js'
+import { normalizePhoneDigits, tzPhoneCanonicalSql } from '../billingStore.js'
 
 const DEFAULT_LIMIT = 25
 const MAX_LIMIT = 100
@@ -72,12 +74,49 @@ function transactionSortSql(sort) {
 }
 
 function appendSearch(search, deviceCol, phoneCol, cond, params, i) {
+  return appendAdminPhoneDeviceSearch(search, deviceCol, [phoneCol], cond, params, i)
+}
+
+function appendSubscriptionSearch(search, cond, params, i) {
   const q = String(search ?? '').trim()
   if (!q) return i
-  const pattern = `%${q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')}%`
-  cond.push(`(${deviceCol} ILIKE $${i} OR ${phoneCol} ILIKE $${i + 1})`)
-  params.push(pattern, pattern)
-  return i + 2
+  const esc = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+  const parts = [`ds.device_id ILIKE $${i}`]
+  params.push(`%${esc}%`)
+  let idx = i + 1
+  const phoneExprs = [`COALESCE(lt.phone, pay.phone, '')`]
+  for (const expr of phoneExprs) {
+    parts.push(`${expr} ILIKE $${idx}`)
+    params.push(`%${esc}%`)
+    idx += 1
+  }
+  const digits = normalizePhoneDigits(q)
+  if (digits && digits.length >= 9) {
+    for (const expr of phoneExprs) {
+      parts.push(`${tzPhoneCanonicalSql(expr)} = $${idx}`)
+      params.push(digits)
+      idx += 1
+    }
+    parts.push(`EXISTS (
+      SELECT 1 FROM transactions t_s
+      WHERE t_s.device_id = ds.device_id
+        AND ${tzPhoneCanonicalSql('t_s.phone::text')} = $${idx}
+    )`)
+    params.push(digits)
+    idx += 1
+    parts.push(`EXISTS (
+      SELECT 1 FROM device_intelligence_registry ir_s
+      WHERE ir_s.device_id = ds.device_id
+        AND (
+          ${tzPhoneCanonicalSql('ir_s.phone_number')} = $${idx}
+          OR ${tzPhoneCanonicalSql('ir_s.account_id')} = $${idx}
+        )
+    )`)
+    params.push(digits)
+    idx += 1
+  }
+  cond.push(`(${parts.join(' OR ')})`)
+  return idx
 }
 
 const SUBSCRIPTION_FROM = `
@@ -168,7 +207,7 @@ function buildSubscriptionWhere({ search, planId, provider, status, extraWhere, 
   } else if (st === 'expired') {
     cond.push(`(ds.status <> 'active' OR ds.expires_at <= now())`)
   }
-  i = appendSearch(search, 'ds.device_id', `COALESCE(lt.phone, pay.phone, '')`, cond, params, i)
+  i = appendSubscriptionSearch(search, cond, params, i)
   const where = cond.length ? `WHERE ${cond.join(' AND ')}` : ''
   return { where, nextI: i }
 }
@@ -337,7 +376,18 @@ export async function listAdminFailedPayments(filters = {}) {
   } else if (st === 'pending') {
     cond.push(`t.status = 'pending'`)
   }
-  i = appendSearch(filters.search, `COALESCE(t.device_id, '')`, `COALESCE(t.phone, '')`, cond, params, i)
+  i = appendAdminPhoneDeviceSearch(
+    filters.search,
+    `COALESCE(t.device_id, '')`,
+    [
+      `COALESCE(t.phone, '')`,
+      `COALESCE(t.raw_payload->>'phone','')`,
+      `COALESCE(t.raw_payload->>'phoneNorm','')`,
+    ],
+    cond,
+    params,
+    i,
+  )
   const where = `WHERE ${cond.join(' AND ')}`
   const total = await countQuery(
     `SELECT COUNT(*)::int AS total

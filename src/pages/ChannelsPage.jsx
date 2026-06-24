@@ -15,6 +15,7 @@ import {
   syncStreamUrl,
   updateChannel,
   updateChannelFormData,
+  uploadInstructionVideo,
 } from '../lib/api'
 import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '../lib/channelApiModel'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
@@ -257,7 +258,7 @@ function ChannelsPage() {
 
   async function handleToggleAccess(id, nextPremium) {
     const ch = channels.find((c) => c.id === id)
-    if (!ch) return
+    if (!ch || ch.isInstructionVideo) return
     try {
       await updateChannel(id, apiBodyFromUiChannel({ ...ch, accessPremium: nextPremium }))
       await loadChannels()
@@ -277,6 +278,9 @@ function ChannelsPage() {
       const fd = channelFormDataFromSubmit(submitPayload)
       if (editingChannel) {
         await updateChannelFormData(editingChannel.id, fd)
+        if (submitPayload.instructionVideoFile instanceof Blob) {
+          await uploadInstructionVideo(editingChannel.id, submitPayload.instructionVideoFile)
+        }
       } else {
         await addChannelFormData(fd)
       }

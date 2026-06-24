@@ -36,4 +36,15 @@ export async function ensureChannelsTable(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS channels_sort_order_idx ON channels (sort_order ASC, id ASC);
   `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS channel_kind TEXT NOT NULL DEFAULT 'standard';
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_visibility TEXT NOT NULL DEFAULT 'all';
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS is_system_locked BOOLEAN NOT NULL DEFAULT false;
+  `)
+  const { ensureInstructionVideoChannel } = await import('../lib/instructionVideoChannelBootstrap.js')
+  await ensureInstructionVideoChannel(client)
 }

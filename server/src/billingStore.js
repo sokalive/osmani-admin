@@ -376,7 +376,7 @@ export function normalizePhoneDigits(phone) {
   return digits
 }
 
-function tzPhoneCanonicalSql(expr) {
+export function tzPhoneCanonicalSql(expr) {
   return `(
     CASE
       WHEN regexp_replace(COALESCE(${expr}, ''), '[^0-9]', '', 'g') ~ '^0[0-9]{9}$'
@@ -413,36 +413,62 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
   if (!digits || digits.length < 10) return null
   const proofDeviceId = String(opts.proofDeviceId ?? '').trim()
   const pool = requirePool()
-  const proofClause = proofDeviceId
-    ? `AND (
-         EXISTS (
-           SELECT 1 FROM transactions t_proof
-           WHERE t_proof.device_id = $2
-             AND trim(coalesce(t_proof.phone::text, '')) <> ''
-             AND ${tzPhoneCanonicalSql('t_proof.phone::text')} = $1
-         )
-         OR EXISTS (
-           SELECT 1 FROM device_intelligence_registry ir_proof
-           WHERE ir_proof.device_id = $2
-             AND (
-               ${tzPhoneCanonicalSql('ir_proof.phone_number')} = $1
-               OR ${tzPhoneCanonicalSql('ir_proof.account_id')} = $1
-             )
-         )
-       )`
-    : ''
-  const params = proofDeviceId ? [digits, proofDeviceId] : [digits]
+  const phoneDevicesCte = `
+    phone_txn_devices AS (
+      SELECT DISTINCT trim(t.device_id::text) AS device_id
+      FROM transactions t
+      WHERE t.status = 'completed'
+        AND trim(coalesce(t.device_id::text, '')) <> ''
+        AND trim(coalesce(t.phone::text, '')) <> ''
+        AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
+      UNION
+      SELECT DISTINCT trim(ir.device_id::text) AS device_id
+      FROM device_intelligence_registry ir
+      WHERE trim(coalesce(ir.device_id::text, '')) <> ''
+        AND (
+          ${tzPhoneCanonicalSql('ir.phone_number')} = $1
+          OR ${tzPhoneCanonicalSql('ir.account_id')} = $1
+        )
+    ),
+    linked_devices AS (
+      SELECT device_id FROM phone_txn_devices
+      UNION
+      SELECT DISTINCT ai_new.device_id::text AS device_id
+      FROM app_installs ai_new
+      INNER JOIN app_installs ai_src
+        ON ai_src.install_instance_id = ai_new.install_instance_id
+       AND trim(ai_src.install_instance_id) <> ''
+       AND ai_src.device_id <> ai_new.device_id
+      INNER JOIN phone_txn_devices p ON p.device_id = ai_src.device_id::text
+      UNION
+      SELECT DISTINCT ai_new.device_id::text AS device_id
+      FROM app_installs ai_new
+      INNER JOIN app_installs ai_src
+        ON ai_src.install_instance_id = ai_new.install_instance_id
+       AND trim(ai_src.install_instance_id) <> ''
+       AND ai_src.device_id <> ai_new.device_id
+      INNER JOIN phone_txn_devices p ON p.device_id = ai_new.device_id::text
+    )`
+  const proofClause = ''
+  if (proofDeviceId) {
+    const { rows: linkRows } = await pool.query(
+      `WITH ${phoneDevicesCte}
+       SELECT 1 FROM linked_devices WHERE device_id = $2 LIMIT 1`,
+      [digits, proofDeviceId],
+    )
+    if (!linkRows[0]) return null
+  }
+  const params = [digits]
+
   const { rows } = await pool.query(
-    `SELECT ds.device_id::text AS device_id
+    `WITH ${phoneDevicesCte}
+     SELECT ds.device_id::text AS device_id
      FROM device_subscriptions ds
-     INNER JOIN transactions t ON t.device_id = ds.device_id
-     WHERE t.status = 'completed'
-       AND trim(coalesce(t.phone::text, '')) <> ''
-       AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
-       AND ds.status = 'active'
+     WHERE ds.status = 'active'
        AND ds.expires_at > now()
+       AND ds.device_id IN (SELECT device_id FROM linked_devices)
        ${proofClause}
-     ORDER BY ds.expires_at DESC, t.created_at DESC
+     ORDER BY ds.expires_at DESC
      LIMIT 1`,
     params,
   )
@@ -453,33 +479,76 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
   const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
   const dev = String(txn.device_id ?? '').trim() || String(raw.device_id ?? '').trim()
   if (!dev) return null
-  if (proofDeviceId) {
+  if (proofDeviceId && proofDeviceId !== dev) {
     const { rows: proofRows } = await pool.query(
-      `SELECT 1 FROM (
-         SELECT 1 FROM transactions
-         WHERE device_id = $1
-           AND trim(coalesce(phone::text, '')) <> ''
-           AND ${tzPhoneCanonicalSql('phone::text')} = $2
-         UNION ALL
-         SELECT 1 FROM device_intelligence_registry ir
-         WHERE ir.device_id = $1
-           AND (
-             ${tzPhoneCanonicalSql('ir.phone_number')} = $2
-             OR ${tzPhoneCanonicalSql('ir.account_id')} = $2
-           )
-       ) proof LIMIT 1`,
-      [proofDeviceId, digits],
+      `WITH ${phoneDevicesCte}
+       SELECT 1 FROM linked_devices WHERE device_id = $2 LIMIT 1`,
+      [digits, proofDeviceId],
     )
     if (!proofRows[0]) return null
   }
   const { rows: dr } = await pool.query(
-    `SELECT device_id::text AS device_id
-     FROM device_subscriptions
-     WHERE device_id = $1 AND status = 'active' AND expires_at > now()
+    `WITH ${phoneDevicesCte}
+     SELECT ds.device_id::text AS device_id
+     FROM device_subscriptions ds
+     WHERE ds.device_id = $2
+       AND ds.status = 'active'
+       AND ds.expires_at > now()
+       AND ds.device_id IN (SELECT device_id FROM linked_devices)
      LIMIT 1`,
-    [dev],
+    [digits, dev],
   )
   return dr[0]?.device_id ? String(dr[0].device_id) : null
+}
+
+/** True when device_id is tied to a completed payment phone (txn, registry, or install_instance sibling). */
+export async function isDeviceLinkedToPaymentPhone(deviceId, phoneInput) {
+  const digits = normalizePhoneDigits(phoneInput)
+  const d = String(deviceId ?? '').trim()
+  if (!digits || digits.length < 10 || !d) return false
+  const pool = requirePool()
+  const phoneDevicesCte = `
+    phone_txn_devices AS (
+      SELECT DISTINCT trim(t.device_id::text) AS device_id
+      FROM transactions t
+      WHERE t.status = 'completed'
+        AND trim(coalesce(t.device_id::text, '')) <> ''
+        AND trim(coalesce(t.phone::text, '')) <> ''
+        AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
+      UNION
+      SELECT DISTINCT trim(ir.device_id::text) AS device_id
+      FROM device_intelligence_registry ir
+      WHERE trim(coalesce(ir.device_id::text, '')) <> ''
+        AND (
+          ${tzPhoneCanonicalSql('ir.phone_number')} = $1
+          OR ${tzPhoneCanonicalSql('ir.account_id')} = $1
+        )
+    ),
+    linked_devices AS (
+      SELECT device_id FROM phone_txn_devices
+      UNION
+      SELECT DISTINCT ai_new.device_id::text AS device_id
+      FROM app_installs ai_new
+      INNER JOIN app_installs ai_src
+        ON ai_src.install_instance_id = ai_new.install_instance_id
+       AND trim(ai_src.install_instance_id) <> ''
+       AND ai_src.device_id <> ai_new.device_id
+      INNER JOIN phone_txn_devices p ON p.device_id = ai_src.device_id::text
+      UNION
+      SELECT DISTINCT ai_new.device_id::text AS device_id
+      FROM app_installs ai_new
+      INNER JOIN app_installs ai_src
+        ON ai_src.install_instance_id = ai_new.install_instance_id
+       AND trim(ai_src.install_instance_id) <> ''
+       AND ai_src.device_id <> ai_new.device_id
+      INNER JOIN phone_txn_devices p ON p.device_id = ai_new.device_id::text
+    )`
+  const { rows } = await pool.query(
+    `WITH ${phoneDevicesCte}
+     SELECT 1 FROM linked_devices WHERE device_id = $2 LIMIT 1`,
+    [digits, d],
+  )
+  return Boolean(rows[0])
 }
 
 /** --- Subscriptions --- */

@@ -22,6 +22,12 @@ export function formLabelClass() {
   return 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400'
 }
 
+export const INSTRUCTION_VISIBILITY_OPTIONS = [
+  { value: 'all', label: 'Show to all users' },
+  { value: 'below_v24', label: 'Show only to versions below v24' },
+  { value: 'hide_v24_plus', label: 'Hide from v24+ users' },
+]
+
 export function emptyFormState() {
   return {
     id: '',
@@ -42,6 +48,10 @@ export function emptyFormState() {
     hd: true,
     active: true,
     showInApp: true,
+    isInstructionVideo: false,
+    isSystemLocked: false,
+    instructionVisibility: 'all',
+    videoUrl: '',
   }
 }
 
@@ -72,5 +82,9 @@ export function channelToForm(channel) {
     hd: channel.hd !== false,
     active: channel.active !== false,
     showInApp: channel.showInApp !== false,
+    isInstructionVideo: Boolean(channel.isInstructionVideo),
+    isSystemLocked: Boolean(channel.isSystemLocked),
+    instructionVisibility: String(channel.instructionVisibility ?? 'all'),
+    videoUrl: channel.videoUrl ?? '',
   }
 }

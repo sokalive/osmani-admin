@@ -4,12 +4,13 @@ import { Router } from 'express'
 import {
   buildDuplicateChannelRecord,
   channelToResponse,
+  isInstructionVideoChannelRow,
   mergeChannelRecord,
   migrateStoredChannel,
   parseChannelInput,
   uploadsFilePathFromThumbnail,
 } from '../channelNormalize.js'
-import { UPLOADS_DIR, uploadThumbnail } from '../multerUpload.js'
+import { UPLOADS_DIR, uploadInstructionVideo, uploadThumbnail } from '../multerUpload.js'
 import {
   deleteChannelById,
   getChannelById,
@@ -31,6 +32,8 @@ import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
 import { warmMpingoMetadataCache } from '../lib/mpingoPlayerMetadata.js'
 import { applyChannelsRoutingHeaders } from '../lib/mpingoRoutingSync.js'
 import { triggerServerHealthBroadcast } from './realtimeSettings.js'
+import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
+import { instructionChannelVisibleForClient } from '../lib/instructionVideoChannel.js'
 
 export const channelsRouter = Router()
 
@@ -39,6 +42,7 @@ async function notifyChannelCatalogChange(action, channelId = null) {
 }
 
 const upload = uploadThumbnail.single('thumbnail')
+const uploadVideo = uploadInstructionVideo.single('video')
 
 function runUpload(req, res, next) {
   upload(req, res, (err) => {
@@ -58,10 +62,28 @@ function maybeUpload(req, res, next) {
   return next()
 }
 
+function runVideoUpload(req, res, next) {
+  uploadVideo(req, res, (err) => {
+    if (err) {
+      res.status(400).json({ error: String(err.message || err) })
+      return
+    }
+    next()
+  })
+}
+
 channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
   const t0 = Date.now()
   try {
+    const clientVersion = extractVersionCodeFromRequest(req)
     const list = await readChannels()
+    const visibleList =
+      clientVersion > 0
+        ? list.filter((c) => {
+            if (!isInstructionVideoChannelRow(c)) return true
+            return instructionChannelVisibleForClient(c, clientVersion)
+          })
+        : list
     const skipWarm =
       String(req.headers['x-osmani-skip-mpingo-warm'] || req.query.lite || '').trim() === '1' ||
       String(process.env.MPINGO_WARM_ON_CHANNEL_LIST || 'background').toLowerCase() === 'off'
@@ -70,12 +92,12 @@ channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
     } else if (String(process.env.MPINGO_WARM_ON_CHANNEL_LIST || 'background').toLowerCase() === 'sync') {
       await warmMpingoMetadataCache(list)
     } else {
-      void warmMpingoMetadataCache(list).catch((e) => {
+      void warmMpingoMetadataCache(visibleList).catch((e) => {
         console.error('[channels] background mpingo warm failed:', e)
       })
     }
-    const payload = list.map((c) => {
-      const api = channelToResponse(c, req)
+    const payload = visibleList.map((c) => {
+      const api = channelToResponse(c, req, clientVersion)
       logChannelStreamDiagGet(c, api, {
         db_read_to_response_ms: Date.now() - t0,
       })
@@ -130,7 +152,12 @@ channelsRouter.post('/:id/duplicate', requireAdminPanelAccess, async (req, res) 
     }
     const existingRow = await getChannelById(id)
     if (!existingRow) {
+      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
       return res.status(404).json({ error: 'Channel not found' })
+    }
+    const existing = migrateStoredChannel(existingRow)
+    if (isInstructionVideoChannelRow(existing)) {
+      return res.status(403).json({ error: 'System instruction channels cannot be duplicated' })
     }
     const nextId = await getNextChannelId()
     const sortOrder = await getNextChannelSortOrder()
@@ -189,8 +216,9 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
       return res.status(404).json({ error: 'Channel not found' })
     }
     const existing = migrateStoredChannel(existingRow)
+    const instruction = isInstructionVideoChannelRow(existing)
     const parsed = parseChannelInput(req.body, req.file, existing)
-    if (!parsed.name || !parsed.url) {
+    if (!parsed.name || (!instruction && !parsed.url)) {
       if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
       return res.status(400).json({ error: 'name and url (stream URL) are required' })
     }
@@ -208,7 +236,7 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after update failed:', err)
     })
-    const updatedBody = channelToResponse(updated, req)
+    const updatedBody = channelToResponse(updated, req, extractVersionCodeFromRequest(req))
     logChannelStreamDiagWrite(updatedBody, { scope: 'channels.PUT_response' })
     res.json(updatedBody)
   } catch (e) {
@@ -228,6 +256,9 @@ channelsRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
       return res.status(404).json({ error: 'Channel not found' })
     }
     const m = migrateStoredChannel(found)
+    if (m.isSystemLocked || isInstructionVideoChannelRow(m)) {
+      return res.status(403).json({ error: 'This system channel cannot be deleted' })
+    }
     if (m.thumbnail?.startsWith('/uploads/')) {
       const f = uploadsFilePathFromThumbnail(m.thumbnail)
       if (f) await fs.unlink(path.join(UPLOADS_DIR, f)).catch(() => {})
@@ -240,6 +271,48 @@ channelsRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
     res.status(204).send()
   } catch (e) {
     console.error('[channels] DELETE /:id failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+channelsRouter.post('/:id/instruction-video', requireAdminPanelAccess, runVideoUpload, async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10)
+    if (Number.isNaN(id)) {
+      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
+      return res.status(400).json({ error: 'Invalid id' })
+    }
+    const existingRow = await getChannelById(id)
+    if (!existingRow) {
+      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
+      return res.status(404).json({ error: 'Channel not found' })
+    }
+    const existing = migrateStoredChannel(existingRow)
+    if (!isInstructionVideoChannelRow(existing)) {
+      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
+      return res.status(400).json({ error: 'Only the VIDEO instruction channel accepts video uploads' })
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'video file is required' })
+    }
+    if (existing.url?.startsWith('/uploads/')) {
+      const oldFile = uploadsFilePathFromThumbnail(existing.url)
+      if (oldFile && oldFile !== req.file.filename) {
+        await fs.unlink(path.join(UPLOADS_DIR, oldFile)).catch(() => {})
+      }
+    }
+    const now = new Date().toISOString()
+    const parsed = parseChannelInput({ url: `/uploads/${req.file.filename}` }, null, existing)
+    const updated = mergeChannelRecord(existing, parsed, id, now)
+    await updateChannel(updated)
+    await notifyChannelCatalogChange('updated', updated.id)
+    void triggerServerHealthBroadcast().catch((err) => {
+      console.error('[channels] health refresh after instruction video upload failed:', err)
+    })
+    const body = channelToResponse(updated, req, extractVersionCodeFromRequest(req))
+    res.json(body)
+  } catch (e) {
+    console.error('[channels] POST /:id/instruction-video failed:', e)
     res.status(500).json({ error: String(e.message || e) })
   }
 })

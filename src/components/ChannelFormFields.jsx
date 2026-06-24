@@ -1,5 +1,6 @@
 import ToggleSwitch from './ToggleSwitch'
 import {
+  INSTRUCTION_VISIBILITY_OPTIONS,
   PLAYER_TYPES,
   SECTION_OPTIONS,
   formInputClass,
@@ -13,10 +14,13 @@ function ChannelFormFields({
   updateField,
   thumbnailPreview,
   onThumbnailChange,
+  instructionVideoFile,
+  onInstructionVideoChange,
 }) {
   const ic = formInputClass()
   const sc = formSelectClass()
   const lc = formLabelClass()
+  const instruction = Boolean(form.isInstructionVideo)
 
   function setDisplaySection(next) {
     updateField('displaySection', next)
@@ -27,6 +31,13 @@ function ChannelFormFields({
 
   return (
     <div className="space-y-5">
+      {instruction ? (
+        <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
+          System instruction video channel — always free, not deletable. Upload a portrait instruction
+          video (e.g. how to update the app).
+        </div>
+      ) : null}
+
       <div>
         <label htmlFor={`${formId}-name`} className={lc}>
           Channel Name
@@ -39,6 +50,8 @@ function ChannelFormFields({
           className={ic}
           placeholder="Channel display name"
           required
+          readOnly={instruction}
+          disabled={instruction}
         />
       </div>
 
@@ -101,6 +114,44 @@ function ChannelFormFields({
         </div>
       </fieldset>
 
+      {instruction ? (
+        <>
+          <div>
+            <label htmlFor={`${formId}-instruction-visibility`} className={lc}>
+              App visibility targeting
+            </label>
+            <select
+              id={`${formId}-instruction-visibility`}
+              value={form.instructionVisibility}
+              onChange={(e) => updateField('instructionVisibility', e.target.value)}
+              className={sc}
+            >
+              {INSTRUCTION_VISIBILITY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <span className={lc}>Instruction video</span>
+            <input
+              type="file"
+              accept="video/mp4,video/webm,video/quicktime"
+              onChange={onInstructionVideoChange}
+              className="block w-full text-sm text-slate-400 file:mr-4 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-cyan-200 hover:file:bg-cyan-500/30"
+            />
+            {instructionVideoFile ? (
+              <p className="mt-2 text-xs text-cyan-300">Selected: {instructionVideoFile.name}</p>
+            ) : form.videoUrl ? (
+              <p className="mt-2 truncate text-xs text-slate-500">Current: {form.videoUrl}</p>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">No video uploaded yet.</p>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
       <div>
         <label htmlFor={`${formId}-primary`} className={lc}>
           Stream URL (Primary)
@@ -205,6 +256,8 @@ function ChannelFormFields({
           ))}
         </select>
       </div>
+        </>
+      )}
 
       <div>
         <span className={lc}>Thumbnail</span>
@@ -229,6 +282,9 @@ function ChannelFormFields({
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-600/50 bg-slate-900/40 px-3 py-3">
         <span className="text-sm font-medium text-slate-300">Access Type</span>
+        {instruction ? (
+          <span className="text-xs font-bold uppercase tracking-wide text-emerald-300">Free (locked)</span>
+        ) : (
         <div className="flex items-center gap-3">
           <span
             className={`text-xs font-bold uppercase tracking-wide ${form.accessPremium ? 'text-slate-500' : 'text-amber-300'}`}
@@ -246,6 +302,7 @@ function ChannelFormFields({
             Premium
           </span>
         </div>
+        )}
       </div>
 
       <fieldset className="rounded-xl border border-slate-600/50 bg-slate-900/30 p-4">
@@ -253,6 +310,7 @@ function ChannelFormFields({
           Options
         </legend>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {!instruction ? (
           <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
             <input
               type="checkbox"
@@ -262,6 +320,7 @@ function ChannelFormFields({
             />
             Live
           </label>
+          ) : null}
           <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
             <input
               type="checkbox"

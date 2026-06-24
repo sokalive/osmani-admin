@@ -1193,16 +1193,22 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
     }
     const ownerDeviceId = await billing.findActiveDeviceIdForPaymentPhone(paymentPhone)
     if (!ownerDeviceId) return res.status(404).json({ error: 'No active subscription found for this payment phone' })
+    let effectiveSourceId = ownerDeviceId
     if (ownerDeviceId !== sourceDeviceId) {
-      return res.status(403).json({ error: 'Requesting device is not the active subscription owner for this payment phone' })
+      const linked = await billing.isDeviceLinkedToPaymentPhone(sourceDeviceId, paymentPhone)
+      if (!linked) {
+        return res.status(403).json({
+          error: 'Requesting device is not the active subscription owner for this payment phone',
+        })
+      }
     }
-    const sourceSub = await resolveSubscriptionByDevice(pool, sourceDeviceId)
+    const sourceSub = await resolveSubscriptionByDevice(pool, effectiveSourceId)
     if (!sourceSub || sourceSub.status !== 'active') {
       return res.status(400).json({ error: 'Source subscription is not active' })
     }
     const validSubRes = await pool.query(
       `SELECT (status = 'active' AND expires_at > now()) AS active FROM device_subscriptions WHERE device_id = $1`,
-      [sourceDeviceId],
+      [effectiveSourceId],
     )
     if (!validSubRes.rows[0]?.active) {
       return res.status(400).json({ error: 'Source subscription expired' })
@@ -1217,7 +1223,7 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
     })
     const limits = await checkTransferLimits(
       pool,
-      sourceDeviceId,
+      effectiveSourceId,
       livePolicy.cooldownMinutes,
       livePolicy.dailyLimit,
       livePolicy.weeklyLimit,
@@ -1299,27 +1305,27 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
        (code, source_device_id, target_device_id, target_fingerprint_hash, status, expires_at, created_by, created_at, updated_at)
        VALUES ($1, $2, $3, $4, 'active', now() + ($5::int * interval '1 minute'), 'device', now(), now())
        RETURNING id, code, expires_at`,
-      [generatedCode, sourceDeviceId, null, fpHash, TRANSFER_CODE_TTL_MINUTES],
+      [generatedCode, effectiveSourceId, null, fpHash, TRANSFER_CODE_TTL_MINUTES],
     )
     await pool.query(
       `INSERT INTO device_transfers
        (code_id, code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, 'requested', 'code_issued', 'device', now())`,
-      [rows[0].id, rows[0].code, sourceDeviceId, 'pending-target', null, fpHash],
+      [rows[0].id, rows[0].code, effectiveSourceId, 'pending-target', null, fpHash],
     )
     await logSecurityEvent(pool, {
       actor: sourceDeviceId,
       eventType: 'Transfer request',
       status: 'completed',
       detail: 'Transfer code issued',
-      metadata: { source_device_id: sourceDeviceId, code: rows[0].code },
+      metadata: { source_device_id: effectiveSourceId, code: rows[0].code },
     })
     const responseBody = {
       ok: true,
       code: String(rows[0].code),
       expires_at: rows[0].expires_at instanceof Date ? rows[0].expires_at.toISOString() : String(rows[0].expires_at),
       transfer_mode: livePolicy.transferMode,
-      source_device_id: sourceDeviceId,
+      source_device_id: effectiveSourceId,
     }
     emitSync('transfer_requested', {
       code: responseBody.code,

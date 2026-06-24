@@ -25,6 +25,7 @@ function ChannelRow({
   canMoveDown = false,
 }) {
   const premium = channel.accessPremium === true
+  const instruction = channel.isInstructionVideo === true
   const dragging = dragChannelId === channel.id
 
   return (
@@ -125,9 +126,14 @@ function ChannelRow({
           <ToggleSwitch
             checked={premium}
             onChange={(next) => onToggleAccess(next)}
+            disabled={instruction}
             aria-label={`${premium ? 'Premium' : 'Free'} access for ${channel.name}`}
           />
-          {premium ? (
+          {instruction ? (
+            <span className="inline-flex items-center rounded-lg bg-cyan-500/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300 ring-1 ring-cyan-400/35">
+              Instruction
+            </span>
+          ) : premium ? (
             <span className="inline-flex items-center rounded-lg bg-yellow-500/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-yellow-300 ring-1 ring-yellow-400/35 shadow-[0_0_12px_rgba(234,179,8,0.12)]">
               Premium
             </span>
@@ -180,12 +186,13 @@ function ChannelRow({
           <button
             type="button"
             onClick={onDuplicate}
-            disabled={duplicateDisabled}
+            disabled={duplicateDisabled || instruction}
             className="rounded-xl p-2.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
             aria-label={`Duplicate ${channel.name}`}
           >
             <Copy className="h-4 w-4" />
           </button>
+          {!instruction ? (
           <button
             type="button"
             onClick={onDelete}
@@ -194,6 +201,7 @@ function ChannelRow({
           >
             <Trash2 className="h-4 w-4" />
           </button>
+          ) : null}
         </div>
       </td>
     </tr>

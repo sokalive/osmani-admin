@@ -160,6 +160,17 @@ export function duplicateChannel(id) {
   return adminApiPost(`/channels/${encodeURIComponent(id)}/duplicate`, {})
 }
 
+export function uploadInstructionVideo(channelId, videoFile) {
+  const fd = new FormData()
+  fd.append('video', videoFile, videoFile.name || 'instruction.mp4')
+  return fetch(joinPath(`/channels/${encodeURIComponent(channelId)}/instruction-video`), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminPanelFormDataHeaders(),
+    body: fd,
+  }).then(parseJsonSafeResponse)
+}
+
 /** Global app modes (Free / Emergency / Maintenance) — GET/PUT /api/settings */
 export const getAppGlobalSettings = () => adminApiGet('/settings')
 export const putAppGlobalSettings = (body) => adminApiPut('/settings', body)

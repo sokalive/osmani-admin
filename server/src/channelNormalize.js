@@ -11,6 +11,12 @@ import {
   mpingoNeedsChromePlayer,
 } from './lib/mpingoPlayerMetadata.js'
 import { isMpingoPlayerPageUrl } from './lib/streamMpingoHtmlBase.js'
+import {
+  instructionChannelApiExtras,
+  instructionChannelVisibleForClient,
+  isInstructionVideoChannelName,
+  normalizeInstructionVisibility,
+} from './lib/instructionVideoChannel.js'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk', 'chrome'])
 
@@ -83,7 +89,19 @@ export function migrateStoredChannel(c) {
     sortOrder: Number(c.sortOrder ?? c.sort_order) || 0,
     url: (c.url || '').trim(),
     name: (c.name || '').trim(),
+    channelKind: String(c.channelKind ?? c.channel_kind ?? 'standard'),
+    instructionVisibility: normalizeInstructionVisibility(
+      c.instructionVisibility ?? c.instruction_visibility,
+    ),
+    isSystemLocked: Boolean(c.isSystemLocked ?? c.is_system_locked),
   }
+}
+
+export function isInstructionVideoChannelRow(c) {
+  if (!c || typeof c !== 'object') return false
+  const kind = String(c.channelKind ?? c.channel_kind ?? '').trim().toLowerCase()
+  if (kind === 'instruction_video') return true
+  return isInstructionVideoChannelName(c.name)
 }
 
 function parseBool(v, defaultVal) {
@@ -124,6 +142,7 @@ function normalizeStoredUploadPath(value) {
 export function parseChannelInput(body, file, existing = null) {
   const b = body || {}
   const ex = existing ? migrateStoredChannel(existing) : null
+  const instruction = isInstructionVideoChannelRow(ex)
 
   let thumbnail = null
   if (file) {
@@ -140,7 +159,9 @@ export function parseChannelInput(body, file, existing = null) {
 
   const accessRaw = str(b.accessType).toLowerCase()
   let accessType = 'free'
-  if (accessRaw === 'premium' || accessRaw === 'free') {
+  if (instruction) {
+    accessType = 'free'
+  } else if (accessRaw === 'premium' || accessRaw === 'free') {
     accessType = accessRaw
   } else if (parseBool(b.accessPremium, false)) {
     accessType = 'premium'
@@ -155,13 +176,19 @@ export function parseChannelInput(body, file, existing = null) {
   const tabs = parseVisibleTabsFromBottomTabField(bottomTabField || category, category)
   const bottomTab = serializeVisibleTabs(tabs)
 
+  const instructionVisibility = instruction
+    ? normalizeInstructionVisibility(b.instructionVisibility ?? b.instruction_visibility ?? ex?.instructionVisibility)
+    : normalizeInstructionVisibility(ex?.instructionVisibility)
+
+  const streamUrl = str(b.url || b.streamUrlPrimary)
+  const resolvedUrl = instruction ? (streamUrl || ex?.url || '') : streamUrl
+
   return {
-    name: str(b.name),
-    url: str(b.url || b.streamUrlPrimary),
+    name: instruction ? (ex?.name || 'VIDEO') : str(b.name),
+    url: resolvedUrl,
     category,
     bottomTab,
     thumbnail: thumbnail || null,
-    isLive: parseBool(b.isLive ?? b.live, ex != null ? Boolean(ex.isLive) : true),
     isHD: parseBool(b.isHD ?? b.hd, ex != null ? Boolean(ex.isHD) : true),
     isActive: parseBool(b.isActive ?? b.active, ex != null ? Boolean(ex.isActive) : true),
     showInApp: parseBool(b.showInApp, ex != null ? Boolean(ex.showInApp) : true),
@@ -178,6 +205,10 @@ export function parseChannelInput(body, file, existing = null) {
         : ex != null
           ? Number(ex.sortOrder) || 0
           : 0,
+    channelKind: instruction ? 'instruction_video' : String(ex?.channelKind ?? 'standard'),
+    instructionVisibility,
+    isSystemLocked: instruction ? true : Boolean(ex?.isSystemLocked),
+    isLive: instruction ? false : parseBool(b.isLive ?? b.live, ex != null ? Boolean(ex.isLive) : true),
   }
 }
 
@@ -240,6 +271,9 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
       parsed.sortOrder != null
         ? Number(parsed.sortOrder) || 0
         : Number(base.sortOrder) || Number(id) || 0,
+    channelKind: parsed.channelKind ?? base.channelKind ?? 'standard',
+    instructionVisibility: parsed.instructionVisibility ?? base.instructionVisibility ?? 'all',
+    isSystemLocked: Boolean(parsed.isSystemLocked ?? base.isSystemLocked),
     createdAt: base.createdAt || nowIso,
     updatedAt: nowIso,
   }
@@ -290,8 +324,9 @@ function resolveClientPlaybackFields(m, delivery) {
 }
 
 /** Public API shape (+ legacy aliases for older clients) */
-export function channelToResponse(c, req) {
+export function channelToResponse(c, req, clientVersion = 0) {
   const m = migrateStoredChannel({ ...c })
+  const instruction = isInstructionVideoChannelRow(m)
   const category = migrateContentCategory(m.category)
   const visibleTabs = parseVisibleTabsFromBottomTabField(m.bottomTab, category)
   const bottomTabCsv = serializeVisibleTabs(visibleTabs)
@@ -299,9 +334,39 @@ export function channelToResponse(c, req) {
   const thumbFull = resolveThumbnailForApi(rel, req)
 
   const isActive = Boolean(m.isActive)
-  const showInApp = Boolean(m.showInApp)
-  const delivery = buildChannelStreamDelivery(req, m)
-  const playback = resolveClientPlaybackFields(m, delivery)
+  let showInApp = Boolean(m.showInApp)
+  if (instruction) {
+    showInApp =
+      clientVersion > 0
+        ? instructionChannelVisibleForClient(m, clientVersion)
+        : Boolean(m.showInApp)
+  }
+  const delivery = instruction
+    ? {
+        playbackUrl: m.url?.startsWith('/uploads/') && req
+          ? `${req.protocol}://${req.get('host')}${m.url}`
+          : m.url,
+        direct_stream_url: m.url,
+        stream_delivery_mode: 'direct',
+        stream_delivery_effective: 'direct',
+        proxy_playback_url: '',
+        direct_stream_rollout: null,
+        streamProxy: { route: null },
+        backupPlayback1: '',
+        backupPlayback2: '',
+        direct_stream_url_backup1: '',
+        direct_stream_url_backup2: '',
+      }
+    : buildChannelStreamDelivery(req, m)
+  const playback = instruction
+    ? {
+        playbackUrl: delivery.playbackUrl,
+        stream_delivery_effective: 'direct',
+        playback_source: 'instruction_video',
+        effectivePlayerType: 'exo',
+        mpingo_drm: null,
+      }
+    : resolveClientPlaybackFields(m, delivery)
 
   return {
     id: m.id,
@@ -321,7 +386,7 @@ export function channelToResponse(c, req) {
     showInApp,
     is_active: isActive,
     show_in_app: showInApp,
-    accessType: m.accessType === 'premium' ? 'premium' : 'free',
+    accessType: instruction ? 'free' : m.accessType === 'premium' ? 'premium' : 'free',
     category,
     bottomTab: bottomTabCsv,
     backupStream1: m.backupStream1 ?? '',
@@ -350,9 +415,16 @@ export function channelToResponse(c, req) {
     live: Boolean(m.isLive),
     hd: Boolean(m.isHD),
     active: Boolean(m.isActive),
-    accessPremium: m.accessType === 'premium',
+    accessPremium: instruction ? false : m.accessType === 'premium',
     thumbnailUrl: thumbFull,
     thumbnail_url: thumbFull,
+    channelKind: m.channelKind ?? 'standard',
+    channel_kind: m.channelKind ?? 'standard',
+    instructionVisibility: m.instructionVisibility ?? 'all',
+    instruction_visibility: m.instructionVisibility ?? 'all',
+    isSystemLocked: Boolean(m.isSystemLocked),
+    is_system_locked: Boolean(m.isSystemLocked),
+    ...(instruction ? instructionChannelApiExtras(m, req, clientVersion) : {}),
   }
 }
 

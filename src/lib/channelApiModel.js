@@ -104,6 +104,12 @@ export function uiFromApiRow(c) {
     userAgent: c.userAgent ?? '',
     playerType,
     thumbnailUrl: thumbnail,
+    isInstructionVideo: Boolean(
+      c.instructionVideo || c.instruction_video || c.channelKind === 'instruction_video',
+    ),
+    isSystemLocked: Boolean(c.isSystemLocked ?? c.is_system_locked),
+    instructionVisibility: String(c.instructionVisibility ?? c.instruction_visibility ?? 'all'),
+    videoUrl: c.videoUrl ?? c.video_url ?? (c.url?.startsWith('/uploads/') ? c.url : ''),
   }
 }
 
@@ -130,6 +136,10 @@ export function channelFormDataFromSubmit(submitPayload) {
   fd.append('userAgent', (s.userAgent ?? '').trim())
   const uiPt = (s.playerType ?? 'Exo').trim() || 'Exo'
   fd.append('playerType', PLAYER_UI_TO_API[uiPt] ?? 'exo')
+
+  if (s.instructionVisibility) {
+    fd.append('instructionVisibility', String(s.instructionVisibility))
+  }
 
   if (s.thumbnailFile instanceof Blob) {
     fd.append('thumbnail', s.thumbnailFile, s.thumbnailFile.name || 'thumbnail.jpg')
