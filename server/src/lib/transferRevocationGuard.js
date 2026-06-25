@@ -119,6 +119,23 @@ export async function auditTransferSourceRevocation({ repair = false } = {}) {
      ) x`,
   )
 
+  const { rows: recentTransfers } = await pool.query(
+    `SELECT dt.id AS transfer_id,
+            dt.source_device_id::text AS source_device_id,
+            dt.target_device_id::text AS target_device_id,
+            dt.completed_at,
+            ds_src.status AS source_status,
+            (ds_src.status = 'active' AND ds_src.expires_at > now()) AS source_active_now,
+            ds_tgt.status AS target_status,
+            (ds_tgt.status = 'active' AND ds_tgt.expires_at > now()) AS target_active_now
+     FROM device_transfers dt
+     LEFT JOIN device_subscriptions ds_src ON ds_src.device_id = dt.source_device_id
+     LEFT JOIN device_subscriptions ds_tgt ON ds_tgt.device_id = dt.target_device_id
+     WHERE dt.status = 'completed'
+     ORDER BY COALESCE(dt.completed_at, dt.created_at) DESC
+     LIMIT 10`,
+  )
+
   let repaired = []
   if (repair && badSources.length) {
     const { notifySubscriptionTransferred } = await import('./subscriptionTransferNotify.js')
@@ -169,6 +186,7 @@ export async function auditTransferSourceRevocation({ repair = false } = {}) {
     source_still_active_after_transfer: badSources.length,
     target_active_after_transfer_7d: targetActive[0]?.n ?? 0,
     duplicate_active_pairs: dupActive[0]?.n ?? 0,
+    recent_transfers: recentTransfers,
     bad_sources: badSources,
     repaired_count: repaired.length,
     repaired,
