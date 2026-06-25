@@ -212,6 +212,32 @@ runtimePublicRouter.post('/subscription-restoration-repair', requireLegacyAdminT
   }
 })
 
+/** Audit transfer sources that incorrectly remain active; optional repair. */
+runtimePublicRouter.get('/transfer-source-revocation-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { auditTransferSourceRevocation } = await import('../lib/transferRevocationGuard.js')
+    const repair = String(req.query.repair ?? '').trim() === '1'
+    const report = await auditTransferSourceRevocation({ repair })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/transfer-source-revocation-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+runtimePublicRouter.post('/transfer-source-revocation-repair', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { auditTransferSourceRevocation } = await import('../lib/transferRevocationGuard.js')
+    const report = await auditTransferSourceRevocation({ repair: true })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/transfer-source-revocation-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Read-only incident audit (suspended/revoked shadows + restoration counts). */
 runtimePublicRouter.get('/subscription-incident-audit', requireLegacyAdminToken, async (_req, res) => {
   try {
