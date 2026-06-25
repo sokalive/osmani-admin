@@ -20,6 +20,15 @@ function labelClass() {
   return 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400'
 }
 
+function statusLabelSw(st) {
+  const s = String(st ?? '').toLowerCase()
+  if (s === 'active') return 'Inatumika'
+  if (s === 'completed') return 'Yamefanikiwa'
+  if (s === 'pending') return 'Yanasubiri'
+  if (s === 'failed') return 'Yameshindwa'
+  return st || '—'
+}
+
 function badge(st) {
   const s = String(st ?? '').toLowerCase()
   if (s === 'active' || s === 'completed') return 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/40'
@@ -36,14 +45,14 @@ function PaymentTable({ title, rows }) {
         <table className="min-w-full text-left text-sm">
           <thead className="text-xs uppercase text-slate-500">
             <tr>
-              <th className="px-2 py-2">Order</th>
-              <th className="px-2 py-2">Device</th>
-              <th className="px-2 py-2">Phone</th>
-              <th className="px-2 py-2">Plan</th>
-              <th className="px-2 py-2">Amount</th>
-              <th className="px-2 py-2">Provider</th>
-              <th className="px-2 py-2">Status</th>
-              <th className="px-2 py-2">When</th>
+              <th className="px-2 py-2">Agizo</th>
+              <th className="px-2 py-2">Kifaa</th>
+              <th className="px-2 py-2">Simu</th>
+              <th className="px-2 py-2">Kifurushi</th>
+              <th className="px-2 py-2">Kiasi</th>
+              <th className="px-2 py-2">Mtoa huduma</th>
+              <th className="px-2 py-2">Hali</th>
+              <th className="px-2 py-2">Tarehe</th>
             </tr>
           </thead>
           <tbody>
@@ -57,7 +66,7 @@ function PaymentTable({ title, rows }) {
                 <td className="px-2 py-2">{r.provider_label}</td>
                 <td className="px-2 py-2">
                   <span className={`rounded-lg px-2 py-0.5 text-[10px] font-bold uppercase ring-1 ${badge(r.status)}`}>
-                    {r.status}
+                    {statusLabelSw(r.status)}
                   </span>
                 </td>
                 <td className="px-2 py-2 text-xs text-slate-500">{formatAdminDateTime(r.created_at)}</td>
@@ -87,7 +96,7 @@ function CustomerInvestigationPage() {
   const runSearch = useCallback(async () => {
     const params = Object.fromEntries(Object.entries(form).filter(([, v]) => String(v).trim()))
     if (!Object.keys(params).length) {
-      showToast('error', 'Enter at least one search field')
+      showToast('error', 'Weka angalau sehemu moja ya utafutaji')
       return
     }
     setLoading(true)
@@ -95,7 +104,7 @@ function CustomerInvestigationPage() {
       const data = await investigateCustomer(params)
       setReport(data)
     } catch (e) {
-      showToast('error', e?.message || 'Investigation failed')
+      showToast('error', e?.message || 'Uchunguzi umeshindwa')
       setReport(null)
     } finally {
       setLoading(false)
@@ -108,31 +117,31 @@ function CustomerInvestigationPage() {
     try {
       if (action.action === 'retry_reconciliation' && action.order_id) {
         await customerInvestigationReconcile({ order_id: action.order_id, confirm: true })
-        showToast('success', 'Reconciliation completed')
+        showToast('success', 'Ulinganisho umekamilika')
       } else if (action.action === 'force_activate' && action.order_id) {
-        if (!window.confirm(`Force activate subscription for order ${action.order_id}?`)) return
+        if (!window.confirm(`Thibitisha kuamsha kifurushi kwa agizo ${action.order_id}?`)) return
         await customerInvestigationForceActivate({ order_id: action.order_id, confirm: true })
-        showToast('success', 'Activation attempted')
+        showToast('success', 'Jaribio la kuamsha limefanywa')
       } else if (action.action === 'refresh_subscription' && action.device_id) {
         await customerInvestigationRefreshSubscription({ device_id: action.device_id })
-        showToast('success', 'Subscription status refreshed')
+        showToast('success', 'Hali ya kifurushi imesasishwa')
       } else if (action.action === 'force_transfer') {
-        const target = window.prompt('Target device_id for force transfer:')
+        const target = window.prompt('Device ID ya kifaa lengwa kwa uhamisho:')
         if (!target?.trim()) return
-        if (!window.confirm(`Force transfer from ${action.source_device_id} to ${target}?`)) return
+        if (!window.confirm(`Thibitisha uhamisho kutoka ${action.source_device_id} kwenda ${target}?`)) return
         await customerInvestigationForceTransfer({
           payment_phone: form.phone || report?.query?.phone_normalized,
           target_device_id: target.trim(),
           confirm: true,
         })
-        showToast('success', 'Force transfer completed')
+        showToast('success', 'Uhamisho umekamilika')
       } else {
         showToast('info', action.label)
         return
       }
       await runSearch()
     } catch (e) {
-      showToast('error', e?.message || 'Action failed')
+      showToast('error', e?.message || 'Hatua imeshindwa')
     } finally {
       setActionBusy('')
     }
@@ -143,25 +152,25 @@ function CustomerInvestigationPage() {
       <Topbar />
       <main className="mt-6 flex flex-col gap-6">
         <header>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400/90">Support</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400/90">Msaada</p>
           <h1 className="mt-1 flex items-center gap-2 text-2xl font-bold text-white">
             <UserSearch className="h-7 w-7 text-cyan-400" />
-            Customer Investigation
+            Uchunguzi wa Mteja
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-400">
-            Search once by phone, device, order, or install ID to see subscriptions, payments, linked devices,
-            and suggested next steps. Read-only until you confirm an action.
+            Tafuta kwa namba ya simu, device ID, agizo, au install ID ili kuona vifurushi, malipo, vifaa vilivyounganishwa,
+            na hatua zinazopendekezwa. Ni kusoma tu hadi uthibitishe hatua.
           </p>
         </header>
 
         <section className="rounded-2xl border border-slate-700/60 bg-[#0b1220]/80 p-5">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[
-              ['phone', 'Phone number'],
+              ['phone', 'Namba ya Simu'],
               ['device_id', 'Device ID'],
-              ['order_id', 'Order ID'],
-              ['external_id', 'Provider reference'],
-              ['account_id', 'Account ID'],
+              ['order_id', 'Agizo ID'],
+              ['external_id', 'Kumbukumbu ya Malipo'],
+              ['account_id', 'Akaunti ID'],
               ['install_instance_id', 'Install instance ID'],
             ].map(([key, label]) => (
               <div key={key}>
@@ -182,14 +191,14 @@ function CustomerInvestigationPage() {
             className="mt-4 inline-flex items-center gap-2 rounded-xl bg-cyan-500/20 px-5 py-2.5 text-sm font-semibold text-cyan-100 ring-1 ring-cyan-500/40 hover:bg-cyan-500/30 disabled:opacity-50"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-            Investigate
+            Chunguza
           </button>
         </section>
 
         {report ? (
           <div className="flex flex-col gap-4">
             <section className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
-              <h2 className="text-sm font-bold text-cyan-100">Diagnosis</h2>
+              <h2 className="text-sm font-bold text-cyan-100">Uchunguzi (kusoma tu)</h2>
               <p className="mt-1 text-sm text-slate-200">{report.diagnosis?.summary}</p>
               {report.diagnosis?.not_activated_reasons?.length > 1 ? (
                 <ul className="mt-2 list-disc pl-5 text-xs text-slate-400">
@@ -200,7 +209,7 @@ function CustomerInvestigationPage() {
               ) : null}
               {report.customer?.payment_phone_owner_device_id ? (
                 <p className="mt-2 text-xs text-slate-400">
-                  Payment phone owner device:{' '}
+                  Kifaa cha namba ya malipo:{' '}
                   <span className="font-mono text-cyan-200">{report.customer.payment_phone_owner_device_id}</span>
                 </p>
               ) : null}
@@ -208,7 +217,7 @@ function CustomerInvestigationPage() {
 
             {report.suggested_actions?.length ? (
               <section className="rounded-2xl border border-slate-700/60 bg-[#0b1220]/80 p-4">
-                <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">Suggested actions</h3>
+                <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">Hatua Inayopendekezwa</h3>
                 <div className="flex flex-col gap-2">
                   {report.suggested_actions.map((a, i) => (
                     <div
@@ -231,7 +240,7 @@ function CustomerInvestigationPage() {
                           {actionBusy === a.action ? (
                             <Loader2 className="inline h-3 w-3 animate-spin" />
                           ) : (
-                            'Run'
+                            'Tekeleza'
                           )}
                         </button>
                       ) : null}
@@ -243,7 +252,7 @@ function CustomerInvestigationPage() {
 
             <section className="rounded-2xl border border-slate-700/60 bg-[#0b1220]/80 p-4">
               <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">
-                Devices ({report.devices?.length ?? 0})
+                Vifaa ({report.devices?.length ?? 0})
               </h3>
               <div className="space-y-3">
                 {report.devices?.map((d) => (
@@ -256,9 +265,9 @@ function CustomerInvestigationPage() {
                     ) : null}
                     {d.access ? (
                       <p className="mt-1 text-xs text-slate-400">
-                        Access: {d.access.active_now ? 'active' : 'inactive'}
-                        {d.access.blocked_now ? ' (blocked)' : ''}
-                        {d.access.expires_at ? ` · expires ${formatAdminDateTime(d.access.expires_at)}` : ''}
+                        Ufikiaji: {d.access.active_now ? 'inatumika' : 'haitumiki'}
+                        {d.access.blocked_now ? ' (imezuiwa)' : ''}
+                        {d.access.expires_at ? ` · inaisha ${formatAdminDateTime(d.access.expires_at)}` : ''}
                       </p>
                     ) : null}
                   </div>
@@ -266,21 +275,21 @@ function CustomerInvestigationPage() {
               </div>
             </section>
 
-            <PaymentTable title="Completed payments" rows={report.payments?.completed} />
-            <PaymentTable title="Pending payments" rows={report.payments?.pending} />
-            <PaymentTable title="Failed / abandoned" rows={report.payments?.failed} />
+            <PaymentTable title="Malipo — Yamefanikiwa" rows={report.payments?.completed} />
+            <PaymentTable title="Malipo — Yanasubiri" rows={report.payments?.pending} />
+            <PaymentTable title="Malipo — Yameshindwa" rows={report.payments?.failed} />
 
             {report.audit_logs?.length ? (
               <section className="rounded-2xl border border-slate-700/60 bg-[#0b1220]/80 p-4">
                 <h3 className="mb-3 flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-slate-300">
-                  <ShieldCheck className="h-4 w-4" /> Audit logs
+                  <ShieldCheck className="h-4 w-4" /> Kumbukumbu za ukaguzi
                 </h3>
                 <ul className="max-h-64 space-y-2 overflow-y-auto text-xs text-slate-400">
                   {report.audit_logs.map((l) => (
                     <li key={l.id} className="rounded-lg bg-slate-900/40 px-2 py-1.5">
                       <span className="text-slate-500">{formatAdminDateTime(l.created_at)}</span> · {l.event_type}{' '}
                       <span className={l.status === 'completed' ? 'text-emerald-400' : 'text-amber-400'}>
-                        ({l.status})
+                        ({statusLabelSw(l.status)})
                       </span>
                       {l.detail ? ` — ${l.detail}` : ''}
                     </li>
@@ -294,7 +303,7 @@ function CustomerInvestigationPage() {
               onClick={runSearch}
               className="inline-flex items-center gap-2 self-start text-xs text-slate-500 hover:text-cyan-300"
             >
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh report
+              <RefreshCw className="h-3.5 w-3.5" /> Sasisha ripoti
             </button>
           </div>
         ) : null}

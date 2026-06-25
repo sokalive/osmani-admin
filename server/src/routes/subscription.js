@@ -23,6 +23,7 @@ import {
   withVerifyDbSlot,
 } from '../lib/verifyDbResilience.js'
 import { coalesceVerifyAccessLoad } from '../lib/verifyAccessSingleflight.js'
+import { isCompletedTransferSourceDevice } from '../lib/transferRevocationGuard.js'
 
 export const subscriptionRouter = Router()
 
@@ -433,13 +434,24 @@ async function maybeActiveVerifyFallback(req, deviceId, fingerprint, err) {
 /** Never downgrade paid users: cache → stale cache → fast DB before any inactive verify body. */
 async function tryLastResortActiveVerifyFallback(req, deviceId, fingerprint) {
   const fp = String(fingerprint ?? '').trim()
+  const transferRevokedSource = await isCompletedTransferSourceDevice(deviceId)
   const cached = getCachedSubscriptionAccess(deviceId, fp)
-  if (isAccessRowActive(cached)) {
+  if (isAccessRowActive(cached) && !transferRevokedSource) {
     return buildActiveVerifyFallbackFromCache(req, deviceId, cached)
   }
   const stale = getStaleCachedSubscriptionAccess(deviceId, fp)
-  if (isAccessRowActive(stale)) {
+  if (isAccessRowActive(stale) && !transferRevokedSource) {
     return buildActiveVerifyFallbackFromCache(req, deviceId, stale)
+  }
+  if (transferRevokedSource) {
+    try {
+      const fast = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
+      if (!isAccessRowActive(fast)) return null
+      setCachedSubscriptionAccess(deviceId, fp, fast)
+      return buildActiveVerifyFallbackFromCache(req, deviceId, fast)
+    } catch {
+      return null
+    }
   }
   try {
     const fast = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
@@ -538,6 +550,12 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   let row = cached !== undefined ? cached : null
   let accessSnapshot = null
 
+  if (cached !== undefined && isAccessRowActive(row) && (await isCompletedTransferSourceDevice(d))) {
+    invalidateSubscriptionAccessCache(d)
+    cached = undefined
+    row = null
+  }
+
   if (cached === undefined) {
     try {
       accessSnapshot = await withVerifyDbSlot(() =>
@@ -546,7 +564,8 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
       row = accessSnapshot.row
     } catch (e) {
       const staleActive = getStaleCachedSubscriptionAccess(d, fp)
-      if (isAccessRowActive(staleActive)) {
+      const transferRevokedSource = await isCompletedTransferSourceDevice(d)
+      if (isAccessRowActive(staleActive) && !transferRevokedSource) {
         row = staleActive
         timing.stale_active_cache = true
       } else {

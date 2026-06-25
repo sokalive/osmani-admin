@@ -38,7 +38,7 @@ const menuItems = [
   { id: 'manual-subscription', label: 'Toa Kifurushi', icon: Gift, path: '/manual-subscription' },
   { id: 'transactions', label: 'Transactions', icon: CreditCard, path: '/transactions' },
   { id: 'users', label: 'Users', icon: Users, path: '/users' },
-  { id: 'customer-investigation', label: 'Customer Investigation', icon: Search, path: '/customer-investigation' },
+  { id: 'customer-investigation', label: 'Uchunguzi wa Mteja', icon: Search, path: '/customer-investigation' },
   {
     id: 'users-intelligence',
     label: 'Users Intelligence',
