@@ -22,5 +22,6 @@ export function markStartupFailed(err) {
 export function isRenderRuntime() {
   if (String(process.env.RENDER || '').trim().toLowerCase() === 'true') return true
   if (String(process.env.RENDER_SERVICE_ID || '').trim()) return true
+  if (String(process.env.RENDER_EXTERNAL_URL || '').includes('onrender.com')) return true
   return false
 }
