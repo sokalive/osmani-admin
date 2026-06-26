@@ -32,12 +32,29 @@ export function instructionChannelVisibleForClient(row, clientVersionInput) {
 }
 
 export function instructionChannelApiExtras(row, req, clientVersion) {
-  const rel = String(row?.url ?? '').trim()
-  const videoUrl = rel.startsWith('/uploads/') && req
-    ? `${req.protocol}://${req.get('host')}${rel}`
-    : rel.startsWith('http')
+  const rel = String(row?.instructionVideoUrl || row?.instruction_video_url || row?.url || '').trim()
+  const pathOnly = rel.startsWith('http')
+    ? (() => {
+        try {
+          return new URL(rel).pathname
+        } catch {
+          return rel
+        }
+      })()
+    : rel.startsWith('/uploads/')
       ? rel
       : rel
+        ? `/uploads/${rel.replace(/^\/+/, '')}`
+        : ''
+  const videoUrl =
+    rel.startsWith('http')
+      ? rel
+      : pathOnly.startsWith('/uploads/') && req
+        ? `${req.protocol}://${req.get('host')}${pathOnly}`
+        : pathOnly.startsWith('http')
+          ? pathOnly
+          : rel
+  const status = String(row?.instructionVideoStatus ?? row?.instruction_video_status ?? '').trim()
   return {
     instructionVideo: true,
     instruction_video: true,
@@ -55,6 +72,8 @@ export function instructionChannelApiExtras(row, req, clientVersion) {
     offline_cache_hint: 'recommended',
     videoUrl,
     video_url: videoUrl,
+    instructionVideoStatus: status || (videoUrl ? 'ready' : ''),
+    instruction_video_status: status || (videoUrl ? 'ready' : ''),
     accessType: 'free',
     accessPremium: false,
     access_premium: false,

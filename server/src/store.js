@@ -33,6 +33,8 @@ function rowToChannel(row) {
     channelKind: String(row.channel_kind ?? 'standard'),
     instructionVisibility: String(row.instruction_visibility ?? 'all'),
     isSystemLocked: Boolean(row.is_system_locked),
+    instructionVideoUrl: String(row.instruction_video_url ?? ''),
+    instructionVideoStatus: String(row.instruction_video_status ?? ''),
     createdAt: ca instanceof Date ? ca.toISOString() : ca,
     updatedAt: ua instanceof Date ? ua.toISOString() : ua,
   }
@@ -80,13 +82,16 @@ export async function ensureDataFile() {
   }
 }
 
+const CHANNEL_SELECT_COLS = `id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
+            access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
+            sort_order, channel_kind, instruction_visibility, is_system_locked,
+            instruction_video_url, instruction_video_status, created_at, updated_at`
+
 export async function readChannels() {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
   const { rows } = await pool.query(
-    `SELECT id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
-            access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
-            sort_order, channel_kind, instruction_visibility, is_system_locked, created_at, updated_at
+    `SELECT ${CHANNEL_SELECT_COLS}
      FROM channels ORDER BY sort_order ASC, id ASC`,
   )
   return rows.map(rowToChannel)
@@ -138,11 +143,30 @@ export async function getChannelById(id) {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
   const { rows } = await pool.query(
-    `SELECT id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
-            access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
-            sort_order, channel_kind, instruction_visibility, is_system_locked, created_at, updated_at
+    `SELECT ${CHANNEL_SELECT_COLS}
      FROM channels WHERE id = $1`,
     [Number(id)],
+  )
+  return rows.length ? rowToChannel(rows[0]) : null
+}
+
+/**
+ * Instruction VIDEO channel only — updates url + instruction_video_* without touching other channels.
+ */
+export async function updateInstructionVideoChannel(id, { url, instructionVideoUrl, instructionVideoStatus }) {
+  const pool = getPool()
+  if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
+  const channelId = Number(id)
+  const { rows } = await pool.query(
+    `UPDATE channels SET
+       url = $2,
+       instruction_video_url = $3,
+       instruction_video_status = $4,
+       updated_at = now()
+     WHERE id = $1
+       AND lower(trim(channel_kind)) = 'instruction_video'
+     RETURNING ${CHANNEL_SELECT_COLS}`,
+    [channelId, url ?? '', instructionVideoUrl ?? '', instructionVideoStatus ?? ''],
   )
   return rows.length ? rowToChannel(rows[0]) : null
 }

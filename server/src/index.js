@@ -8,8 +8,8 @@ import {
   isCdnEnabled,
 } from './lib/cdnAssets.js'
 import {
-  assertUploadStorageReady,
   getMediaHealthSnapshot,
+  initUploadStorage,
   logUploadStorageDiagnostics,
   UPLOADS_DIR,
 } from './multerUpload.js'
@@ -132,6 +132,8 @@ app.use(
       const normalized = String(filePath || '').replace(/\\/g, '/')
       if (normalized.includes('/apks/')) {
         res.setHeader('Content-Type', 'application/vnd.android.package-archive')
+      } else if (/\.(mp4|webm|mkv|mov)$/i.test(normalized)) {
+        res.setHeader('Content-Type', 'video/mp4')
       }
       if (staticUploadMaxAgeMs > 0) {
         res.setHeader('Cache-Control', `public, max-age=${getStaticUploadCacheMaxAgeSec()}, immutable`)
@@ -271,6 +273,12 @@ async function runDeferredStartup({ background = false } = {}) {
   const maxAttempts = background ? 1 : STARTUP_DEFERRED_RETRIES
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+      const uploadRetry = initUploadStorage()
+      if (uploadRetry.ok) {
+        logUploadStorageDiagnostics()
+      } else if (!background) {
+        console.warn('[uploads] deferred retry: storage still not ready:', uploadRetry.error)
+      }
       await wireLiveSyncRelay()
       await ensureAllApiDataFiles()
       markStartupReady()
@@ -325,8 +333,12 @@ async function main() {
   try {
     wireApiCacheInvalidation()
     ensureMpingoRoutingStartupSync()
-    assertUploadStorageReady()
-    logUploadStorageDiagnostics()
+    const uploadInit = initUploadStorage()
+    if (uploadInit.ok) {
+      logUploadStorageDiagnostics()
+    } else {
+      console.warn('[uploads] storage degraded at startup:', uploadInit.error || 'unknown')
+    }
     const cdnHealth = getCdnHealthSnapshot()
     console.log(
       cdnHealth.cdnEnabled

@@ -94,6 +94,8 @@ export function migrateStoredChannel(c) {
       c.instructionVisibility ?? c.instruction_visibility,
     ),
     isSystemLocked: Boolean(c.isSystemLocked ?? c.is_system_locked),
+    instructionVideoUrl: String(c.instructionVideoUrl ?? c.instruction_video_url ?? '').trim(),
+    instructionVideoStatus: String(c.instructionVideoStatus ?? c.instruction_video_status ?? '').trim(),
   }
 }
 
@@ -274,6 +276,8 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
     channelKind: parsed.channelKind ?? base.channelKind ?? 'standard',
     instructionVisibility: parsed.instructionVisibility ?? base.instructionVisibility ?? 'all',
     isSystemLocked: Boolean(parsed.isSystemLocked ?? base.isSystemLocked),
+    instructionVideoUrl: parsed.instructionVideoUrl ?? base.instructionVideoUrl ?? '',
+    instructionVideoStatus: parsed.instructionVideoStatus ?? base.instructionVideoStatus ?? '',
     createdAt: base.createdAt || nowIso,
     updatedAt: nowIso,
   }
@@ -424,12 +428,30 @@ export function channelToResponse(c, req, clientVersion = 0) {
     instruction_visibility: m.instructionVisibility ?? 'all',
     isSystemLocked: Boolean(m.isSystemLocked),
     is_system_locked: Boolean(m.isSystemLocked),
+    instructionVideoUrl: m.instructionVideoUrl ?? '',
+    instruction_video_url: m.instructionVideoUrl ?? '',
+    instructionVideoStatus: m.instructionVideoStatus ?? '',
+    instruction_video_status: m.instructionVideoStatus ?? '',
     ...(instruction ? instructionChannelApiExtras(m, req, clientVersion) : {}),
   }
 }
 
 export function uploadsFilePathFromThumbnail(thumbnail) {
-  if (!thumbnail || typeof thumbnail !== 'string') return null
-  if (!thumbnail.startsWith('/uploads/')) return null
-  return path.basename(thumbnail)
+  const rel = uploadsRelativePathFromUrl(thumbnail)
+  return rel || null
+}
+
+export function uploadsRelativePathFromUrl(uploadUrl) {
+  const raw = String(uploadUrl ?? '').trim()
+  if (!raw) return null
+  if (raw.startsWith('/uploads/')) return raw.slice('/uploads/'.length)
+  try {
+    const parsed = new URL(raw)
+    if (parsed.pathname.startsWith('/uploads/')) {
+      return parsed.pathname.slice('/uploads/'.length)
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
 }

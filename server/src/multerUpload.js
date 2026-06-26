@@ -1,4 +1,4 @@
-import fs from 'node:fs'
+import fs, { createWriteStream } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import multer from 'multer'
@@ -14,34 +14,96 @@ function resolveUploadsDir() {
 }
 
 export const UPLOADS_DIR = resolveUploadsDir()
+export const INSTRUCTION_VIDEOS_DIR = path.join(UPLOADS_DIR, 'videos')
 
 export function ensureUploadsDir() {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true })
 }
 
-/**
- * Blocks startup if uploads root is unusable (missing disk mount, read-only, etc.).
- */
-export function assertUploadStorageReady() {
-  if (process.env.REQUIRE_UPLOAD_DIR === '1' && !process.env.UPLOAD_DIR?.trim()) {
-    console.error('[uploads] FATAL: REQUIRE_UPLOAD_DIR=1 but UPLOAD_DIR is not set')
-    process.exit(1)
-  }
+export function ensureInstructionVideosDir() {
   ensureUploadsDir()
+  fs.mkdirSync(INSTRUCTION_VIDEOS_DIR, { recursive: true })
+  // Render persistent disk nested layout (/var/render/media/uploads/videos)
+  try {
+    fs.mkdirSync(path.join(UPLOADS_DIR, 'uploads', 'videos'), { recursive: true })
+  } catch (e) {
+    console.warn('[uploads] nested uploads/videos mkdir skipped:', e?.message || e)
+  }
+}
+
+let uploadStorageReady = false
+let uploadStorageLastError = null
+
+export function isUploadStorageReady() {
+  return uploadStorageReady
+}
+
+export function getUploadStorageLastError() {
+  return uploadStorageLastError
+}
+
+/**
+ * Create upload dirs and probe writability. Never exits the process — uploads may be degraded.
+ */
+export function initUploadStorage() {
+  const result = {
+    ok: false,
+    uploadsDir: UPLOADS_DIR,
+    instructionVideosDir: INSTRUCTION_VIDEOS_DIR,
+    writable: false,
+    error: null,
+  }
+
+  if (process.env.REQUIRE_UPLOAD_DIR === '1' && !process.env.UPLOAD_DIR?.trim()) {
+    result.error = 'REQUIRE_UPLOAD_DIR=1 but UPLOAD_DIR is not set'
+    uploadStorageReady = false
+    uploadStorageLastError = result.error
+    console.error('[uploads] WARN:', result.error)
+    return result
+  }
+
+  try {
+    ensureInstructionVideosDir()
+  } catch (e) {
+    result.error = `mkdir failed: ${e?.message || e}`
+    uploadStorageReady = false
+    uploadStorageLastError = result.error
+    console.error('[uploads] WARN: could not create upload directories:', result.error)
+    return result
+  }
+
   try {
     fs.accessSync(UPLOADS_DIR, fs.constants.R_OK | fs.constants.W_OK)
+    result.writable = true
   } catch (e) {
-    console.error('[uploads] FATAL: UPLOAD_DIR not readable/writable:', UPLOADS_DIR, e?.message || e)
-    process.exit(1)
+    result.error = `UPLOAD_DIR not readable/writable: ${e?.message || e}`
+    uploadStorageReady = false
+    uploadStorageLastError = result.error
+    console.error('[uploads] WARN:', result.error, UPLOADS_DIR)
+    return result
   }
+
   const probe = path.join(UPLOADS_DIR, '.write-probe')
   try {
     fs.writeFileSync(probe, Buffer.from('ok'))
     fs.unlinkSync(probe)
+    result.ok = true
+    uploadStorageReady = true
+    uploadStorageLastError = null
   } catch (e) {
-    console.error('[uploads] FATAL: cannot write probe file under UPLOAD_DIR:', UPLOADS_DIR, e?.message || e)
-    process.exit(1)
+    result.error = `cannot write probe file under UPLOAD_DIR: ${e?.message || e}`
+    uploadStorageReady = false
+    uploadStorageLastError = result.error
+    console.error('[uploads] WARN: probe write failed:', UPLOADS_DIR, e?.message || e)
+    console.error('[uploads] WARN: server starting in degraded mode — uploads disabled until disk is writable')
   }
+
+  return result
+}
+
+/** @deprecated Prefer initUploadStorage — kept for callers; never exits. */
+export function assertUploadStorageReady() {
+  return initUploadStorage()
 }
 
 function listRegularFiles(dir) {
@@ -220,19 +282,69 @@ export const uploadNotificationImage = multer({
   },
 })
 
-const instructionVideoStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    ensureUploadsDir()
-    cb(null, UPLOADS_DIR)
+const instructionVideoStorage = {
+  _handleFile(req, file, cb) {
+    try {
+      ensureInstructionVideosDir()
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.mp4'
+      const safeExt = ['.mp4', '.webm', '.mkv', '.mov'].includes(ext) ? ext : '.mp4'
+      const channelId = String(req.params?.id ?? 'video').replace(/\D/g, '') || 'video'
+      const filename = `instruction-video-${channelId}-${Date.now()}${safeExt}`
+      const dest = path.join(INSTRUCTION_VIDEOS_DIR, filename)
+      const total = Number(req.headers['content-length'] || 0)
+      let written = 0
+      let lastLoggedPct = -1
+      const logTag = '[instruction-video-upload]'
+      console.log(logTag, 'receiving', {
+        channelId,
+        filename,
+        contentLength: total || null,
+        mimetype: file.mimetype,
+      })
+      const out = createWriteStream(dest)
+      file.stream.on('data', (chunk) => {
+        written += chunk.length
+        if (total > 0) {
+          const pct = Math.floor((written / total) * 100)
+          if (pct >= lastLoggedPct + 10) {
+            lastLoggedPct = pct - (pct % 10)
+            console.log(logTag, 'progress', {
+              channelId,
+              filename,
+              written,
+              total,
+              percent: lastLoggedPct,
+            })
+          }
+        }
+      })
+      file.stream.on('error', (err) => {
+        out.destroy()
+        console.error(logTag, 'stream_error', { channelId, filename, error: err?.message || err })
+        cb(err)
+      })
+      out.on('error', (err) => {
+        console.error(logTag, 'write_error', { channelId, filename, error: err?.message || err })
+        cb(err)
+      })
+      out.on('finish', () => {
+        console.log(logTag, 'saved', { channelId, filename, bytes: written })
+        cb(null, { destination: INSTRUCTION_VIDEOS_DIR, filename, path: dest, size: written })
+      })
+      file.stream.pipe(out)
+    } catch (e) {
+      cb(e)
+    }
   },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase() || '.mp4'
-    const safeExt = ['.mp4', '.webm', '.mkv', '.mov'].includes(ext) ? ext : '.mp4'
-    const channelId = String(req.params?.id ?? 'video').replace(/\D/g, '') || 'video'
-    const name = `instruction-video-${channelId}-${Date.now()}${safeExt}`
-    cb(null, name)
+  _removeFile(_req, file, cb) {
+    const target = file?.path
+    if (!target) {
+      cb(null)
+      return
+    }
+    fs.unlink(target, (err) => cb(err))
   },
-})
+}
 
 function instructionVideoFilter(_req, file, cb) {
   const mime = String(file?.mimetype || '').toLowerCase()

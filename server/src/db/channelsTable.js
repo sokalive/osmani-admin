@@ -45,6 +45,12 @@ export async function ensureChannelsTable(client) {
   await client.query(`
     ALTER TABLE channels ADD COLUMN IF NOT EXISTS is_system_locked BOOLEAN NOT NULL DEFAULT false;
   `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_url TEXT NOT NULL DEFAULT '';
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_status TEXT NOT NULL DEFAULT '';
+  `)
   const { ensureInstructionVideoChannel } = await import('../lib/instructionVideoChannelBootstrap.js')
   await ensureInstructionVideoChannel(client)
 }

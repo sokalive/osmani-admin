@@ -9,8 +9,22 @@ import {
   migrateStoredChannel,
   parseChannelInput,
   uploadsFilePathFromThumbnail,
+  uploadsRelativePathFromUrl,
 } from '../channelNormalize.js'
-import { UPLOADS_DIR, uploadInstructionVideo, uploadThumbnail } from '../multerUpload.js'
+import {
+  getUploadStorageLastError,
+  initUploadStorage,
+  isUploadStorageReady,
+  UPLOADS_DIR,
+  uploadInstructionVideo,
+  uploadThumbnail,
+} from '../multerUpload.js'
+import {
+  buildPublicInstructionVideoUrl,
+  INSTRUCTION_VIDEO_UPLOAD_LOG,
+  INSTRUCTION_VIDEO_UPLOAD_TIMEOUT_MS,
+  instructionVideoUploadPath,
+} from '../lib/instructionVideoUpload.js'
 import {
   deleteChannelById,
   getChannelById,
@@ -20,6 +34,7 @@ import {
   readChannels,
   reorderChannels,
   updateChannel,
+  updateInstructionVideoChannel,
 } from '../store.js'
 import { publishChannelCatalogChange, invalidateChannelCatalogCaches } from '../lib/channelCatalogSync.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
@@ -65,11 +80,38 @@ function maybeUpload(req, res, next) {
 function runVideoUpload(req, res, next) {
   uploadVideo(req, res, (err) => {
     if (err) {
+      console.error(INSTRUCTION_VIDEO_UPLOAD_LOG, 'multer_error', {
+        channelId: req.params?.id,
+        error: String(err.message || err),
+      })
       res.status(400).json({ error: String(err.message || err) })
       return
     }
     next()
   })
+}
+
+function instructionVideoUploadTimeout(req, res, next) {
+  req.setTimeout(INSTRUCTION_VIDEO_UPLOAD_TIMEOUT_MS)
+  res.setTimeout(INSTRUCTION_VIDEO_UPLOAD_TIMEOUT_MS)
+  next()
+}
+
+function requireUploadStorage(req, res, next) {
+  if (isUploadStorageReady()) return next()
+  const retried = initUploadStorage()
+  if (retried.ok) return next()
+  res.status(503).json({
+    success: false,
+    error: 'Upload storage unavailable',
+    detail: retried.error || getUploadStorageLastError(),
+  })
+}
+
+async function unlinkUploadRelative(relativePath) {
+  const rel = uploadsRelativePathFromUrl(relativePath) || String(relativePath ?? '').trim()
+  if (!rel) return
+  await fs.unlink(path.join(UPLOADS_DIR, rel)).catch(() => {})
 }
 
 channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
@@ -275,44 +317,90 @@ channelsRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
   }
 })
 
-channelsRouter.post('/:id/instruction-video', requireAdminPanelAccess, runVideoUpload, async (req, res) => {
+channelsRouter.post(
+  '/:id/instruction-video',
+  requireAdminPanelAccess,
+  requireUploadStorage,
+  instructionVideoUploadTimeout,
+  runVideoUpload,
+  async (req, res) => {
   try {
     const id = Number.parseInt(req.params.id, 10)
     if (Number.isNaN(id)) {
-      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
-      return res.status(400).json({ error: 'Invalid id' })
+      if (req.file?.path) await fs.unlink(req.file.path).catch(() => {})
+      return res.status(400).json({ success: false, error: 'Invalid id' })
     }
     const existingRow = await getChannelById(id)
     if (!existingRow) {
-      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
-      return res.status(404).json({ error: 'Channel not found' })
+      if (req.file?.path) await fs.unlink(req.file.path).catch(() => {})
+      return res.status(404).json({ success: false, error: 'Channel not found' })
     }
     const existing = migrateStoredChannel(existingRow)
     if (!isInstructionVideoChannelRow(existing)) {
-      if (req.file) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
-      return res.status(400).json({ error: 'Only the VIDEO instruction channel accepts video uploads' })
+      if (req.file?.path) await fs.unlink(req.file.path).catch(() => {})
+      return res.status(400).json({
+        success: false,
+        error: 'Only the VIDEO instruction channel accepts video uploads',
+      })
+    }
+    if (String(existing.channelKind ?? '').toLowerCase() !== 'instruction_video') {
+      if (req.file?.path) await fs.unlink(req.file.path).catch(() => {})
+      return res.status(403).json({
+        success: false,
+        error: 'Upload blocked: channel_kind must be instruction_video',
+      })
     }
     if (!req.file) {
-      return res.status(400).json({ error: 'video file is required' })
+      return res.status(400).json({ success: false, error: 'video file is required' })
     }
-    if (existing.url?.startsWith('/uploads/')) {
-      const oldFile = uploadsFilePathFromThumbnail(existing.url)
-      if (oldFile && oldFile !== req.file.filename) {
-        await fs.unlink(path.join(UPLOADS_DIR, oldFile)).catch(() => {})
+
+    const uploadPath = instructionVideoUploadPath(req.file.filename)
+    const videoUrl = buildPublicInstructionVideoUrl(req, uploadPath)
+
+    const priorPaths = [existing.instructionVideoUrl, existing.url].filter(Boolean)
+    for (const prior of priorPaths) {
+      const rel = uploadsRelativePathFromUrl(prior)
+      const nextRel = uploadsRelativePathFromUrl(uploadPath)
+      if (rel && rel !== nextRel) {
+        await unlinkUploadRelative(rel)
       }
     }
-    const now = new Date().toISOString()
-    const parsed = parseChannelInput({ url: `/uploads/${req.file.filename}` }, null, existing)
-    const updated = mergeChannelRecord(existing, parsed, id, now)
-    await updateChannel(updated)
-    await notifyChannelCatalogChange('updated', updated.id)
+
+    const updated = await updateInstructionVideoChannel(id, {
+      url: uploadPath,
+      instructionVideoUrl: videoUrl,
+      instructionVideoStatus: 'ready',
+    })
+    if (!updated) {
+      if (req.file?.path) await fs.unlink(req.file.path).catch(() => {})
+      return res.status(403).json({
+        success: false,
+        error: 'Upload rejected: not an instruction_video channel',
+      })
+    }
+
+    console.log(INSTRUCTION_VIDEO_UPLOAD_LOG, 'ready', {
+      channelId: id,
+      videoUrl,
+      bytes: req.file.size,
+    })
+
+    await notifyChannelCatalogChange('updated', id)
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after instruction video upload failed:', err)
     })
-    const body = channelToResponse(updated, req, extractVersionCodeFromRequest(req))
-    res.json(body)
+
+    res.json({
+      success: true,
+      video_url: videoUrl,
+      message: 'Upload successful',
+      instruction_video_status: 'ready',
+      channel: channelToResponse(updated, req, extractVersionCodeFromRequest(req)),
+    })
   } catch (e) {
     console.error('[channels] POST /:id/instruction-video failed:', e)
-    res.status(500).json({ error: String(e.message || e) })
+    if (req.file?.path) await fs.unlink(req.file.path).catch(() => {})
+    res.status(500).json({ success: false, error: String(e.message || e) })
   }
-})
+},
+)
