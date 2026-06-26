@@ -173,6 +173,13 @@ else
 fi
 
 echo "==> Nginx"
+SNIPPET_SRC="$ROOT/deploy/contabo/nginx/snippets/osmani-node-api.conf"
+SNIPPET_DST="/etc/nginx/snippets/osmani-node-api.conf"
+if [[ -f "$SNIPPET_SRC" ]]; then
+  mkdir -p /etc/nginx/snippets
+  cp "$SNIPPET_SRC" "$SNIPPET_DST"
+  echo "    synced $SNIPPET_DST"
+fi
 if [[ -f "$NGINX_SRC" ]]; then
   cp "$NGINX_SRC" "$NGINX_DST"
   ln -sf "$NGINX_DST" /etc/nginx/sites-enabled/osmani-admin

@@ -70,8 +70,8 @@ function assertVpsUrl(url, label) {
     fail(`${label}: not HTTPS: ${u}`)
     return false
   }
-  if (!u.includes('osmanitv.com') && !u.includes('b-cdn.net')) {
-    fail(`${label}: unexpected host: ${u}`)
+  if (!u.includes('api.osmanitv.com')) {
+    fail(`${label}: notification push URL must use VPS origin: ${u}`)
     return false
   }
   pass(`${label}: ${u.slice(0, 72)}…`)
