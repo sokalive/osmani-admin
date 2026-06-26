@@ -16,6 +16,11 @@ import { fetchOneSignalSubscriptionDiagnostics } from '../lib/oneSignalDiagnosti
 import { isOneSignalConfigured } from '../lib/oneSignalPush.js'
 import { persistOptimizedNotificationImage } from '../lib/notificationImageOptimize.js'
 import { resolvePublicAssetUrl } from '../lib/cdnAssets.js'
+import {
+  getNotificationImageStorageDiagnostics,
+  resolveNotificationImagePublicUrl,
+} from '../lib/notificationImageStorage.js'
+import { scheduleNotificationImageCleanup } from '../lib/notificationImageCleanup.js'
 import { uploadNotificationImage } from '../multerUpload.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
@@ -92,8 +97,8 @@ notificationsRouter.post(
       const persisted = await persistOptimizedNotificationImage(req.file.buffer, {
         mime: req.file.mimetype,
       })
-      const pushImageUrl = resolveOneSignalPushImageUrl(persisted.imageForDb, req)
-      const previewUrl = resolvePublicAssetUrl(persisted.imageForDb, req) || persisted.imageForDb
+      const pushImageUrl = resolveNotificationImagePublicUrl(persisted.imageForDb)
+      const previewUrl = pushImageUrl || resolvePublicAssetUrl(persisted.imageForDb, req) || persisted.imageForDb
       res.json({
         ok: true,
         image: persisted.imageForDb,
@@ -101,6 +106,7 @@ notificationsRouter.post(
         previewUrl,
         pushImageUrl: pushImageUrl || null,
         pushReady: Boolean(pushImageUrl),
+        storage: persisted.storage || getNotificationImageStorageDiagnostics().mode,
         originalBytes: persisted.originalBytes,
         compressedBytes: persisted.compressedBytes,
         width: persisted.width,
@@ -205,3 +211,5 @@ setInterval(() => {
     console.error('[notifications] OneSignal stats refresh failed:', e)
   })
 }, Math.max(15_000, Number(process.env.ONESIGNAL_STATS_REFRESH_MS) || 30_000))
+
+scheduleNotificationImageCleanup()

@@ -53,6 +53,14 @@ services:
     envVars:
       - key: UPLOAD_DIR
         value: /var/render/media/uploads
+      - key: NOTIFICATION_IMAGE_STORAGE
+        value: remote
+      - key: NOTIFICATION_IMAGE_VPS_INGEST_URL
+        value: https://api.osmanitv.com/api/internal/notification-images
+      - key: NOTIFICATION_IMAGE_PUBLIC_ORIGIN
+        value: https://api.osmanitv.com
+      - key: NOTIFICATION_IMAGE_INGEST_TOKEN
+        sync: false
       - key: NODE_VERSION
         value: "20"
       # Set in Render dashboard to your Bunny pull zone (e.g. https://osmani-media.b-cdn.net)

@@ -3,6 +3,10 @@ import { liveSyncBus } from './liveSyncBus.js'
 import { isOneSignalConfigured, sendOneSignalNotification } from './oneSignalPush.js'
 import { resolvePublicAssetUrl } from './cdnAssets.js'
 import {
+  isNotificationImageUploadPath,
+  resolveNotificationImagePublicUrl,
+} from './notificationImageStorage.js'
+import {
   fetchOneSignalMessageStats,
   normalizeOneSignalStatsPayload,
 } from './oneSignalStats.js'
@@ -34,6 +38,10 @@ const ONESIGNAL_STATS_SYNC_LIMIT = Math.min(
 
 /** Public HTTPS URL for a stored `/uploads/...` path (OneSignal requires HTTPS for images). */
 export function absoluteUrlForStoredPath(relativePath, req = null) {
+  const stored = String(relativePath ?? '').trim()
+  if (isNotificationImageUploadPath(stored)) {
+    return resolveNotificationImagePublicUrl(stored)
+  }
   const resolved = resolvePublicAssetUrl(relativePath, req)
   return resolved != null ? String(resolved) : ''
 }
@@ -145,6 +153,9 @@ function resolveNotificationImageForApi(imageField, req) {
   const raw = text(imageField, 600_000)
   if (!raw) return ''
   if (raw.startsWith('data:')) return raw
+  if (isNotificationImageUploadPath(raw)) {
+    return resolveNotificationImagePublicUrl(raw) || raw
+  }
   return resolvePublicAssetUrl(raw, req) || raw
 }
 

@@ -1,8 +1,7 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import { randomBytes } from 'node:crypto'
 import sharp from 'sharp'
-import { ensureUploadsDir, UPLOADS_DIR } from '../multerUpload.js'
+import {
+  storeOptimizedNotificationImage,
+} from './notificationImageStorage.js'
 
 export const NOTIFICATION_IMAGE_MAX_INPUT_BYTES = Math.max(
   512 * 1024,
@@ -121,17 +120,15 @@ export async function optimizeNotificationImageBuffer(inputBuf, { mime = '' } = 
 
 export async function persistOptimizedNotificationImage(inputBuf, opts = {}) {
   const optimized = await optimizeNotificationImageBuffer(inputBuf, opts)
-  ensureUploadsDir()
-  const name = `notif-${Date.now()}-${randomBytes(6).toString('hex')}.${optimized.ext}`
-  const full = path.join(UPLOADS_DIR, name)
-  await fs.writeFile(full, optimized.buffer)
+  const stored = await storeOptimizedNotificationImage(optimized.buffer, { ext: optimized.ext })
   return {
-    imageForDb: `/uploads/${name}`,
+    imageForDb: stored.imageForDb,
     originalBytes: optimized.originalBytes,
     compressedBytes: optimized.compressedBytes,
     width: optimized.width,
     height: optimized.height,
     format: optimized.format,
     savedPercent: optimized.savedPercent,
+    storage: stored.storage,
   }
 }

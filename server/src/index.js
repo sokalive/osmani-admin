@@ -22,7 +22,9 @@ import {
   markStartupFailed,
   markStartupReady,
 } from './lib/startupReadiness.js'
-import { getStreamDeliveryHealthSnapshot } from './lib/streamDelivery.js'
+import {
+  getNotificationImageStorageDiagnostics,
+} from './lib/notificationImageStorage.js'
 import { ensureAllApiDataFiles, restApi } from './routes/restApi.js'
 import { apiRequestTimingMiddleware } from './middleware/apiRequestTiming.js'
 import { streamDeliveryReportRouter } from './routes/streamDeliveryReport.js'
@@ -359,6 +361,11 @@ async function main() {
     } catch (uploadErr) {
       console.error('[uploads] init threw (non-fatal):', uploadErr?.message || uploadErr)
     }
+
+    const notifStorage = getNotificationImageStorageDiagnostics()
+    console.log(
+      `[notifications] image storage mode=${notifStorage.mode} renderDisk=${notifStorage.renderDiskUsed} publicOrigin=${notifStorage.publicOrigin}`,
+    )
 
     const cdnHealth = getCdnHealthSnapshot()
     console.log(

@@ -59,6 +59,7 @@ fi
 ensure_env_key BUNNY_CDN_BASE_URL "https://osmanitv.b-cdn.net"
 ensure_env_key OSMANI_LOAD_CUTOVER_ENV "1"
 ensure_env_key UPLOAD_DIR "/var/www/osmani-admin-api/server/uploads"
+ensure_env_key NOTIFICATION_IMAGE_PUBLIC_ORIGIN "https://api.osmanitv.com"
 
 if [[ -f /etc/letsencrypt/live/osmanitv.com/fullchain.pem ]] || [[ "${OSMANI_USE_BRANDED_HTTPS:-}" == "1" ]]; then
   echo "==> Branded HTTPS public URLs"
