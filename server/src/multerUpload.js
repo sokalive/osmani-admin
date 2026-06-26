@@ -21,7 +21,17 @@ export function ensureUploadsDir() {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true })
 }
 
+function mustSkipLocalInstructionVideoDir() {
+  const mode = String(process.env.INSTRUCTION_VIDEO_STORAGE || '').trim().toLowerCase()
+  if (mode === 'local') return false
+  if (mode === 'remote' || mode === 'vps') return true
+  if (isRenderRuntime()) return true
+  if (String(process.env.INSTRUCTION_VIDEO_VPS_INGEST_URL || '').trim()) return true
+  return false
+}
+
 export function ensureInstructionVideosDir() {
+  if (mustSkipLocalInstructionVideoDir()) return
   ensureUploadsDir()
   fs.mkdirSync(INSTRUCTION_VIDEOS_DIR, { recursive: true })
   try {
@@ -76,7 +86,15 @@ export function initUploadStorage() {
     if (isRenderRuntime()) {
       fs.mkdirSync('/var/render/media', { recursive: true })
     }
-    ensureInstructionVideosDir()
+    ensureUploadsDir()
+    if (!mustSkipLocalInstructionVideoDir()) {
+      fs.mkdirSync(INSTRUCTION_VIDEOS_DIR, { recursive: true })
+    }
+    try {
+      fs.mkdirSync(path.join(UPLOADS_DIR, 'apks'), { recursive: true })
+    } catch (e) {
+      console.warn('[uploads] apks mkdir skipped:', e?.message || e)
+    }
   } catch (e) {
     result.error = `mkdir failed: ${e?.message || e}`
     uploadStorageReady = false
@@ -87,7 +105,9 @@ export function initUploadStorage() {
 
   try {
     fs.accessSync(UPLOADS_DIR, fs.constants.R_OK | fs.constants.W_OK)
-    fs.accessSync(INSTRUCTION_VIDEOS_DIR, fs.constants.R_OK | fs.constants.W_OK)
+    if (!mustSkipLocalInstructionVideoDir()) {
+      fs.accessSync(INSTRUCTION_VIDEOS_DIR, fs.constants.R_OK | fs.constants.W_OK)
+    }
     result.writable = true
   } catch (e) {
     result.error = `upload path not readable/writable: ${e?.message || e}`
@@ -102,7 +122,9 @@ export function initUploadStorage() {
 
   try {
     probeWritableDir(UPLOADS_DIR)
-    probeWritableDir(INSTRUCTION_VIDEOS_DIR)
+    if (!mustSkipLocalInstructionVideoDir()) {
+      probeWritableDir(INSTRUCTION_VIDEOS_DIR)
+    }
     result.ok = true
     uploadStorageReady = true
     uploadStorageLastError = null

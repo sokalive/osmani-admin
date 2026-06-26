@@ -26,6 +26,7 @@ import {
   instructionVideoUploadPath,
 } from '../lib/instructionVideoUpload.js'
 import {
+  getInstructionVideoIngestToken,
   mustUseRemoteInstructionVideoStorage,
   resolveInstructionVideoDiskPath,
   verifyInstructionVideoFileExists,
@@ -323,10 +324,24 @@ channelsRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
   }
 })
 
+function requireInstructionVideoUploadStorage(req, res, next) {
+  if (mustUseRemoteInstructionVideoStorage()) {
+    const token = getInstructionVideoIngestToken()
+    if (!token) {
+      return res.status(503).json({
+        success: false,
+        error: 'Instruction video VPS ingest not configured',
+      })
+    }
+    return next()
+  }
+  return requireUploadStorage(req, res, next)
+}
+
 channelsRouter.post(
   '/:id/instruction-video',
   requireAdminPanelAccess,
-  requireUploadStorage,
+  requireInstructionVideoUploadStorage,
   instructionVideoUploadTimeout,
   runVideoUpload,
   async (req, res) => {
