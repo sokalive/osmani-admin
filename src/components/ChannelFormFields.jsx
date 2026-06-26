@@ -8,6 +8,22 @@ import {
   formSelectClass,
 } from './channelFormModel'
 
+function formatBytes(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v <= 0) return '0 B'
+  if (v < 1024) return `${Math.round(v)} B`
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
+  return `${(v / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatEta(sec) {
+  if (sec == null || !Number.isFinite(sec)) return '—'
+  if (sec < 60) return `${Math.ceil(sec)}s`
+  const m = Math.floor(sec / 60)
+  const s = Math.ceil(sec % 60)
+  return `${m}m ${s}s`
+}
+
 function ChannelFormFields({
   formId,
   form,
@@ -16,6 +32,7 @@ function ChannelFormFields({
   onThumbnailChange,
   instructionVideoFile,
   onInstructionVideoChange,
+  instructionVideoUploadProgress,
 }) {
   const ic = formInputClass()
   const sc = formSelectClass()
@@ -148,6 +165,27 @@ function ChannelFormFields({
             ) : (
               <p className="mt-2 text-xs text-slate-500">No video uploaded yet.</p>
             )}
+            {instructionVideoUploadProgress ? (
+              <div className="mt-3 space-y-1.5 rounded-lg border border-cyan-500/30 bg-slate-900/60 p-3">
+                <div className="flex items-center justify-between text-xs text-cyan-100">
+                  <span>Uploading… {instructionVideoUploadProgress.percent}%</span>
+                  <span>
+                    {formatBytes(instructionVideoUploadProgress.speedBps)}/s · ETA{' '}
+                    {formatEta(instructionVideoUploadProgress.etaSec)}
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-cyan-300 transition-[width] duration-150"
+                    style={{ width: `${instructionVideoUploadProgress.percent}%` }}
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  {formatBytes(instructionVideoUploadProgress.loaded)} /{' '}
+                  {formatBytes(instructionVideoUploadProgress.total)}
+                </p>
+              </div>
+            ) : null}
           </div>
         </>
       ) : (

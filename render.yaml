@@ -61,6 +61,14 @@ services:
         value: https://api.osmanitv.com
       - key: NOTIFICATION_IMAGE_INGEST_TOKEN
         sync: false
+      - key: INSTRUCTION_VIDEO_STORAGE
+        value: remote
+      - key: INSTRUCTION_VIDEO_VPS_INGEST_URL
+        value: https://api.osmanitv.com/api/internal/instruction-videos
+      - key: INSTRUCTION_VIDEO_PUBLIC_ORIGIN
+        value: https://api.osmanitv.com
+      - key: INSTRUCTION_VIDEO_INGEST_TOKEN
+        sync: false
       - key: NODE_VERSION
         value: "20"
       # Set in Render dashboard to your Bunny pull zone (e.g. https://osmani-media.b-cdn.net)

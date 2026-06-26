@@ -161,14 +161,124 @@ export function duplicateChannel(id) {
 }
 
 export function uploadInstructionVideo(channelId, videoFile) {
-  const fd = new FormData()
-  fd.append('video', videoFile, videoFile.name || 'instruction.mp4')
-  return fetch(joinPath(`/channels/${encodeURIComponent(channelId)}/instruction-video`), {
-    ...ADMIN_FETCH_DEFAULTS,
-    method: 'POST',
-    headers: adminPanelFormDataHeaders(),
-    body: fd,
-  }).then(parseJsonSafeResponse)
+  return uploadInstructionVideoWithProgress(channelId, videoFile)
+}
+
+let instructionVideoUploadInFlight = null
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Upload instruction video with real XHR progress, speed/ETA, duplicate guard, and retries.
+ * @param {number|string} channelId
+ * @param {Blob|File} videoFile
+ * @param {{ onProgress?: (p: { percent: number, loaded: number, total: number, speedBps: number, etaSec: number|null }) => void, signal?: AbortSignal, maxRetries?: number }} [opts]
+ */
+export function uploadInstructionVideoWithProgress(channelId, videoFile, opts = {}) {
+  const { onProgress, signal, maxRetries = 3 } = opts
+  const id = String(channelId)
+  if (instructionVideoUploadInFlight?.channelId === id) {
+    return Promise.reject(
+      new ApiError('An upload is already in progress for this channel', 409, { error: 'duplicate_upload' }),
+    )
+  }
+
+  const controller = new AbortController()
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+
+  instructionVideoUploadInFlight = { channelId: id, abort: () => controller.abort() }
+
+  const runAttempt = () =>
+    new Promise((resolve, reject) => {
+      if (controller.signal.aborted) {
+        reject(new ApiError('Upload cancelled', 0))
+        return
+      }
+      const fd = new FormData()
+      fd.append('video', videoFile, videoFile.name || 'instruction.mp4')
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', joinPath(`/channels/${encodeURIComponent(id)}/instruction-video`))
+      const headers = adminPanelFormDataHeaders()
+      for (const [key, value] of Object.entries(headers)) {
+        if (value != null) xhr.setRequestHeader(key, String(value))
+      }
+      let lastLoaded = 0
+      let lastTime = Date.now()
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return
+        const now = Date.now()
+        const dt = Math.max(0.001, (now - lastTime) / 1000)
+        const delta = e.loaded - lastLoaded
+        const speedBps = delta / dt
+        lastLoaded = e.loaded
+        lastTime = now
+        const etaSec = speedBps > 0 ? (e.total - e.loaded) / speedBps : null
+        onProgress?.({
+          percent: Math.min(100, Math.round((e.loaded / e.total) * 100)),
+          loaded: e.loaded,
+          total: e.total,
+          speedBps,
+          etaSec,
+        })
+      }
+      xhr.onload = () => {
+        let body = null
+        try {
+          body = xhr.responseText ? JSON.parse(xhr.responseText) : null
+        } catch {
+          body = xhr.responseText
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress?.({
+            percent: 100,
+            loaded: videoFile.size ?? 0,
+            total: videoFile.size ?? 0,
+            speedBps: 0,
+            etaSec: 0,
+          })
+          resolve(body)
+          return
+        }
+        const retryable = xhr.status === 0 || xhr.status >= 500 || xhr.status === 408 || xhr.status === 429
+        const err = new ApiError(msgFromBody(body, xhr.status), xhr.status, body)
+        err.retryable = retryable
+        reject(err)
+      }
+      xhr.onerror = () => {
+        const err = new ApiError('Network error during upload', 0)
+        err.retryable = true
+        reject(err)
+      }
+      xhr.onabort = () => reject(new ApiError('Upload cancelled', 0))
+      controller.signal.addEventListener('abort', () => xhr.abort(), { once: true })
+      xhr.send(fd)
+    })
+
+  return (async () => {
+    try {
+      let lastErr
+      for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+        try {
+          return await runAttempt()
+        } catch (e) {
+          lastErr = e
+          if (e?.retryable && attempt < maxRetries) {
+            await sleep(1000 * attempt)
+            continue
+          }
+          throw e
+        }
+      }
+      throw lastErr
+    } finally {
+      instructionVideoUploadInFlight = null
+    }
+  })()
 }
 
 /** Global app modes (Free / Emergency / Maintenance) — GET/PUT /api/settings */

@@ -51,6 +51,27 @@ export async function ensureChannelsTable(client) {
   await client.query(`
     ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_status TEXT NOT NULL DEFAULT '';
   `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_file_size BIGINT;
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_duration_sec DOUBLE PRECISION;
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_width INTEGER;
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_height INTEGER;
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_uploaded_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_uploaded_by TEXT NOT NULL DEFAULT '';
+  `)
+  await client.query(`
+    ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_checksum TEXT NOT NULL DEFAULT '';
+  `)
   const { ensureInstructionVideoChannel } = await import('../lib/instructionVideoChannelBootstrap.js')
   await ensureInstructionVideoChannel(client)
 }

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import multer from 'multer'
 import { randomBytes } from 'node:crypto'
+import { createInstructionVideoMulterStorage } from './lib/instructionVideoMulterStorage.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -302,69 +303,7 @@ export const uploadNotificationImage = multer({
   },
 })
 
-const instructionVideoStorage = {
-  _handleFile(req, file, cb) {
-    try {
-      ensureInstructionVideosDir()
-      const ext = path.extname(file.originalname || '').toLowerCase() || '.mp4'
-      const safeExt = ['.mp4', '.webm', '.mkv', '.mov'].includes(ext) ? ext : '.mp4'
-      const channelId = String(req.params?.id ?? 'video').replace(/\D/g, '') || 'video'
-      const filename = `instruction-video-${channelId}-${Date.now()}${safeExt}`
-      const dest = path.join(INSTRUCTION_VIDEOS_DIR, filename)
-      const total = Number(req.headers['content-length'] || 0)
-      let written = 0
-      let lastLoggedPct = -1
-      const logTag = '[instruction-video-upload]'
-      console.log(logTag, 'receiving', {
-        channelId,
-        filename,
-        contentLength: total || null,
-        mimetype: file.mimetype,
-      })
-      const out = createWriteStream(dest)
-      file.stream.on('data', (chunk) => {
-        written += chunk.length
-        if (total > 0) {
-          const pct = Math.floor((written / total) * 100)
-          if (pct >= lastLoggedPct + 10) {
-            lastLoggedPct = pct - (pct % 10)
-            console.log(logTag, 'progress', {
-              channelId,
-              filename,
-              written,
-              total,
-              percent: lastLoggedPct,
-            })
-          }
-        }
-      })
-      file.stream.on('error', (err) => {
-        out.destroy()
-        console.error(logTag, 'stream_error', { channelId, filename, error: err?.message || err })
-        cb(err)
-      })
-      out.on('error', (err) => {
-        console.error(logTag, 'write_error', { channelId, filename, error: err?.message || err })
-        cb(err)
-      })
-      out.on('finish', () => {
-        console.log(logTag, 'saved', { channelId, filename, bytes: written })
-        cb(null, { destination: INSTRUCTION_VIDEOS_DIR, filename, path: dest, size: written })
-      })
-      file.stream.pipe(out)
-    } catch (e) {
-      cb(e)
-    }
-  },
-  _removeFile(_req, file, cb) {
-    const target = file?.path
-    if (!target) {
-      cb(null)
-      return
-    }
-    fs.unlink(target, (err) => cb(err))
-  },
-}
+const instructionVideoStorage = createInstructionVideoMulterStorage()
 
 function instructionVideoFilter(_req, file, cb) {
   const mime = String(file?.mimetype || '').toLowerCase()

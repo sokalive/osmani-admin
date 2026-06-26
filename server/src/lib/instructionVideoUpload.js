@@ -1,10 +1,7 @@
 /**
  * Instruction VIDEO channel upload helpers (public URL + safe path handling).
  */
-
-function trimSlash(s) {
-  return String(s ?? '').trim().replace(/\/+$/, '')
-}
+import { resolveInstructionVideoPublicUrl } from './instructionVideoFileStorage.js'
 
 export const INSTRUCTION_VIDEO_UPLOAD_LOG = '[instruction-video-upload]'
 export const INSTRUCTION_VIDEO_UPLOAD_TIMEOUT_MS = Math.max(
@@ -44,15 +41,12 @@ export function uploadsRelativePathFromUrl(uploadUrl) {
   return null
 }
 
-/** Full HTTPS URL for stored instruction video (CDN when configured). */
-export function buildPublicInstructionVideoUrl(req, uploadPath) {
+/** Full HTTPS URL for stored instruction video (always VPS origin, never Bunny CDN). */
+export function buildPublicInstructionVideoUrl(_req, uploadPath) {
+  const vps = resolveInstructionVideoPublicUrl(uploadPath)
+  if (vps) return vps
   const rel = String(uploadPath ?? '').trim()
   if (!rel) return ''
   const pathPart = rel.startsWith('/') ? rel : `/${rel}`
-  const cdn = trimSlash(process.env.BUNNY_CDN_BASE_URL || process.env.BUNNY_CDN_URL || '')
-  if (cdn && pathPart.startsWith('/uploads/')) {
-    return `${cdn}${pathPart}`
-  }
-  const base = trimSlash(process.env.BASE_URL || '') || `${req.protocol}://${req.get('host')}`
-  return `${base}${pathPart}`
+  return resolveInstructionVideoPublicUrl(pathPart) || pathPart
 }

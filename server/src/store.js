@@ -35,6 +35,20 @@ function rowToChannel(row) {
     isSystemLocked: Boolean(row.is_system_locked),
     instructionVideoUrl: String(row.instruction_video_url ?? ''),
     instructionVideoStatus: String(row.instruction_video_status ?? ''),
+    instructionVideoFileSize:
+      row.instruction_video_file_size != null ? Number(row.instruction_video_file_size) : null,
+    instructionVideoDurationSec:
+      row.instruction_video_duration_sec != null ? Number(row.instruction_video_duration_sec) : null,
+    instructionVideoWidth:
+      row.instruction_video_width != null ? Number(row.instruction_video_width) : null,
+    instructionVideoHeight:
+      row.instruction_video_height != null ? Number(row.instruction_video_height) : null,
+    instructionVideoUploadedAt:
+      row.instruction_video_uploaded_at instanceof Date
+        ? row.instruction_video_uploaded_at.toISOString()
+        : row.instruction_video_uploaded_at ?? null,
+    instructionVideoUploadedBy: String(row.instruction_video_uploaded_by ?? ''),
+    instructionVideoChecksum: String(row.instruction_video_checksum ?? ''),
     createdAt: ca instanceof Date ? ca.toISOString() : ca,
     updatedAt: ua instanceof Date ? ua.toISOString() : ua,
   }
@@ -85,7 +99,11 @@ export async function ensureDataFile() {
 const CHANNEL_SELECT_COLS = `id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
             access_type, backup_stream_1, backup_stream_2, origin, referer, user_agent, player_type,
             sort_order, channel_kind, instruction_visibility, is_system_locked,
-            instruction_video_url, instruction_video_status, created_at, updated_at`
+            instruction_video_url, instruction_video_status,
+            instruction_video_file_size, instruction_video_duration_sec,
+            instruction_video_width, instruction_video_height,
+            instruction_video_uploaded_at, instruction_video_uploaded_by, instruction_video_checksum,
+            created_at, updated_at`
 
 export async function readChannels() {
   const pool = getPool()
@@ -153,7 +171,21 @@ export async function getChannelById(id) {
 /**
  * Instruction VIDEO channel only — updates url + instruction_video_* without touching other channels.
  */
-export async function updateInstructionVideoChannel(id, { url, instructionVideoUrl, instructionVideoStatus }) {
+export async function updateInstructionVideoChannel(
+  id,
+  {
+    url,
+    instructionVideoUrl,
+    instructionVideoStatus,
+    instructionVideoFileSize,
+    instructionVideoDurationSec,
+    instructionVideoWidth,
+    instructionVideoHeight,
+    instructionVideoUploadedAt,
+    instructionVideoUploadedBy,
+    instructionVideoChecksum,
+  },
+) {
   const pool = getPool()
   if (!pool) throw new Error('DATABASE_URL is required for channel storage.')
   const channelId = Number(id)
@@ -162,11 +194,30 @@ export async function updateInstructionVideoChannel(id, { url, instructionVideoU
        url = $2,
        instruction_video_url = $3,
        instruction_video_status = $4,
+       instruction_video_file_size = $5,
+       instruction_video_duration_sec = $6,
+       instruction_video_width = $7,
+       instruction_video_height = $8,
+       instruction_video_uploaded_at = COALESCE($9::timestamptz, now()),
+       instruction_video_uploaded_by = COALESCE($10, ''),
+       instruction_video_checksum = COALESCE($11, ''),
        updated_at = now()
      WHERE id = $1
        AND lower(trim(channel_kind)) = 'instruction_video'
      RETURNING ${CHANNEL_SELECT_COLS}`,
-    [channelId, url ?? '', instructionVideoUrl ?? '', instructionVideoStatus ?? ''],
+    [
+      channelId,
+      url ?? '',
+      instructionVideoUrl ?? '',
+      instructionVideoStatus ?? '',
+      instructionVideoFileSize ?? null,
+      instructionVideoDurationSec ?? null,
+      instructionVideoWidth ?? null,
+      instructionVideoHeight ?? null,
+      instructionVideoUploadedAt ?? null,
+      instructionVideoUploadedBy ?? '',
+      instructionVideoChecksum ?? '',
+    ],
   )
   return rows.length ? rowToChannel(rows[0]) : null
 }

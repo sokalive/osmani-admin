@@ -15,6 +15,8 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
   const [thumbnailFile, setThumbnailFile] = useState(null)
   const [thumbnailPreview, setThumbnailPreview] = useState(null)
   const [instructionVideoFile, setInstructionVideoFile] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [instructionVideoUploadProgress, setInstructionVideoUploadProgress] = useState(null)
 
   useEffect(() => {
     if (!isOpen) return
@@ -23,12 +25,16 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
       setThumbnailFile(null)
       setThumbnailPreview(channel.thumbnailUrl ?? null)
       setInstructionVideoFile(null)
+      setInstructionVideoUploadProgress(null)
+      setSubmitting(false)
     }
     if (variant === 'add') {
       setForm(emptyFormState())
       setThumbnailFile(null)
       setThumbnailPreview(null)
       setInstructionVideoFile(null)
+      setInstructionVideoUploadProgress(null)
+      setSubmitting(false)
     }
   }, [isOpen, variant, channel])
 
@@ -76,26 +82,39 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
     setInstructionVideoFile(file)
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
+    if (submitting) return
     const name = form.name.trim()
     const streamUrl = form.streamUrlPrimary.trim()
     const instruction = Boolean(form.isInstructionVideo)
     if (!name || (!instruction && !streamUrl)) return
 
-    onSubmit({
-      ...form,
-      name,
-      streamUrlPrimary: streamUrl,
-      backupStream1: form.backupStream1.trim(),
-      backupStream2: form.backupStream2.trim(),
-      origin: form.origin.trim(),
-      referer: form.referer.trim(),
-      userAgent: form.userAgent.trim(),
-      thumbnailFile,
-      thumbnailPreviewUrl: thumbnailPreview,
-      instructionVideoFile,
-    })
+    setSubmitting(true)
+    setInstructionVideoUploadProgress(null)
+    try {
+      await onSubmit(
+        {
+          ...form,
+          name,
+          streamUrlPrimary: streamUrl,
+          backupStream1: form.backupStream1.trim(),
+          backupStream2: form.backupStream2.trim(),
+          origin: form.origin.trim(),
+          referer: form.referer.trim(),
+          userAgent: form.userAgent.trim(),
+          thumbnailFile,
+          thumbnailPreviewUrl: thumbnailPreview,
+          instructionVideoFile,
+        },
+        {
+          onUploadProgress: (progress) => setInstructionVideoUploadProgress(progress),
+        },
+      )
+    } finally {
+      setSubmitting(false)
+      setInstructionVideoUploadProgress(null)
+    }
   }
 
   if (!isOpen) return null
@@ -131,7 +150,8 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-amber-300"
+            disabled={submitting}
+            className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-amber-300 disabled:opacity-40"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
@@ -152,15 +172,21 @@ function ChannelFormModal({ variant, isOpen, channel, onClose, onSubmit }) {
               onThumbnailChange={handleThumbnailChange}
               instructionVideoFile={instructionVideoFile}
               onInstructionVideoChange={handleInstructionVideoChange}
+              instructionVideoUploadProgress={instructionVideoUploadProgress}
             />
           </div>
 
           <footer className="shrink-0 border-t border-slate-700/70 bg-[#0f172a]/95 px-5 py-4">
             <button
               type="submit"
-              className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-transform hover:scale-[1.01] active:scale-[0.99] sm:w-auto sm:min-w-[200px] sm:px-8"
+              disabled={submitting}
+              className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-transform hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[200px] sm:px-8"
             >
-              {submitLabel}
+              {submitting
+                ? instructionVideoUploadProgress
+                  ? `Uploading ${instructionVideoUploadProgress.percent}%…`
+                  : 'Saving…'
+                : submitLabel}
             </button>
           </footer>
         </form>

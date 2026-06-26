@@ -26,6 +26,12 @@ import {
   instructionVideoUploadPath,
 } from '../lib/instructionVideoUpload.js'
 import {
+  mustUseRemoteInstructionVideoStorage,
+  resolveInstructionVideoDiskPath,
+  verifyInstructionVideoFileExists,
+} from '../lib/instructionVideoFileStorage.js'
+import { collectInstructionVideoMetadata } from '../lib/instructionVideoMetadata.js'
+import {
   deleteChannelById,
   getChannelById,
   getNextChannelId,
@@ -357,6 +363,37 @@ channelsRouter.post(
     const uploadPath = instructionVideoUploadPath(req.file.filename)
     const videoUrl = buildPublicInstructionVideoUrl(req, uploadPath)
 
+    if (mustUseRemoteInstructionVideoStorage() && videoUrl) {
+      try {
+        const headRes = await fetch(videoUrl, { method: 'HEAD', signal: AbortSignal.timeout(15_000) })
+        if (!headRes.ok) {
+          return res.status(502).json({
+            success: false,
+            error: `VPS video not reachable after upload (HTTP ${headRes.status})`,
+          })
+        }
+      } catch (headErr) {
+        return res.status(502).json({
+          success: false,
+          error: `VPS video verification failed: ${headErr?.message || headErr}`,
+        })
+      }
+    } else {
+      const fileExists = await verifyInstructionVideoFileExists(uploadPath)
+      if (!fileExists) {
+        if (req.file?.path) await fs.unlink(req.file.path).catch(() => {})
+        return res.status(500).json({ success: false, error: 'Uploaded video file missing on VPS' })
+      }
+    }
+
+    let metadata = req.file.instructionVideoMetadata || {}
+    const diskPath = resolveInstructionVideoDiskPath(uploadPath)
+    if (diskPath && !metadata.checksum) {
+      metadata = await collectInstructionVideoMetadata(diskPath, { sizeBytes: req.file.size })
+    }
+
+    const uploadedBy = String(req.adminAuth?.email || req.headers['x-admin-token'] || 'admin').trim()
+
     const priorPaths = [existing.instructionVideoUrl, existing.url].filter(Boolean)
     for (const prior of priorPaths) {
       const rel = uploadsRelativePathFromUrl(prior)
@@ -370,6 +407,13 @@ channelsRouter.post(
       url: uploadPath,
       instructionVideoUrl: videoUrl,
       instructionVideoStatus: 'ready',
+      instructionVideoFileSize: metadata.fileSize ?? req.file.size ?? null,
+      instructionVideoDurationSec: metadata.durationSec ?? null,
+      instructionVideoWidth: metadata.width ?? null,
+      instructionVideoHeight: metadata.height ?? null,
+      instructionVideoUploadedAt: new Date().toISOString(),
+      instructionVideoUploadedBy: uploadedBy,
+      instructionVideoChecksum: metadata.checksum ?? '',
     })
     if (!updated) {
       if (req.file?.path) await fs.unlink(req.file.path).catch(() => {})
@@ -382,7 +426,12 @@ channelsRouter.post(
     console.log(INSTRUCTION_VIDEO_UPLOAD_LOG, 'ready', {
       channelId: id,
       videoUrl,
-      bytes: req.file.size,
+      bytes: metadata.fileSize ?? req.file.size,
+      checksum: metadata.checksum,
+      durationSec: metadata.durationSec,
+      resolution: metadata.width && metadata.height ? `${metadata.width}x${metadata.height}` : null,
+      uploadedBy,
+      remote: mustUseRemoteInstructionVideoStorage(),
     })
 
     await notifyChannelCatalogChange('updated', id)
@@ -395,6 +444,14 @@ channelsRouter.post(
       video_url: videoUrl,
       message: 'Upload successful',
       instruction_video_status: 'ready',
+      instruction_video_metadata: {
+        file_size: metadata.fileSize ?? req.file.size ?? null,
+        duration_sec: metadata.durationSec ?? null,
+        width: metadata.width ?? null,
+        height: metadata.height ?? null,
+        checksum: metadata.checksum ?? '',
+        uploaded_by: uploadedBy,
+      },
       channel: channelToResponse(updated, req, extractVersionCodeFromRequest(req)),
     })
   } catch (e) {

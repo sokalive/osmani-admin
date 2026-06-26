@@ -32,6 +32,7 @@ import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { offerCodesAdminRouter } from './offerCodesAdmin.js'
 import { notificationsRouter } from './notifications.js'
 import { notificationImageIngestRouter } from './notificationImageIngest.js'
+import { instructionVideoIngestRouter } from './instructionVideoIngest.js'
 import { beemSettingsRouter } from './beemSettings.js'
 import { smsAdminRouter } from './smsAdmin.js'
 import './smsScheduler.js'
@@ -338,6 +339,7 @@ restApi.use('/trial-watch', trialWatchRouter)
 restApi.use(appUpdateRouter)
 restApi.use(realtimeSettingsRouter)
 restApi.use(notificationImageIngestRouter)
+restApi.use(instructionVideoIngestRouter)
 restApi.use(notificationsRouter)
 restApi.use(deviceSecurityRouter)
 restApi.use('/admin/auth', adminAuthRouter)

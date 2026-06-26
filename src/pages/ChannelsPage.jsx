@@ -15,7 +15,7 @@ import {
   syncStreamUrl,
   updateChannel,
   updateChannelFormData,
-  uploadInstructionVideo,
+  uploadInstructionVideoWithProgress,
 } from '../lib/api'
 import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '../lib/channelApiModel'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
@@ -273,14 +273,16 @@ function ChannelsPage() {
     setEditingChannel(null)
   }
 
-  async function handleModalSubmit(submitPayload) {
+  async function handleModalSubmit(submitPayload, { onUploadProgress } = {}) {
     try {
       const fd = channelFormDataFromSubmit(submitPayload)
       if (editingChannel) {
-        await updateChannelFormData(editingChannel.id, fd)
         if (submitPayload.instructionVideoFile instanceof Blob) {
-          await uploadInstructionVideo(editingChannel.id, submitPayload.instructionVideoFile)
+          await uploadInstructionVideoWithProgress(editingChannel.id, submitPayload.instructionVideoFile, {
+            onProgress: onUploadProgress,
+          })
         }
+        await updateChannelFormData(editingChannel.id, fd)
       } else {
         await addChannelFormData(fd)
       }
@@ -289,6 +291,7 @@ function ChannelsPage() {
     } catch (e) {
       showToast('error', e?.message || 'Save failed')
       await loadChannels()
+      throw e
     }
   }
 
