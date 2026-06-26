@@ -72,6 +72,17 @@ export async function ensureChannelsTable(client) {
   await client.query(`
     ALTER TABLE channels ADD COLUMN IF NOT EXISTS instruction_video_checksum TEXT NOT NULL DEFAULT '';
   `)
+  await client.query(`
+    UPDATE channels
+    SET url = regexp_replace(instruction_video_url, '^https?://[^/]+', '')
+    WHERE lower(trim(channel_kind)) = 'instruction_video'
+      AND instruction_video_url LIKE 'https://%/uploads/videos/%'
+      AND (
+        url IS NULL
+        OR url = ''
+        OR url IS DISTINCT FROM regexp_replace(instruction_video_url, '^https?://[^/]+', '')
+      )
+  `)
   const { ensureInstructionVideoChannel } = await import('../lib/instructionVideoChannelBootstrap.js')
   await ensureInstructionVideoChannel(client)
 }

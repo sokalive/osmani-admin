@@ -14,8 +14,10 @@ import { isMpingoPlayerPageUrl } from './lib/streamMpingoHtmlBase.js'
 import {
   instructionChannelApiExtras,
   instructionChannelVisibleForClient,
+  instructionVideoRelativePathFromStored,
   isInstructionVideoChannelName,
   normalizeInstructionVisibility,
+  resolveInstructionVideoPlaybackForApi,
 } from './lib/instructionVideoChannel.js'
 
 const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk', 'chrome'])
@@ -183,7 +185,9 @@ export function parseChannelInput(body, file, existing = null) {
     : normalizeInstructionVisibility(ex?.instructionVisibility)
 
   const streamUrl = str(b.url || b.streamUrlPrimary)
-  const resolvedUrl = instruction ? (streamUrl || ex?.url || '') : streamUrl
+  const resolvedUrl = instruction
+    ? instructionVideoRelativePathFromStored(ex) || String(ex?.url ?? '').trim()
+    : streamUrl
 
   return {
     name: instruction ? (ex?.name || 'VIDEO') : str(b.name),
@@ -345,12 +349,11 @@ export function channelToResponse(c, req, clientVersion = 0) {
         ? instructionChannelVisibleForClient(m, clientVersion)
         : Boolean(m.showInApp)
   }
+  const instructionPlayback = instruction ? resolveInstructionVideoPlaybackForApi(m, req) : null
   const delivery = instruction
     ? {
-        playbackUrl: m.url?.startsWith('/uploads/') && req
-          ? `${req.protocol}://${req.get('host')}${m.url}`
-          : m.url,
-        direct_stream_url: m.url,
+        playbackUrl: instructionPlayback.full,
+        direct_stream_url: instructionPlayback.full,
         stream_delivery_mode: 'direct',
         stream_delivery_effective: 'direct',
         proxy_playback_url: '',
@@ -375,8 +378,10 @@ export function channelToResponse(c, req, clientVersion = 0) {
   return {
     id: m.id,
     name: m.name,
-    url: m.url,
+    url: instruction ? instructionPlayback.relative || instructionPlayback.full : m.url,
     playbackUrl: playback.playbackUrl,
+    stream_url: instruction ? instructionPlayback.full : playback.playbackUrl,
+    streamUrl: instruction ? instructionPlayback.full : playback.playbackUrl,
     direct_stream_url: delivery.direct_stream_url,
     stream_delivery_mode: delivery.stream_delivery_mode,
     stream_delivery_effective: playback.stream_delivery_effective,
@@ -428,8 +433,8 @@ export function channelToResponse(c, req, clientVersion = 0) {
     instruction_visibility: m.instructionVisibility ?? 'all',
     isSystemLocked: Boolean(m.isSystemLocked),
     is_system_locked: Boolean(m.isSystemLocked),
-    instructionVideoUrl: m.instructionVideoUrl ?? '',
-    instruction_video_url: m.instructionVideoUrl ?? '',
+    instructionVideoUrl: instruction ? instructionPlayback.full : (m.instructionVideoUrl ?? ''),
+    instruction_video_url: instruction ? instructionPlayback.full : (m.instructionVideoUrl ?? ''),
     instructionVideoStatus: m.instructionVideoStatus ?? '',
     instruction_video_status: m.instructionVideoStatus ?? '',
     ...(instruction ? instructionChannelApiExtras(m, req, clientVersion) : {}),

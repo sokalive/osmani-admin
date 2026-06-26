@@ -1,4 +1,5 @@
 import { parseVersionCode, APP_UPDATE_NEVER_MIN } from './appUpdateTargeting.js'
+import { resolveInstructionVideoPublicUrl } from './instructionVideoFileStorage.js'
 
 export const INSTRUCTION_VIDEO_CHANNEL_NAME = 'VIDEO'
 export const INSTRUCTION_VISIBILITY = {
@@ -18,7 +19,37 @@ export function normalizeInstructionVisibility(raw) {
   return INSTRUCTION_VISIBILITY.ALL
 }
 
-/** Whether this instruction channel row should appear for the client app version. */
+/** Relative /uploads/videos/... path from DB row (instruction_video_url preferred). */
+export function instructionVideoRelativePathFromStored(row) {
+  const candidates = [row?.instructionVideoUrl, row?.instruction_video_url, row?.url]
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean)
+  for (const raw of candidates) {
+    if (raw.startsWith('/uploads/videos/')) return raw
+    if (raw.startsWith('http')) {
+      try {
+        const p = new URL(raw).pathname
+        if (p.startsWith('/uploads/videos/')) return p
+      } catch {
+        /* ignore */
+      }
+    }
+    if (raw.startsWith('videos/')) return `/uploads/${raw.replace(/^\/+/, '')}`
+  }
+  return ''
+}
+
+/** Canonical HTTPS VPS playback URL + relative path for API clients. */
+export function resolveInstructionVideoPlaybackForApi(row, _req) {
+  const relative = instructionVideoRelativePathFromStored(row)
+  const fromColumn = String(row?.instructionVideoUrl ?? row?.instruction_video_url ?? '').trim()
+  const full =
+    resolveInstructionVideoPublicUrl(relative) ||
+    (fromColumn.startsWith('http') ? fromColumn : '') ||
+    resolveInstructionVideoPublicUrl(fromColumn)
+  return { relative, full }
+}
+
 export function instructionChannelVisibleForClient(row, clientVersionInput) {
   const showInApp = row?.showInApp !== false && row?.show_in_app !== false
   if (!showInApp || row?.isActive === false || row?.is_active === false) return false
@@ -32,28 +63,7 @@ export function instructionChannelVisibleForClient(row, clientVersionInput) {
 }
 
 export function instructionChannelApiExtras(row, req, clientVersion) {
-  const rel = String(row?.instructionVideoUrl || row?.instruction_video_url || row?.url || '').trim()
-  const pathOnly = rel.startsWith('http')
-    ? (() => {
-        try {
-          return new URL(rel).pathname
-        } catch {
-          return rel
-        }
-      })()
-    : rel.startsWith('/uploads/')
-      ? rel
-      : rel
-        ? `/uploads/${rel.replace(/^\/+/, '')}`
-        : ''
-  const videoUrl =
-    rel.startsWith('http')
-      ? rel
-      : pathOnly.startsWith('/uploads/') && req
-        ? `${req.protocol}://${req.get('host')}${pathOnly}`
-        : pathOnly.startsWith('http')
-          ? pathOnly
-          : rel
+  const { relative, full: videoUrl } = resolveInstructionVideoPlaybackForApi(row, req)
   const status = String(row?.instructionVideoStatus ?? row?.instruction_video_status ?? '').trim()
   return {
     instructionVideo: true,
@@ -72,10 +82,15 @@ export function instructionChannelApiExtras(row, req, clientVersion) {
     offline_cache_hint: 'recommended',
     videoUrl,
     video_url: videoUrl,
+    streamUrl: videoUrl,
+    stream_url: videoUrl,
+    instructionVideoUrl: videoUrl,
+    instruction_video_url: videoUrl,
     instructionVideoStatus: status || (videoUrl ? 'ready' : ''),
     instruction_video_status: status || (videoUrl ? 'ready' : ''),
     accessType: 'free',
     accessPremium: false,
     access_premium: false,
+    instruction_video_path: relative,
   }
 }

@@ -121,7 +121,9 @@ export function channelFormDataFromSubmit(submitPayload) {
   const bottomTab = serializeVisibleTabs(tabs)
   const fd = new FormData()
   fd.append('name', (s.name ?? '').trim())
-  fd.append('url', (s.streamUrlPrimary ?? '').trim())
+  if (!s.isInstructionVideo) {
+    fd.append('url', (s.streamUrlPrimary ?? '').trim())
+  }
   fd.append('category', line)
   fd.append('bottomTab', bottomTab)
   fd.append('isLive', String(Boolean(s.live)))
