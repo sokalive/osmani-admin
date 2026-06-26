@@ -20,5 +20,7 @@ export function markStartupFailed(err) {
 }
 
 export function isRenderRuntime() {
-  return String(process.env.RENDER || '').trim().toLowerCase() === 'true'
+  if (String(process.env.RENDER || '').trim().toLowerCase() === 'true') return true
+  if (String(process.env.RENDER_SERVICE_ID || '').trim()) return true
+  return false
 }

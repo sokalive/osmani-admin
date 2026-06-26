@@ -333,22 +333,6 @@ async function main() {
   try {
     wireApiCacheInvalidation()
     ensureMpingoRoutingStartupSync()
-    try {
-      const uploadInit = initUploadStorage()
-      if (uploadInit.ok) {
-        logUploadStorageDiagnostics()
-      } else {
-        console.warn('[uploads] storage degraded at startup:', uploadInit.error || 'unknown')
-      }
-    } catch (uploadErr) {
-      console.error('[uploads] init threw (non-fatal):', uploadErr?.message || uploadErr)
-    }
-    const cdnHealth = getCdnHealthSnapshot()
-    console.log(
-      cdnHealth.cdnEnabled
-        ? `[cdn] Bunny enabled → ${cdnHealth.cdnBaseUrl} (origin fallback ${cdnHealth.originBaseUrl})`
-        : '[cdn] Bunny not configured — static images served from API origin (set BUNNY_CDN_BASE_URL)',
-    )
 
     const server = app.listen(PORT, () => {
       console.log(
@@ -364,6 +348,24 @@ async function main() {
       }
       process.exit(1)
     })
+
+    try {
+      const uploadInit = initUploadStorage()
+      if (uploadInit.ok) {
+        logUploadStorageDiagnostics()
+      } else {
+        console.warn('[uploads] storage degraded at startup:', uploadInit.error || 'unknown')
+      }
+    } catch (uploadErr) {
+      console.error('[uploads] init threw (non-fatal):', uploadErr?.message || uploadErr)
+    }
+
+    const cdnHealth = getCdnHealthSnapshot()
+    console.log(
+      cdnHealth.cdnEnabled
+        ? `[cdn] Bunny enabled → ${cdnHealth.cdnBaseUrl} (origin fallback ${cdnHealth.originBaseUrl})`
+        : '[cdn] Bunny not configured — static images served from API origin (set BUNNY_CDN_BASE_URL)',
+    )
 
     void runDeferredStartup()
   } catch (err) {
