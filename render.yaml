@@ -52,7 +52,7 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: UPLOAD_DIR
-        value: /var/render/media
+        value: /var/render/media/uploads
       - key: NODE_VERSION
         value: "20"
       # Set in Render dashboard to your Bunny pull zone (e.g. https://osmani-media.b-cdn.net)

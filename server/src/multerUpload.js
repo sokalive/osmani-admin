@@ -23,12 +23,21 @@ export function ensureUploadsDir() {
 export function ensureInstructionVideosDir() {
   ensureUploadsDir()
   fs.mkdirSync(INSTRUCTION_VIDEOS_DIR, { recursive: true })
-  // Render persistent disk nested layout (/var/render/media/uploads/videos)
   try {
-    fs.mkdirSync(path.join(UPLOADS_DIR, 'uploads', 'videos'), { recursive: true })
+    fs.mkdirSync(path.join(UPLOADS_DIR, 'apks'), { recursive: true })
   } catch (e) {
-    console.warn('[uploads] nested uploads/videos mkdir skipped:', e?.message || e)
+    console.warn('[uploads] apks mkdir skipped:', e?.message || e)
   }
+}
+
+function isRenderRuntime() {
+  return String(process.env.RENDER || '').trim().toLowerCase() === 'true'
+}
+
+function probeWritableDir(dir) {
+  const probe = path.join(dir, `.write-probe-${process.pid}`)
+  fs.writeFileSync(probe, Buffer.from('ok'))
+  fs.unlinkSync(probe)
 }
 
 let uploadStorageReady = false
@@ -63,6 +72,9 @@ export function initUploadStorage() {
   }
 
   try {
+    if (isRenderRuntime()) {
+      fs.mkdirSync('/var/render/media', { recursive: true })
+    }
     ensureInstructionVideosDir()
   } catch (e) {
     result.error = `mkdir failed: ${e?.message || e}`
@@ -74,19 +86,22 @@ export function initUploadStorage() {
 
   try {
     fs.accessSync(UPLOADS_DIR, fs.constants.R_OK | fs.constants.W_OK)
+    fs.accessSync(INSTRUCTION_VIDEOS_DIR, fs.constants.R_OK | fs.constants.W_OK)
     result.writable = true
   } catch (e) {
-    result.error = `UPLOAD_DIR not readable/writable: ${e?.message || e}`
+    result.error = `upload path not readable/writable: ${e?.message || e}`
     uploadStorageReady = false
     uploadStorageLastError = result.error
-    console.error('[uploads] WARN:', result.error, UPLOADS_DIR)
+    console.error('[uploads] WARN:', result.error, {
+      uploadsDir: UPLOADS_DIR,
+      instructionVideosDir: INSTRUCTION_VIDEOS_DIR,
+    })
     return result
   }
 
-  const probe = path.join(UPLOADS_DIR, '.write-probe')
   try {
-    fs.writeFileSync(probe, Buffer.from('ok'))
-    fs.unlinkSync(probe)
+    probeWritableDir(UPLOADS_DIR)
+    probeWritableDir(INSTRUCTION_VIDEOS_DIR)
     result.ok = true
     uploadStorageReady = true
     uploadStorageLastError = null
@@ -94,7 +109,11 @@ export function initUploadStorage() {
     result.error = `cannot write probe file under UPLOAD_DIR: ${e?.message || e}`
     uploadStorageReady = false
     uploadStorageLastError = result.error
-    console.error('[uploads] WARN: probe write failed:', UPLOADS_DIR, e?.message || e)
+    console.error('[uploads] WARN: probe write failed:', {
+      uploadsDir: UPLOADS_DIR,
+      instructionVideosDir: INSTRUCTION_VIDEOS_DIR,
+      error: e?.message || e,
+    })
     console.error('[uploads] WARN: server starting in degraded mode — uploads disabled until disk is writable')
   }
 
@@ -140,6 +159,7 @@ export function logUploadStorageDiagnostics() {
   }
 
   console.log('[uploads] resolved UPLOAD_DIR:', UPLOADS_DIR)
+  console.log('[uploads] instruction videos dir:', INSTRUCTION_VIDEOS_DIR)
   console.log('[uploads] directory exists:', exists)
   console.log('[uploads] image file count:', files.length)
   if (sample.length) console.log('[uploads] sample files:', sample.join(', '))

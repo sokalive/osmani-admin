@@ -333,11 +333,15 @@ async function main() {
   try {
     wireApiCacheInvalidation()
     ensureMpingoRoutingStartupSync()
-    const uploadInit = initUploadStorage()
-    if (uploadInit.ok) {
-      logUploadStorageDiagnostics()
-    } else {
-      console.warn('[uploads] storage degraded at startup:', uploadInit.error || 'unknown')
+    try {
+      const uploadInit = initUploadStorage()
+      if (uploadInit.ok) {
+        logUploadStorageDiagnostics()
+      } else {
+        console.warn('[uploads] storage degraded at startup:', uploadInit.error || 'unknown')
+      }
+    } catch (uploadErr) {
+      console.error('[uploads] init threw (non-fatal):', uploadErr?.message || uploadErr)
     }
     const cdnHealth = getCdnHealthSnapshot()
     console.log(
