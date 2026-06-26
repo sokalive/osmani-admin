@@ -93,8 +93,7 @@ export function resolveNotificationImagePublicUrl(storedPath) {
   if (!uploadPath || !isNotificationImageUploadPath(uploadPath)) {
     return ''
   }
-  const cdn = getCdnBaseUrl()
-  if (cdn) return `${trimSlash(cdn)}${uploadPath}`
+  // OneSignal fetches VPS origin directly — new notif files are not on Bunny edge yet.
   return `${getNotificationImagePublicOrigin()}${uploadPath}`
 }
 

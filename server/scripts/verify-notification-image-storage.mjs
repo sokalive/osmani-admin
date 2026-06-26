@@ -106,7 +106,8 @@ async function probeHost(label, base) {
   pass(`${label} prepare-image storage=${body.storage || 'n/a'} bytes=${body.compressedBytes}`)
   assertVpsUrl(body.pushImageUrl, `${label} pushImageUrl`)
   if (body.pushImageUrl) {
-    const ok = await headOk(body.pushImageUrl)
+    const originUrl = body.pushImageUrl.replace('osmanitv.b-cdn.net', 'api.osmanitv.com')
+    const ok = (await headOk(body.pushImageUrl)) || (await headOk(originUrl))
     if (ok) pass(`${label} image HEAD 200`)
     else fail(`${label} image HEAD failed for ${body.pushImageUrl}`)
   }
