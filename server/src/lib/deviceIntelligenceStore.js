@@ -257,6 +257,9 @@ export async function registerDeviceIntelligence(payload, meta = {}) {
         ],
       )
       registry = upd.rows[0]
+      if (!registry) {
+        throw new Error(`device registry update failed for ${deviceId}`)
+      }
       const eventType = prev.status === 'blocked' ? 'blocked_attempt' : 'heartbeat'
       await client.query(
         `INSERT INTO device_intelligence_login_log

@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { resolveDevicePhoneProfile, saveDevicePhoneProfile } from '../lib/devicePhoneProfile.js'
+import { resolveDevicePhoneProfile, saveDevicePhoneProfile, updateDevicePhoneProfile } from '../lib/devicePhoneProfile.js'
 import { readPhoneGateEnabled } from '../lib/phoneGateSettings.js'
 
 export const deviceProfileRouter = Router()
@@ -86,10 +86,7 @@ deviceProfileRouter.put('/phone', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
     const body = req.body && typeof req.body === 'object' ? req.body : {}
-    const result = await saveDevicePhoneProfile(body, {
-      ip: clientIp(req),
-      userAgent: String(req.headers['user-agent'] ?? ''),
-    })
+    const result = await updateDevicePhoneProfile(body)
     const gate = await phoneGatePayload({ hasPhone: true })
     res.json(phoneResponse(result, gate))
   } catch (e) {

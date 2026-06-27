@@ -11,8 +11,12 @@ import crypto from 'node:crypto'
 const VPS = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/$/, '')
 const API = `${VPS}/api`
 const TOKEN = String(process.env.ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '3030').trim()
-const TEST_PHONE = String(process.env.TEST_PHONE || '255712345678').trim()
-const TEST_PHONE_UPDATED = String(process.env.TEST_PHONE_UPDATED || '255712345679').trim()
+const TEST_PHONE_BASE = String(process.env.TEST_PHONE_BASE || '2557123').trim()
+
+function uniqueTestPhone(suffix) {
+  const tail = String(suffix).replace(/\D/g, '').padStart(5, '0').slice(-5)
+  return `${TEST_PHONE_BASE}${tail}`.slice(0, 15)
+}
 
 const report = {
   time: new Date().toISOString(),
@@ -66,6 +70,9 @@ async function adminGet(path) {
 }
 
 async function verifyPhoneApis() {
+  const runTag = Date.now().toString().slice(-5)
+  const testPhone = uniqueTestPhone(runTag)
+  const testPhoneUpdated = uniqueTestPhone(String(Number(runTag) + 1))
   const newDevice = `verify-phone-new-${uuid()}`
   const existingDevice = `verify-phone-existing-${uuid()}`
 
@@ -79,7 +86,7 @@ async function verifyPhoneApis() {
 
   const postNew = await jsonFetch(`${API}/device/phone`, {
     method: 'POST',
-    body: JSON.stringify({ device_id: newDevice, phone: TEST_PHONE }),
+    body: JSON.stringify({ device_id: newDevice, phone: testPhone }),
   })
   report.phoneApis.postNew = { status: postNew.res.status, hasPhone: postNew.body?.hasPhone }
   if (postNew.res.status !== 200 || postNew.body?.hasPhone !== true) {
@@ -97,7 +104,7 @@ async function verifyPhoneApis() {
 
   const putUpdate = await jsonFetch(`${API}/device/phone`, {
     method: 'PUT',
-    body: JSON.stringify({ device_id: existingDevice, phone: TEST_PHONE }),
+    body: JSON.stringify({ device_id: existingDevice, phone: testPhone }),
   })
   report.phoneApis.putFirst = { status: putUpdate.res.status }
   if (putUpdate.res.status !== 200) {
@@ -107,11 +114,15 @@ async function verifyPhoneApis() {
 
   const putChange = await jsonFetch(`${API}/device/phone`, {
     method: 'PUT',
-    body: JSON.stringify({ device_id: existingDevice, phone: TEST_PHONE_UPDATED }),
+    body: JSON.stringify({ device_id: existingDevice, phone: testPhoneUpdated }),
   })
-  report.phoneApis.putUpdate = { status: putChange.res.status, phone: putChange.body?.phoneNumber }
-  if (putChange.res.status !== 200 || !String(putChange.body?.phoneNumber || '').endsWith('9')) {
-    fail('phone', 'PUT /device/phone update failed')
+  report.phoneApis.putUpdate = {
+    status: putChange.res.status,
+    phone: putChange.body?.phoneNumber,
+    error: putChange.body?.error,
+  }
+  if (putChange.res.status !== 200 || putChange.body?.phoneNumber !== testPhoneUpdated) {
+    fail('phone', `PUT /device/phone update failed: ${putChange.body?.error || putChange.res.status}`)
     return
   }
   pass('phone', 'PUT /device/phone create + update')
@@ -191,13 +202,17 @@ async function verifyPhoneGateFlag() {
 }
 
 async function verifySmsIdempotency() {
-  const logs = await adminGet('/admin/sms/logs?limit=50')
+  const logs = await adminGet('/admin/sms/log?limit=50')
   if (!logs.res.ok) {
     report.sms.skipped = 'admin logs unavailable'
     console.log('SKIP [sms] admin logs HTTP', logs.res.status)
     return
   }
-  const rows = Array.isArray(logs.body?.logs) ? logs.body.logs : []
+  const rows = Array.isArray(logs.body?.rows)
+    ? logs.body.rows
+    : Array.isArray(logs.body?.logs)
+      ? logs.body.logs
+      : []
   const byKey = new Map()
   let dupes = 0
   for (const row of rows) {
