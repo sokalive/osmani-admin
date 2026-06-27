@@ -103,6 +103,38 @@ export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInp
   }
 
   const activeDevices = await listActivePhoneSubscriptionDevices(digits)
+
+  // Paying device with its own active subscription may renew/stack (legacy rows may lack phone binding).
+  const pool = requirePool()
+  const { rows: payingSubRows } = await pool.query(
+    `SELECT device_id::text AS device_id, expires_at, status, transaction_id
+     FROM device_subscriptions
+     WHERE device_id = $1
+       AND status = 'active'
+       AND expires_at > now()
+     LIMIT 1`,
+    [paying],
+  )
+  if (payingSubRows[0]) {
+    const own = {
+      device_id: String(payingSubRows[0].device_id ?? paying),
+      expires_at: payingSubRows[0].expires_at,
+      status: String(payingSubRows[0].status ?? 'active'),
+      transaction_id:
+        payingSubRows[0].transaction_id != null ? String(payingSubRows[0].transaction_id) : null,
+    }
+    const merged = activeDevices.some((d) => d.device_id === paying)
+      ? activeDevices
+      : [own, ...activeDevices]
+    return {
+      allowed: true,
+      reason: 'same_device_renewal',
+      ownerDeviceId: paying,
+      activeDevices: merged,
+      message: null,
+    }
+  }
+
   const payingActive = activeDevices.find((d) => d.device_id === paying)
   if (payingActive) {
     return {
