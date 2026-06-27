@@ -6,6 +6,11 @@
  *   node scripts/verify-sms-production.mjs
  *   TEST_SMS_PHONE=2557XXXXXXXX node scripts/verify-sms-production.mjs
  */
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dir = path.dirname(fileURLToPath(import.meta.url))
 const VPS = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/$/, '')
 const RENDER = String(process.env.RENDER_API || 'https://osmani-admin-api.onrender.com').replace(/\/$/, '')
 const TOKEN = String(process.env.ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '3030').trim()
@@ -91,6 +96,8 @@ async function verifyHost(base, label) {
   console.log('connectivity test:', test.body?.success, test.body?.message)
   if (test.body?.success !== true) {
     fail(`${label}: Beem connectivity test failed — ${test.body?.message || 'unknown'}`)
+  } else if (/HTTP 400/i.test(String(test.body?.message || ''))) {
+    fail(`${label}: Beem connectivity test reported HTTP 400 — ${test.body?.message}`)
   } else {
     pass(`${label}: Beem connectivity test passed`)
   }
@@ -125,10 +132,7 @@ async function main() {
   await verifyHost(VPS, 'vps')
   await verifyHost(RENDER, 'render')
 
-  const out = new URL('../docs/sms-verification/report.json', import.meta.url)
-  const fs = await import('node:fs')
-  const path = await import('node:path')
-  const outPath = path.fileURLToPath(out)
+  const outPath = path.join(__dir, '../../docs/sms-verification/report.json')
   fs.mkdirSync(path.dirname(outPath), { recursive: true })
   fs.writeFileSync(outPath, JSON.stringify(report, null, 2))
   console.log(`\nReport: ${outPath}`)
