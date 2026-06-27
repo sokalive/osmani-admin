@@ -62,6 +62,38 @@ function summarizeDeviceChange(prev, payload) {
   return parts.length ? parts.join(', ') : 'heartbeat'
 }
 
+function buildPushMetadataPatch(payload) {
+  const pushSubscriptionId = String(
+    payload.pushSubscriptionId ?? payload.push_subscription_id ?? '',
+  ).trim()
+  const onesignalId = String(payload.onesignalId ?? payload.onesignal_id ?? '').trim()
+  const pushOptedIn = payload.pushOptedIn ?? payload.push_opted_in
+  const pushPermission = payload.pushPermission ?? payload.push_permission
+  const nativeVersionCode = payload.nativeVersionCode ?? payload.native_version_code
+  const patch = { push_registered_at: new Date().toISOString() }
+  if (pushSubscriptionId) patch.push_subscription_id = pushSubscriptionId
+  if (onesignalId) patch.onesignal_id = onesignalId
+  if (pushOptedIn != null) patch.push_opted_in = pushOptedIn === true
+  if (pushPermission != null) patch.push_permission = pushPermission === true
+  if (nativeVersionCode != null && String(nativeVersionCode).trim() !== '') {
+    patch.native_version_code = Number(nativeVersionCode) || String(nativeVersionCode).trim()
+  }
+  return patch
+}
+
+function mergeRegistryMetadata(existingMetadata, payload) {
+  const base =
+    existingMetadata && typeof existingMetadata === 'object' && !Array.isArray(existingMetadata)
+      ? existingMetadata
+      : {}
+  const pushPatch = buildPushMetadataPatch(payload)
+  const extra =
+    payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)
+      ? payload.metadata
+      : {}
+  return { ...base, ...extra, push: { ...(base.push || {}), ...pushPatch } }
+}
+
 export async function getDeviceIntelligenceSummary() {
   const pool = requirePool()
   const { rows } = await pool.query(`
@@ -171,6 +203,7 @@ export async function registerDeviceIntelligence(payload, meta = {}) {
     const now = new Date()
 
     if (!prev) {
+      const metadata = mergeRegistryMetadata(null, payload)
       const ins = await client.query(
         `INSERT INTO device_intelligence_registry (
           account_id, user_id, device_id, device_fingerprint, android_id,
@@ -190,7 +223,7 @@ export async function registerDeviceIntelligence(payload, meta = {}) {
           fields.appVersion,
           phoneDigits,
           now,
-          JSON.stringify(payload.metadata ?? {}),
+          JSON.stringify(metadata),
         ],
       )
       registry = ins.rows[0]
@@ -225,6 +258,7 @@ export async function registerDeviceIntelligence(payload, meta = {}) {
       )
     } else {
       const status = prev.status === 'inactive' ? 'active' : prev.status
+      const metadata = mergeRegistryMetadata(prev.metadata, payload)
       const upd = await client.query(
         `UPDATE device_intelligence_registry SET
           account_id = CASE WHEN $2 <> '' THEN $2 ELSE account_id END,
@@ -238,6 +272,7 @@ export async function registerDeviceIntelligence(payload, meta = {}) {
           phone_number = CASE WHEN $10 <> '' THEN $10 ELSE phone_number END,
           last_seen_at = $11,
           status = $12,
+          metadata = $13::jsonb,
           updated_at = $11
         WHERE device_id = $1
         RETURNING *`,
@@ -254,6 +289,7 @@ export async function registerDeviceIntelligence(payload, meta = {}) {
           phoneDigits,
           now,
           status,
+          JSON.stringify(metadata),
         ],
       )
       registry = upd.rows[0]
