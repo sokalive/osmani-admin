@@ -62,8 +62,8 @@ export async function listActivePhoneSubscriptionDevices(phoneInput) {
        ds.updated_at
      FROM device_subscriptions ds
      INNER JOIN phone_devices pd ON pd.device_id = ds.device_id::text
-     WHERE ds.status = 'active'
-       AND ds.expires_at > now()
+     WHERE ds.expires_at > now()
+       AND COALESCE(ds.manual_admin_blocked, false) = false
      ORDER BY ds.expires_at DESC`,
     [digits],
   )
@@ -110,8 +110,8 @@ export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInp
     `SELECT device_id::text AS device_id, expires_at, status, transaction_id
      FROM device_subscriptions
      WHERE device_id = $1
-       AND status = 'active'
        AND expires_at > now()
+       AND COALESCE(manual_admin_blocked, false) = false
      LIMIT 1`,
     [paying],
   )
