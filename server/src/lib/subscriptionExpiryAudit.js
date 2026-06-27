@@ -61,7 +61,17 @@ export function replayStackedExpiryFromEvents(events) {
   return { expectedExpiresAt: current, steps }
 }
 
-async function loadCreditEventsForDevice(pool, deviceId) {
+/** Minimum expiry from the most recent successful payment alone (no stacking). */
+export function computeLastPaymentFloorExpiry(events) {
+  if (!events?.length) return null
+  const last = events[events.length - 1]
+  const atMs = last.atMs
+  const days = Math.max(1, Math.trunc(Number(last.durationDays) || 0))
+  if (!atMs || days < 1) return null
+  return computeStackedExpiryIso(null, days, atMs).expiresAt
+}
+
+export async function loadCreditEventsForDevice(pool, deviceId) {
   const d = String(deviceId ?? '').trim()
   const events = []
 
@@ -424,11 +434,23 @@ async function findOverCreditedBatch({ limit = 50, offset = 0 } = {}) {
 }
 
 /**
- * Repair clear over-credits (>1 day beyond replay). Never shortens below replay.
- * @param {{ dryRun?: boolean; maxRepairs?: number; offset?: number }} opts
+ * Repair clear over-credits (>1 day beyond replay). Never shortens below replay or payment floor.
+ * @param {{ dryRun?: boolean; maxRepairs?: number; offset?: number; confirm?: boolean }} opts
  */
 export async function repairSubscriptionExpiryOverCredits(opts = {}) {
   const dryRun = opts.dryRun !== false
+  const confirm = opts.confirm === true
+  if (!dryRun && !confirm) {
+    return {
+      dry_run: true,
+      error:
+        'Live repair requires dryRun=false and confirm=true. Use subscription-expiry-restore for safe uplift only.',
+      repaired_count: 0,
+      flagged_count: 0,
+      repaired: [],
+      flagged: [],
+    }
+  }
   const maxRepairs = Math.min(200, Math.max(1, Number(opts.maxRepairs) || 50))
   const offset = Math.max(0, Number(opts.offset) || 0)
   const scanLimit = Math.max(maxRepairs * 4, 80)
@@ -439,29 +461,56 @@ export async function repairSubscriptionExpiryOverCredits(opts = {}) {
 
   for (const row of candidates.slice(0, maxRepairs)) {
     if (!row.expected_expires_at || !row.device_id) continue
-  const expectedMs = toMs(row.expected_expires_at)
-  const actualMs = toMs(row.actual_expires_at)
-  if (expectedMs == null || actualMs == null || actualMs <= expectedMs + REPAIR_MIN_OVER_MS) {
+    const expectedMs = toMs(row.expected_expires_at)
+    const actualMs = toMs(row.actual_expires_at)
+    if (expectedMs == null || actualMs == null || actualMs <= expectedMs + REPAIR_MIN_OVER_MS) {
       flagged.push({ ...row, reason: 'skipped_margin' })
       continue
     }
+
+    const events = await loadCreditEventsForDevice(requirePool(), row.device_id)
+    const floorIso = computeLastPaymentFloorExpiry(events)
+    const floorMs = toMs(floorIso)
+    const safeMs = Math.max(expectedMs, floorMs ?? 0)
+    const nowMs = Date.now()
+
+    if (safeMs <= nowMs + MS_TOLERANCE) {
+      flagged.push({
+        ...row,
+        reason: 'would_deactivate_user',
+        last_payment_floor: floorIso,
+      })
+      continue
+    }
+    if (safeMs < actualMs - MS_TOLERANCE) {
+      flagged.push({ ...row, reason: 'would_reduce_expiry', safe_expires_at: new Date(safeMs).toISOString() })
+      continue
+    }
+    if (!row.credit_events || row.credit_events < 1) {
+      flagged.push({ ...row, reason: 'uncertain_no_credit_history' })
+      continue
+    }
+
+    const targetIso = new Date(safeMs).toISOString()
     if (!dryRun) {
       const pool = requirePool()
       await pool.query(
         `UPDATE device_subscriptions
          SET expires_at = $2::timestamptz,
+             status = 'active',
              updated_at = now()
          WHERE device_id = $1
            AND status = 'active'
-           AND expires_at > now()`,
-        [row.device_id, row.expected_expires_at],
+           AND expires_at > now()
+           AND expires_at > $2::timestamptz`,
+        [row.device_id, targetIso],
       )
       invalidateSubscriptionAccessCache(row.device_id)
     }
     repaired.push({
       device_id_masked: row.device_id_masked,
       before_expires_at: row.actual_expires_at,
-      after_expires_at: row.expected_expires_at,
+      after_expires_at: targetIso,
       over_days: row.over_days,
       dry_run: dryRun,
     })

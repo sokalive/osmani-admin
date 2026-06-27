@@ -209,16 +209,22 @@ export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reas
 }
 
 /** Link subscription when payment phone resolves to a different active device (no fingerprint required). */
-export async function migrateSubscriptionFromSourceDevice(targetDeviceId, sourceDeviceId, fpHash = null) {
+export async function migrateSubscriptionFromSourceDevice(
+  targetDeviceId,
+  sourceDeviceId,
+  fpHash = null,
+  opts = {},
+) {
   const target = String(targetDeviceId ?? '').trim()
   const source = String(sourceDeviceId ?? '').trim()
+  const allowReverseTransfer = opts.allowReverseTransfer === true
   if (!target || !source || target === source) {
     return { recovered: false, reason: 'invalid_devices' }
   }
-  if (await isReverseTransferMigrationBlocked(target, source)) {
+  if (!allowReverseTransfer && (await isReverseTransferMigrationBlocked(target, source))) {
     return { recovered: false, reason: 'transfer_revoked_source' }
   }
-  if (await isCompletedTransferSourceDevice(target)) {
+  if (!allowReverseTransfer && (await isCompletedTransferSourceDevice(target))) {
     return { recovered: false, reason: 'transfer_revoked_source' }
   }
 

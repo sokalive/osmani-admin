@@ -305,12 +305,69 @@ runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken,
     res.setHeader('Cache-Control', 'no-store, private')
     const { repairSubscriptionExpiryOverCredits } = await import('../lib/subscriptionExpiryAudit.js')
     const dryRun = String(req.query.dry_run ?? '1').trim() !== '0'
+    const confirm = String(req.query.confirm ?? req.body?.confirm ?? '0').trim() === '1'
     const maxRepairs = Number(req.query.max_repairs ?? 50)
     const offset = Number(req.query.offset ?? 0)
-    const report = await repairSubscriptionExpiryOverCredits({ dryRun, maxRepairs, offset })
+    const report = await repairSubscriptionExpiryOverCredits({ dryRun, maxRepairs, offset, confirm })
     res.json({ ok: true, ...report, commit: getServerGitCommit() })
   } catch (e) {
     console.error('[runtime/subscription-expiry-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Audit users wrongly inactive after expiry repair (read-only). */
+runtimePublicRouter.get('/subscription-expiry-restore-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { findPaymentReplayRestoreCandidates, runSubscriptionExpiryRestore } = await import(
+      '../lib/subscriptionExpiryRestore.js'
+    )
+    const sinceDays = Number(req.query.since_days ?? req.query.days ?? 30)
+    const deviceId = String(req.query.device_id ?? '').trim()
+    const pool = (await import('../db/pool.js')).getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })
+    const victims = await findPaymentReplayRestoreCandidates(pool, { sinceDays })
+    const dryReport = await runSubscriptionExpiryRestore({
+      dryRun: true,
+      sinceDays,
+      deviceId: deviceId || undefined,
+      maxRestores: 500,
+    })
+    res.json({
+      ok: true,
+      since_days: sinceDays,
+      replay_victims: deviceId ? victims.filter((v) => v.device_id === deviceId) : victims,
+      migration_shadows: dryReport.migration_shadows_found,
+      would_restore: dryReport.restored_count,
+      samples: dryReport.restored.slice(0, 25),
+      commit: getServerGitCommit(),
+    })
+  } catch (e) {
+    console.error('[runtime/subscription-expiry-restore-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Safe restore: replay payments + migration shadows. Never reduces expiry. ?dry_run=0 to apply. */
+runtimePublicRouter.post('/subscription-expiry-restore', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runSubscriptionExpiryRestore } = await import('../lib/subscriptionExpiryRestore.js')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const sinceDays = Number(req.query.since_days ?? b.since_days ?? 30)
+    const maxRestores = Number(req.query.max_restores ?? b.max_restores ?? 200)
+    const deviceId = String(req.query.device_id ?? b.device_id ?? '').trim()
+    const report = await runSubscriptionExpiryRestore({
+      dryRun,
+      sinceDays,
+      maxRestores,
+      deviceId: deviceId || undefined,
+    })
+    res.json({ ok: report.unresolved.length === 0, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-expiry-restore]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
@@ -337,7 +394,9 @@ runtimePublicRouter.post('/subscription-shadow-migrate', requireLegacyAdminToken
     if (!(await probe(source))) {
       return res.status(409).json({ ok: false, error: 'source_not_active', target, source })
     }
-    const mig = await migrateSubscriptionFromSourceDevice(target, source)
+    const mig = await migrateSubscriptionFromSourceDevice(target, source, null, {
+      allowReverseTransfer: Boolean(b.allow_reverse_transfer ?? b.allowReverseTransfer),
+    })
     const verifyActive = await probe(target)
     res.json({
       ok: mig.recovered === true && verifyActive,
