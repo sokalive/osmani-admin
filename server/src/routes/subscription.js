@@ -189,7 +189,7 @@ function rowToPublicStatus(row) {
       ...reminderFieldsFromRow(null),
     }
   }
-  const active = row.active_now === true && row.blocked_now !== true
+  const active = isAccessRowActive(row)
   const status =
     row.blocked_now === true ? 'blocked' : active ? 'active' : row.status === 'active' ? 'expired' : row.status
   const exp = row.expires_at
