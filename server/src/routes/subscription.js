@@ -5,6 +5,7 @@ import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
+import { loadPhoneGatePublicPayload } from '../lib/phoneGateSettings.js'
 import { getDeviceTrialWatchStatus } from '../lib/trialWatchStore.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
@@ -1180,6 +1181,17 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   }
   void writeAppModesEvent('init')
 
+  const writePhoneGateEvent = async (reason) => {
+    try {
+      const p = await loadPhoneGatePublicPayload()
+      const body = JSON.stringify({ ...p, reason })
+      res.write(`event: phone_gate_settings\ndata: ${body}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] phone_gate_settings push failed:', e)
+    }
+  }
+  void writePhoneGateEvent('init')
+
   const writeTrialWatchEvent = async (reason) => {
     try {
       const settings = await loadTrialWatchSettings()
@@ -1288,13 +1300,33 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     }
   }
 
+  const phoneGateSyncHandler = (packet) => {
+    if (String(packet?.event || '') !== 'phone_gate_changed') return
+    try {
+      const enabled = packet?.payload?.phone_gate_enabled === true
+      const body = JSON.stringify({
+        ok: true,
+        v: packet.configVersion,
+        phone_gate_enabled: enabled,
+        phoneGateEnabled: enabled,
+        reason: 'phone_gate_changed',
+        server_time_ms: Date.now(),
+      })
+      res.write(`event: phone_gate_settings\ndata: ${body}\n\n`)
+    } catch (e) {
+      console.error('[subscription-stream] phone_gate immediate push failed:', e)
+    }
+  }
+
   liveSyncBus.on('sync', modeSyncHandler)
   liveSyncBus.on('sync', trialSyncHandler)
   liveSyncBus.on('sync', appUpdateSyncHandler)
   liveSyncBus.on('sync', catalogSyncHandler)
+  liveSyncBus.on('sync', phoneGateSyncHandler)
 
   const modePoll = setInterval(() => {
     void writeAppModesEvent('poll')
+    void writePhoneGateEvent('poll')
     void writeTrialWatchEvent('poll')
     void writeAppUpdateEvent('poll')
   }, MODE_SSE_POLL_MS)
@@ -1337,6 +1369,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     liveSyncBus.off('sync', trialSyncHandler)
     liveSyncBus.off('sync', appUpdateSyncHandler)
     liveSyncBus.off('sync', catalogSyncHandler)
+    liveSyncBus.off('sync', phoneGateSyncHandler)
     try {
       res.end()
     } catch (e) {

@@ -27,6 +27,7 @@ function defaultDevice() {
     dailyLimit: 5,
     weeklyLimit: 15,
     cooldownMinutes: 60,
+    phoneGateEnabled: true,
     pending: [],
     logs: [],
   }
@@ -53,6 +54,7 @@ function normalizeDeviceControlFromServer(s) {
     dailyLimit: toSafeNonNegInt(s.dailyLimit ?? s.daily_limit, 5),
     weeklyLimit: toSafeNonNegInt(s.weeklyLimit ?? s.weekly_limit, 15),
     cooldownMinutes: toSafeNonNegInt(s.cooldownMinutes ?? s.cooldown_minutes, 60),
+    phoneGateEnabled: !(s.phoneGateEnabled === false || s.phone_gate_enabled === false),
     pending,
     logs: Array.isArray(s.logs) ? s.logs : [],
   }
@@ -78,9 +80,11 @@ function DeviceControlPage() {
     dailyLimit: defaultDevice().dailyLimit,
     weeklyLimit: defaultDevice().weeklyLimit,
     cooldownMinutes: defaultDevice().cooldownMinutes,
+    phoneGateEnabled: defaultDevice().phoneGateEnabled,
   }))
   const [tab, setTab] = useState('settings')
   const [flash, setFlash] = useState(null)
+  const [phoneGateBusy, setPhoneGateBusy] = useState(false)
   const [forcePaymentPhone, setForcePaymentPhone] = useState('')
   const [forceNewDeviceId, setForceNewDeviceId] = useState('')
   const [forceSubmitting, setForceSubmitting] = useState(false)
@@ -128,6 +132,7 @@ function DeviceControlPage() {
         dailyLimit: hydrated.dailyLimit,
         weeklyLimit: hydrated.weeklyLimit,
         cooldownMinutes: hydrated.cooldownMinutes,
+        phoneGateEnabled: hydrated.phoneGateEnabled,
       })
     } catch (e) {
       showToast('error', e?.message || 'Could not load device control')
@@ -148,7 +153,7 @@ function DeviceControlPage() {
     es.addEventListener('transfer_rejected', onRefresh)
     es.addEventListener('subscription_revoked', onRefresh)
     es.addEventListener('app_settings_changed', onRefresh)
-    es.addEventListener('device_control_changed', onRefresh)
+    es.addEventListener('phone_gate_changed', onRefresh)
     es.addEventListener('security_logs_changed', onRefresh)
     return () => es.close()
   }, [loadCfg])
@@ -158,9 +163,37 @@ function DeviceControlPage() {
       draft.transferMode !== cfg.transferMode ||
       Number(draft.dailyLimit) !== cfg.dailyLimit ||
       Number(draft.weeklyLimit) !== cfg.weeklyLimit ||
-      Number(draft.cooldownMinutes) !== cfg.cooldownMinutes,
+      Number(draft.cooldownMinutes) !== cfg.cooldownMinutes ||
+      draft.phoneGateEnabled !== cfg.phoneGateEnabled,
     [draft, cfg],
   )
+
+  async function setPhoneGateEnabled(nextEnabled) {
+    if (phoneGateBusy) return
+    setPhoneGateBusy(true)
+    try {
+      const saved = await putDeviceControlSettings({
+        transferMode: cfg.transferMode,
+        dailyLimit: cfg.dailyLimit,
+        weeklyLimit: cfg.weeklyLimit,
+        cooldownMinutes: cfg.cooldownMinutes,
+        phoneGateEnabled: nextEnabled,
+      })
+      const hydrated = normalizeDeviceControlFromServer(saved)
+      setCfg(hydrated)
+      setDraft((d) => ({ ...d, phoneGateEnabled: hydrated.phoneGateEnabled }))
+      showFlash(
+        'success',
+        nextEnabled
+          ? 'Phone gate enabled — production apps will require phone capture.'
+          : 'Phone gate disabled — production apps skip phone capture immediately.',
+      )
+    } catch (err) {
+      showToast('error', err?.message || 'Phone gate update failed')
+    } finally {
+      setPhoneGateBusy(false)
+    }
+  }
 
   function showFlash(type, message) {
     setFlash({ type, message })
@@ -207,6 +240,7 @@ function DeviceControlPage() {
       dailyLimit: daily,
       weeklyLimit: weekly,
       cooldownMinutes: cool,
+      phoneGateEnabled: draft.phoneGateEnabled,
     }
     try {
       const saved = await putDeviceControlSettings(requestPayload)
@@ -217,6 +251,7 @@ function DeviceControlPage() {
         dailyLimit: hydrated.dailyLimit,
         weeklyLimit: hydrated.weeklyLimit,
         cooldownMinutes: hydrated.cooldownMinutes,
+        phoneGateEnabled: hydrated.phoneGateEnabled,
       })
       showFlash('success', 'Settings saved.')
     } catch (err) {
@@ -311,6 +346,39 @@ function DeviceControlPage() {
             onSubmit={handleSaveSettings}
             className="max-w-xl space-y-5 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]"
           >
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-amber-100">Emergency phone gate</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Toggle phone capture on production apps instantly via SSE — no OTA required.
+                    Current:{' '}
+                    <span className="font-semibold text-white">
+                      {cfg.phoneGateEnabled ? 'ENABLED' : 'DISABLED'}
+                    </span>
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={phoneGateBusy || cfg.phoneGateEnabled}
+                    onClick={() => void setPhoneGateEnabled(true)}
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold uppercase text-white disabled:opacity-40"
+                  >
+                    Enable Phone Gate
+                  </button>
+                  <button
+                    type="button"
+                    disabled={phoneGateBusy || !cfg.phoneGateEnabled}
+                    onClick={() => void setPhoneGateEnabled(false)}
+                    className="rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold uppercase text-white disabled:opacity-40"
+                  >
+                    Disable Phone Gate
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
               <div>
                 <p className="text-sm font-medium text-slate-200">Transfer mode</p>

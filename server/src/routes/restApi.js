@@ -26,6 +26,7 @@ import { ensurePaymentProvidersFile, paymentProvidersRouter } from './paymentPro
 import { appUpdateRouter } from './appUpdate.js'
 import { realtimeSettingsRouter } from './realtimeSettings.js'
 import { deviceSecurityRouter } from './deviceSecurity.js'
+import { deviceProfileRouter } from './deviceProfile.js'
 import { deviceSecurityReportsRouter } from './deviceSecurityReports.js'
 import { adminAuthRouter } from './adminAuth.js'
 import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
@@ -39,7 +40,6 @@ import './smsScheduler.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { customerInvestigationRouter } from './customerInvestigation.js'
 import { runtimePublicRouter } from './runtimePublic.js'
-import { deviceProfileRouter } from './deviceProfile.js'
 import { usersIntelligencePublicRouter } from './usersIntelligencePublic.js'
 import { usersIntelligenceAdminRouter } from './usersIntelligenceAdmin.js'
 import { appVersionMigrationAdminRouter } from './appVersionMigrationAdmin.js'
@@ -289,7 +289,6 @@ restApi.get('/admin/panel-diagnostics', requireAdminPanelAccess, async (_req, re
 
 restApi.use('/admin/customer-investigation', customerInvestigationRouter)
 restApi.use('/runtime', runtimePublicRouter)
-restApi.use('/device', deviceProfileRouter)
 restApi.use('/users-intelligence', usersIntelligencePublicRouter)
 restApi.use('/admin/users-intelligence', usersIntelligenceAdminRouter)
 restApi.use('/admin/app-version-migration', appVersionMigrationAdminRouter)
@@ -344,6 +343,7 @@ restApi.use(notificationImageIngestRouter)
 restApi.use(instructionVideoIngestRouter)
 restApi.use(notificationsRouter)
 restApi.use(deviceSecurityRouter)
+restApi.use('/device', deviceProfileRouter)
 restApi.use('/admin/auth', adminAuthRouter)
 restApi.use('/admin/manual-subscription', manualSubscriptionAdminRouter)
 restApi.use('/admin/offer-codes', offerCodesAdminRouter)

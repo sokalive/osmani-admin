@@ -174,6 +174,7 @@ export async function auditTransferSourceRevocation({ repair = false } = {}) {
           ? { ...tgtRow[0], active_now: true, blocked_now: false }
           : null,
         reason: 'transfer_repair',
+        userInitiatedTransfer: true,
       })
       repaired.push({ source_device_id: source, target_device_id: target, transfer_id: row.transfer_id })
     }

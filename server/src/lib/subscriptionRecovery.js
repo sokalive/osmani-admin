@@ -156,16 +156,18 @@ export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reas
       )
     }
 
+    const startedAt = row.started_at ?? new Date()
     await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2, now(), $3, now(), $4)
+       VALUES ($1, 'active', $2, $3, $4, now(), $5)
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
+         started_at = COALESCE(device_subscriptions.started_at, EXCLUDED.started_at),
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          fingerprint_hash = EXCLUDED.fingerprint_hash`,
-      [target, row.expires_at, txnId, hash],
+      [target, row.expires_at, startedAt, txnId, hash],
     )
     await client.query('COMMIT')
 
@@ -189,6 +191,7 @@ export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reas
         transaction_id: txnId,
       },
       reason: 'recovery',
+      userInitiatedTransfer: false,
     })
 
     console.log('[subscription-recover]', {
@@ -224,7 +227,7 @@ export async function migrateSubscriptionFromSourceDevice(targetDeviceId, source
   try {
     await client.query('BEGIN')
     const { rows } = await client.query(
-      `SELECT device_id, expires_at, status, transaction_id, fingerprint_hash
+      `SELECT device_id, expires_at, started_at, status, transaction_id, fingerprint_hash
        FROM device_subscriptions
        WHERE device_id = $1 AND status = 'active' AND expires_at > now()
        LIMIT 1
@@ -250,16 +253,18 @@ export async function migrateSubscriptionFromSourceDevice(targetDeviceId, source
          AND expires_at > now()`,
       [source, freedSourceTxnId],
     )
+    const startedAt = row.started_at ?? new Date()
     await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2, now(), $3, now(), $4)
+       VALUES ($1, 'active', $2, $3, $4, now(), $5)
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
+         started_at = COALESCE(device_subscriptions.started_at, EXCLUDED.started_at),
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
-      [target, row.expires_at, txnId, hash],
+      [target, row.expires_at, startedAt, txnId, hash],
     )
     await client.query('COMMIT')
     notifySubscriptionTransferred({
@@ -279,6 +284,7 @@ export async function migrateSubscriptionFromSourceDevice(targetDeviceId, source
         transaction_id: txnId,
       },
       reason: 'verify_payment_phone',
+      userInitiatedTransfer: false,
     })
     return { recovered: true, recovered_from: source, recovered_to: target }
   } catch (e) {
@@ -492,8 +498,6 @@ export async function ensureSubscriptionLinkedForDevice(
 
   const resolvedFingerprint = await resolveFingerprintForDevice(d, fingerprint)
   const fpHash = hashDeviceFingerprint(resolvedFingerprint)
-  const explicitPhone = normalizePhoneDigits(phone)
-  const accountDigits = normalizePhoneDigits(accountId)
   const explicitHints = hasExplicitMigrationHints({
     phone,
     legacyDeviceId,
@@ -519,35 +523,8 @@ export async function ensureSubscriptionLinkedForDevice(
     }
   }
 
-  const phoneCandidates = new Set()
-  const explicit = normalizePhoneDigits(phone)
-  if (explicit && explicit.length >= 10) phoneCandidates.add(explicit)
-  if (accountDigits && accountDigits.length >= 10) phoneCandidates.add(accountDigits)
-  for (const p of await collectPaymentPhonesForDevice(d)) phoneCandidates.add(p)
-
-  for (const digits of phoneCandidates) {
-    const sourceId = await findActiveDeviceIdForPaymentPhone(digits, { proofDeviceId: d })
-    if (sourceId && sourceId !== d) {
-      const linked = await tryLinkFromSource(d, sourceId, fpHash, 'payment_phone')
-      if (linked.linked) return linked
-    }
-  }
-
-  if (phoneCandidates.size > 0) {
-    const uniqueCluster = await findUniqueActiveDeviceIdForPhoneCluster([...phoneCandidates], d)
-    if (uniqueCluster) {
-      const linked = await tryLinkFromSource(d, uniqueCluster, fpHash, 'phone_cluster_unique')
-      if (linked.linked) return linked
-    }
-  }
-
-  for (const digits of phoneCandidates) {
-    const intelSource = await findUniqueActiveDeviceIdByIntelligencePhone(digits, d)
-    if (intelSource) {
-      const linked = await tryLinkFromSource(d, intelSource, fpHash, 'intelligence_phone')
-      if (linked.linked) return linked
-    }
-  }
+  // Phone-only migration removed: shared payment phones in device_intelligence_registry
+  // caused false "package transferred" popups when unrelated devices registered the same number.
 
   const androidSource = await findActiveDeviceIdBySharedAndroidId(d)
   if (androidSource) {

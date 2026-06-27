@@ -7,6 +7,11 @@ import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { ensureSubscriptionLinkedForDevice } from '../lib/subscriptionRecovery.js'
 import { notifySubscriptionTransferred, toAccessCacheRow } from '../lib/subscriptionTransferNotify.js'
+import {
+  publishPhoneGateChanged,
+  readPhoneGateEnabled,
+  writePhoneGateEnabled,
+} from '../lib/phoneGateSettings.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const deviceSecurityRouter = Router()
@@ -132,7 +137,8 @@ async function ensureTransferSettingsInfrastructure(pool) {
       ('transfer_mode', 'confirmation'),
       ('transfer_daily_limit', '5'),
       ('transfer_weekly_limit', '15'),
-      ('transfer_cooldown_minutes', '60')
+      ('transfer_cooldown_minutes', '60'),
+      ('phone_gate_enabled', 'true')
     ON CONFLICT (key) DO NOTHING;
   `)
 }
@@ -213,6 +219,7 @@ async function readTransferSettingsLive(pool) {
     dailyLimit: toInt(byKey[TRANSFER_SETTING_KEYS.daily], 5, 1, 1000),
     weeklyLimit: toInt(byKey[TRANSFER_SETTING_KEYS.weekly], 15, 1, 5000),
     cooldownMinutes: toInt(byKey[TRANSFER_SETTING_KEYS.cooldown], 60, 1, 1440),
+    phoneGateEnabled: await readPhoneGateEnabled(pool),
     dbRows: rows.map((r) => ({
       key: String(r.key),
       value: String(r.value ?? ''),
@@ -385,14 +392,15 @@ export async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDe
     )
     await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2, now(), $3, now(), $4)
+       VALUES ($1, 'active', $2, $3, $4, now(), $5)
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
+         started_at = COALESCE(device_subscriptions.started_at, EXCLUDED.started_at),
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
-      [tgt, sub.expires_at, `force:${code}`, targetFpHash],
+      [tgt, sub.expires_at, sub.started_at ?? new Date(), `force:${code}`, targetFpHash],
     )
     await client.query(
       `UPDATE device_subscriptions SET status = 'pending', updated_at = now() WHERE device_id = $1`,
@@ -431,6 +439,7 @@ export async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDe
         tgt,
       ),
       reason: 'admin_force_transfer',
+      userInitiatedTransfer: true,
     })
     emitSync('transfer_completed', {
       source_device_id: src,
@@ -473,6 +482,8 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
       dailyLimit: live.dailyLimit,
       weeklyLimit: live.weeklyLimit,
       cooldownMinutes: live.cooldownMinutes,
+      phoneGateEnabled: live.phoneGateEnabled,
+      phone_gate_enabled: live.phoneGateEnabled,
       pending: pendingRows.rows
         .filter((r) =>
           ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked', 'expired'].includes(
@@ -511,17 +522,23 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     console.log('[device-control] PUT raw req.body keys', Object.keys(b))
     await client.query('BEGIN')
     const before = await readTransferSettingsLive(client)
+    const phoneGateRaw = b.phoneGateEnabled ?? b.phone_gate_enabled
+    const phoneGateTouched = phoneGateRaw !== undefined
     const payload = {
       transferMode: String(b.transferMode || 'confirmation') === 'manual' ? 'manual' : 'confirmation',
       dailyLimit: toInt(b.dailyLimit, before.dailyLimit, 1, 1000),
       weeklyLimit: toInt(b.weeklyLimit, before.weeklyLimit, 1, 5000),
       cooldownMinutes: toInt(b.cooldownMinutes, before.cooldownMinutes, 1, 1440),
+      phoneGateEnabled: phoneGateTouched
+        ? !(String(phoneGateRaw).toLowerCase() === 'false' || phoneGateRaw === false || phoneGateRaw === 0)
+        : before.phoneGateEnabled,
     }
     console.log('[device-control] PUT incoming payload', {
       beforeSnapshot: {
         dailyLimit: before.dailyLimit,
         weeklyLimit: before.weeklyLimit,
         cooldownMinutes: before.cooldownMinutes,
+        phoneGateEnabled: before.phoneGateEnabled,
       },
     })
     const upsertResults = await saveAppSettings(client, {
@@ -530,16 +547,20 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       [TRANSFER_SETTING_KEYS.weekly]: payload.weeklyLimit,
       [TRANSFER_SETTING_KEYS.cooldown]: payload.cooldownMinutes,
     })
+    if (phoneGateTouched) {
+      await writePhoneGateEnabled(client, payload.phoneGateEnabled)
+    }
     await logSecurityEvent(client, {
       actor: adminActor(req),
       eventType: 'Device control updated',
       status: 'completed',
-      detail: `transfer_mode:${payload.transferMode} daily:${payload.dailyLimit} weekly:${payload.weeklyLimit} cooldown:${payload.cooldownMinutes}`,
+      detail: `transfer_mode:${payload.transferMode} daily:${payload.dailyLimit} weekly:${payload.weeklyLimit} cooldown:${payload.cooldownMinutes} phone_gate:${payload.phoneGateEnabled}`,
       metadata: {
         transfer_mode: payload.transferMode,
         daily_limit: payload.dailyLimit,
         weekly_limit: payload.weeklyLimit,
         cooldown_minutes: payload.cooldownMinutes,
+        phone_gate_enabled: payload.phoneGateEnabled,
       },
     })
     console.log('[device-control] PUT upsert rowCount/returned', upsertResults)
@@ -559,11 +580,17 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
     )
     await client.query('COMMIT')
     emitSync('app_settings_changed', payload)
+    if (phoneGateTouched) {
+      publishPhoneGateChanged(payload.phoneGateEnabled)
+      emitSync('phone_gate_changed', { phone_gate_enabled: payload.phoneGateEnabled })
+    }
     const responseBody = {
       transferMode: live.transferMode,
       dailyLimit: live.dailyLimit,
       weeklyLimit: live.weeklyLimit,
       cooldownMinutes: live.cooldownMinutes,
+      phoneGateEnabled: live.phoneGateEnabled,
+      phone_gate_enabled: live.phoneGateEnabled,
       pending: pendingRows.rows
         .filter((r) =>
           ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked', 'expired'].includes(
@@ -596,6 +623,7 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
         dailyLimit: live.dailyLimit,
         weeklyLimit: live.weeklyLimit,
         cooldownMinutes: live.cooldownMinutes,
+        phoneGateEnabled: live.phoneGateEnabled,
       },
     })
     console.log('[device-control] PUT persisted rows', live.dbRows)
@@ -1413,15 +1441,16 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
     }
     const upsertTarget = await client.query(
       `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2, now(), $3, now(), $4)
+       VALUES ($1, 'active', $2, $3, $4, now(), $5)
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
+         started_at = COALESCE(device_subscriptions.started_at, EXCLUDED.started_at),
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)
-       RETURNING device_id, status, expires_at, transaction_id`,
-      [targetDeviceId, sub.expires_at, `transfer:${code}`, targetFpHash],
+       RETURNING device_id, status, expires_at, started_at, transaction_id`,
+      [targetDeviceId, sub.expires_at, sub.started_at ?? new Date(), `transfer:${code}`, targetFpHash],
     )
     if (!upsertTarget.rows[0]) {
       await client.query('ROLLBACK')
@@ -1509,6 +1538,7 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
       sourceRow: sourceAfter,
       targetRow: targetAfter,
       reason: 'transfer_confirm',
+      userInitiatedTransfer: true,
     })
     emitSync('transfer_completed', {
       source_device_id: sourceDeviceId,
@@ -1721,6 +1751,7 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
           transaction_id: `recovery:${recoveredFrom}`,
         },
         reason: 'recovery',
+        userInitiatedTransfer: false,
       })
     } else {
       notifySubscriptionTransferred({
@@ -1733,11 +1764,12 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
           transaction_id: `recovery:${recoveredFrom}`,
         },
         reason: 'recovery',
+        userInitiatedTransfer: false,
       })
     }
     emitSync('transfer_completed', { source_device_id: row.device_id, target_device_id: deviceId, reason: 'recovery' })
     if (recoveredFrom && recoveredFrom !== deviceId) {
-      emitSync('subscription_revoked', { device_id: recoveredFrom, reason: 'recovery' })
+      emitSync('subscription_access_sync', { device_id: recoveredFrom, reason: 'recovery' })
     }
     emitSync('security_logs_changed', { action: 'recovery', recovered_from: recoveredFrom || null, recovered_to: deviceId })
     return res.json({ ok: true, recovered_from: row.device_id })

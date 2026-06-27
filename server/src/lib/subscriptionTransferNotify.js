@@ -54,15 +54,31 @@ function publishDeviceSubscriptionUpdate(deviceId, reason) {
 /**
  * Call immediately after transfer/recovery commits source revoke + target activation.
  */
+const USER_INITIATED_TRANSFER_REASONS = new Set([
+  'transfer',
+  'transfer_confirm',
+  'admin_force_transfer',
+  'transfer_repair',
+])
+
+function isUserInitiatedTransferReason(reason, userInitiatedTransfer) {
+  if (userInitiatedTransfer === true) return true
+  if (userInitiatedTransfer === false) return false
+  const r = String(reason ?? '').trim()
+  return USER_INITIATED_TRANSFER_REASONS.has(r) || r.startsWith('transfer_')
+}
+
 export function notifySubscriptionTransferred({
   sourceDeviceId,
   targetDeviceId,
   sourceRow,
   targetRow,
   reason = 'transfer',
+  userInitiatedTransfer,
 } = {}) {
   const src = String(sourceDeviceId ?? '').trim()
   const tgt = String(targetDeviceId ?? '').trim()
+  const userTransfer = isUserInitiatedTransferReason(reason, userInitiatedTransfer)
 
   if (src && sourceRow) primeDeviceCache(src, sourceRow)
   else if (src) {
@@ -76,8 +92,13 @@ export function notifySubscriptionTransferred({
     clearVerifyAccessInflightForDevice(tgt)
   }
 
-  if (src) publishDeviceSubscriptionUpdate(src, `${reason}_revoked`)
-  if (tgt) publishDeviceSubscriptionUpdate(tgt, `${reason}_active`)
+  // Only user-initiated transfers emit *_revoked on source (avoids false "package transferred" UI).
+  if (src && userTransfer) publishDeviceSubscriptionUpdate(src, `${reason}_revoked`)
+  else if (src) publishDeviceSubscriptionUpdate(src, 'access_sync')
+
+  if (tgt) {
+    publishDeviceSubscriptionUpdate(tgt, userTransfer ? `${reason}_active` : 'access_sync_active')
+  }
 }
 
 export { toAccessCacheRow }
