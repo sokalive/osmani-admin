@@ -1,4 +1,4 @@
-import { Ban, Circle, Wrench } from 'lucide-react'
+import { Ban, Circle, Phone, Wrench } from 'lucide-react'
 
 const basePill =
   'inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-full px-5 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] transition-all duration-300 sm:text-xs sm:tracking-[0.12em]'
@@ -49,6 +49,18 @@ const variants = {
     ),
     offIcon: <Wrench className="h-4 w-4 shrink-0 text-slate-500" strokeWidth={2} aria-hidden />,
     offLabel: 'MAINTENANCE MODE',
+  },
+  phone: {
+    onGradient:
+      'bg-gradient-to-r from-[#38bdf8] to-[#0ea5e9] text-white shadow-[0_0_28px_rgba(56,189,248,0.4),0_8px_24px_rgba(14,165,233,0.35)] ring-1 ring-sky-200/50 hover:brightness-[1.03]',
+    onLabel: (
+      <>
+        <Phone className="h-4 w-4 shrink-0" strokeWidth={2.2} aria-hidden />
+        <span>PHONE GATE ON</span>
+      </>
+    ),
+    offIcon: <Phone className="h-4 w-4 shrink-0 text-slate-500" strokeWidth={2} aria-hidden />,
+    offLabel: 'PHONE GATE',
   },
 }
 

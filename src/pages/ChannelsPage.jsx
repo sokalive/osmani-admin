@@ -12,6 +12,8 @@ import {
   getChannels,
   postChannelsReorder,
   putAppGlobalSettings,
+  getDeviceControlSettings,
+  putDeviceControlSettings,
   syncStreamUrl,
   updateChannel,
   updateChannelFormData,
@@ -52,6 +54,9 @@ function ChannelsPage() {
   const [editingChannel, setEditingChannel] = useState(null)
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [modesSaving, setModesSaving] = useState(false)
+  const [phoneGateEnabled, setPhoneGateEnabled] = useState(true)
+  const [phoneGateReady, setPhoneGateReady] = useState(false)
+  const [phoneGateSaving, setPhoneGateSaving] = useState(false)
   const [dragChannelId, setDragChannelId] = useState(null)
   const [reorderBusy, setReorderBusy] = useState(false)
   const [duplicateBusyId, setDuplicateBusyId] = useState(null)
@@ -60,6 +65,7 @@ function ChannelsPage() {
   const isFreeMode = appModes.free_mode === true
   const isEmergencyMode = appModes.emergency_mode === true
   const isMaintenanceMode = appModes.maintenance_mode === true
+  const isPhoneGateEnabled = phoneGateEnabled !== false
 
   const loadChannels = useCallback(async () => {
     try {
@@ -89,6 +95,20 @@ function ChannelsPage() {
   }, [refreshAppModes])
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void getDeviceControlSettings()
+        .then((body) => {
+          setPhoneGateEnabled(body?.phoneGateEnabled !== false && body?.phone_gate_enabled !== false)
+          setPhoneGateReady(true)
+        })
+        .catch(() => {
+          setPhoneGateReady(true)
+        })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
     const es = new EventSource(syncStreamUrl(['config']))
     es.addEventListener('app_modes', (ev) => {
       try {
@@ -107,6 +127,13 @@ function ChannelsPage() {
     }
     es.addEventListener('config.settings_changed', onChanged)
     es.addEventListener('config.channels_changed', onChannelsChanged)
+    es.addEventListener('phone_gate_changed', () => {
+      void getDeviceControlSettings()
+        .then((body) => {
+          setPhoneGateEnabled(body?.phoneGateEnabled !== false && body?.phone_gate_enabled !== false)
+        })
+        .catch(() => {})
+    })
     return () => es.close()
   }, [applyAppModesPayload, loadChannels, refreshAppModes])
 
@@ -128,6 +155,18 @@ function ChannelsPage() {
       })
     } finally {
       setModesSaving(false)
+    }
+  }
+
+  async function persistPhoneGate(enabled) {
+    try {
+      setPhoneGateSaving(true)
+      const saved = await putDeviceControlSettings({ phoneGateEnabled: enabled })
+      setPhoneGateEnabled(saved?.phoneGateEnabled !== false && saved?.phone_gate_enabled !== false)
+    } catch (e) {
+      showToast('error', e?.message || 'Could not save phone gate')
+    } finally {
+      setPhoneGateSaving(false)
     }
   }
 
@@ -295,6 +334,20 @@ function ChannelsPage() {
     }
   }
 
+  const handleInstructionVideoUploaded = useCallback(
+    async (apiRow) => {
+      const ui = uiFromApiRow(apiRow)
+      setChannels((prev) =>
+        prev.map((c) => (String(c.id) === String(ui.id) ? { ...c, ...ui } : c)),
+      )
+      setEditingChannel((prev) =>
+        prev && String(prev.id) === String(ui.id) ? { ...prev, ...ui } : prev,
+      )
+      await loadChannels()
+    },
+    [loadChannels],
+  )
+
   const modalOpen = addModalOpen || editingChannel != null
 
   return (
@@ -347,7 +400,8 @@ function ChannelsPage() {
           isFreeMode={isFreeMode}
           isEmergencyMode={isEmergencyMode}
           isMaintenanceMode={isMaintenanceMode}
-          modesDisabled={!appModesReady || modesSaving}
+          isPhoneGateEnabled={isPhoneGateEnabled}
+          modesDisabled={!appModesReady || modesSaving || !phoneGateReady || phoneGateSaving}
           onFreeModeChange={(v) => {
             void persistAppModes({ freeMode: v })
           }}
@@ -356,6 +410,9 @@ function ChannelsPage() {
           }}
           onMaintenanceModeChange={(v) => {
             void persistAppModes({ maintenanceMode: v })
+          }}
+          onPhoneGateChange={(v) => {
+            void persistPhoneGate(v)
           }}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -455,6 +512,7 @@ function ChannelsPage() {
         channel={editingChannel}
         onClose={closeModal}
         onSubmit={handleModalSubmit}
+        onInstructionVideoUploaded={handleInstructionVideoUploaded}
       />
     </>
   )

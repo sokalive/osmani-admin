@@ -15,6 +15,8 @@ async function phoneGatePayload(profile) {
   return {
     phone_gate_enabled: gateEnabled,
     phoneGateEnabled: gateEnabled,
+    phone_number_gate_enabled: gateEnabled,
+    phoneNumberGateEnabled: gateEnabled,
     phone_gate_required: gateEnabled && !profile.hasPhone,
     phoneGateRequired: gateEnabled && !profile.hasPhone,
   }

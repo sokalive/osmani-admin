@@ -6,10 +6,12 @@ function ChannelsToolbar({
   isFreeMode,
   isEmergencyMode,
   isMaintenanceMode,
+  isPhoneGateEnabled = true,
   modesDisabled = false,
   onFreeModeChange,
   onEmergencyModeChange,
   onMaintenanceModeChange,
+  onPhoneGateChange,
   searchQuery,
   onSearchChange,
   onAddChannel,
@@ -38,6 +40,13 @@ function ChannelsToolbar({
             disabled={modesDisabled}
             onToggle={onMaintenanceModeChange}
             ariaLabel="Maintenance Mode"
+          />
+          <ModeControlButton
+            variant="phone"
+            active={isPhoneGateEnabled}
+            disabled={modesDisabled}
+            onToggle={onPhoneGateChange}
+            ariaLabel="Phone Number Gate"
           />
         </div>
 

@@ -1211,3 +1211,12 @@ export const postUsersIntelligenceUnblock = (id, body) =>
 export const postUsersIntelligenceBackfill = () => adminApiPost('/admin/users-intelligence/backfill', {})
 export const postUsersIntelligenceSyncBlocks = () =>
   adminApiPost('/admin/users-intelligence/sync-blocks', {})
+
+export const getCustomerInvestigation = (q) =>
+  adminApiGet(`/admin/customer-investigation?q=${encodeURIComponent(q)}`)
+export const postCustomerInvestigationReconcile = (body) =>
+  adminApiPost('/admin/customer-investigation/actions/reconcile', body)
+export const postCustomerInvestigationActivate = (body) =>
+  adminApiPost('/admin/customer-investigation/actions/activate-completed', body)
+export const postCustomerInvestigationRefreshSubscription = (body) =>
+  adminApiPost('/admin/customer-investigation/actions/refresh-subscription', body)
