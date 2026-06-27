@@ -1,0 +1,371 @@
+/**
+ * Audit subscription expires_at against replayed payment/grant stacking history.
+ * Stacking on active renewals is intentional (see subscriptionStacking.js).
+ */
+import { getPool } from '../db/pool.js'
+import { computeStackedExpiryIso } from './subscriptionStacking.js'
+import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
+
+const MS_TOLERANCE = 2 * 60 * 1000 // 2 minutes clock skew
+const REPAIR_MIN_OVER_MS = 24 * 60 * 60 * 1000 // only auto-repair >1 day over-credit
+
+function requirePool() {
+  const pool = getPool()
+  if (!pool) throw new Error('DATABASE_URL is required')
+  return pool
+}
+
+function maskId(id) {
+  const s = String(id ?? '').trim()
+  if (s.length <= 10) return `${s.slice(0, 4)}…`
+  return `${s.slice(0, 8)}…${s.slice(-4)}`
+}
+
+function toMs(v) {
+  if (v == null) return null
+  const d = v instanceof Date ? v : new Date(v)
+  const ms = d.getTime()
+  return Number.isFinite(ms) ? ms : null
+}
+
+function isTransferOrRecoveryTxn(txnId) {
+  const t = String(txnId ?? '').trim().toLowerCase()
+  return (
+    t.startsWith('transfer:') ||
+    t.startsWith('recovery:') ||
+    t.startsWith('force:') ||
+    t.startsWith('moved:') ||
+    t.startsWith('repair:')
+  )
+}
+
+/**
+ * Replay stacking from ordered credit events (payments + manual grants).
+ * @param {Array<{ atMs: number; durationDays: number; kind: string; ref: string }>} events
+ */
+export function replayStackedExpiryFromEvents(events) {
+  let current = null
+  const steps = []
+  for (const ev of events) {
+    const stack = computeStackedExpiryIso(current, ev.durationDays, ev.atMs)
+    current = stack.expiresAt
+    steps.push({
+      ref: ev.ref,
+      kind: ev.kind,
+      duration_days: ev.durationDays,
+      at: new Date(ev.atMs).toISOString(),
+      expires_after: current,
+      stacked: stack.stacked,
+    })
+  }
+  return { expectedExpiresAt: current, steps }
+}
+
+async function loadCreditEventsForDevice(pool, deviceId) {
+  const d = String(deviceId ?? '').trim()
+  const events = []
+
+  const { rows: txns } = await pool.query(
+    `SELECT t.order_id,
+            t.amount,
+            t.currency,
+            t.plan_id,
+            COALESCE(t.updated_at, t.created_at) AS credited_at,
+            p.duration_days,
+            p.name AS plan_name,
+            p.price AS plan_price
+     FROM transactions t
+     LEFT JOIN plans p ON p.id = t.plan_id
+     WHERE t.device_id = $1
+       AND t.status = 'completed'
+       AND p.duration_days IS NOT NULL
+     ORDER BY COALESCE(t.updated_at, t.created_at) ASC`,
+    [d],
+  )
+  for (const row of txns) {
+    const atMs = toMs(row.credited_at)
+    const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
+    if (!atMs || days < 1) continue
+    events.push({
+      atMs,
+      durationDays: days,
+      kind: 'payment',
+      ref: String(row.order_id),
+      plan_name: row.plan_name,
+      plan_price: row.plan_price != null ? Number(row.plan_price) : null,
+      amount: row.amount != null ? Number(row.amount) : null,
+    })
+  }
+
+  const { rows: grants } = await pool.query(
+    `SELECT id, duration_days, created_at
+     FROM manual_subscription_grants
+     WHERE device_id = $1
+       AND deleted_at IS NULL
+     ORDER BY created_at ASC`,
+    [d],
+  )
+  for (const row of grants) {
+    const atMs = toMs(row.created_at)
+    const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
+    if (!atMs || days < 1) continue
+    events.push({
+      atMs,
+      durationDays: days,
+      kind: 'manual_grant',
+      ref: `manual_grant:${row.id}`,
+    })
+  }
+
+  events.sort((a, b) => a.atMs - b.atMs)
+  return events
+}
+
+function classifyRow({ actualMs, expectedMs, events, txnId, active }) {
+  if (!active || actualMs == null) {
+    return { category: 'inactive_or_missing', repair_safe: false }
+  }
+  if (isTransferOrRecoveryTxn(txnId)) {
+    return { category: 'transfer_or_recovery', repair_safe: false }
+  }
+  if (events.length === 0) {
+    return { category: 'no_credit_history', repair_safe: false }
+  }
+  if (expectedMs == null) {
+    return { category: 'replay_failed', repair_safe: false }
+  }
+  const deltaMs = actualMs - expectedMs
+  if (Math.abs(deltaMs) <= MS_TOLERANCE) {
+    const last = events[events.length - 1]
+    return {
+      category: 'replay_match',
+      repair_safe: false,
+      last_payment_duration_days: last?.durationDays ?? null,
+      stacked: events.length > 1,
+    }
+  }
+  if (deltaMs > REPAIR_MIN_OVER_MS) {
+    return {
+      category: 'over_credited',
+      repair_safe: true,
+      over_ms: deltaMs,
+      over_days: Math.round((deltaMs / 86400000) * 10) / 10,
+    }
+  }
+  if (deltaMs > MS_TOLERANCE) {
+    return {
+      category: 'minor_over_credited',
+      repair_safe: false,
+      over_ms: deltaMs,
+    }
+  }
+  if (deltaMs < -MS_TOLERANCE) {
+    return {
+      category: 'under_credited',
+      repair_safe: false,
+      under_ms: -deltaMs,
+    }
+  }
+  return { category: 'replay_match', repair_safe: false }
+}
+
+/**
+ * @param {{ limit?: number; deviceId?: string; sinceDays?: number }} opts
+ */
+export async function runSubscriptionExpiryAudit(opts = {}) {
+  const pool = requirePool()
+  const limit = Math.min(5000, Math.max(1, Number(opts.limit) || 2000))
+  const sinceDays = Math.min(365, Math.max(1, Number(opts.sinceDays) || 90))
+  const deviceFilter = String(opts.deviceId ?? '').trim()
+
+  const { rows: plans } = await pool.query(
+    `SELECT id, name, price, duration_days, is_active
+     FROM plans
+     WHERE deleted_at IS NULL
+     ORDER BY price ASC, duration_days ASC`,
+  )
+
+  const params = [sinceDays]
+  let deviceClause = ''
+  if (deviceFilter) {
+    params.push(deviceFilter)
+    deviceClause = `AND ds.device_id = $${params.length}`
+  }
+
+  const { rows: subs } = await pool.query(
+    `SELECT ds.device_id,
+            ds.status,
+            ds.expires_at,
+            ds.started_at,
+            ds.transaction_id,
+            ds.updated_at,
+            (ds.status = 'active' AND ds.expires_at > now()) AS active_now
+     FROM device_subscriptions ds
+     WHERE ds.expires_at > now() - ($1::int * interval '1 day')
+       ${deviceClause}
+     ORDER BY ds.expires_at DESC
+     LIMIT ${limit}`,
+    params,
+  )
+
+  const categories = {
+    replay_match: [],
+    stacked_legitimate: [],
+    over_credited: [],
+    minor_over_credited: [],
+    under_credited: [],
+    transfer_or_recovery: [],
+    no_credit_history: [],
+    inactive_or_missing: [],
+    replay_failed: [],
+    ui_mismatch_only: [],
+  }
+
+  let audited = 0
+  for (const sub of subs) {
+    audited += 1
+    const deviceId = String(sub.device_id)
+    const events = await loadCreditEventsForDevice(pool, deviceId)
+    const { expectedExpiresAt, steps } = replayStackedExpiryFromEvents(events)
+    const actualMs = toMs(sub.expires_at)
+    const expectedMs = toMs(expectedExpiresAt)
+    const active = sub.active_now === true
+    const cls = classifyRow({
+      actualMs,
+      expectedMs,
+      events,
+      txnId: sub.transaction_id,
+      active,
+    })
+
+    const remainingDays =
+      active && actualMs != null
+        ? Math.max(0, Math.floor((actualMs - Date.now()) / 86400000))
+        : 0
+    const lastDuration = events.length ? events[events.length - 1].durationDays : null
+
+    const row = {
+      device_id_masked: maskId(deviceId),
+      device_id: deviceId,
+      active,
+      actual_expires_at:
+        sub.expires_at instanceof Date ? sub.expires_at.toISOString() : String(sub.expires_at),
+      expected_expires_at: expectedExpiresAt,
+      transaction_id: String(sub.transaction_id ?? ''),
+      credit_events: events.length,
+      replay_steps: steps,
+      remaining_days: remainingDays,
+      last_package_duration_days: lastDuration,
+      ui_mismatch:
+        active &&
+        lastDuration != null &&
+        remainingDays > lastDuration + 1 &&
+        cls.category === 'replay_match',
+      ...cls,
+    }
+
+    if (categories[cls.category]) {
+      categories[cls.category].push(row)
+    }
+    if (row.ui_mismatch) {
+      categories.ui_mismatch_only.push(row)
+      if (cls.category === 'replay_match') {
+        categories.stacked_legitimate.push(row)
+      }
+    }
+  }
+
+  const weeklyPlan = plans.find((p) => Number(p.price) === 3000 && Number(p.duration_days) === 7)
+
+  return {
+    audited_at: new Date().toISOString(),
+    extension_policy: 'stack_on_active',
+    extension_policy_detail:
+      'Renewals add package duration_days onto remaining active time. plan_duration_days in verify is the last package length; remaining_days is total entitlement.',
+    plans: plans.map((p) => ({
+      id: p.id,
+      name: p.name,
+      price: Number(p.price),
+      duration_days: Number(p.duration_days),
+      is_active: p.is_active === true,
+    })),
+    weekly_3000_plan: weeklyPlan
+      ? {
+          id: weeklyPlan.id,
+          name: weeklyPlan.name,
+          price: Number(weeklyPlan.price),
+          duration_days: Number(weeklyPlan.duration_days),
+        }
+      : null,
+    users_audited: audited,
+    summary: {
+      replay_match: categories.replay_match.length,
+      stacked_legitimate_ui_mismatch: categories.stacked_legitimate.length,
+      ui_mismatch_only: categories.ui_mismatch_only.length,
+      over_credited: categories.over_credited.length,
+      minor_over_credited: categories.minor_over_credited.length,
+      under_credited: categories.under_credited.length,
+      transfer_or_recovery: categories.transfer_or_recovery.length,
+      no_credit_history: categories.no_credit_history.length,
+    },
+    categories,
+    samples: {
+      over_credited: categories.over_credited.slice(0, 15),
+      under_credited: categories.under_credited.slice(0, 10),
+      ui_mismatch_only: categories.ui_mismatch_only.slice(0, 15),
+      stacked_legitimate: categories.stacked_legitimate.slice(0, 10),
+    },
+  }
+}
+
+/**
+ * Repair clear over-credits (>1 day beyond replay). Never shortens below replay.
+ * @param {{ dryRun?: boolean; maxRepairs?: number }} opts
+ */
+export async function repairSubscriptionExpiryOverCredits(opts = {}) {
+  const dryRun = opts.dryRun !== false
+  const maxRepairs = Math.min(500, Math.max(1, Number(opts.maxRepairs) || 100))
+  const audit = await runSubscriptionExpiryAudit({ limit: 3000 })
+  const candidates = audit.categories.over_credited.filter((r) => r.repair_safe === true)
+  const repaired = []
+  const flagged = []
+
+  for (const row of candidates.slice(0, maxRepairs)) {
+    if (!row.expected_expires_at || !row.device_id) continue
+  const expectedMs = toMs(row.expected_expires_at)
+  const actualMs = toMs(row.actual_expires_at)
+  if (expectedMs == null || actualMs == null || actualMs <= expectedMs + REPAIR_MIN_OVER_MS) {
+      flagged.push({ ...row, reason: 'skipped_margin' })
+      continue
+    }
+    if (!dryRun) {
+      const pool = requirePool()
+      await pool.query(
+        `UPDATE device_subscriptions
+         SET expires_at = $2::timestamptz,
+             updated_at = now()
+         WHERE device_id = $1
+           AND status = 'active'
+           AND expires_at > now()`,
+        [row.device_id, row.expected_expires_at],
+      )
+      invalidateSubscriptionAccessCache(row.device_id)
+    }
+    repaired.push({
+      device_id_masked: row.device_id_masked,
+      before_expires_at: row.actual_expires_at,
+      after_expires_at: row.expected_expires_at,
+      over_days: row.over_days,
+      dry_run: dryRun,
+    })
+  }
+
+  return {
+    dry_run: dryRun,
+    candidates: candidates.length,
+    repaired_count: repaired.length,
+    flagged_count: flagged.length,
+    repaired,
+    flagged: flagged.slice(0, 20),
+  }
+}

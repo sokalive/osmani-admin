@@ -16,7 +16,6 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { runSubscriptionRestorationAudit } from '../lib/subscriptionRestorationAudit.js'
 import { runVpsMigrationAudit } from '../lib/vpsMigrationAudit.js'
-import { devicePhonePublicRouter } from './devicePhonePublic.js'
 
 function legacyAdminTokenOk(req) {
   const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
@@ -280,6 +279,41 @@ runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdmin
   }
 })
 
+/** Package duration + expiry stacking audit (read-only). */
+runtimePublicRouter.get('/subscription-expiry-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runSubscriptionExpiryAudit } = await import('../lib/subscriptionExpiryAudit.js')
+    const limit = Number(req.query.limit ?? 2000)
+    const sinceDays = Number(req.query.since_days ?? req.query.days ?? 90)
+    const deviceId = String(req.query.device_id ?? '').trim()
+    const report = await runSubscriptionExpiryAudit({
+      limit,
+      sinceDays,
+      deviceId: deviceId || undefined,
+    })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-expiry-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Repair over-credited subscriptions (>1 day beyond payment replay). ?dry_run=0 to apply. */
+runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { repairSubscriptionExpiryOverCredits } = await import('../lib/subscriptionExpiryAudit.js')
+    const dryRun = String(req.query.dry_run ?? '1').trim() !== '0'
+    const maxRepairs = Number(req.query.max_repairs ?? 100)
+    const report = await repairSubscriptionExpiryOverCredits({ dryRun, maxRepairs })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-expiry-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Directed single-pair migration (telemetry-aware recovery; avoids install_instance ping-pong). */
 runtimePublicRouter.post('/subscription-shadow-migrate', requireLegacyAdminToken, async (req, res) => {
   try {
@@ -380,5 +414,3 @@ runtimePublicRouter.post('/provision-https', requireLegacyAdminToken, async (_re
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
-
-runtimePublicRouter.use('/device-phone', devicePhonePublicRouter)

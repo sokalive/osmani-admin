@@ -1289,10 +1289,10 @@ export async function upsertDeviceSubscriptionActive(
        VALUES ($1, 'active', $2::timestamptz, now(), $3, now(), $4)
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
-         expires_at = GREATEST(device_subscriptions.expires_at, EXCLUDED.expires_at),
+         expires_at = EXCLUDED.expires_at,
          started_at = CASE
            WHEN device_subscriptions.expires_at > now() THEN device_subscriptions.started_at
-           ELSE now()
+           ELSE EXCLUDED.started_at
          END,
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
@@ -1790,15 +1790,6 @@ const TXN_PHONE_NONEMPTY = `trim(coalesce(t.phone::text, '')) <> ''`
 export async function resolvePaymentPhoneForDevice(deviceId) {
   const d = String(deviceId ?? '').trim()
   if (!d) return { phone: '', source: null }
-
-  const { resolveSavedDevicePhone } = await import('./lib/devicePhoneStore.js')
-  const saved = await resolveSavedDevicePhone(d)
-  if (saved.normalized) {
-    return {
-      phone: formatPaymentPhoneForDisplay(saved.phone || saved.normalized),
-      source: saved.source || 'device_phone_registry',
-    }
-  }
 
   const pool = requirePool()
 

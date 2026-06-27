@@ -245,6 +245,16 @@ export function normalizeVerifyResponse(pub, txnSummary) {
     currency,
     plan_duration_days: planDurationDays,
     planDurationDays: planDurationDays,
+    subscription_extension_policy: 'stack_on_active',
+    subscriptionExtensionPolicy: 'stack_on_active',
+    entitlement_remaining_days: pub.remaining_days ?? pub.remainingDays ?? 0,
+    entitlementRemainingDays: pub.remaining_days ?? pub.remainingDays ?? 0,
+    is_stacked_entitlement:
+      planDurationDays != null &&
+      (pub.remaining_days ?? pub.remainingDays ?? 0) > planDurationDays + 0,
+    isStackedEntitlement:
+      planDurationDays != null &&
+      (pub.remaining_days ?? pub.remainingDays ?? 0) > planDurationDays + 0,
   }
 }
 
