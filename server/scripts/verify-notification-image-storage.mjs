@@ -70,9 +70,8 @@ function assertPushImageUrl(url, label) {
     fail(`${label}: not HTTPS: ${u}`)
     return false
   }
-  const okHost = u.includes('api.osmanitv.com') || u.includes('osmanitv.b-cdn.net')
-  if (!okHost) {
-    fail(`${label}: push URL must use VPS origin or Bunny CDN: ${u}`)
+  if (!u.includes('api.osmanitv.com')) {
+    fail(`${label}: push URL must use VPS origin (CDN 404s for notif files): ${u}`)
     return false
   }
   pass(`${label}: ${u.slice(0, 72)}…`)

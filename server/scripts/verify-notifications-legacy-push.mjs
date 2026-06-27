@@ -149,16 +149,11 @@ async function main() {
     fail(`prepare-image failed HTTP ${prep.res.status}`)
   } else {
     const pushUrl = prep.body.pushImageUrl
-    const usesCdn = pushUrl.includes('osmanitv.b-cdn.net')
-    const usesVps = pushUrl.includes('api.osmanitv.com')
-    if (usesCdn) pass(`pushImageUrl uses Bunny CDN: ${pushUrl.slice(0, 80)}…`)
-    else if (usesVps) pass(`pushImageUrl uses VPS origin (CDN unset): ${pushUrl.slice(0, 80)}…`)
-    else fail(`unexpected pushImageUrl host: ${pushUrl}`)
+    if (pushUrl.includes('api.osmanitv.com')) pass(`pushImageUrl uses VPS origin: ${pushUrl.slice(0, 80)}…`)
+    else fail(`pushImageUrl must use VPS origin, got: ${pushUrl}`)
 
-    const headOk =
-      (await headImage(pushUrl)) ||
-      (await headImage(pushUrl.replace('osmanitv.b-cdn.net', 'api.osmanitv.com')))
-    if (headOk) pass('push image HEAD 200 (CDN or VPS origin)')
+    const headOk = await headImage(pushUrl)
+    if (headOk) pass('push image HEAD 200 on VPS origin')
     else fail(`push image HEAD failed: ${pushUrl}`)
 
     await sendTestNotification(VPS_API, {

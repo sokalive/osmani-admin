@@ -65,9 +65,13 @@ const imgBody = buildProductionOneSignalBody({
   appId: 'app',
   title: 'T',
   message: 'M',
-  imageUrl: 'https://osmanitv.b-cdn.net/uploads/notif-test.jpg',
+  imageUrl: 'https://api.osmanitv.com/uploads/notif-test.jpg',
 })
-assert(imgBody.big_picture?.includes('b-cdn.net') && !imgBody.chrome_web_image, 'push image uses CDN fields only')
+assert(
+  imgBody.big_picture?.includes('api.osmanitv.com') &&
+    imgBody.chrome_web_image === imgBody.big_picture,
+  'push image uses VPS origin + chrome_web_image',
+)
 
 // Recurrence
 assert(!isRecurringKind('once') && isRecurringKind('daily'), 'recurring kind detection')

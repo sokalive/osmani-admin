@@ -93,13 +93,34 @@ export function resolveNotificationImagePublicUrl(storedPath) {
   if (!uploadPath || !isNotificationImageUploadPath(uploadPath)) {
     return ''
   }
-  // Bunny CDN: legacy v16–v23 APKs already load channel/banner assets from b-cdn.net.
-  // api.osmanitv.com may be unreachable in older network configs — use CDN when configured.
-  const cdnBase = getCdnBaseUrl()
-  if (cdnBase) {
-    return `${trimSlash(cdnBase)}${uploadPath}`
-  }
+  // notif-* files live on VPS disk only. Bunny pull zone still origins from Render, so b-cdn.net
+  // returns 404 for these paths — OneSignal cannot fetch the image from CDN.
   return `${getNotificationImagePublicOrigin()}${uploadPath}`
+}
+
+/**
+ * Best public URL for in-app notification history (admin + runtime API).
+ * Prefer Bunny CDN when the object is reachable there; otherwise VPS origin.
+ */
+export async function resolveNotificationImageDisplayUrl(storedPath) {
+  const originUrl = resolveNotificationImagePublicUrl(storedPath)
+  if (!originUrl) return ''
+  const cdnBase = getCdnBaseUrl()
+  if (!cdnBase) return originUrl
+  const uploadPath = extractUploadPath(storedPath) || ''
+  if (!uploadPath) return originUrl
+  const cdnUrl = `${trimSlash(cdnBase)}${uploadPath}`
+  try {
+    const res = await fetch(cdnUrl, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(5000),
+    })
+    if (res.ok) return cdnUrl
+  } catch {
+    /* CDN miss — use VPS origin */
+  }
+  return originUrl
 }
 
 function contentTypeForExt(ext) {
