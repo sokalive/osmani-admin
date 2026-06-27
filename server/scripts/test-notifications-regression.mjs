@@ -61,13 +61,13 @@ const baseBody = buildProductionOneSignalBody({
 })
 assert(baseBody.target_channel === 'push' && !baseBody.data && baseBody.included_segments[0] === 'Total Subscriptions', 'base push body')
 
-const dataBody = buildProductionOneSignalBody({
+const imgBody = buildProductionOneSignalBody({
   appId: 'app',
   title: 'T',
   message: 'M',
-  data: osData,
+  imageUrl: 'https://osmanitv.b-cdn.net/uploads/notif-test.jpg',
 })
-assert(dataBody.data?.channel_id === '42', 'push body with optional data')
+assert(imgBody.big_picture?.includes('b-cdn.net') && !imgBody.chrome_web_image, 'push image uses CDN fields only')
 
 // Recurrence
 assert(!isRecurringKind('once') && isRecurringKind('daily'), 'recurring kind detection')

@@ -93,7 +93,12 @@ export function resolveNotificationImagePublicUrl(storedPath) {
   if (!uploadPath || !isNotificationImageUploadPath(uploadPath)) {
     return ''
   }
-  // OneSignal fetches VPS origin directly — new notif files are not on Bunny edge yet.
+  // Bunny CDN: legacy v16–v23 APKs already load channel/banner assets from b-cdn.net.
+  // api.osmanitv.com may be unreachable in older network configs — use CDN when configured.
+  const cdnBase = getCdnBaseUrl()
+  if (cdnBase) {
+    return `${trimSlash(cdnBase)}${uploadPath}`
+  }
   return `${getNotificationImagePublicOrigin()}${uploadPath}`
 }
 

@@ -59,13 +59,19 @@ export function resolveOneSignalPushImageUrl(imageField) {
  * Persist data-URL uploads to /uploads and return { imageForDb, pushImageUrl }.
  */
 export async function prepareNotificationImageForPush(imageField) {
-  let imageForDb = sanitizeImage(imageField)
-  if (!imageForDb) return { imageForDb: '', pushImageUrl: '' }
-  if (imageForDb.startsWith('data:image')) {
-    imageForDb = await persistNotificationDataUrlImageIfNeeded(imageForDb)
+  try {
+    let imageForDb = sanitizeImage(imageField)
+    if (!imageForDb) return { imageForDb: '', pushImageUrl: '' }
+    if (imageForDb.startsWith('data:image')) {
+      imageForDb = await persistNotificationDataUrlImageIfNeeded(imageForDb)
+    }
+    const pushImageUrl = resolveOneSignalPushImageUrl(imageForDb)
+    return { imageForDb, pushImageUrl }
+  } catch (e) {
+    console.error('[notifications] prepareNotificationImageForPush failed (text-only send):', e)
+    const fallbackDb = sanitizeImage(imageField)
+    return { imageForDb: fallbackDb.startsWith('data:') ? '' : fallbackDb, pushImageUrl: '' }
   }
-  const pushImageUrl = resolveOneSignalPushImageUrl(imageForDb)
-  return { imageForDb, pushImageUrl }
 }
 
 /**
@@ -359,6 +365,10 @@ async function deliverAdminNotificationPush(row, pushImageUrl, logSource) {
     ...basePayload,
     onesignal_id: result.id,
     onesignal_recipients: result.recipients,
+    onesignal_push_image_url: result.pushImageUrl,
+    onesignal_image_skipped: result.imageSkipped || false,
+    onesignal_image_skip_reason: result.imageSkipReason || null,
+    onesignal_api_host: result.apiHost,
   }
 }
 
@@ -647,6 +657,10 @@ export async function createAdminNotification(body, actor = 'Admin', req = null)
       ...mergedPayload,
       onesignal_id: result.id,
       onesignal_recipients: result.recipients,
+      onesignal_push_image_url: result.pushImageUrl,
+      onesignal_image_skipped: result.imageSkipped || false,
+      onesignal_image_skip_reason: result.imageSkipReason || null,
+      onesignal_api_host: result.apiHost,
     }
     deliveryState = 'sent'
   }

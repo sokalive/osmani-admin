@@ -56,7 +56,7 @@ async function prepareImage(base) {
   return { res, body }
 }
 
-function assertVpsUrl(url, label) {
+function assertPushImageUrl(url, label) {
   const u = String(url || '')
   if (!u) {
     fail(`${label}: empty URL`)
@@ -70,8 +70,9 @@ function assertVpsUrl(url, label) {
     fail(`${label}: not HTTPS: ${u}`)
     return false
   }
-  if (!u.includes('api.osmanitv.com')) {
-    fail(`${label}: notification push URL must use VPS origin: ${u}`)
+  const okHost = u.includes('api.osmanitv.com') || u.includes('osmanitv.b-cdn.net')
+  if (!okHost) {
+    fail(`${label}: push URL must use VPS origin or Bunny CDN: ${u}`)
     return false
   }
   pass(`${label}: ${u.slice(0, 72)}…`)
@@ -104,7 +105,7 @@ async function probeHost(label, base) {
     return false
   }
   pass(`${label} prepare-image storage=${body.storage || 'n/a'} bytes=${body.compressedBytes}`)
-  assertVpsUrl(body.pushImageUrl, `${label} pushImageUrl`)
+  assertPushImageUrl(body.pushImageUrl, `${label} pushImageUrl`)
   if (body.pushImageUrl) {
     const originUrl = body.pushImageUrl.replace('osmanitv.b-cdn.net', 'api.osmanitv.com')
     const ok = (await headOk(body.pushImageUrl)) || (await headOk(originUrl))

@@ -6,9 +6,12 @@
  * Body: target_channel push + included_segments ["Total Subscriptions"].
  */
 
+import { isRenderRuntime } from './startupReadiness.js'
+
 const ONESIGNAL_API_URL = 'https://api.onesignal.com/notifications'
 const PRODUCTION_SEGMENT = 'Total Subscriptions'
 const ONESIGNAL_LOG_MAX = 24_000
+const IMAGE_HEAD_TIMEOUT_MS = Math.max(2000, Number(process.env.ONESIGNAL_IMAGE_HEAD_TIMEOUT_MS) || 8000)
 
 export function getOneSignalConfig() {
   const appId = String(process.env.ONESIGNAL_APP_ID ?? '').trim()
@@ -25,9 +28,16 @@ export function isOneSignalConfigured() {
   return Boolean(appId && restKey)
 }
 
+export function getOneSignalApiHostLabel() {
+  if (isRenderRuntime()) return 'render'
+  const base = String(process.env.BASE_URL || process.env.NOTIFICATION_IMAGE_PUBLIC_ORIGIN || '').toLowerCase()
+  if (base.includes('osmanitv.com') || base.includes('144.91.117.90')) return 'vps'
+  return 'unknown'
+}
+
 function logOneSignalProduction(phase, payload) {
   try {
-    let line = JSON.stringify({ oneSignalProduction: true, phase, ...payload })
+    let line = JSON.stringify({ oneSignalProduction: true, phase, api_host: getOneSignalApiHostLabel(), ...payload })
     if (line.length > ONESIGNAL_LOG_MAX) line = `${line.slice(0, ONESIGNAL_LOG_MAX)}…[truncated]`
     console.log(line)
   } catch (e) {
@@ -41,6 +51,38 @@ function formatOneSignalFailure(httpStatus, raw) {
   else if (raw?.errors && typeof raw.errors === 'object') errMsg = JSON.stringify(raw.errors)
   errMsg = errMsg || String(httpStatus)
   return errMsg
+}
+
+function isImageRelatedError(msg) {
+  const m = String(msg || '').toLowerCase()
+  return (
+    m.includes('big_picture') ||
+    m.includes('attachment') ||
+    m.includes('image') ||
+    m.includes('picture') ||
+    m.includes('invalid url')
+  )
+}
+
+/** HEAD-check that push image URL is fetchable (OneSignal + legacy devices). */
+export async function validatePushImageUrl(imageUrl) {
+  const url = String(imageUrl ?? '').trim()
+  if (!url.startsWith('https://')) return { ok: false, reason: 'not_https' }
+  try {
+    const res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(IMAGE_HEAD_TIMEOUT_MS),
+    })
+    if (!res.ok) return { ok: false, reason: `http_${res.status}` }
+    const ct = String(res.headers.get('content-type') || '').toLowerCase()
+    if (ct && !ct.includes('image') && !ct.includes('octet-stream')) {
+      return { ok: false, reason: `content_type_${ct}` }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: String(e?.message || e).slice(0, 120) }
+  }
 }
 
 /**
@@ -58,7 +100,7 @@ export function buildProductionOneSignalBody({ appId, title, message, imageUrl, 
   const img = String(imageUrl ?? '').trim()
   if (img.startsWith('https://')) {
     body.big_picture = img
-    body.chrome_web_image = img
+    body.android_big_picture = img
     body.ios_attachments = { id1: img }
   }
   if (data && typeof data === 'object' && !Array.isArray(data)) {
@@ -70,6 +112,45 @@ export function buildProductionOneSignalBody({ appId, title, message, imageUrl, 
     if (Object.keys(flat).length > 0) body.data = flat
   }
   return body
+}
+
+async function postOneSignalNotification(requestPayload, restKey, logMeta = {}) {
+  logOneSignalProduction('before_post', {
+    source: logMeta.source ?? 'notifications.sendOneSignalNotification',
+    method: 'POST',
+    url: ONESIGNAL_API_URL,
+    requestHeaders: { 'Content-Type': 'application/json; charset=utf-8', Authorization: 'Key [REDACTED]' },
+    requestPayload,
+    push_image_included: Boolean(requestPayload.big_picture),
+  })
+
+  const res = await fetch(ONESIGNAL_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Key ${restKey}`,
+    },
+    body: JSON.stringify(requestPayload),
+  })
+
+  const raw = await res.json().catch(() => ({}))
+  const recipients = Number(raw?.recipients ?? raw.successful ?? 0) || 0
+  const failed = Number(raw?.failed ?? 0) || 0
+  const errored = Number(raw?.errored ?? 0) || 0
+
+  logOneSignalProduction('after_post', {
+    source: logMeta.source ?? 'notifications.sendOneSignalNotification',
+    httpStatus: res.status,
+    ok: res.ok,
+    requestPayload,
+    recipients,
+    failed,
+    errored,
+    rejected_player_ids: Array.isArray(raw?.errors) ? raw.errors.slice(0, 20) : raw?.errors ?? null,
+    rawOneSignalResponse: raw,
+  })
+
+  return { res, raw, recipients, failed, errored }
 }
 
 /**
@@ -92,47 +173,47 @@ export async function sendOneSignalNotification(opts, logMeta = {}) {
   if (!title) throw new Error('OneSignal: title is required')
   if (!message) throw new Error('OneSignal: message is required')
 
+  let imageUrl = String(opts.imageUrl ?? '').trim()
+  let imageSkipped = false
+  let imageSkipReason = null
+
+  if (imageUrl) {
+    const check = await validatePushImageUrl(imageUrl)
+    if (!check.ok) {
+      imageSkipped = true
+      imageSkipReason = check.reason
+      imageUrl = ''
+      logOneSignalProduction('image_skipped', {
+        source: logMeta.source,
+        reason: check.reason,
+        attempted_url: String(opts.imageUrl).slice(0, 240),
+      })
+    }
+  }
+
   const requestPayload = buildProductionOneSignalBody({
     appId,
     title,
     message,
-    imageUrl: opts.imageUrl,
+    imageUrl: imageUrl || undefined,
     data: opts.data,
   })
-  const requestHeaders = {
-    'Content-Type': 'application/json; charset=utf-8',
-    Authorization: 'Key [REDACTED]',
+
+  let { res, raw, recipients } = await postOneSignalNotification(requestPayload, restKey, logMeta)
+
+  if (!res.ok && imageUrl && isImageRelatedError(formatOneSignalFailure(res.status, raw))) {
+    logOneSignalProduction('image_fallback_retry', {
+      source: logMeta.source,
+      reason: formatOneSignalFailure(res.status, raw),
+    })
+    const textOnlyPayload = buildProductionOneSignalBody({ appId, title, message, data: opts.data })
+    ;({ res, raw, recipients } = await postOneSignalNotification(textOnlyPayload, restKey, {
+      ...logMeta,
+      source: `${logMeta.source || 'send'}:text_fallback`,
+    }))
+    imageSkipped = true
+    imageSkipReason = imageSkipReason || 'api_image_rejected'
   }
-
-  logOneSignalProduction('before_post', {
-    source: logMeta.source ?? 'notifications.sendOneSignalNotification',
-    method: 'POST',
-    url: ONESIGNAL_API_URL,
-    requestHeaders,
-    requestPayload,
-  })
-
-  const res = await fetch(ONESIGNAL_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Key ${restKey}`,
-    },
-    body: JSON.stringify(requestPayload),
-  })
-
-  const raw = await res.json().catch(() => ({}))
-
-  logOneSignalProduction('after_post', {
-    source: logMeta.source ?? 'notifications.sendOneSignalNotification',
-    httpStatus: res.status,
-    ok: res.ok,
-    requestPayload,
-    recipients: Number(raw?.recipients ?? raw.successful ?? 0) || 0,
-    failed: Number(raw?.failed ?? 0) || 0,
-    errored: Number(raw?.errored ?? 0) || 0,
-    rawOneSignalResponse: raw,
-  })
 
   if (!res.ok) {
     throw new Error(`OneSignal API error (${res.status}): ${formatOneSignalFailure(res.status, raw)}`)
@@ -162,6 +243,13 @@ export async function sendOneSignalNotification(opts, logMeta = {}) {
     )
   }
 
-  const recipients = Number(raw.recipients ?? raw.successful ?? 0) || 0
-  return { id, recipients, raw }
+  return {
+    id,
+    recipients,
+    raw,
+    imageSkipped,
+    imageSkipReason,
+    pushImageUrl: imageUrl || null,
+    apiHost: getOneSignalApiHostLabel(),
+  }
 }
