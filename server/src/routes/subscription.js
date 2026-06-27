@@ -633,9 +633,25 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     setCachedSubscriptionAccess(d, fp, row)
   } else {
     timing.skip_poll_reason = pollDecision.reason
-    void billing.tryFinalizeActivationForDevice(d).catch((e) => {
-      console.error('[subscription-verify] background finalize failed:', e)
-    })
+    if (!isAccessRowActive(row)) {
+      try {
+        const fin = await billing.tryFinalizeActivationForDevice(d)
+        if (fin.ran === true && fin.activated === true) {
+          invalidateSubscriptionAccessCache(d)
+          row =
+            (await billing.getDeviceSubscriptionAccessStateFast(d)) ??
+            (await billing.getDeviceSubscriptionAccessState(d, fp))
+          setCachedSubscriptionAccess(d, fp, row)
+          timing.sync_finalize_activation = true
+        } else {
+          timing.sync_finalize_activation = false
+          timing.sync_finalize_reason = fin?.reason ?? null
+        }
+      } catch (e) {
+        console.error('[subscription-verify] sync finalize failed:', e)
+        timing.sync_finalize_error = String(e?.message || e)
+      }
+    }
   }
 
   const inactiveNow = !isAccessRowActive(row)
