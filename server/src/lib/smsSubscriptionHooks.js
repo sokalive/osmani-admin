@@ -1,33 +1,64 @@
-import { resolvePaymentPhoneForDevice } from '../billingStore.js'
-import { sendTemplatedSms } from './smsService.js'
+import {
+  getPlanRowByIdAny,
+  getTransactionByOrderId,
+  resolvePaymentPhoneForDevice,
+} from '../billingStore.js'
+import {
+  buildPaymentSuccessSms,
+  subscriptionPeriodKey,
+} from './smsTransactionalMessages.js'
+import { resolveSmsPhoneForDevice, sendTransactionalSms } from './smsService.js'
 
-const LOG_PREFIX = '[sms-activation]'
+const LOG_PREFIX = '[sms-payment-success]'
+
+function isManualGrantOrder(orderId) {
+  return String(orderId ?? '').trim().startsWith('manual_grant:')
+}
 
 /**
- * Fire-and-forget SMS after subscription activation. Never throws to caller.
+ * Fire-and-forget SMS after paid subscription activation. Never throws to caller.
  */
 export async function notifySubscriptionActivated({ deviceId, orderId, expiresAt }) {
   const d = String(deviceId ?? '').trim()
   const oid = String(orderId ?? '').trim()
   if (!d) return { skipped: true, reason: 'no_device' }
+  if (!oid || isManualGrantOrder(oid)) {
+    return { skipped: true, reason: 'not_payment_activation' }
+  }
 
   try {
-    const { phone } = await resolvePaymentPhoneForDevice(d)
-    if (!phone) {
-      console.log(LOG_PREFIX, 'no phone for device', d.slice(0, 20))
-      return { skipped: true, reason: 'no_phone' }
+    const txn = await getTransactionByOrderId(oid)
+    if (!txn || String(txn.status ?? '').trim() !== 'completed') {
+      return { skipped: true, reason: 'not_completed_payment' }
     }
-    const expIso =
-      expiresAt instanceof Date ? expiresAt.toISOString() : String(expiresAt ?? '')
-    const idempotencyKey = `activated:${oid || d}:${expIso.slice(0, 10)}`
 
-    return await sendTemplatedSms({
-      phone,
-      templateKey: 'subscription_activated',
+    const plan = txn.plan_id ? await getPlanRowByIdAny(txn.plan_id) : null
+    const { phone: fallbackPhone } = await resolvePaymentPhoneForDevice(d)
+    const resolved = await resolveSmsPhoneForDevice(d, fallbackPhone)
+    const message = buildPaymentSuccessSms({
+      planName: plan?.name ?? txn.plan_name,
+      price: txn.amount ?? plan?.price,
+      currency: txn.currency || 'TZS',
+      expiresAt,
+    })
+
+    const idempotencyKey = `payment_success:${oid}`
+    const subscriptionId = subscriptionPeriodKey({
       deviceId: d,
-      triggerType: 'subscription_activated',
+      transactionId: oid,
+      expiresAt,
+    })
+
+    return await sendTransactionalSms({
+      phone: resolved.normalized || resolved.phone || fallbackPhone,
+      message,
+      deviceId: d,
+      smsType: 'payment_success',
+      subscriptionId,
+      paymentId: oid,
+      triggerType: 'payment_success',
       idempotencyKey,
-      context: { deviceId: d, expiresAt: expIso },
+      templateKey: 'payment_success',
     })
   } catch (e) {
     console.warn(LOG_PREFIX, 'failed', d, e)

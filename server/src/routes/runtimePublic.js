@@ -16,6 +16,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { runSubscriptionRestorationAudit } from '../lib/subscriptionRestorationAudit.js'
 import { runVpsMigrationAudit } from '../lib/vpsMigrationAudit.js'
+import { devicePhonePublicRouter } from './devicePhonePublic.js'
 
 function legacyAdminTokenOk(req) {
   const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
@@ -379,3 +380,5 @@ runtimePublicRouter.post('/provision-https', requireLegacyAdminToken, async (_re
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
+
+runtimePublicRouter.use('/device-phone', devicePhonePublicRouter)

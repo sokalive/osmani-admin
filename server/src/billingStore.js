@@ -1791,6 +1791,15 @@ export async function resolvePaymentPhoneForDevice(deviceId) {
   const d = String(deviceId ?? '').trim()
   if (!d) return { phone: '', source: null }
 
+  const { resolveSavedDevicePhone } = await import('./lib/devicePhoneStore.js')
+  const saved = await resolveSavedDevicePhone(d)
+  if (saved.normalized) {
+    return {
+      phone: formatPaymentPhoneForDisplay(saved.phone || saved.normalized),
+      source: saved.source || 'device_phone_registry',
+    }
+  }
+
   const pool = requirePool()
 
   const { rows: activeRows } = await pool.query(

@@ -909,6 +909,32 @@ export async function ensureBillingTables(client) {
     ON sms_send_log (idempotency_key)
     WHERE idempotency_key <> '';
   `)
+  await client.query(`
+    ALTER TABLE sms_send_log ADD COLUMN IF NOT EXISTS sms_type TEXT NOT NULL DEFAULT '';
+  `)
+  await client.query(`
+    ALTER TABLE sms_send_log ADD COLUMN IF NOT EXISTS subscription_id TEXT NOT NULL DEFAULT '';
+  `)
+  await client.query(`
+    ALTER TABLE sms_send_log ADD COLUMN IF NOT EXISTS payment_id TEXT NOT NULL DEFAULT '';
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS device_phone_registry (
+      device_id TEXT NOT NULL,
+      install_instance_id TEXT NOT NULL DEFAULT '',
+      phone_number_raw TEXT NOT NULL DEFAULT '',
+      phone_number_normalized TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (device_id, install_instance_id)
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS device_phone_registry_normalized_idx
+    ON device_phone_registry (phone_number_normalized)
+    WHERE phone_number_normalized <> '';
+  `)
 
   const { ensureDeviceIntelligenceTables } = await import('./deviceIntelligenceTables.js')
   await ensureDeviceIntelligenceTables(client)

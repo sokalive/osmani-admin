@@ -20,6 +20,9 @@ function logRowToApi(r) {
     status: String(row.status ?? ''),
     providerResponse: row.provider_response ?? null,
     providerMessageId: String(row.provider_message_id ?? ''),
+    smsType: String(row.sms_type ?? ''),
+    subscriptionId: String(row.subscription_id ?? ''),
+    paymentId: String(row.payment_id ?? ''),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
   }
 }
@@ -115,7 +118,13 @@ smsAdminRouter.post('/send', async (req, res) => {
 
     if (phone || deviceId) {
       const { resolvePaymentPhoneForDevice } = await import('../billingStore.js')
-      const targetPhone = phone || (deviceId ? (await resolvePaymentPhoneForDevice(deviceId)).phone : '')
+      const { resolveSmsPhoneForDevice } = await import('../lib/smsService.js')
+      let targetPhone = phone
+      if (!targetPhone && deviceId) {
+        const { phone: fallback } = await resolvePaymentPhoneForDevice(deviceId)
+        const resolved = await resolveSmsPhoneForDevice(deviceId, fallback)
+        targetPhone = resolved.normalized || resolved.phone || fallback
+      }
       const result = await sendSmsToPhone({
         phone: targetPhone,
         message,

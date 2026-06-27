@@ -1,4 +1,5 @@
-import { normalizePhoneDigits } from '../billingStore.js'
+import { normalizePhoneInternational } from './phoneNormalize.js'
+import { resolveSavedDevicePhone } from './devicePhoneStore.js'
 import { getPool } from '../db/pool.js'
 import { beemCredentialsReady, resolveBeemCredentials, sendBeemSms, sendBeemSmsBatch } from './beemSms.js'
 import * as smsStore from './smsStore.js'
@@ -21,12 +22,94 @@ export function renderSmsTemplate(body, context = {}) {
 }
 
 function phoneDigitsForBeem(phone) {
-  return normalizePhoneDigits(phone)
+  const parsed = normalizePhoneInternational(phone)
+  return parsed.valid ? parsed.normalized : ''
 }
 
 async function loadBeemCred() {
   const row = await smsStore.getBeemRow()
   return resolveBeemCredentials(row || {})
+}
+
+async function logPhoneMissing({
+  deviceId,
+  smsType,
+  subscriptionId,
+  paymentId,
+  idempotencyKey,
+  triggerType,
+  message = '',
+}) {
+  const idem = String(idempotencyKey ?? '').trim()
+  if (idem) {
+    const ins = await smsStore.insertSmsLog({
+      recipient: '',
+      deviceId,
+      message: message || `[${smsType}] phone missing`,
+      templateKey: smsType,
+      triggerType: triggerType || smsType,
+      status: 'phone_missing',
+      providerResponse: { reason: 'phone_missing' },
+      idempotencyKey: idem,
+      smsType,
+      subscriptionId,
+      paymentId,
+    })
+    if (ins.duplicate) return { ok: false, skipped: true, reason: 'duplicate', logId: ins.row?.id }
+    return { ok: false, skipped: true, reason: 'phone_missing', logId: ins.row?.id }
+  }
+  console.log('[sms]', 'phone_missing', { deviceId: String(deviceId ?? '').slice(0, 24), smsType })
+  return { ok: false, skipped: true, reason: 'phone_missing' }
+}
+
+/**
+ * Resolve phone for transactional SMS: saved registry → caller fallback.
+ */
+export async function resolveSmsPhoneForDevice(deviceId, fallbackPhone = '') {
+  const saved = await resolveSavedDevicePhone(deviceId)
+  if (saved.normalized) return saved
+  const digits = phoneDigitsForBeem(fallbackPhone)
+  if (digits) return { phone: fallbackPhone, normalized: digits, source: 'fallback' }
+  return { phone: '', normalized: '', source: null }
+}
+
+/**
+ * Transactional lifecycle SMS with structured logging + idempotency.
+ */
+export async function sendTransactionalSms({
+  phone,
+  message,
+  deviceId = '',
+  smsType = '',
+  subscriptionId = '',
+  paymentId = '',
+  triggerType = '',
+  idempotencyKey = '',
+  templateKey = '',
+}) {
+  const digits = phoneDigitsForBeem(phone)
+  if (!digits) {
+    return logPhoneMissing({
+      deviceId,
+      smsType,
+      subscriptionId,
+      paymentId,
+      idempotencyKey,
+      triggerType: triggerType || smsType,
+      message,
+    })
+  }
+  return sendSmsToPhone({
+    phone: digits,
+    message,
+    deviceId,
+    templateKey: templateKey || smsType,
+    triggerType: triggerType || smsType,
+    idempotencyKey,
+    smsType,
+    subscriptionId,
+    paymentId,
+  })
 }
 
 /**
@@ -39,6 +122,9 @@ export async function sendSmsToPhone({
   templateKey = '',
   triggerType = 'manual',
   idempotencyKey = '',
+  smsType = '',
+  subscriptionId = '',
+  paymentId = '',
 }) {
   const digits = phoneDigitsForBeem(phone)
   if (!digits) {
@@ -65,6 +151,9 @@ export async function sendSmsToPhone({
       triggerType,
       status: 'pending',
       idempotencyKey: idem,
+      smsType,
+      subscriptionId,
+      paymentId,
     })
     if (ins.duplicate) {
       return { ok: true, skipped: true, reason: 'duplicate', logId: ins.row?.id }
@@ -105,6 +194,9 @@ export async function sendSmsToPhone({
       status,
       providerResponse: result.body ?? { error: result.error },
       providerMessageId,
+      smsType,
+      subscriptionId,
+      paymentId,
     })
     logRow = ins.row
   }
@@ -126,6 +218,9 @@ export async function sendTemplatedSms({
   deviceId = '',
   triggerType = '',
   idempotencyKey = '',
+  smsType = '',
+  subscriptionId = '',
+  paymentId = '',
 }) {
   const tpl = await smsStore.getSmsTemplate(templateKey)
   if (!tpl || tpl.enabled === false) {
@@ -139,12 +234,12 @@ export async function sendTemplatedSms({
     templateKey,
     triggerType: triggerType || templateKey,
     idempotencyKey,
+    smsType: smsType || templateKey,
+    subscriptionId,
+    paymentId,
   })
 }
 
-/**
- * Send same message to multiple phones (batched via Beem multi-recipient API).
- */
 export async function sendSmsToMany({
   recipients,
   message,
@@ -195,6 +290,7 @@ export async function sendSmsToMany({
         triggerType,
         status,
         providerResponse: result.body ?? { error: result.error },
+        smsType: triggerType,
       })
     }
     if (result.ok) sent += chunk.length
@@ -213,7 +309,7 @@ export async function sendSmsToMany({
   }
 }
 
-/** Recipients for admin broadcast — uses device_subscriptions + transactions.phone */
+/** Recipients for admin broadcast — saved device phone, then subscription txn phone. */
 export async function listSmsRecipients(audience) {
   const pool = getPool()
   const aud = String(audience ?? 'all').toLowerCase()
@@ -230,14 +326,25 @@ export async function listSmsRecipients(audience) {
        ds.device_id,
        ds.expires_at,
        ds.status,
-       COALESCE(NULLIF(trim(t.phone::text), ''), '') AS phone
+       COALESCE(
+         NULLIF(trim(dpr.phone_number_normalized::text), ''),
+         NULLIF(trim(t.phone::text), ''),
+         ''
+       ) AS phone
      FROM device_subscriptions ds
+     LEFT JOIN LATERAL (
+       SELECT phone_number_normalized, updated_at
+       FROM device_phone_registry
+       WHERE device_id = ds.device_id AND phone_number_normalized <> ''
+       ORDER BY updated_at DESC
+       LIMIT 1
+     ) dpr ON true
      LEFT JOIN LATERAL (
        SELECT phone FROM transactions
        WHERE device_id = ds.device_id AND trim(coalesce(phone::text, '')) <> ''
        ORDER BY created_at DESC LIMIT 1
      ) t ON true
-     WHERE trim(coalesce(t.phone::text, '')) <> ''
+     WHERE COALESCE(NULLIF(trim(dpr.phone_number_normalized::text), ''), NULLIF(trim(t.phone::text), '')) <> ''
      ${statusFilter}
      ORDER BY ds.device_id, ds.updated_at DESC`,
   )

@@ -79,6 +79,9 @@ export async function insertSmsLog({
   providerResponse,
   providerMessageId,
   idempotencyKey,
+  smsType = '',
+  subscriptionId = '',
+  paymentId = '',
 }) {
   const pool = getPool()
   const idem = String(idempotencyKey ?? '').trim()
@@ -92,8 +95,9 @@ export async function insertSmsLog({
   const { rows } = await pool.query(
     `INSERT INTO sms_send_log (
        recipient, device_id, message, template_key, trigger_type, status,
-       provider_response, provider_message_id, idempotency_key
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+       provider_response, provider_message_id, idempotency_key,
+       sms_type, subscription_id, payment_id
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12)
      RETURNING *`,
     [
       String(recipient ?? ''),
@@ -105,6 +109,9 @@ export async function insertSmsLog({
       providerResponse != null ? JSON.stringify(providerResponse) : null,
       String(providerMessageId ?? ''),
       idem,
+      String(smsType ?? ''),
+      String(subscriptionId ?? ''),
+      String(paymentId ?? ''),
     ],
   )
   return { row: rows[0], duplicate: false }
@@ -116,7 +123,7 @@ export async function listSmsLog({ limit = 100, offset = 0 } = {}) {
   const off = Math.max(0, Number(offset) || 0)
   const { rows } = await pool.query(
     `SELECT id, recipient, device_id, message, template_key, trigger_type, status,
-            provider_response, provider_message_id, created_at
+            provider_response, provider_message_id, sms_type, subscription_id, payment_id, created_at
      FROM sms_send_log
      ORDER BY created_at DESC
      LIMIT $1 OFFSET $2`,
