@@ -117,18 +117,36 @@ export async function insertSmsLog({
   return { row: rows[0], duplicate: false }
 }
 
-export async function listSmsLog({ limit = 100, offset = 0 } = {}) {
+import { buildSmsLogListQuery, SMS_LOG_SELECT_COLUMNS } from './smsLogQuery.js'
+
+export async function getSmsLogById(id) {
   const pool = getPool()
-  const lim = Math.min(500, Math.max(1, Number(limit) || 100))
-  const off = Math.max(0, Number(offset) || 0)
+  const logId = Number(id)
+  if (!Number.isFinite(logId) || logId <= 0) return null
   const { rows } = await pool.query(
-    `SELECT id, recipient, device_id, message, template_key, trigger_type, status,
-            provider_response, provider_message_id, sms_type, subscription_id, payment_id, created_at
-     FROM sms_send_log
-     ORDER BY created_at DESC
-     LIMIT $1 OFFSET $2`,
-    [lim, off],
+    `SELECT ${SMS_LOG_SELECT_COLUMNS} FROM sms_send_log WHERE id = $1 LIMIT 1`,
+    [logId],
   )
-  const { rows: countRows } = await pool.query(`SELECT COUNT(*)::int AS total FROM sms_send_log`)
-  return { rows, total: countRows[0]?.total ?? 0 }
+  return rows[0] ?? null
+}
+
+export async function listSmsLog(opts = {}) {
+  const pool = getPool()
+  const { whereSql, params, limit, offset } = buildSmsLogListQuery(opts)
+  const listParams = [...params, limit, offset]
+  const limitIdx = params.length + 1
+  const offsetIdx = params.length + 2
+  const { rows } = await pool.query(
+    `SELECT ${SMS_LOG_SELECT_COLUMNS}
+     FROM sms_send_log
+     WHERE ${whereSql}
+     ORDER BY created_at DESC
+     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    listParams,
+  )
+  const { rows: countRows } = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM sms_send_log WHERE ${whereSql}`,
+    params,
+  )
+  return { rows, total: countRows[0]?.total ?? 0, limit, offset }
 }

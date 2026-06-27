@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, Loader2, MessageSquare, Send, Wifi, XCircle } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
+import SmsHistorySection from '../components/SmsHistorySection'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   getBeemSettings,
-  getSmsLog,
   getSmsRecipientCounts,
   getSmsTemplates,
   postBeemTest,
@@ -44,10 +44,6 @@ function SmsCenterPage() {
   const [singlePhone, setSinglePhone] = useState('')
   const [singleDeviceId, setSingleDeviceId] = useState('')
   const [sending, setSending] = useState(false)
-
-  const [logs, setLogs] = useState([])
-  const [logTotal, setLogTotal] = useState(0)
-  const [logsLoading, setLogsLoading] = useState(false)
 
   function showFlash(type, message) {
     setFlash({ type, message })
@@ -94,25 +90,11 @@ function SmsCenterPage() {
     }
   }, [])
 
-  const loadLogs = useCallback(async () => {
-    setLogsLoading(true)
-    try {
-      const r = await getSmsLog({ limit: 100 })
-      setLogs(Array.isArray(r?.rows) ? r.rows : [])
-      setLogTotal(Number(r?.total) || 0)
-    } catch (e) {
-      showToast('error', e?.message || 'Could not load SMS log')
-    } finally {
-      setLogsLoading(false)
-    }
-  }, [showToast])
-
   useEffect(() => {
     void loadBeem()
     void loadTemplates()
     void loadCounts()
-    void loadLogs()
-  }, [loadBeem, loadTemplates, loadCounts, loadLogs])
+  }, [loadBeem, loadTemplates, loadCounts])
 
   useEffect(() => {
     const es = new EventSource(syncStreamUrl(['config']))
@@ -199,7 +181,6 @@ function SmsCenterPage() {
       } else {
         showFlash('success', `SMS sent (${r?.sent ?? 1} recipient(s)).`)
         setCustomMessage('')
-        void loadLogs()
       }
     } catch (err) {
       showToast('error', err?.message || 'Send failed')
@@ -481,64 +462,7 @@ function SmsCenterPage() {
           </form>
         ) : null}
 
-        {tab === 'history' ? (
-          <div className="overflow-x-auto rounded-2xl border border-slate-700/60 bg-slate-950/40">
-            <div className="flex items-center justify-between border-b border-slate-700/60 px-4 py-3">
-              <p className="text-sm text-slate-400">{logTotal} log entries</p>
-              <button
-                type="button"
-                onClick={() => void loadLogs()}
-                disabled={logsLoading}
-                className="text-xs text-amber-400 hover:text-amber-300"
-              >
-                Refresh
-              </button>
-            </div>
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-slate-900/80 text-xs uppercase text-slate-500">
-                <tr>
-                  <th className="px-4 py-3">Time</th>
-                  <th className="px-4 py-3">Recipient</th>
-                  <th className="px-4 py-3">Trigger</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Message</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/80">
-                {logs.map((row) => (
-                  <tr key={row.id} className="text-slate-300">
-                    <td className="whitespace-nowrap px-4 py-3 text-xs">
-                      {row.createdAt ? formatAdminDateTime(row.createdAt) : '—'}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs">{row.recipient || '—'}</td>
-                    <td className="px-4 py-3 text-xs">{row.triggerType || row.templateKey || '—'}</td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={
-                          row.status === 'sent'
-                            ? 'text-emerald-400'
-                            : row.status === 'failed'
-                              ? 'text-red-400'
-                              : 'text-slate-400'
-                        }
-                      >
-                        {row.status}
-                      </span>
-                    </td>
-                    <td className="max-w-md truncate px-4 py-3 text-xs text-slate-400">{row.message}</td>
-                  </tr>
-                ))}
-                {logs.length === 0 && !logsLoading ? (
-                  <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
-                      No SMS sent yet
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+        {tab === 'history' ? <SmsHistorySection /> : null}
       </main>
     </>
   )

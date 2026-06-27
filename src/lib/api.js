@@ -1060,9 +1060,17 @@ export const getSmsLog = (params = {}) => {
   const q = new URLSearchParams()
   if (params.limit != null) q.set('limit', String(params.limit))
   if (params.offset != null) q.set('offset', String(params.offset))
+  if (params.search) q.set('search', String(params.search))
+  if (params.status) q.set('status', String(params.status))
+  if (params.trigger) q.set('trigger', String(params.trigger))
+  if (params.recipient) q.set('recipient', String(params.recipient))
+  if (params.date_from) q.set('date_from', String(params.date_from))
+  if (params.date_to) q.set('date_to', String(params.date_to))
   const qs = q.toString()
   return adminApiGet(`/admin/sms/log${qs ? `?${qs}` : ''}`)
 }
+export const getSmsLogById = (id) => adminApiGet(`/admin/sms/log/${encodeURIComponent(id)}`)
+export const postSmsLogResend = (id) => adminApiPost(`/admin/sms/log/${encodeURIComponent(id)}/resend`, {})
 export const getSmsRecipientCounts = () => adminApiGet('/admin/sms/recipients/counts')
 export const postSmsSend = (body) => adminApiPost('/admin/sms/send', body)
 

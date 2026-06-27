@@ -38,6 +38,8 @@ assert('device phone routes', read('routes/devicePhonePublic.js').includes('devi
 assert('runtime device-phone mount', read('routes/runtimePublic.js').includes("'/device-phone'"))
 assert('restApi beem mount', read('routes/restApi.js').includes("restApi.use('/settings/beem'"))
 assert('restApi sms admin', read('routes/restApi.js').includes("restApi.use('/admin/sms'"))
+assert('sms log query filters', read('lib/smsLogQuery.js').includes('buildSmsLogListQuery'))
+assert('sms log resend route', read('routes/smsAdmin.js').includes('/log/:id/resend'))
 assert('scheduler import', read('routes/restApi.js').includes("import './smsScheduler.js'"))
 
 const failed = checks.filter((c) => !c.ok)
