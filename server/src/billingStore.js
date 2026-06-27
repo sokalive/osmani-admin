@@ -1380,6 +1380,36 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
     })
   }
 
+  const phone = String(txn.phone ?? '').trim()
+  if (phone) {
+    const { assessPhoneSubscriptionActivation, markTransactionPhoneActivationConflict } =
+      await import('./lib/phoneSubscriptionGuard.js')
+    const gate = await assessPhoneSubscriptionActivation(deviceId, phone)
+    if (!gate.allowed) {
+      await markTransactionPhoneActivationConflict(orderId, {
+        ownerDeviceId: gate.ownerDeviceId,
+        payingDeviceId: deviceId,
+      })
+      console.warn('[phone_subscription_guard] activation blocked — active subscription on another device', {
+        orderId: orderId.length > 26 ? `${orderId.slice(0, 24)}…` : orderId,
+        payingDeviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+        ownerDeviceId:
+          gate.ownerDeviceId && gate.ownerDeviceId.length > 24
+            ? `${gate.ownerDeviceId.slice(0, 22)}…`
+            : gate.ownerDeviceId,
+      })
+      return {
+        activated: false,
+        skipped: true,
+        reason: 'phone_subscription_conflict',
+        ownerDeviceId: gate.ownerDeviceId,
+        message: gate.message,
+        deviceId,
+        orderId,
+      }
+    }
+  }
+
   const fpRaw = String(raw.device_fingerprint ?? raw.fingerprint ?? raw.deviceFingerprint ?? '').trim()
   const fpHash = fpRaw ? hashDeviceFingerprint(fpRaw) : null
 

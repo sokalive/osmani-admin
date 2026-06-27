@@ -132,6 +132,22 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       return res.status(400).json({ error: 'Plan not found or inactive' })
     }
 
+    const {
+      assertPhoneSubscriptionPaymentAllowed,
+      phoneSubscriptionConflictHttpBody,
+    } = await import('../lib/phoneSubscriptionGuard.js')
+    const phoneGate = await assertPhoneSubscriptionPaymentAllowed(deviceId, phoneE164)
+    if (!phoneGate.ok) {
+      console.warn('[create-payment] blocked — phone subscription conflict', {
+        deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+        ownerDeviceId:
+          phoneGate.ownerDeviceId && phoneGate.ownerDeviceId.length > 24
+            ? `${phoneGate.ownerDeviceId.slice(0, 22)}…`
+            : phoneGate.ownerDeviceId,
+      })
+      return res.status(409).json(phoneSubscriptionConflictHttpBody(phoneGate))
+    }
+
     const fpRaw = String(
       b.device_fingerprint ?? b.fingerprint ?? b.deviceFingerprint ?? '',
     ).trim()

@@ -279,6 +279,24 @@ runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdmin
   }
 })
 
+/** Phone → active subscription ownership audit (read-only). */
+runtimePublicRouter.get('/phone-subscription-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const phone = String(req.query.phone ?? req.query.payment_phone ?? '').trim()
+    if (!phone) {
+      return res.status(400).json({ ok: false, error: 'phone query parameter is required' })
+    }
+    const deviceId = String(req.query.device_id ?? '').trim()
+    const { auditPhoneSubscriptionOwnership } = await import('../lib/phoneSubscriptionGuard.js')
+    const report = await auditPhoneSubscriptionOwnership(phone, { deviceId: deviceId || undefined })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/phone-subscription-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Package duration + expiry stacking audit (read-only). */
 runtimePublicRouter.get('/subscription-expiry-audit', requireLegacyAdminToken, async (req, res) => {
   try {

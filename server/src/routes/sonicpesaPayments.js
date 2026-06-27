@@ -58,6 +58,21 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
     if (!row || row.enabled !== true) {
       return res.status(503).json({ error: 'SonicPesa is disabled or not configured in admin' })
     }
+    const {
+      assertPhoneSubscriptionPaymentAllowed,
+      phoneSubscriptionConflictHttpBody,
+    } = await import('../lib/phoneSubscriptionGuard.js')
+    const phoneGate = await assertPhoneSubscriptionPaymentAllowed(deviceId, phoneE164)
+    if (!phoneGate.ok) {
+      console.warn('[sonicpesa] create-order blocked — phone subscription conflict', {
+        deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+        ownerDeviceId:
+          phoneGate.ownerDeviceId && phoneGate.ownerDeviceId.length > 24
+            ? `${phoneGate.ownerDeviceId.slice(0, 22)}…`
+            : phoneGate.ownerDeviceId,
+      })
+      return res.status(409).json(phoneSubscriptionConflictHttpBody(phoneGate))
+    }
     const cred = resolveSonicpesaCredentials(row)
     if (!cred.apiKey) {
       return res.status(503).json({ error: 'SonicPesa credentials incomplete (admin or env)' })

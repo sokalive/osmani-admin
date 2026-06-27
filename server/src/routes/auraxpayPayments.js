@@ -58,6 +58,22 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
       console.warn('[auraxpay] create-order blocked — gateway disabled in admin', { context, deviceId })
       return res.status(503).json({ error: 'Aurax Pay is disabled or not configured in admin' })
     }
+    const {
+      assertPhoneSubscriptionPaymentAllowed,
+      phoneSubscriptionConflictHttpBody,
+    } = await import('../lib/phoneSubscriptionGuard.js')
+    const phoneGate = await assertPhoneSubscriptionPaymentAllowed(deviceId, phoneE164)
+    if (!phoneGate.ok) {
+      console.warn('[auraxpay] create-order blocked — phone subscription conflict', {
+        context,
+        deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+        ownerDeviceId:
+          phoneGate.ownerDeviceId && phoneGate.ownerDeviceId.length > 24
+            ? `${phoneGate.ownerDeviceId.slice(0, 22)}…`
+            : phoneGate.ownerDeviceId,
+      })
+      return res.status(409).json(phoneSubscriptionConflictHttpBody(phoneGate))
+    }
     const orderId = `osm_ax_${Date.now()}_${randomBytes(5).toString('hex')}`
     const amount = Number(plan.price)
     console.log('[auraxpay] create-order', {
