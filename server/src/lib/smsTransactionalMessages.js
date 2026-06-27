@@ -60,12 +60,33 @@ export function buildExpiryReminderSms({ planName, price, currency, expiresAt })
   ].join('\n')
 }
 
-export function buildExpiredSubscriptionSms({ planName }) {
-  const pkg = String(planName ?? '').trim() || 'Kifurushi'
+function isGenericPackageName(planName) {
+  const pkg = String(planName ?? '').trim()
+  return !pkg || pkg.toLowerCase() === 'kifurushi'
+}
+
+/** Expired package line — never emit "Kifurushi chako cha Kifurushi". */
+export function buildExpiredPackageLine({ planName, price, currency }) {
+  const pkg = String(planName ?? '').trim()
+  const hasPkg = pkg && pkg.toLowerCase() !== 'kifurushi'
+  const priceNum = price != null ? Number(price) : NaN
+  const hasPrice = Number.isFinite(priceNum) && priceNum > 0
+
+  if (hasPkg && hasPrice) {
+    return `Kifurushi chako cha ${pkg} (${formatTzPrice(priceNum, currency || 'TZS')}) kimeisha.`
+  }
+  if (hasPkg) {
+    return `Kifurushi chako cha ${pkg} kimeisha.`
+  }
+  return 'Kifurushi chako kimeisha.'
+}
+
+export function buildExpiredSubscriptionSms({ planName, price, currency }) {
+  const expiryLine = buildExpiredPackageLine({ planName, price, currency })
   return [
     'Osmani TV',
     '',
-    `Kifurushi chako cha ${pkg} kimeisha.`,
+    expiryLine,
     '',
     'Ili uendelee kutazama vipindi vyote, tafadhali nunua kifurushi kipya kupitia Osmani TV.',
     '',

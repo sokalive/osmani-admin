@@ -7,6 +7,7 @@
  *   VPS_API=https://api.osmanitv.com node scripts/verify-device-phone-transactional-sms.mjs
  */
 import {
+  buildExpiredPackageLine,
   buildExpiredSubscriptionSms,
   buildExpiryReminderSms,
   buildPaymentSuccessSms,
@@ -69,11 +70,34 @@ function testMessageBuilders() {
     ok('expiry_reminder message builder')
   }
 
-  const expired = buildExpiredSubscriptionSms({ planName: 'Wiki' })
-  if (!expired.includes('Kifurushi chako cha Wiki kimeisha.')) {
-    fail('expired wording')
+  const expired = buildExpiredSubscriptionSms({ planName: 'Wiki 1', price: 3000, currency: 'TZS' })
+  if (!expired.includes('Kifurushi chako cha Wiki 1 (TZS 3,000) kimeisha.')) {
+    fail('expired with package and price', expired.split('\n')[2])
   } else {
-    ok('expired message builder')
+    ok('expired message with package + price')
+  }
+
+  const expiredNoPrice = buildExpiredSubscriptionSms({ planName: 'Wiki 1' })
+  if (!expiredNoPrice.includes('Kifurushi chako cha Wiki 1 kimeisha.')) {
+    fail('expired package only')
+  } else {
+    ok('expired message package only')
+  }
+
+  const expiredUnknown = buildExpiredSubscriptionSms({})
+  if (!expiredUnknown.includes('Kifurushi chako kimeisha.')) {
+    fail('expired unknown package')
+  } else if (expiredUnknown.includes('cha Kifurushi')) {
+    fail('expired must not contain cha Kifurushi')
+  } else {
+    ok('expired message unknown package fallback')
+  }
+
+  const badDefault = buildExpiredPackageLine({ planName: '' })
+  if (badDefault.includes('cha Kifurushi')) {
+    fail('buildExpiredPackageLine generic guard')
+  } else {
+    ok('buildExpiredPackageLine no double Kifurushi')
   }
 
   const key = subscriptionPeriodKey({

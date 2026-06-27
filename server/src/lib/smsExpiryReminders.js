@@ -4,6 +4,7 @@ import {
   buildExpiryReminderSms,
   subscriptionPeriodKey,
 } from './smsTransactionalMessages.js'
+import { resolveSubscriptionSmsPackageContext } from './smsSubscriptionPackageContext.js'
 import { resolveSmsPhoneForDevice, sendTransactionalSms } from './smsService.js'
 import { getPool } from '../db/pool.js'
 
@@ -14,13 +15,20 @@ async function loadSubscriptionSmsContext(row) {
   const deviceId = String(row.device_id ?? '').trim()
   const transactionId = String(row.transaction_id ?? '').trim()
   const expiresAt = row.expires_at
+  const pkg = await resolveSubscriptionSmsPackageContext({
+    deviceId,
+    transactionId,
+    planName: row.plan_name,
+    price: row.amount != null ? Number(row.amount) : null,
+    currency: String(row.currency ?? 'TZS').trim() || 'TZS',
+  })
   return {
     deviceId,
     transactionId,
     expiresAt,
-    planName: String(row.plan_name ?? '').trim(),
-    price: row.amount != null ? Number(row.amount) : null,
-    currency: String(row.currency ?? 'TZS').trim() || 'TZS',
+    planName: pkg.planName,
+    price: pkg.price,
+    currency: pkg.currency,
     subscriptionId: subscriptionPeriodKey({ deviceId, transactionId, expiresAt }),
   }
 }
@@ -93,7 +101,11 @@ export async function runSmsExpiryReminders() {
               currency: ctx.currency,
               expiresAt: ctx.expiresAt,
             })
-          : buildExpiredSubscriptionSms({ planName: ctx.planName })
+          : buildExpiredSubscriptionSms({
+              planName: ctx.planName,
+              price: ctx.price,
+              currency: ctx.currency,
+            })
 
       const r = await sendTransactionalSms({
         phone: resolved.normalized || resolved.phone || fallbackPhone,

@@ -1842,6 +1842,37 @@ export async function resolvePaymentPhoneForDevice(deviceId) {
     }
   }
 
+  const { rows: subRows } = await pool.query(
+    `SELECT transaction_id::text AS transaction_id
+     FROM device_subscriptions
+     WHERE device_id = $1
+     ORDER BY updated_at DESC NULLS LAST
+     LIMIT 1`,
+    [d],
+  )
+  const linkedTxnId = String(subRows[0]?.transaction_id ?? '').trim()
+  if (linkedTxnId) {
+    const { extractPaymentOrderIdFromSubscriptionTxn } = await import(
+      './lib/smsSubscriptionPackageContext.js'
+    )
+    const orderId = extractPaymentOrderIdFromSubscriptionTxn(linkedTxnId) || linkedTxnId
+    if (orderId && !orderId.startsWith('manual_grant:')) {
+      const { rows: linkedTxnPhone } = await pool.query(
+        `SELECT phone::text AS phone
+         FROM transactions
+         WHERE order_id = $1 AND trim(coalesce(phone::text, '')) <> ''
+         LIMIT 1`,
+        [orderId],
+      )
+      if (linkedTxnPhone[0]?.phone) {
+        return {
+          phone: formatPaymentPhoneForDisplay(linkedTxnPhone[0].phone),
+          source: 'subscription_linked_payment',
+        }
+      }
+    }
+  }
+
   const completedTxn = await getLatestCompletedTransactionForDevice(d)
   const completedPhone = phoneFromTransactionRow(completedTxn)
   if (completedPhone) {
@@ -1936,6 +1967,22 @@ export async function resolvePaymentPhoneForDevice(deviceId) {
     return {
       phone: formatPaymentPhoneForDisplay(intelRows[0].phone),
       source: 'device_intelligence',
+    }
+  }
+
+  const { rows: registryRows } = await pool.query(
+    `SELECT phone_number_raw, phone_number_normalized
+     FROM device_phone_registry
+     WHERE device_id = $1 AND trim(coalesce(phone_number_normalized::text, '')) <> ''
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  if (registryRows[0]?.phone_number_normalized) {
+    const raw = String(registryRows[0].phone_number_raw ?? registryRows[0].phone_number_normalized)
+    return {
+      phone: formatPaymentPhoneForDisplay(raw),
+      source: 'device_phone_registry',
     }
   }
 
