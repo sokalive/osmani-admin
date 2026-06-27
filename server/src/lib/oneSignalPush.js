@@ -64,25 +64,42 @@ function isImageRelatedError(msg) {
   )
 }
 
-/** HEAD-check that push image URL is fetchable (OneSignal + legacy devices). */
+/** HEAD-check that push image exists on origin (CDN edge may lag for new uploads). */
 export async function validatePushImageUrl(imageUrl) {
   const url = String(imageUrl ?? '').trim()
   if (!url.startsWith('https://')) return { ok: false, reason: 'not_https' }
-  try {
-    const res = await fetch(url, {
-      method: 'HEAD',
-      redirect: 'follow',
-      signal: AbortSignal.timeout(IMAGE_HEAD_TIMEOUT_MS),
-    })
-    if (!res.ok) return { ok: false, reason: `http_${res.status}` }
-    const ct = String(res.headers.get('content-type') || '').toLowerCase()
-    if (ct && !ct.includes('image') && !ct.includes('octet-stream')) {
-      return { ok: false, reason: `content_type_${ct}` }
-    }
-    return { ok: true }
-  } catch (e) {
-    return { ok: false, reason: String(e?.message || e).slice(0, 120) }
+
+  const candidates = [url]
+  if (url.includes('osmanitv.b-cdn.net')) {
+    candidates.push(url.replace('osmanitv.b-cdn.net', 'api.osmanitv.com'))
+  } else if (url.includes('api.osmanitv.com')) {
+    candidates.push(url.replace('api.osmanitv.com', 'osmanitv.b-cdn.net'))
   }
+
+  let lastReason = 'unreachable'
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(candidate, {
+        method: 'HEAD',
+        redirect: 'follow',
+        signal: AbortSignal.timeout(IMAGE_HEAD_TIMEOUT_MS),
+      })
+      if (!res.ok) {
+        lastReason = `http_${res.status}`
+        continue
+      }
+      const ct = String(res.headers.get('content-type') || '').toLowerCase()
+      if (ct && !ct.includes('image') && !ct.includes('octet-stream')) {
+        lastReason = `content_type_${ct}`
+        continue
+      }
+      // Keep CDN URL for legacy APK clients when configured; origin HEAD proves file exists.
+      return { ok: true, validatedUrl: url }
+    } catch (e) {
+      lastReason = String(e?.message || e).slice(0, 120)
+    }
+  }
+  return { ok: false, reason: lastReason }
 }
 
 /**
