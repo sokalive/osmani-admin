@@ -42,7 +42,6 @@ import { runtimePublicRouter } from './runtimePublic.js'
 import { deviceProfileRouter } from './deviceProfile.js'
 import { usersIntelligencePublicRouter } from './usersIntelligencePublic.js'
 import { usersIntelligenceAdminRouter } from './usersIntelligenceAdmin.js'
-import { customerInvestigationAdminRouter } from './customerInvestigationAdmin.js'
 import { appVersionMigrationAdminRouter } from './appVersionMigrationAdmin.js'
 import { trialWatchSettingsRouter } from './trialWatchSettings.js'
 import { trialWatchRouter } from './trialWatch.js'
@@ -293,7 +292,6 @@ restApi.use('/runtime', runtimePublicRouter)
 restApi.use('/device', deviceProfileRouter)
 restApi.use('/users-intelligence', usersIntelligencePublicRouter)
 restApi.use('/admin/users-intelligence', usersIntelligenceAdminRouter)
-restApi.use('/admin/customer-investigation', customerInvestigationAdminRouter)
 restApi.use('/admin/app-version-migration', appVersionMigrationAdminRouter)
 restApi.use(deviceSecurityReportsRouter)
 
