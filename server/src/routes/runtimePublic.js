@@ -305,8 +305,9 @@ runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken,
     res.setHeader('Cache-Control', 'no-store, private')
     const { repairSubscriptionExpiryOverCredits } = await import('../lib/subscriptionExpiryAudit.js')
     const dryRun = String(req.query.dry_run ?? '1').trim() !== '0'
-    const maxRepairs = Number(req.query.max_repairs ?? 100)
-    const report = await repairSubscriptionExpiryOverCredits({ dryRun, maxRepairs })
+    const maxRepairs = Number(req.query.max_repairs ?? 50)
+    const offset = Number(req.query.offset ?? 0)
+    const report = await repairSubscriptionExpiryOverCredits({ dryRun, maxRepairs, offset })
     res.json({ ok: true, ...report, commit: getServerGitCommit() })
   } catch (e) {
     console.error('[runtime/subscription-expiry-repair]', e)

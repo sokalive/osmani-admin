@@ -121,6 +121,99 @@ async function loadCreditEventsForDevice(pool, deviceId) {
   return events
 }
 
+/** Bulk-load credit events for many devices (2 queries instead of N). */
+async function loadCreditEventsForDevices(pool, deviceIds) {
+  const ids = [...new Set(deviceIds.map((d) => String(d).trim()).filter(Boolean))]
+  const byDevice = new Map(ids.map((id) => [id, []]))
+  if (!ids.length) return byDevice
+
+  const { rows: txns } = await pool.query(
+    `SELECT t.device_id::text AS device_id,
+            t.order_id,
+            COALESCE(t.updated_at, t.created_at) AS credited_at,
+            p.duration_days
+     FROM transactions t
+     LEFT JOIN plans p ON p.id = t.plan_id
+     WHERE t.device_id = ANY($1::text[])
+       AND t.status = 'completed'
+       AND p.duration_days IS NOT NULL
+     ORDER BY COALESCE(t.updated_at, t.created_at) ASC`,
+    [ids],
+  )
+  for (const row of txns) {
+    const d = String(row.device_id)
+    const atMs = toMs(row.credited_at)
+    const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
+    if (!byDevice.has(d) || !atMs || days < 1) continue
+    byDevice.get(d).push({
+      atMs,
+      durationDays: days,
+      kind: 'payment',
+      ref: String(row.order_id),
+    })
+  }
+
+  const { rows: grants } = await pool.query(
+    `SELECT device_id::text AS device_id, id, duration_days, created_at
+     FROM manual_subscription_grants
+     WHERE device_id = ANY($1::text[])
+       AND deleted_at IS NULL
+     ORDER BY created_at ASC`,
+    [ids],
+  )
+  for (const row of grants) {
+    const d = String(row.device_id)
+    const atMs = toMs(row.created_at)
+    const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
+    if (!byDevice.has(d) || !atMs || days < 1) continue
+    byDevice.get(d).push({
+      atMs,
+      durationDays: days,
+      kind: 'manual_grant',
+      ref: `manual_grant:${row.id}`,
+    })
+  }
+
+  for (const list of byDevice.values()) {
+    list.sort((a, b) => a.atMs - b.atMs)
+  }
+  return byDevice
+}
+
+function auditSubscriptionRow(sub, events) {
+  const { expectedExpiresAt, steps } = replayStackedExpiryFromEvents(events)
+  const actualMs = toMs(sub.expires_at)
+  const expectedMs = toMs(expectedExpiresAt)
+  const active = sub.active_now === true
+  const cls = classifyRow({
+    actualMs,
+    expectedMs,
+    events,
+    txnId: sub.transaction_id,
+    active,
+  })
+  const remainingDays =
+    active && actualMs != null ? Math.max(0, Math.floor((actualMs - Date.now()) / 86400000)) : 0
+  const lastDuration = events.length ? events[events.length - 1].durationDays : null
+  const deviceId = String(sub.device_id)
+  return {
+    device_id_masked: maskId(deviceId),
+    device_id: deviceId,
+    active,
+    actual_expires_at:
+      sub.expires_at instanceof Date ? sub.expires_at.toISOString() : String(sub.expires_at),
+    expected_expires_at: expectedExpiresAt,
+    transaction_id: String(sub.transaction_id ?? ''),
+    credit_events: events.length,
+    replay_steps: steps,
+    remaining_days: remainingDays,
+    last_package_duration_days: lastDuration,
+    ui_mismatch:
+      active && lastDuration != null && remainingDays > lastDuration + 1 && cls.category === 'replay_match',
+    ...cls,
+  }
+}
+
 function classifyRow({ actualMs, expectedMs, events, txnId, active }) {
   if (!active || actualMs == null) {
     return { category: 'inactive_or_missing', repair_safe: false }
@@ -185,6 +278,7 @@ export async function runSubscriptionExpiryAudit(opts = {}) {
      ORDER BY price ASC, duration_days ASC`,
   )
 
+  const offset = Math.max(0, Number(opts.offset) || 0)
   const params = [sinceDays]
   let deviceClause = ''
   if (deviceFilter) {
@@ -204,8 +298,14 @@ export async function runSubscriptionExpiryAudit(opts = {}) {
      WHERE ds.expires_at > now() - ($1::int * interval '1 day')
        ${deviceClause}
      ORDER BY ds.expires_at DESC
+     OFFSET ${offset}
      LIMIT ${limit}`,
     params,
+  )
+
+  const eventsByDevice = await loadCreditEventsForDevices(
+    pool,
+    subs.map((s) => s.device_id),
   )
 
   const categories = {
@@ -225,44 +325,9 @@ export async function runSubscriptionExpiryAudit(opts = {}) {
   for (const sub of subs) {
     audited += 1
     const deviceId = String(sub.device_id)
-    const events = await loadCreditEventsForDevice(pool, deviceId)
-    const { expectedExpiresAt, steps } = replayStackedExpiryFromEvents(events)
-    const actualMs = toMs(sub.expires_at)
-    const expectedMs = toMs(expectedExpiresAt)
-    const active = sub.active_now === true
-    const cls = classifyRow({
-      actualMs,
-      expectedMs,
-      events,
-      txnId: sub.transaction_id,
-      active,
-    })
-
-    const remainingDays =
-      active && actualMs != null
-        ? Math.max(0, Math.floor((actualMs - Date.now()) / 86400000))
-        : 0
-    const lastDuration = events.length ? events[events.length - 1].durationDays : null
-
-    const row = {
-      device_id_masked: maskId(deviceId),
-      device_id: deviceId,
-      active,
-      actual_expires_at:
-        sub.expires_at instanceof Date ? sub.expires_at.toISOString() : String(sub.expires_at),
-      expected_expires_at: expectedExpiresAt,
-      transaction_id: String(sub.transaction_id ?? ''),
-      credit_events: events.length,
-      replay_steps: steps,
-      remaining_days: remainingDays,
-      last_package_duration_days: lastDuration,
-      ui_mismatch:
-        active &&
-        lastDuration != null &&
-        remainingDays > lastDuration + 1 &&
-        cls.category === 'replay_match',
-      ...cls,
-    }
+    const events = eventsByDevice.get(deviceId) ?? []
+    const row = auditSubscriptionRow(sub, events)
+    const cls = { category: row.category, repair_safe: row.repair_safe }
 
     if (categories[cls.category]) {
       categories[cls.category].push(row)
@@ -319,14 +384,56 @@ export async function runSubscriptionExpiryAudit(opts = {}) {
 }
 
 /**
+ * Fast over-credit scan for repair batches (active subs only, ordered by highest expiry).
+ */
+async function findOverCreditedBatch({ limit = 50, offset = 0 } = {}) {
+  const pool = requirePool()
+  const { rows: subs } = await pool.query(
+    `SELECT ds.device_id,
+            ds.status,
+            ds.expires_at,
+            ds.started_at,
+            ds.transaction_id,
+            ds.updated_at,
+            (ds.status = 'active' AND ds.expires_at > now()) AS active_now
+     FROM device_subscriptions ds
+     WHERE ds.status = 'active'
+       AND ds.expires_at > now()
+       AND ds.transaction_id NOT LIKE 'transfer:%'
+       AND ds.transaction_id NOT LIKE 'recovery:%'
+       AND ds.transaction_id NOT LIKE 'force:%'
+     ORDER BY ds.expires_at DESC
+     OFFSET $1
+     LIMIT $2`,
+    [Math.max(0, Number(offset) || 0), Math.min(200, Math.max(1, Number(limit) || 50))],
+  )
+  const eventsByDevice = await loadCreditEventsForDevices(
+    pool,
+    subs.map((s) => s.device_id),
+  )
+  const over = []
+  for (const sub of subs) {
+    const deviceId = String(sub.device_id)
+    const events = eventsByDevice.get(deviceId) ?? []
+    const row = auditSubscriptionRow(sub, events)
+    if (row.category === 'over_credited' && row.repair_safe === true) {
+      over.push(row)
+    }
+  }
+  return over
+}
+
+/**
  * Repair clear over-credits (>1 day beyond replay). Never shortens below replay.
- * @param {{ dryRun?: boolean; maxRepairs?: number }} opts
+ * @param {{ dryRun?: boolean; maxRepairs?: number; offset?: number }} opts
  */
 export async function repairSubscriptionExpiryOverCredits(opts = {}) {
   const dryRun = opts.dryRun !== false
-  const maxRepairs = Math.min(500, Math.max(1, Number(opts.maxRepairs) || 100))
-  const audit = await runSubscriptionExpiryAudit({ limit: 3000 })
-  const candidates = audit.categories.over_credited.filter((r) => r.repair_safe === true)
+  const maxRepairs = Math.min(200, Math.max(1, Number(opts.maxRepairs) || 50))
+  const offset = Math.max(0, Number(opts.offset) || 0)
+  const scanLimit = Math.max(maxRepairs * 4, 80)
+  const scanned = await findOverCreditedBatch({ limit: scanLimit, offset })
+  const candidates = scanned
   const repaired = []
   const flagged = []
 
@@ -362,6 +469,8 @@ export async function repairSubscriptionExpiryOverCredits(opts = {}) {
 
   return {
     dry_run: dryRun,
+    offset,
+    scanned_rows: scanned.length,
     candidates: candidates.length,
     repaired_count: repaired.length,
     flagged_count: flagged.length,
