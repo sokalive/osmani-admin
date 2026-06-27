@@ -61,6 +61,7 @@ ensure_env_key OSMANI_LOAD_CUTOVER_ENV "1"
 ensure_env_key UPLOAD_DIR "/var/www/osmani-admin-api/server/uploads"
 ensure_env_key NOTIFICATION_IMAGE_PUBLIC_ORIGIN "https://api.osmanitv.com"
 ensure_env_key INSTRUCTION_VIDEO_PUBLIC_ORIGIN "https://api.osmanitv.com"
+upsert_env_key BEEM_SENDER_NAME "OSMANITVMAX"
 
 if [[ -f /etc/letsencrypt/live/osmanitv.com/fullchain.pem ]] || [[ "${OSMANI_USE_BRANDED_HTTPS:-}" == "1" ]]; then
   echo "==> Branded HTTPS public URLs"

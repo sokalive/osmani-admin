@@ -838,6 +838,17 @@ export async function ensureBillingTables(client) {
     INSERT INTO beem_settings (id) VALUES (1)
     ON CONFLICT (id) DO NOTHING;
   `)
+  await client.query(`
+    UPDATE beem_settings
+    SET sender_name = 'OSMANITVMAX', updated_at = now()
+    WHERE id = 1
+      AND (
+        trim(sender_name) = ''
+        OR sender_name ILIKE '%osmani%tv%max%'
+        OR sender_name ~ '[[:space:]]'
+        OR length(regexp_replace(sender_name, '[^A-Za-z0-9]', '', 'g')) > 11
+      )
+  `)
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS sms_templates (

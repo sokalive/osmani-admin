@@ -69,6 +69,12 @@ services:
         value: https://api.osmanitv.com
       - key: INSTRUCTION_VIDEO_INGEST_TOKEN
         sync: false
+      - key: BEEM_SENDER_NAME
+        value: OSMANITVMAX
+      - key: BEEM_API_KEY
+        sync: false
+      - key: BEEM_SECRET_KEY
+        sync: false
       - key: NODE_VERSION
         value: "20"
       # Set in Render dashboard to your Bunny pull zone (e.g. https://osmani-media.b-cdn.net)

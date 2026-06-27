@@ -74,11 +74,13 @@ export async function sendSmsToPhone({
   const result = await sendBeemSms(cred, { phone: digits, message: msg })
   const status = result.ok ? 'sent' : 'failed'
   const providerMessageId =
-    result.body?.request_id != null
-      ? String(result.body.request_id)
-      : result.body?.data?.request_id != null
-        ? String(result.body.data.request_id)
-        : ''
+    result.parsed?.requestId != null
+      ? String(result.parsed.requestId)
+      : result.body?.request_id != null
+        ? String(result.body.request_id)
+        : result.body?.data?.request_id != null
+          ? String(result.body.data.request_id)
+          : ''
 
   let logRow
   if (idem) {
@@ -113,6 +115,7 @@ export async function sendSmsToPhone({
     logId: logRow?.id,
     recipient: digits,
     error: result.error,
+    errorCode: result.errorCode || result.parsed?.errorCode || null,
   }
 }
 

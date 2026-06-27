@@ -319,9 +319,12 @@ function SmsCenterPage() {
               <input
                 value={beemDraft.senderName}
                 onChange={(e) => setBeemDraft((d) => ({ ...d, senderName: e.target.value }))}
-                placeholder="Approved sender ID"
+                placeholder="OSMANITVMAX"
                 className={inputClass()}
               />
+              <p className="mt-1.5 text-xs text-slate-500">
+                Beem-approved sender ID only — max 11 letters/numbers, no spaces (e.g. OSMANITVMAX).
+              </p>
             </div>
             <div className="flex flex-wrap gap-3">
               <button

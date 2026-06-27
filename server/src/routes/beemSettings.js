@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { maskSecret } from '../billingNormalize.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
-import { beemCredentialsReady, resolveBeemCredentials, testBeemConnection } from '../lib/beemSms.js'
+import { beemCredentialsReady, normalizeBeemSenderName, resolveBeemCredentials, testBeemConnection, validateBeemSenderName } from '../lib/beemSms.js'
 import * as smsStore from '../lib/smsStore.js'
 
 export const beemSettingsRouter = Router()
@@ -15,6 +15,7 @@ async function rowToApiResponse(row) {
   const hasKey = Boolean(String(process.env.BEEM_API_KEY || r.api_key || '').trim())
   const hasSecret = Boolean(String(process.env.BEEM_SECRET_KEY || r.secret_key || '').trim())
   const senderName = String(process.env.BEEM_SENDER_NAME || r.sender_name || '').trim()
+  const senderValidation = validateBeemSenderName(senderName || cred.senderName)
   const la = r.last_test_at
   const envOverrideActive = {
     apiKey: Boolean(String(process.env.BEEM_API_KEY || '').trim()),
@@ -31,8 +32,11 @@ async function rowToApiResponse(row) {
     secretKeyMasked: hasSecret
       ? maskSecret(String(process.env.BEEM_SECRET_KEY || r.secret_key || '').trim())
       : '',
-    senderName,
-    sender_name: senderName,
+    senderName: cred.senderName,
+    sender_name: cred.senderName,
+    rawSenderName: cred.rawSenderName || senderName,
+    effectiveSenderName: cred.senderName,
+    senderValidation,
     credentialsReady: beemCredentialsReady(cred),
     envOverrideAny: Object.values(envOverrideActive).some(Boolean),
     envOverrideActive,
@@ -64,7 +68,13 @@ beemSettingsRouter.put('/', async (req, res) => {
     if (secretIn) patch.secret_key = secretIn
     const senderIn =
       b.senderName != null ? String(b.senderName).trim() : b.sender_name != null ? String(b.sender_name).trim() : ''
-    if (senderIn) patch.sender_name = senderIn
+    if (senderIn) {
+      const normalized = normalizeBeemSenderName(senderIn)
+      if (!normalized) {
+        return res.status(400).json({ error: 'Invalid sender name — use approved Beem sender ID (max 11 alphanumeric)' })
+      }
+      patch.sender_name = normalized
+    }
     const row = await smsStore.updateBeemRowFull(patch)
     liveSyncBus.publish('config.beem_settings_changed', { topics: ['config'] })
     const updated = await smsStore.getBeemRow()

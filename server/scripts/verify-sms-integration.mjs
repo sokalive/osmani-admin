@@ -22,6 +22,7 @@ assert('billingTables beem_settings', read('db/billingTables.js').includes('beem
 assert('billingTables sms_templates', read('db/billingTables.js').includes('sms_templates'))
 assert('billingTables sms_send_log', read('db/billingTables.js').includes('sms_send_log'))
 assert('beemSms client', read('lib/beemSms.js').includes('apisms.beem.africa'))
+assert('beem sender normalize', read('lib/beemSms.js').includes('normalizeBeemSenderName'))
 assert('smsService sendSmsToPhone', read('lib/smsService.js').includes('sendSmsToPhone'))
 assert('smsExpiryReminders', read('lib/smsExpiryReminders.js').includes('expiry_reminder_3d'))
 assert('activation hook', read('billingStore.js').includes('smsSubscriptionHooks'))
