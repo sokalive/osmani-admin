@@ -240,20 +240,29 @@ export async function runSubscriptionExpiryRestore(opts = {}) {
 
   report.migration_shadows_found = shadows.length + transferReturns.length
 
+  const transferReturnTargets = new Set(
+    transferReturns.map((r) => String(r.target_device_id ?? '').trim()).filter(Boolean),
+  )
+  const protectedSources = new Set(transferReturnTargets)
+
   const pairMap = new Map()
-  for (const row of [...shadows, ...transferReturns]) {
-    const target = String(row.device_id ?? row.target_device_id ?? '').trim()
+  for (const row of transferReturns) {
+    const target = String(row.target_device_id ?? '').trim()
     const source = String(row.source_device_id ?? '').trim()
     if (!target || !source) continue
-    if (!pairMap.has(target)) {
-      pairMap.set(target, {
-        source,
-        match_reason: row.match_reason || 'migration_shadow',
-      })
-    }
+    pairMap.set(target, { source, match_reason: 'transfer_source_return', priority: 3 })
+  }
+  for (const row of shadows) {
+    const target = String(row.device_id ?? '').trim()
+    const source = String(row.source_device_id ?? '').trim()
+    if (!target || !source || pairMap.has(target)) continue
+    if (protectedSources.has(source)) continue
+    pairMap.set(target, { source, match_reason: row.match_reason || 'migration_shadow', priority: 2 })
   }
 
-  for (const [target, { source, match_reason }] of pairMap) {
+  const sortedPairs = [...pairMap.entries()].sort((a, b) => (b[1].priority || 0) - (a[1].priority || 0))
+
+  for (const [target, { source, match_reason }] of sortedPairs) {
     if (report.restored_count >= maxRestores) break
     const before = await getDeviceSubscriptionAccessState(target, null)
     if (isActiveAccess(before)) continue
