@@ -3,8 +3,6 @@ import { getPool } from '../db/pool.js'
 import { tryRecordAppInstall } from '../lib/installAnalytics.js'
 import {
   LIVE_PRESENCE_WINDOW_SECONDS,
-  livePresenceWindowInterval,
-  liveSessionActiveWhere,
   SESSION_PRUNE_SECONDS,
   startLivePresenceJanitor,
 } from '../lib/livePresence.js'
@@ -14,7 +12,13 @@ import {
   resolveLocationLabel,
   sumLocationsOnline,
 } from '../lib/analyticsLocation.js'
-import { parseChannelRefFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
+import { parseChannelRefFromPayload, parseChannelClearFromPayload, TOP5_MIN_VIEWERS } from '../lib/analyticsPresence.js'
+import {
+  queryLiveChannelStats,
+  queryLiveLocationBuckets,
+  queryLivePresenceTotals,
+  sumChannelViewers,
+} from '../lib/livePresenceStats.js'
 import { queryMigrationDevicePopulationSummary } from '../lib/appVersionMigration.js'
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
 import { readChannelIdNameMap } from '../store.js'
@@ -25,14 +29,14 @@ startLivePresenceJanitor()
 
 const OVERVIEW_ZERO = {
   onlineNow: 0,
+  watchingNow: 0,
+  idleNow: 0,
   dauToday: 0,
   newUsersToday: 0,
   revenueToday: 0,
   totalInstalls: 0,
   totalUniqueDevices: 0,
 }
-
-const LIVE_WINDOW_INTERVAL = livePresenceWindowInterval()
 
 function numOrZero(v) {
   const n = Number(v)
@@ -62,7 +66,13 @@ function parseDeviceId(v) {
 
 
 function parseChannelRefFromBody(body) {
-  return parseChannelRefFromPayload(body && typeof body === 'object' ? body : {})
+  const b = body && typeof body === 'object' ? body : {}
+  return parseChannelRefFromPayload(b)
+}
+
+function parseChannelClearFromBody(body) {
+  const b = body && typeof body === 'object' ? body : {}
+  return parseChannelClearFromPayload(b)
 }
 
 async function parseCountryFromBody(body, req) {
@@ -85,22 +95,17 @@ function parseInstallInstanceIdFromBody(body) {
 
 async function queryOverviewStats(pool) {
   const [
-    onlineNowRaw,
+    presenceTotals,
     dauTodayRaw,
     newUsersTodayRaw,
     revenueTodayRaw,
     totalInstallsRaw,
     migrationSummary,
   ] = await Promise.all([
-      safeQueryScalar(
-        pool,
-        `SELECT COUNT(*)::int AS c
-     FROM live_sessions
-     WHERE ${liveSessionActiveWhere()}`,
-        'overview.onlineNow',
-        (r) => numOrZero(r?.c),
-        [LIVE_WINDOW_INTERVAL],
-      ),
+      queryLivePresenceTotals(pool).catch((e) => {
+        console.error('[analytics] overview.presenceTotals:', e)
+        return null
+      }),
       safeQueryScalar(
         pool,
         `SELECT COUNT(DISTINCT device_id)::int AS c
@@ -141,14 +146,19 @@ async function queryOverviewStats(pool) {
     migrationSummary?.ok && migrationSummary.summary
       ? numOrZero(migrationSummary.summary.totalUniqueDevices)
       : 0
+  const onlineNow = presenceTotals?.onlineNow ?? 0
+  const watchingNow = presenceTotals?.watchingNow ?? 0
+  const idleNow = presenceTotals?.idleNow ?? 0
   const degraded =
-    onlineNowRaw === null ||
+    presenceTotals === null ||
     dauTodayRaw === null ||
     newUsersTodayRaw === null ||
     revenueTodayRaw === null ||
     totalInstallsRaw === null
   return {
-    onlineNow: onlineNowRaw ?? 0,
+    onlineNow,
+    watchingNow,
+    idleNow,
     dauToday: dauTodayRaw ?? 0,
     newUsersToday: newUsersTodayRaw ?? 0,
     revenueToday: revenueTodayRaw ?? 0,
@@ -162,54 +172,17 @@ async function queryOverviewStats(pool) {
 }
 
 async function queryChannelStats(pool) {
-  const { rows } = await pool.query(
-    `WITH active AS (
-       SELECT ls.device_id, trim(ls.channel_id) AS raw_channel_id
-       FROM live_sessions ls
-       WHERE ls.channel_id IS NOT NULL
-         AND trim(ls.channel_id) <> ''
-         AND ${liveSessionActiveWhere('ls')}
-     ),
-     normalized AS (
-       SELECT a.device_id,
-         COALESCE(c.id::text, a.raw_channel_id) AS channel_id
-       FROM active a
-       LEFT JOIN channels c ON (
-         c.id::text = a.raw_channel_id
-         OR lower(trim(c.name)) = lower(a.raw_channel_id)
-       )
-     )
-     SELECT channel_id, COUNT(*)::int AS viewers
-     FROM normalized
-     GROUP BY channel_id
-     ORDER BY viewers DESC`,
-    [LIVE_WINDOW_INTERVAL],
-  )
-  const mapped = rows.map((r) => ({
-    channel_id: String(r.channel_id),
-    viewers: Number(r.viewers) || 0,
-  }))
+  const mapped = await queryLiveChannelStats(pool)
   return {
     mostWatched: mapped,
     top5: mapped.filter((x) => x.viewers >= TOP5_MIN_VIEWERS).slice(0, 5),
     top5MinViewers: TOP5_MIN_VIEWERS,
+    watchingNow: sumChannelViewers(mapped),
   }
 }
 
 async function queryLocationStats(pool) {
-  const { rows } = await pool.query(
-    `SELECT
-       CASE
-         WHEN country IS NOT NULL AND trim(country) <> '' THEN country
-         ELSE 'Unknown'
-       END AS country,
-       COUNT(*)::int AS users
-     FROM live_sessions
-     WHERE ${liveSessionActiveWhere()}
-     GROUP BY 1
-     ORDER BY users DESC`,
-    [LIVE_WINDOW_INTERVAL],
-  )
+  const rows = await queryLiveLocationBuckets(pool)
   return aggregateLocationsByPlace(rows)
 }
 
@@ -237,10 +210,14 @@ analyticsRouter.get('/snapshot', async (_req, res) => {
       }),
     ])
     const locationsOnline = sumLocationsOnline(locations)
+    const watchingFromChannels = channels.watchingNow ?? sumChannelViewers(channels.mostWatched)
     res.json({
       ...overview,
-      onlineNow: locationsOnline > 0 ? locationsOnline : overview.onlineNow,
+      onlineNow: overview.onlineNow,
+      watchingNow: overview.watchingNow ?? watchingFromChannels,
+      idleNow: overview.idleNow ?? Math.max(0, overview.onlineNow - watchingFromChannels),
       locationsOnline,
+      channelWatchingNow: watchingFromChannels,
       mostWatched: channels.mostWatched,
       top5: channels.top5,
       top5MinViewers: TOP5_MIN_VIEWERS,
@@ -402,6 +379,7 @@ analyticsRouter.post('/session/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelRef = parseChannelRefFromBody(req.body)
+    const clearChannel = parseChannelClearFromBody(req.body)
     const country = await parseCountryFromBody(req.body, req)
     await upsertLiveSession(pool, {
       deviceId,
@@ -409,6 +387,7 @@ analyticsRouter.post('/session/start', async (req, res) => {
       channelName: channelRef.channelName,
       country,
       installBody: req.body,
+      clearChannel,
     })
     liveSyncBus.publish('analytics.session_start', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
@@ -430,6 +409,7 @@ export async function handleLiveSessionHeartbeat(req, res) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelRef = parseChannelRefFromBody(req.body)
+    const clearChannel = parseChannelClearFromBody(req.body)
     const country = await parseCountryFromBody(req.body, req)
     await upsertLiveSession(pool, {
       deviceId,
@@ -437,6 +417,7 @@ export async function handleLiveSessionHeartbeat(req, res) {
       channelName: channelRef.channelName,
       country,
       installBody: req.body,
+      clearChannel,
     })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
@@ -481,6 +462,7 @@ analyticsRouter.post('/presence/start', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelRef = parseChannelRefFromBody(req.body)
+    const clearChannel = parseChannelClearFromBody(req.body)
     const country = await parseCountryFromBody(req.body, req)
     await upsertLiveSession(pool, {
       deviceId,
@@ -488,6 +470,7 @@ analyticsRouter.post('/presence/start', async (req, res) => {
       channelName: channelRef.channelName,
       country,
       installBody: req.body,
+      clearChannel,
     })
     liveSyncBus.publish('analytics.session_start', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
@@ -508,6 +491,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
     const channelRef = parseChannelRefFromBody(req.body)
+    const clearChannel = parseChannelClearFromBody(req.body)
     const country = await parseCountryFromBody(req.body, req)
     await upsertLiveSession(pool, {
       deviceId,
@@ -515,6 +499,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       channelName: channelRef.channelName,
       country,
       installBody: req.body,
+      clearChannel,
     })
     liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })

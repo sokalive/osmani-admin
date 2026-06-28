@@ -103,3 +103,27 @@ export const TOP5_MIN_VIEWERS = Math.max(
   1,
   Math.min(100, Math.trunc(Number(process.env.ANALYTICS_TOP5_MIN_VIEWERS) || 10)),
 )
+
+/** True when client explicitly signals playback stopped (clears stale channel_id). */
+export function parseChannelClearFromPayload(source) {
+  if (!source || typeof source !== 'object') return false
+  if (source.watching === false || source.is_watching === false || source.isWatching === false) {
+    return true
+  }
+  if (
+    source.playback_active === false ||
+    source.playbackActive === false ||
+    source.playing === false ||
+    source.is_playing === false ||
+    source.isPlaying === false
+  ) {
+    return true
+  }
+  if ('channel_id' in source && (source.channel_id === null || source.channel_id === '')) {
+    return true
+  }
+  if ('channelId' in source && (source.channelId === null || source.channelId === '')) {
+    return true
+  }
+  return false
+}

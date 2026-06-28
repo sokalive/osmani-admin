@@ -88,6 +88,8 @@ function AnalyticsPage() {
   useAnalyticsLiveRefresh(load, { pollMs: 15_000 })
 
   const onlineNow = Number(overview?.onlineNow) || 0
+  const watchingNow = Number(overview?.watchingNow) || 0
+  const idleNow = Number(overview?.idleNow) || 0
   const newUsersToday = Number(overview?.newUsersToday) || 0
   const revenueTodayValue = Number(overview?.revenueToday) || 0
   const totalInstallsBase = Number(overview?.totalInstalls) || 0
@@ -180,7 +182,11 @@ function AnalyticsPage() {
             display={vOnline.toLocaleString('en-TZ')}
             icon={Radio}
             gradientClass="bg-gradient-to-br from-cyan-400/95 via-teal-600/95 to-slate-900/95"
-            sub="Active live sessions within runtime TTL"
+            sub={
+              watchingNow > 0 || idleNow > 0
+                ? `${watchingNow.toLocaleString('en-TZ')} watching · ${idleNow.toLocaleString('en-TZ')} idle`
+                : 'Active live sessions within runtime TTL'
+            }
           />
           <MetricCard
             title="New Subscriptions Today"

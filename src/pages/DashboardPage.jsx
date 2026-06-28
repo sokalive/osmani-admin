@@ -35,6 +35,8 @@ function DashboardPage() {
       const [snap, t] = await Promise.all([getAnalyticsSnapshot(), getAnalyticsTrend()])
       setOverview({
         onlineNow: snap?.onlineNow,
+        watchingNow: snap?.watchingNow,
+        idleNow: snap?.idleNow,
         totalUniqueDevices: snap?.totalUniqueDevices,
         revenueToday: snap?.revenueToday,
         newUsersToday: snap?.newUsersToday,
@@ -121,6 +123,8 @@ function DashboardPage() {
             <LiveUserLocationsCard
               locations={locations}
               totalOnline={Number(overview?.onlineNow) || 0}
+              watchingNow={Number(overview?.watchingNow) || 0}
+              idleNow={Number(overview?.idleNow) || 0}
             />
           </section>
         </div>

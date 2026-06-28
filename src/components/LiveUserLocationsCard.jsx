@@ -90,13 +90,21 @@ export function LiveLocationRowList({ rows, scroll = true, className = '' }) {
 /**
  * Same footprint as other `.dashboard-card` tiles — header fixed, list scrolls inside.
  */
-function LiveUserLocationsCard({ locations, totalOnline = 0, className = 'dashboard-card' }) {
+function LiveUserLocationsCard({
+  locations,
+  totalOnline = 0,
+  watchingNow = 0,
+  idleNow = 0,
+  className = 'dashboard-card',
+}) {
   const rows = useMemo(() => normalizePlaceRows(locations), [locations])
   const rowTotal = useMemo(
     () => rows.reduce((sum, row) => sum + (Number(row.users) || 0), 0),
     [rows],
   )
   const total = rowTotal > 0 ? rowTotal : Math.max(0, Math.floor(Number(totalOnline) || 0))
+  const watching = Math.max(0, Math.floor(Number(watchingNow) || 0))
+  const idle = Math.max(0, Math.floor(Number(idleNow) || 0))
 
   return (
     <article
@@ -114,6 +122,20 @@ function LiveUserLocationsCard({ locations, totalOnline = 0, className = 'dashbo
         <p className="live-locations-total mb-3 text-sm font-semibold text-slate-300">
           Total Online Users:{' '}
           <span className="font-bold tabular-nums text-white">{total.toLocaleString('en-US')}</span>
+          {watching > 0 || idle > 0 ? (
+            <span className="mt-1 block text-xs font-medium text-slate-400">
+              <span className="tabular-nums text-emerald-300">{watching.toLocaleString('en-US')}</span>{' '}
+              watching
+              {idle > 0 ? (
+                <>
+                  {' '}
+                  ·{' '}
+                  <span className="tabular-nums text-amber-200/90">{idle.toLocaleString('en-US')}</span>{' '}
+                  idle (app open)
+                </>
+              ) : null}
+            </span>
+          ) : null}
         </p>
         <LiveLocationRowList rows={rows} />
       </div>

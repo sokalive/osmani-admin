@@ -353,6 +353,42 @@ async function main() {
 
   const locSum = (snapCombo.locations || []).reduce((a, r) => a + (Number(r.users) || 0), 0)
   const mwSum = (snapCombo.mostWatched || []).reduce((a, r) => a + (Number(r.viewers) || 0), 0)
+  const watchingNow = Number(snapCombo.watchingNow) || 0
+  const idleNow = Number(snapCombo.idleNow) || 0
+  const onlineNow = Number(snapCombo.onlineNow) || 0
+
+  if (watchingNow === mwSum) {
+    pass(`watchingNow matches mostWatched sum (${watchingNow})`)
+    evidence.steps.push({
+      step: 'watchingNow vs mostWatched',
+      ok: true,
+      detail: `watching=${watchingNow} mwSum=${mwSum}`,
+    })
+  } else {
+    fail(`watchingNow ${watchingNow} != mostWatched sum ${mwSum}`)
+    evidence.steps.push({
+      step: 'watchingNow vs mostWatched',
+      ok: false,
+      detail: `watching=${watchingNow} mwSum=${mwSum}`,
+    })
+  }
+
+  if (onlineNow === watchingNow + idleNow) {
+    pass(`onlineNow split consistent (${onlineNow} = ${watchingNow} + ${idleNow})`)
+    evidence.steps.push({
+      step: 'onlineNow watching+idle',
+      ok: true,
+      detail: `online=${onlineNow} watching=${watchingNow} idle=${idleNow}`,
+    })
+  } else {
+    fail(`onlineNow ${onlineNow} != watching ${watchingNow} + idle ${idleNow}`)
+    evidence.steps.push({
+      step: 'onlineNow watching+idle',
+      ok: false,
+      detail: `online=${onlineNow} watching=${watchingNow} idle=${idleNow}`,
+    })
+  }
+
   if (mwSum <= locSum) {
     pass(`watching tally consistent (mostWatched sum ${mwSum} <= locations sum ${locSum})`)
     evidence.steps.push({

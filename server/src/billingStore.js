@@ -915,17 +915,20 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
   return null
 }
 
-/** Touch live presence row so analytics can reflect app-open presence immediately. */
+/** Touch live presence only when a channel is active (avoids idle verify/SSE inflation). */
 export async function touchLivePresence({ deviceId, country = null, channelId = null, channelName = null }) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return null
+  const safeChannelId = sanitizePresenceText(channelId, 128)
+  const safeChannelName = sanitizePresenceText(channelName, 128)
+  if (!safeChannelId && !safeChannelName) return null
   const rawLab = normalizeLocationPayload({ country: country ?? '' })
   const safeCountry = rawLab ? sanitizePresenceText(rawLab, 120) : null
   const out = await upsertLiveSession(pool, {
     deviceId: d,
-    channelId: sanitizePresenceText(channelId, 128),
-    channelName: sanitizePresenceText(channelName, 128),
+    channelId: safeChannelId,
+    channelName: safeChannelName,
     country: safeCountry,
   })
   return { deviceId: d, country: safeCountry, channelId: out.channelId }

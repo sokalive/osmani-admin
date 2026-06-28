@@ -24,12 +24,21 @@ function parseInstallInstanceIdFromBody(body) {
  */
 export async function upsertLiveSession(
   pool,
-  { deviceId, channelId = null, channelName = null, country = null, installBody = null },
+  {
+    deviceId,
+    channelId = null,
+    channelName = null,
+    country = null,
+    installBody = null,
+    clearChannel = false,
+  },
 ) {
   const d = parseDeviceId(deviceId)
   if (!d) throw new Error('device_id is required')
 
-  const resolvedChannel = await resolveAnalyticsChannelRef(pool, { channelId, channelName })
+  const resolvedChannel = clearChannel
+    ? null
+    : await resolveAnalyticsChannelRef(pool, { channelId, channelName })
   const safeCountry = country ? String(country).slice(0, 120) : null
 
   await pool.query(
@@ -37,13 +46,14 @@ export async function upsertLiveSession(
      VALUES ($1, $2, $3, now(), now())
      ON CONFLICT (device_id) DO UPDATE SET
        channel_id = CASE
+         WHEN $4::boolean THEN NULL
          WHEN EXCLUDED.channel_id IS NOT NULL AND trim(EXCLUDED.channel_id) <> ''
            THEN EXCLUDED.channel_id
          ELSE live_sessions.channel_id
        END,
        country = COALESCE(EXCLUDED.country, live_sessions.country),
        updated_at = now()`,
-    [d, resolvedChannel, safeCountry],
+    [d, resolvedChannel, safeCountry, clearChannel === true],
   )
 
   const body = installBody && typeof installBody === 'object' ? installBody : {}
