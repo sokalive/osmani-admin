@@ -8,6 +8,14 @@ function debugLog(label, data) {
   console.info(`[banner-save] ${label}`, data)
 }
 
+function resolveTriStateFlag(m, keys, defaultVal = true) {
+  for (const key of keys) {
+    if (m[key] === true) return true
+    if (m[key] === false) return false
+  }
+  return defaultVal
+}
+
 /**
  * Canonical JSON body for POST/PUT /api/banners.
  * Matches mobile GET /api/banners fields: title, description, event_timer, redirect_channel_id,
@@ -40,8 +48,10 @@ export function bannerSaveBody(b, overrides = {}) {
       return Number.isFinite(n) ? n : null
     })(),
     sortOrder,
-    isActive: m.isActive !== false && m.is_active !== false && m.active !== false,
-    isEnabled: m.isEnabled !== false && m.enabled !== false,
+    active: resolveTriStateFlag(m, ['isActive', 'active', 'is_active'], true),
+    isActive: resolveTriStateFlag(m, ['isActive', 'active', 'is_active'], true),
+    enabled: resolveTriStateFlag(m, ['isEnabled', 'enabled', 'is_enabled'], true),
+    isEnabled: resolveTriStateFlag(m, ['isEnabled', 'enabled', 'is_enabled'], true),
     useTimer,
     event_timer: useTimer,
     eventTimer: useTimer,

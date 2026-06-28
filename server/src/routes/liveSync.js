@@ -126,6 +126,15 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
       send('banners_changed', {
         v: packet.configVersion,
         action: packet?.payload?.action ?? null,
+        bannerId: packet?.payload?.bannerId ?? null,
+        updatedAt: packet?.payload?.updatedAt ?? packet?.payload?.synced_at ?? null,
+        reason: String(packet.event || 'sync'),
+      })
+      send('banner_updated', {
+        v: packet.configVersion,
+        action: packet?.payload?.action ?? null,
+        bannerId: packet?.payload?.bannerId ?? null,
+        updatedAt: packet?.payload?.updatedAt ?? packet?.payload?.synced_at ?? null,
         reason: String(packet.event || 'sync'),
       })
     }

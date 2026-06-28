@@ -12,7 +12,6 @@ import {
   putBanner,
   syncStreamUrl,
 } from '../lib/api'
-import { bannerSaveBody } from '../lib/bannerSaveBody'
 import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
@@ -79,6 +78,7 @@ function BannersPage() {
     const onChanged = () => {
       void loadBanners()
     }
+    es.addEventListener('banners_changed', onChanged)
     es.addEventListener('config.banners_changed', onChanged)
     return () => es.close()
   }, [loadBanners])
@@ -139,7 +139,7 @@ function BannersPage() {
     try {
       const rest = { ...payload }
       delete rest.id
-      await postBanner(bannerSaveBody(rest))
+      await postBanner(rest)
       await loadBanners()
       setAddOpen(false)
       showToast('success', 'Banner created.')
@@ -152,15 +152,7 @@ function BannersPage() {
     try {
       const { id, ...rest } = payload
       if (!id) return
-      const saveBody = bannerSaveBody({ ...editingBanner, ...rest })
-      if (import.meta.env.DEV) {
-        console.info('[banner-save] edit submit form.runtimePosition', rest.runtimePosition)
-        console.info('[banner-save] edit submit saveBody', {
-          runtime_position: saveBody.runtime_position,
-          runtimePosition: saveBody.runtimePosition,
-        })
-      }
-      await putBanner(id, saveBody)
+      await putBanner(id, { ...editingBanner, ...rest })
       await loadBanners()
       setEditingBanner(null)
       showToast('success', 'Banner updated.')

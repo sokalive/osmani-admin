@@ -1310,6 +1310,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         v: packet.configVersion,
         event,
         action: packet?.payload?.action ?? null,
+        bannerId: packet?.payload?.bannerId ?? null,
+        updatedAt: packet?.payload?.updatedAt ?? packet?.payload?.synced_at ?? null,
         reason: event,
       })
       res.write(`event: catalog_refresh\ndata: ${body}\n\n`)
@@ -1319,6 +1321,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       }
       if (event === 'config.banners_changed') {
         res.write(`event: banners_changed\ndata: ${body}\n\n`)
+        res.write(`event: banner_updated\ndata: ${body}\n\n`)
       }
       if (event === 'config.plans_changed') {
         res.write(`event: plans_changed\ndata: ${body}\n\n`)

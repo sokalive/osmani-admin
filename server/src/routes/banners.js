@@ -12,8 +12,19 @@ import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
 import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { invalidateApiCacheNamespace } from '../lib/apiResponseCache.js'
 import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+
+function publishBannersChanged(action, extra = {}) {
+  invalidateApiCacheNamespace('banners')
+  return liveSyncBus.publish('config.banners_changed', {
+    topics: ['config'],
+    action,
+    synced_at: new Date().toISOString(),
+    ...extra,
+  })
+}
 
 export const bannersRouter = Router()
 
@@ -281,11 +292,7 @@ bannersRouter.post('/reorder', requireAdminPanelAccess, async (req, res) => {
       return res.status(400).json({ error: 'orders array required' })
     }
     const updated = await bannerStore.reorderBanners(orders)
-    liveSyncBus.publish('config.banners_changed', {
-      topics: ['config'],
-      action: 'reordered',
-      synced_at: new Date().toISOString(),
-    })
+    publishBannersChanged('reordered')
     res.json({ ok: true, updated })
   } catch (e) {
     console.error('[banners] POST /reorder failed:', e)
@@ -333,12 +340,7 @@ bannersRouter.post('/', requireAdminPanelAccess, maybeUploadBanner, async (req, 
     })
     const full = await bannerStore.getBannerById(inserted.id)
     logRuntimePositionDebug('POST DB row', { id: inserted.id, runtime_position: full?.runtime_position })
-    liveSyncBus.publish('config.banners_changed', {
-      topics: ['config'],
-      action: 'created',
-      bannerId: inserted.id,
-      synced_at: new Date().toISOString(),
-    })
+    publishBannersChanged('created', { bannerId: inserted.id })
     const responseBody = bannerToResponse(full, req)
     logRuntimePositionDebug('POST API response', {
       id: responseBody?.id,
@@ -417,11 +419,9 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
     }
     const full = await bannerStore.getBannerById(id)
     logRuntimePositionDebug('PUT DB row', { id, runtime_position: full?.runtime_position })
-    liveSyncBus.publish('config.banners_changed', {
-      topics: ['config'],
-      action: 'updated',
+    publishBannersChanged('updated', {
       bannerId: id,
-      synced_at: new Date().toISOString(),
+      updatedAt: full?.updated_at instanceof Date ? full.updated_at.toISOString() : full?.updated_at ?? null,
     })
     const responseBody = bannerToResponse(full, req)
     logRuntimePositionDebug('PUT API response', {
@@ -456,12 +456,7 @@ bannersRouter.delete('/:id', requireAdminPanelAccess, async (req, res) => {
     }
     await bannerStore.deleteBannerById(id)
     await unlinkUploadIfAny(existing.image)
-    liveSyncBus.publish('config.banners_changed', {
-      topics: ['config'],
-      action: 'deleted',
-      bannerId: id,
-      synced_at: new Date().toISOString(),
-    })
+    publishBannersChanged('deleted', { bannerId: id })
     res.status(204).send()
   } catch (e) {
     console.error('[banners] DELETE /:id failed:', e)
