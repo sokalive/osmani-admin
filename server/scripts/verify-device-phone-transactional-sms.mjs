@@ -12,6 +12,7 @@ import {
   buildExpiryReminderSms,
   buildPaymentSuccessSms,
   formatExpirySwahili,
+  formatSwahiliClockTime,
   formatTzPrice,
   subscriptionPeriodKey,
 } from '../src/lib/smsTransactionalMessages.js'
@@ -59,13 +60,15 @@ function testMessageBuilders() {
   }
 
   const reminder = buildExpiryReminderSms({
-    planName: 'Wiki',
+    planName: 'Wiki 1',
     price: 3000,
     currency: 'TZS',
     expiresAt,
   })
-  if (!reminder.includes('Kumbusho!') || !reminder.includes('kinaisha kesho saa')) {
+  if (!reminder.includes('Kumbusho!') || !reminder.includes('kinaisha kesho Saa')) {
     fail('expiry_reminder wording')
+  } else if (!reminder.includes('Vipindi Vyote Live kupitia simu yako')) {
+    fail('expiry_reminder CTA')
   } else {
     ok('expiry_reminder message builder')
   }
@@ -109,6 +112,7 @@ function testMessageBuilders() {
   else ok('subscriptionPeriodKey', key)
 
   ok('formatTzPrice', formatTzPrice(3000))
+  ok('formatSwahiliClockTime', formatSwahiliClockTime(expiresAt))
   ok('formatExpirySwahili', formatExpirySwahili(expiresAt))
 }
 
