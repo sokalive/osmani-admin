@@ -777,6 +777,31 @@ export async function postManualSubscriptionGrant({ deviceId, durationDays, pin 
   return body
 }
 
+/** Admin: custom manual grant with explicit start/expiry (PIN validated on server). */
+export async function postManualSubscriptionGrantCustom({
+  deviceId,
+  planId,
+  startedAt,
+  expiresAt,
+  pin,
+}) {
+  const res = await fetch(joinPath('/admin/manual-subscription/grant-custom'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      device_id: String(deviceId ?? '').trim(),
+      plan_id: Number(planId),
+      started_at: startedAt,
+      expires_at: expiresAt,
+      pin: String(pin ?? ''),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
 export async function getManualSubscriptionHistory() {
   const bust = `_cb=${Date.now()}`
   const res = await fetch(joinPath(`/admin/manual-subscription/history?${bust}`), {

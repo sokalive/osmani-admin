@@ -96,15 +96,22 @@ manualSubscriptionAdminRouter.post('/setup-pin', rateLimitSetup, async (req, res
   }
 })
 
-function logManualSubscriptionAudit(action, deviceId) {
+function logManualSubscriptionAudit(action, deviceId, extra = {}) {
   console.log(
     '[manual_subscription_audit]',
     JSON.stringify({
       action,
       device_id: deviceId,
       timestamp: new Date().toISOString(),
+      ...extra,
     }),
   )
+}
+
+function adminCreatedByLabel(req) {
+  if (req?.adminAuth?.email) return String(req.adminAuth.email).trim().slice(0, 256)
+  if (req?.adminAuth?.legacy) return 'legacy_token'
+  return 'admin'
 }
 
 /** Safe DB routing fingerprint for logs (no credentials). */
@@ -351,6 +358,84 @@ manualSubscriptionAdminRouter.delete('/history/:grantId', async (req, res) => {
   } catch (e) {
     console.error('[manual_subscription delete history]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+manualSubscriptionAdminRouter.post('/grant-custom', rateLimitGrant, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const pin = String(body.pin ?? '').trim()
+    if (!pin) {
+      return res.status(400).json({ ok: false, error: 'PIN is required' })
+    }
+    if (!(await billing.verifyManualSubscriptionGrantPin(pin))) {
+      console.warn('[manual_grant_custom] invalid PIN', {
+        ip: String(req.headers['x-forwarded-for'] ?? '').slice(0, 40),
+      })
+      return res.status(403).json({ ok: false, error: 'Invalid PIN' })
+    }
+
+    const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
+    const planId = Number(body.plan_id ?? body.planId)
+    const startedAt = body.started_at ?? body.startedAt
+    const expiresAt = body.expires_at ?? body.expiresAt
+    if (!deviceId || !Number.isFinite(planId) || planId < 1 || !startedAt || !expiresAt) {
+      return res.status(400).json({
+        ok: false,
+        error: 'device_id, plan_id, started_at, and expires_at are required',
+      })
+    }
+
+    const result = await billing.grantCustomManualDeviceSubscription(deviceId, {
+      planId,
+      startedAt,
+      expiresAt,
+      createdBy: adminCreatedByLabel(req),
+    })
+
+    deviceSubscriptionBus.emit('update', { deviceId })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId,
+      orderId: `manual_grant:${result.grantId}`,
+    })
+    void recordSystemNotificationEvent('subscription_manual_grant', {
+      device_id: deviceId,
+      grant_id: result.grantId,
+      duration_days: result.durationDays,
+      custom_expiry: true,
+      manual_custom: true,
+    }).catch((err) => {
+      console.error('[manual_grant_custom] notification sync failed:', err)
+    })
+
+    logManualSubscriptionAudit('grant_custom', deviceId, {
+      grant_id: result.grantId,
+      plan_id: planId,
+      custom_expiry: true,
+      created_by: result.createdBy,
+    })
+
+    res.json({
+      ok: true,
+      grantId: result.grantId,
+      nonce: result.nonce,
+      expiresAt: result.expiresAt,
+      startedAt: result.startedAt,
+      durationDays: result.durationDays,
+      planId: result.planId,
+      planName: result.planName,
+      customExpiry: true,
+      manualCustom: true,
+      createdBy: result.createdBy,
+    })
+  } catch (e) {
+    const msg = String(e?.message || e)
+    if (/must be later|Invalid started_at|Invalid expires_at|Plan not found/i.test(msg)) {
+      return res.status(400).json({ ok: false, error: msg })
+    }
+    console.error('[manual_grant_custom]', e)
+    res.status(500).json({ ok: false, error: msg })
   }
 })
 

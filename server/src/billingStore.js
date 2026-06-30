@@ -999,6 +999,84 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   }
 }
 
+function parseAdminTimestamptz(value, label) {
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) {
+    throw new Error(`Invalid ${label}`)
+  }
+  return d
+}
+
+/**
+ * Admin custom manual grant — exact start/expiry chosen by admin (no duration stacking).
+ * Same gift popup + device_subscriptions activation path as {@link grantManualDeviceSubscription}.
+ */
+export async function grantCustomManualDeviceSubscription(
+  deviceId,
+  { planId, startedAt, expiresAt, createdBy = 'admin' },
+  client = null,
+) {
+  const q = dbQuery(client)
+  const d = String(deviceId ?? '').trim()
+  const pid = Number(planId)
+  const start = parseAdminTimestamptz(startedAt, 'started_at')
+  const exp = parseAdminTimestamptz(expiresAt, 'expires_at')
+  if (!d || !Number.isFinite(pid) || pid < 1) {
+    throw new Error('device_id and plan_id are required')
+  }
+  if (exp.getTime() <= start.getTime()) {
+    throw new Error('expires_at must be later than started_at')
+  }
+
+  const plan = await getPlanRowByIdAny(pid)
+  if (!plan || plan.deleted_at) {
+    throw new Error('Plan not found')
+  }
+  const days = Math.max(1, Math.floor(Number(plan.duration_days) || 0))
+  const creator = String(createdBy ?? 'admin').trim().slice(0, 256) || 'admin'
+
+  const ins = await q(
+    `INSERT INTO manual_subscription_grants (
+       device_id, duration_days, plan_id, created_by, manual_custom, custom_expiry,
+       started_at_custom, expires_at_custom
+     )
+     VALUES ($1, $2, $3, $4, true, true, $5::timestamptz, $6::timestamptz)
+     RETURNING id, nonce`,
+    [d, days, pid, creator, start.toISOString(), exp.toISOString()],
+  )
+  const grantId = Number(ins.rows[0]?.id)
+  const nonce = ins.rows[0]?.nonce
+  if (!grantId || nonce == null) throw new Error('manual custom grant insert failed')
+
+  const orderId = `manual_grant:${grantId}`
+  const { skipped } = await upsertDeviceSubscriptionActiveAt(
+    { deviceId: d, orderId, expiresAt: exp.toISOString(), startedAt: start.toISOString() },
+    client,
+  )
+  if (skipped) {
+    console.warn('[manual_grant_custom] unexpected upsert skip — order_id should be unique:', orderId)
+  }
+
+  await q(`UPDATE manual_subscription_grants SET expires_at_snapshot = $2::timestamptz WHERE id = $1`, [
+    grantId,
+    exp.toISOString(),
+  ])
+
+  return {
+    grantId,
+    nonce: String(nonce),
+    expiresAt: exp.toISOString(),
+    startedAt: start.toISOString(),
+    durationDays: days,
+    planId: pid,
+    planName: String(plan.name ?? ''),
+    customExpiry: true,
+    manualCustom: true,
+    createdBy: creator,
+    skipped,
+  }
+}
+
 /** FIFO pending manual gift for verify popup (oldest unacknowledged grant first). */
 export async function getOldestPendingManualGrant(deviceId) {
   const pool = requirePool()
@@ -1069,8 +1147,15 @@ export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
        g.id,
        g.device_id,
        g.duration_days,
+       g.plan_id,
+       g.created_by,
+       g.manual_custom,
+       g.custom_expiry,
+       g.started_at_custom,
+       g.expires_at_custom,
        g.created_at AS granted_at,
        g.expires_at_snapshot,
+       p.name AS plan_name,
        COALESCE(ds.manual_admin_blocked, false) AS manual_admin_blocked,
        COALESCE(
          (SELECT bool_or(ad.is_blocked) FROM admin_devices ad WHERE ad.device_id = g.device_id),
@@ -1080,6 +1165,7 @@ export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
        ds.status AS subscription_status
      FROM manual_subscription_grants g
      LEFT JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     LEFT JOIN plans p ON p.id = g.plan_id
      WHERE g.deleted_at IS NULL
      ORDER BY g.created_at DESC
      LIMIT $1`,
@@ -1115,6 +1201,23 @@ export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
       id: Number(r.id),
       deviceId: String(r.device_id ?? ''),
       durationDays: Number(r.duration_days) || 0,
+      planId: r.plan_id != null ? Number(r.plan_id) : null,
+      planName: r.plan_name != null ? String(r.plan_name) : '',
+      createdBy: r.created_by != null ? String(r.created_by) : null,
+      manualCustom: r.manual_custom === true,
+      customExpiry: r.custom_expiry === true,
+      startedAtCustom:
+        r.started_at_custom instanceof Date
+          ? r.started_at_custom.toISOString()
+          : r.started_at_custom != null
+            ? new Date(r.started_at_custom).toISOString()
+            : null,
+      expiresAtCustom:
+        r.expires_at_custom instanceof Date
+          ? r.expires_at_custom.toISOString()
+          : r.expires_at_custom != null
+            ? new Date(r.expires_at_custom).toISOString()
+            : null,
       grantedAt:
         r.granted_at instanceof Date ? r.granted_at.toISOString() : r.granted_at != null
           ? new Date(r.granted_at).toISOString()
@@ -1309,6 +1412,48 @@ export async function upsertDeviceSubscriptionActive(
     void import('./lib/smsSubscriptionHooks.js')
       .then((m) => m.notifySubscriptionActivated({ deviceId: d, orderId: oid, expiresAt }))
       .catch((err) => console.warn('[sms] activation notify failed:', err))
+    void import('./lib/subscriptionAccessCache.js')
+      .then((m) => m.invalidateSubscriptionAccessCache(d))
+      .catch(() => {})
+  } catch (e) {
+    if (e?.code === '23505') {
+      console.log('[device_subscriptions] duplicate transaction_id (race):', oid)
+      return { skipped: true }
+    }
+    throw e
+  }
+  return { skipped: false }
+}
+
+/**
+ * Admin custom grant — sets exact started_at and expires_at (no stacking on started_at).
+ */
+export async function upsertDeviceSubscriptionActiveAt(
+  { deviceId, orderId, expiresAt, startedAt },
+  client = null,
+) {
+  const q = dbQuery(client)
+  const d = String(deviceId ?? '').trim()
+  const oid = String(orderId ?? '').trim()
+  const exp = parseAdminTimestamptz(expiresAt, 'expires_at')
+  const start = parseAdminTimestamptz(startedAt, 'started_at')
+  if (!d || !oid) throw new Error('deviceId and orderId required')
+  if (await deviceSubscriptionOrderAlreadyApplied(oid, client)) {
+    console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
+    return { skipped: true }
+  }
+  try {
+    await q(
+      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at)
+       VALUES ($1, 'active', $2::timestamptz, $3::timestamptz, $4, now())
+       ON CONFLICT (device_id) DO UPDATE SET
+         status = 'active',
+         expires_at = EXCLUDED.expires_at,
+         started_at = EXCLUDED.started_at,
+         transaction_id = EXCLUDED.transaction_id,
+         updated_at = now()`,
+      [d, exp.toISOString(), start.toISOString(), oid],
+    )
     void import('./lib/subscriptionAccessCache.js')
       .then((m) => m.invalidateSubscriptionAccessCache(d))
       .catch(() => {})

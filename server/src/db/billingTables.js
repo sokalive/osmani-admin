@@ -729,6 +729,24 @@ export async function ensureBillingTables(client) {
     ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
   `)
   await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS plan_id INTEGER REFERENCES plans (id) ON DELETE SET NULL;
+  `)
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS created_by TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS manual_custom BOOLEAN NOT NULL DEFAULT false;
+  `)
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS custom_expiry BOOLEAN NOT NULL DEFAULT false;
+  `)
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS started_at_custom TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE manual_subscription_grants ADD COLUMN IF NOT EXISTS expires_at_custom TIMESTAMPTZ;
+  `)
+  await client.query(`
     ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS manual_admin_blocked BOOLEAN NOT NULL DEFAULT false;
   `)
 

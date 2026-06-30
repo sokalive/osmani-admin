@@ -144,6 +144,7 @@ restApi.get('/', (_req, res) => {
       '/admin/auth/admin-security/destructive/execute',
       '/admin/auth/emergency-pin',
       '/admin/manual-subscription/grant',
+      '/admin/manual-subscription/grant-custom',
       '/admin/manual-subscription/history',
       '/admin/manual-subscription/block',
       '/admin/manual-subscription/unblock',

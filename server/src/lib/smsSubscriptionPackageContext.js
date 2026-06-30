@@ -47,12 +47,23 @@ async function packageFromTransactionOrderId(orderId) {
     if (!Number.isSafeInteger(grantId) || grantId < 1) return null
     const pool = getPool()
     const { rows } = await pool.query(
-      `SELECT id, duration_days FROM manual_subscription_grants
+      `SELECT id, duration_days, plan_id FROM manual_subscription_grants
        WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
       [grantId],
     )
     const grant = rows[0]
     if (!grant) return null
+    if (grant.plan_id != null) {
+      const plan = await getPlanRowByIdAny(grant.plan_id)
+      if (plan) {
+        return {
+          planName: String(plan.name ?? ''),
+          price: plan.price != null ? Number(plan.price) : null,
+          currency: 'TZS',
+          source: 'manual_grant',
+        }
+      }
+    }
     const plan = await planByDurationDays(grant.duration_days)
     return {
       planName: plan?.name ? String(plan.name) : '',

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Gift, History, Ticket } from 'lucide-react'
+import { CalendarClock, Gift, History, Ticket } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import SecurityPinModal from '../components/SecurityPinModal'
 import Topbar from '../components/Topbar'
@@ -14,6 +14,7 @@ import {
   postManualSubscriptionBulkBlock,
   postManualSubscriptionBulkUnblock,
   postManualSubscriptionGrant,
+  postManualSubscriptionGrantCustom,
   postManualSubscriptionHistoryBulkDelete,
   postManualSubscriptionUnblock,
   postOfferCodeBlock,
@@ -23,7 +24,7 @@ import {
   postOfferCodeGenerate,
   postOfferCodeUnblock,
 } from '../lib/api'
-import { formatAdminDateTime } from '../lib/formatAdminDateTime'
+import { formatAdminDateTime, adminDateAndTimeToIso, adminDateFromIso, adminTimeFromIso } from '../lib/formatAdminDateTime'
 import {
   filterSelectableSubscriptionPlans,
   formatManualGrantPlanLabel,
@@ -76,6 +77,25 @@ function bulkResultToast(body) {
   return { tone: 'success', msg: 'Imefanikiwa' }
 }
 
+function eatNowDateTimeFields() {
+  const iso = new Date().toISOString()
+  return {
+    date: adminDateFromIso(iso) || '',
+    time: adminTimeFromIso(iso) || '12:00',
+  }
+}
+
+function expiryFieldsFromPlan(plan, startDate, startTime) {
+  const startIso = adminDateAndTimeToIso(startDate, startTime)
+  const days = planDurationDays(plan) || 7
+  const base = startIso ? new Date(startIso).getTime() : Date.now()
+  const expIso = new Date(base + days * 86400000).toISOString()
+  return {
+    date: adminDateFromIso(expIso) || '',
+    time: adminTimeFromIso(expIso) || '12:00',
+  }
+}
+
 function ManualSubscriptionPage() {
   const { showToast } = useToast()
   const [tab, setTab] = useState('grant')
@@ -86,6 +106,15 @@ function ManualSubscriptionPage() {
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [flash, setFlash] = useState(null)
+
+  const [customDeviceId, setCustomDeviceId] = useState('')
+  const [customPlanId, setCustomPlanId] = useState('')
+  const [customPin, setCustomPin] = useState('')
+  const [customBusy, setCustomBusy] = useState(false)
+  const [customStartDate, setCustomStartDate] = useState('')
+  const [customStartTime, setCustomStartTime] = useState('')
+  const [customExpireDate, setCustomExpireDate] = useState('')
+  const [customExpireTime, setCustomExpireTime] = useState('')
 
   const [historyRows, setHistoryRows] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -117,6 +146,11 @@ function ManualSubscriptionPage() {
     [selectablePlans, offerSelectedPlanId],
   )
 
+  const customSelectedPlan = useMemo(
+    () => selectablePlans.find((p) => String(p.id) === String(customPlanId)) ?? null,
+    [selectablePlans, customPlanId],
+  )
+
   const loadPlans = useCallback(async () => {
     setPlansLoading(true)
     try {
@@ -131,11 +165,16 @@ function ManualSubscriptionPage() {
         if (prev && list.some((p) => String(p.id) === String(prev))) return prev
         return list[0] ? String(list[0].id) : ''
       })
+      setCustomPlanId((prev) => {
+        if (prev && list.some((p) => String(p.id) === String(prev))) return prev
+        return list[0] ? String(list[0].id) : ''
+      })
     } catch (err) {
       showToast('error', err?.message || 'Mipango haikuweza kupakiwa')
       setPlans([])
       setSelectedPlanId('')
       setOfferSelectedPlanId('')
+      setCustomPlanId('')
     } finally {
       setPlansLoading(false)
     }
@@ -152,6 +191,16 @@ function ManualSubscriptionPage() {
   useEffect(() => {
     if (tab !== 'offer') setOfferSelected(new Set())
   }, [tab])
+
+  useEffect(() => {
+    if (tab !== 'custom' || !customSelectedPlan) return
+    const start = eatNowDateTimeFields()
+    setCustomStartDate(start.date)
+    setCustomStartTime(start.time)
+    const exp = expiryFieldsFromPlan(customSelectedPlan, start.date, start.time)
+    setCustomExpireDate(exp.date)
+    setCustomExpireTime(exp.time)
+  }, [tab, customPlanId, customSelectedPlan])
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -337,6 +386,52 @@ function ManualSubscriptionPage() {
     }
   }
 
+  async function handleCustomSubmit(e) {
+    e.preventDefault()
+    const d = customDeviceId.trim()
+    if (!d) {
+      showToast('error', 'Ingiza Device ID')
+      return
+    }
+    if (!customPin.trim()) {
+      showToast('error', 'Ingiza PIN kabla ya kuweka kifurushi')
+      return
+    }
+    if (!customSelectedPlan) {
+      showToast('error', 'Chagua kifurushi')
+      return
+    }
+    const startedAt = adminDateAndTimeToIso(customStartDate, customStartTime)
+    const expiresAt = adminDateAndTimeToIso(customExpireDate, customExpireTime)
+    if (!startedAt || !expiresAt) {
+      showToast('error', 'Tarehe na saa za kuanza na kuisha zinahitajika')
+      return
+    }
+    if (new Date(expiresAt).getTime() <= new Date(startedAt).getTime()) {
+      showToast('error', 'Tarehe ya kuisha lazima iwe baada ya tarehe ya kuanza')
+      return
+    }
+    setCustomBusy(true)
+    try {
+      const out = await postManualSubscriptionGrantCustom({
+        deviceId: d,
+        planId: customSelectedPlan.id,
+        startedAt,
+        expiresAt,
+        pin: customPin.trim(),
+      })
+      setFlash({
+        type: 'success',
+        message: `Kifurushi kimewekwa. Muda wa mwisho: ${formatAdminDateTime(out.expiresAt, { fallback: '—' })} (grant #${out.grantId ?? '—'})`,
+      })
+      void loadHistory()
+    } catch (err) {
+      showToast('error', err?.message || 'Imeshindikana')
+    } finally {
+      setCustomBusy(false)
+    }
+  }
+
   async function handleBlock(device_id) {
     setHistoryBusyId(`b:${device_id}`)
     try {
@@ -451,6 +546,12 @@ function ManualSubscriptionPage() {
           <button type="button" className={tabBtn(tab === 'grant')} onClick={() => setTab('grant')}>
             Toa Kifurushi
           </button>
+          <button type="button" className={tabBtn(tab === 'custom')} onClick={() => setTab('custom')}>
+            <span className="inline-flex items-center gap-2">
+              <CalendarClock className="h-4 w-4 opacity-90" aria-hidden />
+              Custom Subscription
+            </span>
+          </button>
           <button
             type="button"
             className={tabBtn(tab === 'history')}
@@ -535,6 +636,132 @@ function ManualSubscriptionPage() {
                 className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-transform hover:scale-[1.01] disabled:opacity-60 sm:w-auto sm:min-w-[200px] sm:px-8"
               >
                 {busy ? 'Inaweka…' : 'Weka Kifurushi'}
+              </button>
+            </form>
+          </section>
+        ) : tab === 'custom' ? (
+          <section className="max-w-xl space-y-5 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-6 ring-1 ring-white/[0.04]">
+            <p className="text-sm text-slate-400">
+              Weka kifurushi kwa muda maalum — chagua tarehe na saa za kuanza na kuisha (EAT).
+            </p>
+            <form onSubmit={handleCustomSubmit} className="space-y-4">
+              <div>
+                <label htmlFor="cs-device" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Device ID
+                </label>
+                <input
+                  id="cs-device"
+                  className={inputClass()}
+                  value={customDeviceId}
+                  onChange={(e) => setCustomDeviceId(e.target.value)}
+                  placeholder="000865b4f965515c"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="cs-plan" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Kifurushi
+                </label>
+                <select
+                  id="cs-plan"
+                  className={selectClass()}
+                  value={customPlanId}
+                  onChange={(e) => setCustomPlanId(e.target.value)}
+                  disabled={plansLoading || selectablePlans.length === 0}
+                >
+                  {plansLoading ? (
+                    <option value="">Inapakia mipango…</option>
+                  ) : selectablePlans.length === 0 ? (
+                    <option value="">Hakuna mipango hai</option>
+                  ) : (
+                    selectablePlans.map((p) => (
+                      <option key={p.id} value={String(p.id)}>
+                        {formatManualGrantPlanLabel(p)}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="cs-start-date" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Start Date
+                  </label>
+                  <input
+                    id="cs-start-date"
+                    type="date"
+                    className={inputClass()}
+                    value={customStartDate}
+                    onChange={(e) => setCustomStartDate(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="cs-start-time" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Start Time
+                  </label>
+                  <input
+                    id="cs-start-time"
+                    type="time"
+                    className={inputClass()}
+                    value={customStartTime}
+                    onChange={(e) => setCustomStartTime(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="cs-expire-date" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Expiry Date
+                  </label>
+                  <input
+                    id="cs-expire-date"
+                    type="date"
+                    className={inputClass()}
+                    value={customExpireDate}
+                    onChange={(e) => setCustomExpireDate(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="cs-expire-time" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Expiry Time
+                  </label>
+                  <input
+                    id="cs-expire-time"
+                    type="time"
+                    className={inputClass()}
+                    value={customExpireTime}
+                    onChange={(e) => setCustomExpireTime(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="cs-pin" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  PIN ya uhakiki
+                </label>
+                <input
+                  id="cs-pin"
+                  type="password"
+                  className={inputClass()}
+                  value={customPin}
+                  onChange={(e) => setCustomPin(e.target.value)}
+                  placeholder="Ingiza PIN"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={customBusy || plansLoading || !customSelectedPlan}
+                className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 py-3 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-transform hover:scale-[1.01] disabled:opacity-60 sm:w-auto sm:min-w-[200px] sm:px-8"
+              >
+                {customBusy ? 'Inaweka…' : 'Weka Custom Subscription'}
               </button>
             </form>
           </section>
@@ -675,6 +902,7 @@ function ManualSubscriptionPage() {
                     </th>
                     <th className="px-3 py-3 font-semibold">Device ID</th>
                     <th className="px-3 py-3 font-semibold">Muda</th>
+                    <th className="px-3 py-3 font-semibold">Aina</th>
                     <th className="px-3 py-3 font-semibold">Alipotolewa</th>
                     <th className="px-3 py-3 font-semibold">Mwisho</th>
                     <th className="px-3 py-3 font-semibold">Hali</th>
@@ -684,13 +912,13 @@ function ManualSubscriptionPage() {
                 <tbody className="divide-y divide-slate-800/80">
                   {historyLoading && historyRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                      <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
                         Inapakia…
                       </td>
                     </tr>
                   ) : historyRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                      <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
                         Hakuna rekodi bado.
                       </td>
                     </tr>
@@ -724,7 +952,27 @@ function ManualSubscriptionPage() {
                           <td className="max-w-[200px] truncate px-3 py-2.5 font-mono text-xs text-slate-200" title={row.deviceId}>
                             {shortDev}
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{row.durationDays} siku</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">
+                            {row.customExpiry
+                              ? row.planName
+                                ? `${row.planName} (custom)`
+                                : 'Custom'
+                              : `${row.durationDays} siku`}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            {row.customExpiry ? (
+                              <span className="inline-flex rounded-lg bg-violet-500/15 px-2 py-0.5 text-xs font-semibold text-violet-200 ring-1 ring-violet-500/30">
+                                Custom
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-500">Standard</span>
+                            )}
+                            {row.createdBy ? (
+                              <span className="mt-1 block max-w-[120px] truncate text-[10px] text-slate-500" title={row.createdBy}>
+                                {row.createdBy}
+                              </span>
+                            ) : null}
+                          </td>
                           <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.grantedAt)}</td>
                           <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.expiresAt)}</td>
                           <td className="px-3 py-2.5">
