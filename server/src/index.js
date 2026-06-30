@@ -21,6 +21,10 @@ import {
   isStartupReady,
   markStartupFailed,
   markStartupReady,
+  renderSuppressFatalExit,
+  shouldDeferMpingoRoutingStartupSync,
+  shouldWarmApiCachesOnStartup,
+  wireRenderProcessGuards,
 } from './lib/startupReadiness.js'
 import {
   getNotificationImageStorageDiagnostics,
@@ -290,9 +294,17 @@ async function runDeferredStartup({ background = false } = {}) {
         deferredStartupBackgroundTimer = null
       }
 
-      void import('./lib/warmApiCaches.js')
-        .then((m) => m.warmApiCaches())
-        .catch((e) => console.warn('[warm-cache] startup:', e?.message || e))
+      if (shouldWarmApiCachesOnStartup()) {
+        void import('./lib/warmApiCaches.js')
+          .then((m) => m.warmApiCaches())
+          .catch((e) => console.warn('[warm-cache] startup:', e?.message || e))
+      } else if (isRenderRuntime()) {
+        console.info('[warm-cache] skipped on Render (WARM_API_CACHE_ON_STARTUP=0)')
+      }
+
+      if (shouldDeferMpingoRoutingStartupSync()) {
+        ensureMpingoRoutingStartupSync()
+      }
 
       if (process.env.AUTO_RECONCILE_UNBLOCKED_PLAYBACK !== '0') {
         const { reconcileUnblockedPlaybackAccess } = await import(
@@ -322,7 +334,7 @@ async function runDeferredStartup({ background = false } = {}) {
           return
         }
         console.error('[startup] FATAL: deferred init exhausted retries')
-        process.exit(1)
+        renderSuppressFatalExit(1, 'deferred_startup_exhausted')
       }
       if (!background) {
         await sleep(STARTUP_RETRY_BASE_MS * attempt)
@@ -333,8 +345,11 @@ async function runDeferredStartup({ background = false } = {}) {
 
 async function main() {
   try {
+    wireRenderProcessGuards()
     wireApiCacheInvalidation()
-    ensureMpingoRoutingStartupSync()
+    if (!shouldDeferMpingoRoutingStartupSync()) {
+      ensureMpingoRoutingStartupSync()
+    }
 
     const server = app.listen(PORT, () => {
       console.log(
@@ -348,7 +363,7 @@ async function main() {
       } else {
         console.error(err)
       }
-      process.exit(1)
+      renderSuppressFatalExit(1, `http_server_error:${err?.code || 'unknown'}`)
     })
 
     try {
@@ -377,7 +392,7 @@ async function main() {
     void runDeferredStartup()
   } catch (err) {
     console.error('❌ Failed to start server:', err)
-    process.exit(1)
+    renderSuppressFatalExit(1, 'main_startup_catch')
   }
 }
 

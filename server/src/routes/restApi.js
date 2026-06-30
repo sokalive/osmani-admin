@@ -50,6 +50,7 @@ import { getPool } from '../db/pool.js'
 import { getApiCacheStats } from '../lib/apiResponseCache.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
 import { getPoolStats } from '../db/pool.js'
+import { isRenderRuntime, isStartupReady, getStartupError } from '../lib/startupReadiness.js'
 import { readPgConnectionStats, findSampleActiveDeviceId, findSampleActiveDeviceIds } from '../lib/pgConnectionStats.js'
 import { getVerifyDbStats } from '../lib/verifyDbResilience.js'
 import { readProcessCapacityStats } from '../lib/processCapacityStats.js'
@@ -224,6 +225,12 @@ restApi.get('/health', (_req, res) => {
     service: 'osmani-admin-api',
     time: new Date().toISOString(),
     commit: getServerGitCommit(),
+    startup: {
+      ready: isStartupReady(),
+      error: getStartupError(),
+      render: isRenderRuntime(),
+      uptime_sec: Math.round(process.uptime()),
+    },
   }
   if (
     String(process.env.API_CACHE_DEBUG || '').trim() === '1' ||
@@ -231,7 +238,7 @@ restApi.get('/health', (_req, res) => {
   ) {
     body.api_cache = getApiCacheStats()
   }
-  if (String(process.env.PG_POOL_STATS || '').trim() === '1') {
+  if (String(process.env.PG_POOL_STATS || '').trim() === '1' || isRenderRuntime()) {
     body.pool = getPoolStats()
     body.verify_db = getVerifyDbStats()
   }

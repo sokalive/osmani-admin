@@ -86,6 +86,15 @@ services:
         value: "0"
       - key: PG_POOL_MAX
         value: "8"
+      - key: PG_POOL_STATS
+        value: "1"
+      # Render starter: avoid startup pool hog + SSE poll storm (legacy APK subscription-stream).
+      - key: AUTO_RECONCILE_UNBLOCKED_PLAYBACK
+        value: "0"
+      - key: WARM_API_CACHE_ON_STARTUP
+        value: "0"
+      - key: MODE_SSE_POLL_MS
+        value: "5000"
       # Render pool max 8 — keep verify slots below pool headroom (LISTEN relay holds 1 client).
       - key: VERIFY_DB_MAX_CONCURRENT
         value: "6"
