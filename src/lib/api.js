@@ -1,4 +1,5 @@
 import { getAdminDeviceFingerprintRaw } from './adminDeviceFingerprint'
+import { getAdminSessionToken } from './adminSessionStorage'
 import { bannerSaveBody } from './bannerSaveBody.js'
 
 const API_BASE_ENV = String(
@@ -503,8 +504,8 @@ export function adminPanelApiHeaders() {
     'X-Admin-Token': legacyToken,
     'X-Admin-Device-Fingerprint': getAdminDeviceFingerprintRaw(),
   }
-  if (typeof sessionStorage !== 'undefined') {
-    const jwt = sessionStorage.getItem('osmani_admin_token')
+  if (typeof localStorage !== 'undefined') {
+    const jwt = getAdminSessionToken()
     if (jwt) h.Authorization = `Bearer ${jwt}`
   }
   return h
@@ -592,6 +593,10 @@ export function postAdminEmergencyPin(body) {
 
 export function getAdminAuthMe() {
   return adminApiGet('/admin/auth/me')
+}
+
+export function postAdminRefreshSession() {
+  return adminApiPost('/admin/auth/refresh', {})
 }
 
 export function postAdminLogout() {
@@ -760,8 +765,8 @@ export async function postAdminDeviceForceOtp(id, opts = {}) {
   return body
 }
 
-/** Admin: grant stacked subscription days (PIN validated only on server). */
-export async function postManualSubscriptionGrant({ deviceId, durationDays, pin }) {
+/** Admin: grant stacked subscription days (admin session auth). */
+export async function postManualSubscriptionGrant({ deviceId, durationDays, phone }) {
   const res = await fetch(joinPath('/admin/manual-subscription/grant'), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
@@ -769,7 +774,7 @@ export async function postManualSubscriptionGrant({ deviceId, durationDays, pin 
     body: JSON.stringify({
       device_id: String(deviceId ?? '').trim(),
       duration_days: Number(durationDays),
-      pin: String(pin ?? ''),
+      phone: String(phone ?? '').trim(),
     }),
   })
   const body = await parseJsonSafe(res)
@@ -777,13 +782,13 @@ export async function postManualSubscriptionGrant({ deviceId, durationDays, pin 
   return body
 }
 
-/** Admin: custom manual grant with explicit start/expiry (PIN validated on server). */
+/** Admin: custom manual grant with explicit start/expiry (admin session auth). */
 export async function postManualSubscriptionGrantCustom({
   deviceId,
   planId,
   startedAt,
   expiresAt,
-  pin,
+  phone,
 }) {
   const res = await fetch(joinPath('/admin/manual-subscription/grant-custom'), {
     ...ADMIN_FETCH_DEFAULTS,
@@ -794,7 +799,7 @@ export async function postManualSubscriptionGrantCustom({
       plan_id: Number(planId),
       started_at: startedAt,
       expires_at: expiresAt,
-      pin: String(pin ?? ''),
+      phone: String(phone ?? '').trim(),
     }),
   })
   const body = await parseJsonSafe(res)

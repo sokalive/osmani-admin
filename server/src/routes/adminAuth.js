@@ -491,6 +491,26 @@ adminAuthRouter.get('/me', attachAdminReq, async (req, res) => {
   }
 })
 
+/** Extend an active admin session (same device fingerprint). */
+adminAuthRouter.post('/refresh', attachAdminReq, async (req, res) => {
+  try {
+    const fpHash = currentSessionFingerprintHash(req)
+    const user = await authStore.findAdminUserByEmail(req.adminEmail)
+    if (!user) {
+      return res.status(401).json({ ok: false, error: 'Invalid session' })
+    }
+    if (!req.adminEmergency) {
+      const row = await authStore.getTrustedDeviceRow(req.adminUserId, fpHash)
+      if (row?.id) await authStore.touchTrustedDeviceLastUsed(row.id)
+    }
+    const token = sessionJwt(user, fpHash, { emergency: req.adminEmergency === true })
+    adminAuthAudit('session_refresh', { email: req.adminEmail })
+    res.json({ ok: true, token, email: user.email })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 adminAuthRouter.post('/verify-security-pin', attachAdminReq, (req, res) => {
   const pin = adminSecurityPinFromBody(req)
   if (!pin) {

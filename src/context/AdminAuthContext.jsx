@@ -1,21 +1,23 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { getAdminAuthMe, getAdminAuthStatus, postAdminLogout } from '../lib/api'
-
-const TOKEN_KEY = 'osmani_admin_token'
-const PENDING_OTP_KEY = 'osmani_admin_pending_otp_token'
-const PENDING_EMAIL_KEY = 'osmani_admin_pending_email'
+import { getAdminAuthMe, getAdminAuthStatus, postAdminLogout, postAdminRefreshSession } from '../lib/api'
+import {
+  adminJwtNeedsRefresh,
+  clearAdminSession,
+  getAdminSessionEmail,
+  getAdminSessionToken,
+  PENDING_EMAIL_KEY,
+  PENDING_OTP_KEY,
+  setAdminSessionEmail,
+  setAdminSessionToken,
+} from '../lib/adminSessionStorage'
 
 const AdminAuthContext = createContext(null)
 
 export function AdminAuthProvider({ children }) {
   const [ready, setReady] = useState(false)
   const [panelAuthRequired, setPanelAuthRequired] = useState(false)
-  const [token, setTokenState] = useState(() =>
-    typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(TOKEN_KEY) : null,
-  )
-  const [email, setEmail] = useState(() =>
-    typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('osmani_admin_email') : null,
-  )
+  const [token, setTokenState] = useState(() => getAdminSessionToken())
+  const [email, setEmail] = useState(() => getAdminSessionEmail())
   const [sessionChecked, setSessionChecked] = useState(false)
 
   const refreshStatus = useCallback(async () => {
@@ -35,8 +37,8 @@ export function AdminAuthProvider({ children }) {
 
   useEffect(() => {
     const onStorage = () => {
-      setTokenState(sessionStorage.getItem(TOKEN_KEY))
-      setEmail(sessionStorage.getItem('osmani_admin_email'))
+      setTokenState(getAdminSessionToken())
+      setEmail(getAdminSessionEmail())
     }
     window.addEventListener('osmani-admin-auth', onStorage)
     window.addEventListener('storage', onStorage)
@@ -47,18 +49,19 @@ export function AdminAuthProvider({ children }) {
   }, [])
 
   const setSession = useCallback((t, em) => {
-    if (t) sessionStorage.setItem(TOKEN_KEY, t)
-    else sessionStorage.removeItem(TOKEN_KEY)
-    if (em) sessionStorage.setItem('osmani_admin_email', em)
-    else sessionStorage.removeItem('osmani_admin_email')
-    sessionStorage.removeItem(PENDING_OTP_KEY)
-    sessionStorage.removeItem(PENDING_EMAIL_KEY)
+    setAdminSessionToken(t ?? null)
+    setAdminSessionEmail(em ?? null)
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(PENDING_OTP_KEY)
+      sessionStorage.removeItem(PENDING_EMAIL_KEY)
+    }
     setTokenState(t ?? null)
     setEmail(em ?? null)
     window.dispatchEvent(new Event('osmani-admin-auth'))
   }, [])
 
   const setPendingOtp = useCallback((pendingToken, em) => {
+    if (typeof sessionStorage === 'undefined') return
     if (pendingToken) sessionStorage.setItem(PENDING_OTP_KEY, pendingToken)
     else sessionStorage.removeItem(PENDING_OTP_KEY)
     if (em) sessionStorage.setItem(PENDING_EMAIL_KEY, em)
@@ -67,10 +70,7 @@ export function AdminAuthProvider({ children }) {
 
   const logout = useCallback(() => {
     void postAdminLogout().catch(() => {})
-    sessionStorage.removeItem(TOKEN_KEY)
-    sessionStorage.removeItem('osmani_admin_email')
-    sessionStorage.removeItem(PENDING_OTP_KEY)
-    sessionStorage.removeItem(PENDING_EMAIL_KEY)
+    clearAdminSession()
     setTokenState(null)
     setEmail(null)
     setSessionChecked(true)
@@ -85,8 +85,16 @@ export function AdminAuthProvider({ children }) {
       return undefined
     }
     setSessionChecked(false)
-    void getAdminAuthMe()
-      .then((me) => {
+
+    async function validateSession() {
+      try {
+        if (adminJwtNeedsRefresh(token)) {
+          const refreshed = await postAdminRefreshSession()
+          if (refreshed?.ok === true && refreshed.token) {
+            setSession(refreshed.token, refreshed.email || getAdminSessionEmail())
+          }
+        }
+        const me = await getAdminAuthMe()
         if (cancelled) return
         if (!me || me.ok !== true) {
           logout()
@@ -94,20 +102,21 @@ export function AdminAuthProvider({ children }) {
         }
         const nextEmail = String(me.email ?? '').trim()
         if (nextEmail) {
-          sessionStorage.setItem('osmani_admin_email', nextEmail)
+          setAdminSessionEmail(nextEmail)
           setEmail(nextEmail)
         }
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) logout()
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setSessionChecked(true)
-      })
+      }
+    }
+
+    void validateSession()
     return () => {
       cancelled = true
     }
-  }, [ready, panelAuthRequired, token, logout])
+  }, [ready, panelAuthRequired, token, logout, setSession])
 
   const value = useMemo(
     () => ({

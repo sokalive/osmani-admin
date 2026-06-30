@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarClock, Gift, History, Ticket } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import SecurityPinModal from '../components/SecurityPinModal'
@@ -100,16 +100,16 @@ function ManualSubscriptionPage() {
   const { showToast } = useToast()
   const [tab, setTab] = useState('grant')
   const [deviceId, setDeviceId] = useState('')
+  const [grantPhone, setGrantPhone] = useState('')
   const [plans, setPlans] = useState([])
   const [plansLoading, setPlansLoading] = useState(true)
   const [selectedPlanId, setSelectedPlanId] = useState('')
-  const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [flash, setFlash] = useState(null)
 
   const [customDeviceId, setCustomDeviceId] = useState('')
+  const [customPhone, setCustomPhone] = useState('')
   const [customPlanId, setCustomPlanId] = useState('')
-  const [customPin, setCustomPin] = useState('')
   const [customBusy, setCustomBusy] = useState(false)
   const [customStartDate, setCustomStartDate] = useState('')
   const [customStartTime, setCustomStartTime] = useState('')
@@ -192,8 +192,13 @@ function ManualSubscriptionPage() {
     if (tab !== 'offer') setOfferSelected(new Set())
   }, [tab])
 
+  const customPlanInitRef = useRef('')
+
   useEffect(() => {
     if (tab !== 'custom' || !customSelectedPlan) return
+    const planKey = String(customPlanId)
+    if (customPlanInitRef.current === planKey && customStartDate) return
+    customPlanInitRef.current = planKey
     const start = eatNowDateTimeFields()
     setCustomStartDate(start.date)
     setCustomStartTime(start.time)
@@ -201,6 +206,10 @@ function ManualSubscriptionPage() {
     setCustomExpireDate(exp.date)
     setCustomExpireTime(exp.time)
   }, [tab, customPlanId, customSelectedPlan])
+
+  useEffect(() => {
+    if (tab !== 'custom') customPlanInitRef.current = ''
+  }, [tab])
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -358,8 +367,9 @@ function ManualSubscriptionPage() {
       showToast('error', 'Ingiza Device ID')
       return
     }
-    if (!pin.trim()) {
-      showToast('error', 'Ingiza PIN kabla ya kuweka kifurushi')
+    const phone = grantPhone.trim()
+    if (!phone) {
+      showToast('error', 'Ingiza namba ya simu')
       return
     }
     const days = planDurationDays(selectedPlan)
@@ -372,7 +382,7 @@ function ManualSubscriptionPage() {
       const out = await postManualSubscriptionGrant({
         deviceId: d,
         durationDays: days,
-        pin: pin.trim(),
+        phone,
       })
       setFlash({
         type: 'success',
@@ -393,8 +403,9 @@ function ManualSubscriptionPage() {
       showToast('error', 'Ingiza Device ID')
       return
     }
-    if (!customPin.trim()) {
-      showToast('error', 'Ingiza PIN kabla ya kuweka kifurushi')
+    const phone = customPhone.trim()
+    if (!phone) {
+      showToast('error', 'Ingiza namba ya simu')
       return
     }
     if (!customSelectedPlan) {
@@ -418,7 +429,7 @@ function ManualSubscriptionPage() {
         planId: customSelectedPlan.id,
         startedAt,
         expiresAt,
-        pin: customPin.trim(),
+        phone,
       })
       setFlash({
         type: 'success',
@@ -614,19 +625,17 @@ function ManualSubscriptionPage() {
               </div>
 
               <div>
-                <label htmlFor="ms-pin" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  PIN ya uhakiki
+                <label htmlFor="ms-phone" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Phone Number
                 </label>
                 <input
-                  id="ms-pin"
-                  type="password"
+                  id="ms-phone"
+                  type="tel"
                   className={inputClass()}
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="Ingiza PIN"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  spellCheck={false}
+                  value={grantPhone}
+                  onChange={(e) => setGrantPhone(e.target.value)}
+                  placeholder="+2557XXXXXXXX"
+                  autoComplete="tel"
                 />
               </div>
 
@@ -740,19 +749,17 @@ function ManualSubscriptionPage() {
               </div>
 
               <div>
-                <label htmlFor="cs-pin" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  PIN ya uhakiki
+                <label htmlFor="cs-phone" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Phone Number
                 </label>
                 <input
-                  id="cs-pin"
-                  type="password"
+                  id="cs-phone"
+                  type="tel"
                   className={inputClass()}
-                  value={customPin}
-                  onChange={(e) => setCustomPin(e.target.value)}
-                  placeholder="Ingiza PIN"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  spellCheck={false}
+                  value={customPhone}
+                  onChange={(e) => setCustomPhone(e.target.value)}
+                  placeholder="+2557XXXXXXXX"
+                  autoComplete="tel"
                 />
               </div>
 

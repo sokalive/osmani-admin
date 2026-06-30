@@ -15,6 +15,72 @@ function isManualGrantOrder(orderId) {
   return String(orderId ?? '').trim().startsWith('manual_grant:')
 }
 
+function isManualGrantOrder(orderId) {
+  return String(orderId ?? '').trim().startsWith('manual_grant:')
+}
+
+/**
+ * Fire-and-forget payment-success SMS after admin manual grant. Never throws to caller.
+ */
+export async function notifyManualGrantActivated({
+  deviceId,
+  grantId,
+  planId,
+  planName,
+  price,
+  expiresAt,
+  phone,
+}) {
+  const d = String(deviceId ?? '').trim()
+  const gid = Number(grantId)
+  const oid = Number.isSafeInteger(gid) && gid > 0 ? `manual_grant:${gid}` : ''
+  if (!d || !oid) return { skipped: true, reason: 'no_device_or_grant' }
+
+  try {
+    let resolvedPlanName = String(planName ?? '').trim()
+    let resolvedPrice = price != null && Number.isFinite(Number(price)) ? Number(price) : null
+    if ((!resolvedPlanName || resolvedPrice == null) && planId != null) {
+      const plan = await getPlanRowByIdAny(planId)
+      if (plan) {
+        if (!resolvedPlanName) resolvedPlanName = String(plan.name ?? '')
+        if (resolvedPrice == null && plan.price != null) resolvedPrice = Number(plan.price)
+      }
+    }
+
+    const { phone: fallbackPhone } = await resolvePaymentPhoneForDevice(d)
+    const phoneHint = String(phone ?? '').trim() || fallbackPhone
+    const resolved = await resolveSmsPhoneForDevice(d, phoneHint)
+    const message = buildPaymentSuccessSms({
+      planName: resolvedPlanName,
+      price: resolvedPrice,
+      currency: 'TZS',
+      expiresAt,
+    })
+
+    const idempotencyKey = `payment_success:${oid}`
+    const subscriptionId = subscriptionPeriodKey({
+      deviceId: d,
+      transactionId: oid,
+      expiresAt,
+    })
+
+    return await sendTransactionalSms({
+      phone: resolved.normalized || resolved.phone || phoneHint,
+      message,
+      deviceId: d,
+      smsType: 'payment_success',
+      subscriptionId,
+      paymentId: oid,
+      triggerType: 'payment_success',
+      idempotencyKey,
+      templateKey: 'payment_success',
+    })
+  } catch (e) {
+    console.warn(LOG_PREFIX, 'manual grant failed', d, e)
+    return { ok: false, error: String(e?.message || e) }
+  }
+}
+
 /**
  * Fire-and-forget SMS after paid subscription activation. Never throws to caller.
  */

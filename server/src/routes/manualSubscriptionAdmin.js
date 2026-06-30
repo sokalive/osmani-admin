@@ -364,32 +364,27 @@ manualSubscriptionAdminRouter.delete('/history/:grantId', async (req, res) => {
 manualSubscriptionAdminRouter.post('/grant-custom', rateLimitGrant, async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
-    const pin = String(body.pin ?? '').trim()
-    if (!pin) {
-      return res.status(400).json({ ok: false, error: 'PIN is required' })
-    }
-    if (!(await billing.verifyManualSubscriptionGrantPin(pin))) {
-      console.warn('[manual_grant_custom] invalid PIN', {
-        ip: String(req.headers['x-forwarded-for'] ?? '').slice(0, 40),
-      })
-      return res.status(403).json({ ok: false, error: 'Invalid PIN' })
-    }
 
     const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
     const planId = Number(body.plan_id ?? body.planId)
     const startedAt = body.started_at ?? body.startedAt
     const expiresAt = body.expires_at ?? body.expiresAt
+    const phone = String(body.phone ?? body.phone_number ?? body.phoneNumber ?? '').trim()
     if (!deviceId || !Number.isFinite(planId) || planId < 1 || !startedAt || !expiresAt) {
       return res.status(400).json({
         ok: false,
         error: 'device_id, plan_id, started_at, and expires_at are required',
       })
     }
+    if (!phone) {
+      return res.status(400).json({ ok: false, error: 'phone is required' })
+    }
 
     const result = await billing.grantCustomManualDeviceSubscription(deviceId, {
       planId,
       startedAt,
       expiresAt,
+      phone,
       createdBy: adminCreatedByLabel(req),
     })
 
@@ -442,19 +437,10 @@ manualSubscriptionAdminRouter.post('/grant-custom', rateLimitGrant, async (req, 
 manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
-    const pin = String(body.pin ?? '').trim()
-    if (!pin) {
-      return res.status(400).json({ ok: false, error: 'PIN is required' })
-    }
-    if (!(await billing.verifyManualSubscriptionGrantPin(pin))) {
-      console.warn('[manual_grant] invalid PIN', {
-        ip: String(req.headers['x-forwarded-for'] ?? '').slice(0, 40),
-      })
-      return res.status(403).json({ ok: false, error: 'Invalid PIN' })
-    }
 
     const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
     const durationDays = Number(body.duration_days ?? body.durationDays)
+    const phone = String(body.phone ?? body.phone_number ?? body.phoneNumber ?? '').trim()
     const allowed = await billing.getManualGrantAllowedDurationDays()
     if (!deviceId || !allowed.has(durationDays)) {
       const list = [...allowed].sort((a, b) => a - b).join(', ')
@@ -463,8 +449,11 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
         error: `device_id and duration_days are required (duration_days: ${list})`,
       })
     }
+    if (!phone) {
+      return res.status(400).json({ ok: false, error: 'phone is required' })
+    }
 
-    const result = await billing.grantManualDeviceSubscription(deviceId, durationDays)
+    const result = await billing.grantManualDeviceSubscription(deviceId, durationDays, null, { phone })
 
     deviceSubscriptionBus.emit('update', { deviceId })
     liveSyncBus.publish('analytics.subscription_updated', {

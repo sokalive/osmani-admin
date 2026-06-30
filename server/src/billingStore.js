@@ -951,24 +951,70 @@ export async function getManualGrantAllowedDurationDays() {
 }
 
 /**
- * Admin-only manual subscription extension using same stacking math as payments.
- * Inserts grant row (nonce for one-time gift popup), then upserts device_subscriptions.
+ * Persist admin-entered phone like a completed payment (registry + synthetic txn row).
+ * Idempotent per manual_grant:{grantId} order_id. Does not alter subscription expiry.
  */
-export async function grantManualDeviceSubscription(deviceId, durationDays, client = null) {
+export async function recordManualGrantPhoneAndTransaction(
+  { deviceId, grantId, planId, phone },
+  client = null,
+) {
+  const q = dbQuery(client)
+  const d = String(deviceId ?? '').trim()
+  const gid = Number(grantId)
+  const pid = planId != null ? Number(planId) : null
+  const orderId = `manual_grant:${gid}`
+  if (!d || !Number.isSafeInteger(gid) || gid < 1) return { recorded: false, orderId }
+
+  const phoneRaw = String(phone ?? '').trim()
+  if (!phoneRaw) return { recorded: false, orderId }
+
+  const { updateDevicePhone } = await import('./lib/devicePhoneStore.js')
+  await updateDevicePhone({ deviceId: d, phone: phoneRaw }).catch((err) => {
+    console.warn('[manual_grant] phone registry update failed:', err?.message || err)
+  })
+
+  let resolvedPlanId = Number.isFinite(pid) && pid > 0 ? pid : null
+  let amount = null
+  if (resolvedPlanId) {
+    const plan = await getPlanRowByIdAny(resolvedPlanId)
+    amount = plan?.price != null ? Number(plan.price) : null
+  }
+
+  await q(
+    `INSERT INTO transactions (order_id, plan_id, phone, amount, currency, status, device_id)
+     VALUES ($1, $2, $3, $4, 'TZS', 'completed', $5)
+     ON CONFLICT (order_id) DO UPDATE SET
+       phone = CASE
+         WHEN trim(coalesce(EXCLUDED.phone::text, '')) <> '' THEN EXCLUDED.phone
+         ELSE transactions.phone
+       END,
+       plan_id = COALESCE(EXCLUDED.plan_id, transactions.plan_id),
+       device_id = COALESCE(EXCLUDED.device_id, transactions.device_id),
+       updated_at = now()`,
+    [orderId, resolvedPlanId, phoneRaw || null, amount, d],
+  )
+
+  return { recorded: true, orderId }
+}
+
+export async function grantManualDeviceSubscription(deviceId, durationDays, client = null, opts = {}) {
   const q = dbQuery(client)
   const d = String(deviceId ?? '').trim()
   const days = Number(durationDays)
+  const phone = String(opts.phone ?? '').trim()
   const allowed = await getManualGrantAllowedDurationDays()
   if (!d || !allowed.has(days)) {
     const list = [...allowed].sort((a, b) => a - b).join(', ')
     throw new Error(`Invalid device_id or duration_days (allowed: ${list})`)
   }
 
+  const plan = await getActivePlanByDurationDays(days)
+
   const ins = await q(
-    `INSERT INTO manual_subscription_grants (device_id, duration_days)
-     VALUES ($1, $2)
+    `INSERT INTO manual_subscription_grants (device_id, duration_days, plan_id)
+     VALUES ($1, $2, $3)
      RETURNING id, nonce`,
-    [d, days],
+    [d, days, plan?.id ?? null],
   )
   const grantId = Number(ins.rows[0]?.id)
   const nonce = ins.rows[0]?.nonce
@@ -987,6 +1033,27 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
     `UPDATE manual_subscription_grants SET expires_at_snapshot = $2::timestamptz WHERE id = $1`,
     [grantId, expiresAt],
   )
+
+  await recordManualGrantPhoneAndTransaction(
+    { deviceId: d, grantId, planId: plan?.id ?? null, phone },
+    client,
+  )
+
+  if (phone) {
+    void import('./lib/smsSubscriptionHooks.js')
+      .then((m) =>
+        m.notifyManualGrantActivated({
+          deviceId: d,
+          grantId,
+          planId: plan?.id ?? null,
+          planName: plan?.name ?? '',
+          price: plan?.price != null ? Number(plan.price) : null,
+          expiresAt,
+          phone,
+        }),
+      )
+      .catch((err) => console.warn('[sms] manual grant notify failed:', err))
+  }
 
   return {
     grantId,
@@ -1013,16 +1080,20 @@ function parseAdminTimestamptz(value, label) {
  */
 export async function grantCustomManualDeviceSubscription(
   deviceId,
-  { planId, startedAt, expiresAt, createdBy = 'admin' },
+  { planId, startedAt, expiresAt, createdBy = 'admin', phone },
   client = null,
 ) {
   const q = dbQuery(client)
   const d = String(deviceId ?? '').trim()
   const pid = Number(planId)
+  const phoneRaw = String(phone ?? '').trim()
   const start = parseAdminTimestamptz(startedAt, 'started_at')
   const exp = parseAdminTimestamptz(expiresAt, 'expires_at')
   if (!d || !Number.isFinite(pid) || pid < 1) {
     throw new Error('device_id and plan_id are required')
+  }
+  if (!phoneRaw) {
+    throw new Error('phone is required')
   }
   if (exp.getTime() <= start.getTime()) {
     throw new Error('expires_at must be later than started_at')
@@ -1061,6 +1132,22 @@ export async function grantCustomManualDeviceSubscription(
     grantId,
     exp.toISOString(),
   ])
+
+  await recordManualGrantPhoneAndTransaction({ deviceId: d, grantId, planId: pid, phone: phoneRaw }, client)
+
+  void import('./lib/smsSubscriptionHooks.js')
+    .then((m) =>
+      m.notifyManualGrantActivated({
+        deviceId: d,
+        grantId,
+        planId: pid,
+        planName: String(plan.name ?? ''),
+        price: plan.price != null ? Number(plan.price) : null,
+        expiresAt: exp.toISOString(),
+        phone: phoneRaw,
+      }),
+    )
+    .catch((err) => console.warn('[sms] manual custom grant notify failed:', err))
 
   return {
     grantId,
@@ -1479,6 +1566,16 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
       reason: 'not_completed',
       deviceId: null,
       orderId: txn?.order_id ? String(txn.order_id) : null,
+    }
+  }
+  const orderIdEarly = String(txn.order_id ?? '').trim()
+  if (orderIdEarly.startsWith('manual_grant:')) {
+    return {
+      activated: false,
+      skipped: true,
+      reason: 'manual_grant_txn',
+      deviceId: String(txn.device_id ?? '').trim() || null,
+      orderId: orderIdEarly,
     }
   }
   const planId = txn.plan_id

@@ -47,6 +47,19 @@ export function replayStackedExpiryFromEvents(events) {
   let current = null
   const steps = []
   for (const ev of events) {
+    if (ev.absoluteExpiresAtMs != null) {
+      current = new Date(ev.absoluteExpiresAtMs).toISOString()
+      steps.push({
+        ref: ev.ref,
+        kind: ev.kind,
+        duration_days: ev.durationDays,
+        at: new Date(ev.atMs).toISOString(),
+        expires_after: current,
+        stacked: false,
+        custom_absolute: true,
+      })
+      continue
+    }
     const stack = computeStackedExpiryIso(current, ev.durationDays, ev.atMs)
     current = stack.expiresAt
     steps.push({
@@ -108,7 +121,7 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
   }
 
   const { rows: grants } = await pool.query(
-    `SELECT id, duration_days, created_at
+    `SELECT id, duration_days, created_at, custom_expiry, started_at_custom, expires_at_custom
      FROM manual_subscription_grants
      WHERE device_id = $1
        AND deleted_at IS NULL
@@ -116,6 +129,20 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
     [d],
   )
   for (const row of grants) {
+    if (row.custom_expiry === true && row.expires_at_custom != null) {
+      const startMs = toMs(row.started_at_custom) ?? toMs(row.created_at)
+      const expMs = toMs(row.expires_at_custom)
+      const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
+      if (!startMs || !expMs) continue
+      events.push({
+        atMs: startMs,
+        absoluteExpiresAtMs: expMs,
+        durationDays: days,
+        kind: 'manual_grant_custom',
+        ref: `manual_grant:${row.id}`,
+      })
+      continue
+    }
     const atMs = toMs(row.created_at)
     const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
     if (!atMs || days < 1) continue
@@ -164,7 +191,8 @@ async function loadCreditEventsForDevices(pool, deviceIds) {
   }
 
   const { rows: grants } = await pool.query(
-    `SELECT device_id::text AS device_id, id, duration_days, created_at
+    `SELECT device_id::text AS device_id, id, duration_days, created_at,
+            custom_expiry, started_at_custom, expires_at_custom
      FROM manual_subscription_grants
      WHERE device_id = ANY($1::text[])
        AND deleted_at IS NULL
@@ -173,9 +201,24 @@ async function loadCreditEventsForDevices(pool, deviceIds) {
   )
   for (const row of grants) {
     const d = String(row.device_id)
+    if (!byDevice.has(d)) continue
+    if (row.custom_expiry === true && row.expires_at_custom != null) {
+      const startMs = toMs(row.started_at_custom) ?? toMs(row.created_at)
+      const expMs = toMs(row.expires_at_custom)
+      const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
+      if (!startMs || !expMs) continue
+      byDevice.get(d).push({
+        atMs: startMs,
+        absoluteExpiresAtMs: expMs,
+        durationDays: days,
+        kind: 'manual_grant_custom',
+        ref: `manual_grant:${row.id}`,
+      })
+      continue
+    }
     const atMs = toMs(row.created_at)
     const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
-    if (!byDevice.has(d) || !atMs || days < 1) continue
+    if (!atMs || days < 1) continue
     byDevice.get(d).push({
       atMs,
       durationDays: days,
@@ -230,6 +273,10 @@ function classifyRow({ actualMs, expectedMs, events, txnId, active }) {
   }
   if (isTransferOrRecoveryTxn(txnId)) {
     return { category: 'transfer_or_recovery', repair_safe: false }
+  }
+  const lastEvent = events.length ? events[events.length - 1] : null
+  if (lastEvent?.kind === 'manual_grant_custom') {
+    return { category: 'custom_manual_grant', repair_safe: false }
   }
   if (events.length === 0) {
     return { category: 'no_credit_history', repair_safe: false }
