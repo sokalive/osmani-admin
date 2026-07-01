@@ -16,6 +16,22 @@ function requirePool() {
   return pool
 }
 
+/** Shadow device_ids that must not receive subscription again (post-migration / transfer). */
+const SHADOW_DEVICE_EXCLUDE_SQL = `
+  AND NOT EXISTS (
+    SELECT 1 FROM device_subscriptions ds_rev
+    WHERE ds_rev.device_id = %SHADOW%
+      AND COALESCE(ds_rev.transaction_id, '') LIKE 'moved:%'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM device_transfers dt
+    WHERE dt.status = 'completed' AND dt.source_device_id = %SHADOW%
+  )`
+
+function shadowExcludeFor(columnExpr) {
+  return SHADOW_DEVICE_EXCLUDE_SQL.replaceAll('%SHADOW%', columnExpr)
+}
+
 /** Active subs in DB where a sibling device_id shares fingerprint via trial but has no active sub. */
 export async function findMigrationShadowDevices(pool = requirePool()) {
   const { rows } = await pool.query(
@@ -36,6 +52,7 @@ export async function findMigrationShadowDevices(pool = requirePool()) {
      WHERE ds_source.status = 'active'
        AND ds_source.expires_at > now()
        AND ds_new.device_id IS NULL
+       ${shadowExcludeFor('dte_new.device_id')}
      ORDER BY dte_new.device_id
      LIMIT 500`,
   )
@@ -81,6 +98,7 @@ export async function findMigrationShadowByPhone(pool = requirePool()) {
      WHERE ds_source.status = 'active'
        AND ds_source.expires_at > now()
        AND ds_new.device_id IS NULL
+       ${shadowExcludeFor('t_new.device_id::text')}
      ORDER BY t_new.device_id
      LIMIT 500`,
   )
@@ -108,6 +126,7 @@ export async function findMigrationShadowByInstallInstance(pool = requirePool())
       AND ds_new.status = 'active'
       AND ds_new.expires_at > now()
      WHERE ds_new.device_id IS NULL
+       ${shadowExcludeFor('ai_new.device_id::text')}
      ORDER BY ai_new.device_id
      LIMIT 500`,
   )
@@ -141,6 +160,7 @@ export async function findMigrationShadowByIntelligencePhone(pool = requirePool(
       AND ds_new.expires_at > now()
      WHERE ds_new.device_id IS NULL
        AND trim(coalesce(ir_new.phone_number, ir_new.account_id, '')) <> ''
+       ${shadowExcludeFor('ir_new.device_id::text')}
      ORDER BY ir_new.device_id
      LIMIT 500`,
   )
@@ -165,6 +185,11 @@ export async function findOrphanCompletedActivations(pool = requirePool()) {
          WHERE ds.device_id = t.device_id
            AND ds.expires_at IS NOT NULL
            AND ds.expires_at <= now()
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM device_subscriptions ds_mov
+         WHERE ds_mov.device_id = t.device_id
+           AND COALESCE(ds_mov.transaction_id, '') LIKE 'moved:%'
        )
      ORDER BY t.device_id
      LIMIT 500`,
