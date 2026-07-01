@@ -23,8 +23,8 @@ jobs:
           RENDER_MPYA_DEPLOY_HOOK: ${{ secrets.RENDER_MPYA_DEPLOY_HOOK }}
         run: |
           if [ -z "${RENDER_MPYA_DEPLOY_HOOK}" ]; then
-            echo "::notice::RENDER_MPYA_DEPLOY_HOOK not configured — enable auto-deploy in Render dashboard or add deploy hook secret."
-            exit 0
+            echo "::error::RENDER_MPYA_DEPLOY_HOOK not configured — add deploy hook URL from Render Dashboard → osmani-admin-mpya → Settings → Deploy Hook"
+            exit 1
           fi
           curl -fsSL -X POST "${RENDER_MPYA_DEPLOY_HOOK}"
           echo "Triggered Render osmani-admin-mpya deploy"

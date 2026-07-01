@@ -71,9 +71,13 @@ async function main() {
 
   record(
     'api-commits',
-    true,
+    vpsCut.body?.commit === renderCut.body?.commit,
     `VPS=${String(vpsCut.body?.commit || '').slice(0, 7)} Render=${String(renderCut.body?.commit || '').slice(0, 7)}`,
   )
+  if (vpsCut.body?.commit !== renderCut.body?.commit) {
+    console.error('\nBLOCKED: VPS and Render API are on different commits. Deploy Render to match before parity audit.')
+    process.exit(1)
+  }
 
   const [vpsB, renderB] = await Promise.all([bundleInfo(VPS_ADMIN), bundleInfo(RENDER_ADMIN)])
   record(
