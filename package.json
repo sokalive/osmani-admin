@@ -13,7 +13,9 @@
     "verify:subscription-admin-stability": "node server/scripts/verify-subscription-admin-stability.mjs",
     "verify:admin-instability": "node server/scripts/live-admin-instability-audit.mjs",
     "deploy:render": "node deploy/render/trigger-render-deploy.mjs",
-    "verify:final-production-pass": "node deploy/render/final-production-pass.mjs"
+    "verify:final-production-pass": "node deploy/render/final-production-pass.mjs",
+    "verify:admin-ui-parity": "node deploy/render/verify-admin-ui-parity.mjs",
+    "verify:admin-parity-investigate": "node server/scripts/investigate-admin-parity.mjs"
   },
   "dependencies": {
     "framer-motion": "^12.38.0",

@@ -12,9 +12,10 @@ services:
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     envVars:
-      # Static site has no /api proxy (/* → index.html). Point admin UI at Render Node API.
+      # Leave empty — same as VPS (deploy/contabo/apply-cutover.sh). Runtime api.js resolves
+      # osmani-admin-mpya.onrender.com → Render Node API; admin.osmanitv.com → same-origin /api.
       - key: VITE_API_BASE_URL
-        value: https://osmani-admin-api.onrender.com
+        value: ""
     routes:
       # Static host has no Node /api — proxy API paths to Render Node service (legacy admin SPA).
       - type: redirect

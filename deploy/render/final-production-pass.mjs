@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-const EXPECT = String(process.env.EXPECT_COMMIT || 'b2d7e12').trim()
+const EXPECT = String(process.env.EXPECT_COMMIT || '7dc0a84').trim()
 const VPS_API = 'https://api.osmanitv.com'
 const RENDER_API = 'https://osmani-admin-api.onrender.com'
 const VPS_ADMIN = 'https://admin.osmanitv.com'
