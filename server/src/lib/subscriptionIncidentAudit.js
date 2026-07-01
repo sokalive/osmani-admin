@@ -141,6 +141,16 @@ export async function findIncorrectlyRevokedMigrationShadows(
          AND ds_ok.status = 'active'
          AND ds_ok.expires_at > now()
      )
+     AND NOT EXISTS (
+       SELECT 1 FROM device_subscriptions ds_rev
+       WHERE ds_rev.device_id = shadow.shadow_device_id
+         AND COALESCE(ds_rev.transaction_id, '') LIKE 'moved:%'
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM device_transfers dt
+       WHERE dt.status = 'completed'
+         AND dt.source_device_id = shadow.shadow_device_id
+     )
      ${telemetryClause}
      ORDER BY shadow_device_id`,
   )

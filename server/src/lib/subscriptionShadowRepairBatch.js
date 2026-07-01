@@ -9,6 +9,7 @@ import {
   findIncorrectlySuspendedActive,
 } from './subscriptionIncidentAudit.js'
 import { findOrphanCompletedActivations } from './subscriptionRestorationAudit.js'
+import { isIntentionalMigrationRevokedDevice } from './transferRevocationGuard.js'
 
 function requirePool() {
   const pool = getPool()
@@ -43,8 +44,10 @@ async function resolveMigrationDirection(pair, probeActive) {
   const aActive = await probeActive(pair.a)
   const bActive = await probeActive(pair.b)
   if (aActive && bActive) return null
-  if (aActive && !bActive) return { target: pair.b, source: pair.a, reason: pair.reason }
-  if (!aActive && bActive) return { target: pair.a, source: pair.b, reason: pair.reason }
+  const aRevoked = await isIntentionalMigrationRevokedDevice(pair.a)
+  const bRevoked = await isIntentionalMigrationRevokedDevice(pair.b)
+  if (aActive && !bActive && !bRevoked) return { target: pair.b, source: pair.a, reason: pair.reason }
+  if (!aActive && bActive && !aRevoked) return { target: pair.a, source: pair.b, reason: pair.reason }
   return null
 }
 

@@ -25,6 +25,22 @@ export async function isCompletedTransferSourceDevice(deviceId) {
   return Boolean(rows[0])
 }
 
+/** Old device_id after auto-migration (transaction_id moved:*) — must not receive subscription again. */
+export async function isIntentionalMigrationRevokedDevice(deviceId) {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return false
+  const pool = getPool()
+  if (!pool) return false
+  const { rows } = await pool.query(
+    `SELECT 1 FROM device_subscriptions
+     WHERE device_id = $1
+       AND COALESCE(transaction_id, '') LIKE 'moved:%'
+     LIMIT 1`,
+    [d],
+  )
+  return Boolean(rows[0])
+}
+
 /**
  * Block reverse migration: requesting device transferred TO candidateSource;
  * pulling subscription back from candidateSource would undo the transfer.

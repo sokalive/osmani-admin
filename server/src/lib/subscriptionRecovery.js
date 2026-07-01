@@ -10,6 +10,7 @@ import {
 import { getDeviceIntelligenceByDeviceId } from './deviceIntelligenceStore.js'
 import {
   isCompletedTransferSourceDevice,
+  isIntentionalMigrationRevokedDevice,
   isReverseTransferMigrationBlocked,
 } from './transferRevocationGuard.js'
 
@@ -226,6 +227,9 @@ export async function migrateSubscriptionFromSourceDevice(
   }
   if (!allowReverseTransfer && (await isCompletedTransferSourceDevice(target))) {
     return { recovered: false, reason: 'transfer_revoked_source' }
+  }
+  if (await isIntentionalMigrationRevokedDevice(target)) {
+    return { recovered: false, reason: 'migration_revoked_target' }
   }
 
   const pool = requirePool()
