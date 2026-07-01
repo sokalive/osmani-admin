@@ -26,6 +26,20 @@ function phoneDigitsSql(expr) {
   return `regexp_replace(COALESCE(${expr}::text, ''), '[^0-9]', '', 'g')`
 }
 
+async function loadLegitimateTransferSourceIds(pool) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT dt.source_device_id::text AS device_id
+     FROM device_transfers dt
+     INNER JOIN device_subscriptions ds_tgt
+       ON ds_tgt.device_id = dt.target_device_id
+      AND ds_tgt.status = 'active'
+      AND ds_tgt.expires_at > now()
+     WHERE dt.status = 'completed'
+       AND trim(coalesce(dt.source_device_id::text, '')) <> ''`,
+  )
+  return new Set(rows.map((r) => String(r.device_id)))
+}
+
 /** Phones with more than one concurrently active subscription (must consolidate). */
 export async function findDuplicateActivePhoneClusters(pool = requirePool()) {
   const { rows } = await pool.query(
@@ -146,6 +160,7 @@ async function probeApiParity(deviceId) {
  * Scan subscriptions with future expiry where APIs/admin would not show ACTIVE.
  */
 export async function runSubscriptionApiParityAudit(pool = requirePool()) {
+  const transferSources = await loadLegitimateTransferSourceIds(pool)
   const falseExpired = await findFalseExpiredSubscriptions(pool)
   const wrongDirection = await findWrongDirectionMigrationVictims(pool)
   const shadows = await findIncorrectlyRevokedMigrationShadows(pool, { requireTelemetry: false })
@@ -166,11 +181,14 @@ export async function runSubscriptionApiParityAudit(pool = requirePool()) {
 
   const apiProbes = []
   for (const row of entitledRows.slice(0, 100)) {
-    apiProbes.push(await probeApiParity(String(row.device_id)))
+    const deviceId = String(row.device_id)
+    if (transferSources.has(deviceId)) continue
+    apiProbes.push(await probeApiParity(deviceId))
   }
 
   const apiMismatch = apiProbes.filter((p) => p.mismatch)
   const duplicateDeviceCount = duplicates.reduce((n, c) => n + Math.max(0, c.active_count - 1), 0)
+  const entitledActionable = entitledRows.filter((r) => !transferSources.has(String(r.device_id)))
 
   return {
     server_time: new Date().toISOString(),
@@ -181,7 +199,8 @@ export async function runSubscriptionApiParityAudit(pool = requirePool()) {
       restoration_unresolved: restoration.unresolved_users_count,
       duplicate_phone_active_excess: duplicateDeviceCount,
       duplicate_phone_clusters: duplicates.length,
-      entitled_non_active_non_moved: entitledRows.length,
+      entitled_non_active_non_moved: entitledActionable.length,
+      entitled_transfer_sources_skipped: entitledRows.length - entitledActionable.length,
       api_mismatch_sampled: apiMismatch.length,
       denied_future_total: denied.total_denied_future,
       active_subscriptions: restoration.total_active_subscriptions,
@@ -309,8 +328,10 @@ export async function runFullSubscriptionParityRepair(opts = {}) {
       after.counts.wrong_direction_victims === 0 &&
       after.counts.migration_shadows === 0 &&
       after.counts.restoration_unresolved === 0 &&
-      after.counts.duplicate_phone_clusters === 0 &&
-      after.counts.entitled_non_active_non_moved === 0,
+    after.counts.duplicate_phone_clusters === 0 &&
+    after.counts.entitled_non_active_non_moved === 0 &&
+    after.counts.api_mismatch_sampled === 0 &&
+      after.counts.api_mismatch_sampled === 0,
     before: before.counts,
     after: after.counts,
     rounds,

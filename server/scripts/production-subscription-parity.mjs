@@ -97,6 +97,7 @@ async function main() {
     after.counts.restoration_unresolved === 0 &&
     after.counts.duplicate_phone_clusters === 0 &&
     after.counts.entitled_non_active_non_moved === 0 &&
+    after.counts.api_mismatch_sampled === 0 &&
     vps.status_active &&
     vps.verify_active &&
     render.status_active &&
