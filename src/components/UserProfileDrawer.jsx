@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+/** Premium Swahili user profile drawer — UI parity with VPS admin. */
 import {
   Activity,
   Ban,
