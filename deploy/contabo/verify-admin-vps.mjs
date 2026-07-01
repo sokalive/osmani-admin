@@ -60,10 +60,15 @@ async function main() {
   if (assetMatch) {
     const bundle = await fetchText(`${ADMIN_BASE}${assetMatch[1]}`)
     if (bundle.res.ok) {
-      if (bundle.text.includes('osmani-admin-api.onrender.com')) {
-        fail('admin-bundle-api-origin', 'built JS still references Render API — rebuild with empty VITE_API_BASE_URL')
+      // Render host appears as mpya fallback even when VPS uses same-origin /api (var B=``).
+      const usesRenderAsDefault = /var B=`https:\/\/osmani-admin-api\.onrender\.com`/.test(bundle.text)
+      const usesSameOrigin = /var B=``/.test(bundle.text) || /var B=""/.test(bundle.text)
+      if (usesRenderAsDefault) {
+        fail('admin-bundle-api-origin', 'built JS defaults to Render API — rebuild with VITE_API_BASE_URL=')
+      } else if (usesSameOrigin) {
+        pass('admin-bundle-api-origin', 'same-origin /api (VITE_API_BASE_URL empty at build)')
       } else {
-        pass('admin-bundle-api-origin', 'same-origin /api (no Render API host in bundle)')
+        fail('admin-bundle-api-origin', 'could not detect API base in bundle')
       }
     } else {
       fail('admin-bundle-fetch', `status ${bundle.res.status}`)

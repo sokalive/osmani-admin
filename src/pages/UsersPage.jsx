@@ -196,6 +196,8 @@ function UsersPageContent() {
   const [confirm, setConfirm] = useState(null)
   const [remainingClock, setRemainingClock] = useState(0)
   const loadedTabsRef = useRef(new Set())
+  const loadTabGenRef = useRef(0)
+  const sseRefreshTimerRef = useRef(null)
 
   useEffect(() => {
     const t = window.setTimeout(() => setSearchDebounced(search.trim()), 300)
@@ -243,20 +245,22 @@ function UsersPageContent() {
 
   const loadTab = useCallback(
     async (opts = {}) => {
+      const gen = ++loadTabGenRef.current
       setLoading(true)
       try {
         const res = await fetchTab(opts)
+        if (gen !== loadTabGenRef.current) return
         setItems(Array.isArray(res?.items) ? res.items : [])
         setPagination(
           res?.pagination ?? { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 },
         )
         loadedTabsRef.current.add(`${tab}:${expiringWithin}`)
       } catch (e) {
+        if (gen !== loadTabGenRef.current) return
         showToast('error', e?.message || 'Could not load users')
-        setItems([])
-        setPagination({ page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 })
+        // Keep prior rows visible — clearing on transient API errors looked like data loss.
       } finally {
-        setLoading(false)
+        if (gen === loadTabGenRef.current) setLoading(false)
       }
     },
     [fetchTab, showToast, tab, expiringWithin],
@@ -275,13 +279,23 @@ function UsersPageContent() {
 
   useEffect(() => {
     const es = new EventSource(syncStreamUrl(['analytics']))
-    const onRefresh = () => {
-      void loadSummary()
-      void loadTab({ page })
+    const scheduleRefresh = () => {
+      if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current)
+      sseRefreshTimerRef.current = window.setTimeout(() => {
+        sseRefreshTimerRef.current = null
+        void loadSummary()
+        void loadTab({ page })
+      }, 400)
     }
-    es.addEventListener('analytics.subscription_updated', onRefresh)
-    es.addEventListener('analytics.transaction_updated', onRefresh)
-    return () => es.close()
+    es.addEventListener('analytics.subscription_updated', scheduleRefresh)
+    es.addEventListener('analytics.transaction_updated', scheduleRefresh)
+    es.onerror = () => {
+      scheduleRefresh()
+    }
+    return () => {
+      if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current)
+      es.close()
+    }
   }, [loadSummary, loadTab, page])
 
   useEffect(() => {
