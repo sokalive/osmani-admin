@@ -332,6 +332,35 @@ runtimePublicRouter.post('/subscription-wrong-direction-repair', requireLegacyAd
   }
 })
 
+/** Full DB vs verify/status/admin parity audit (read-only). */
+runtimePublicRouter.get('/subscription-api-parity-audit', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runSubscriptionApiParityAudit } = await import('../lib/subscriptionApiParityAudit.js')
+    const report = await runSubscriptionApiParityAudit()
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-api-parity-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Run false-expired + wrong-direction + duplicate-phone + shadow repair until clear. */
+runtimePublicRouter.post('/subscription-api-parity-repair', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runFullSubscriptionParityRepair } = await import('../lib/subscriptionApiParityAudit.js')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const confirm = String(req.query.confirm ?? b.confirm ?? '0').trim() === '1'
+    const maxRounds = Number(req.query.max_rounds ?? b.max_rounds ?? 10)
+    const report = await runFullSubscriptionParityRepair({ confirm, maxRounds })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-api-parity-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Bounded batch repair — avoids nginx 504 on full restore (call until remaining=0). */
 runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdminToken, async (req, res) => {
   try {
