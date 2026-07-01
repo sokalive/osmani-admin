@@ -264,6 +264,35 @@ runtimePublicRouter.post('/subscription-incident-repair', requireLegacyAdminToke
   }
 })
 
+/** Audit future-expiry rows wrongly marked inactive (read-only). */
+runtimePublicRouter.get('/subscription-false-expired-audit', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { findFalseExpiredSubscriptions } = await import('../lib/subscriptionFalseExpiredRepair.js')
+    const report = await findFalseExpiredSubscriptions()
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-false-expired-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Restore ACTIVE for future-expiry rows stuck non-active. Never shortens expires_at. */
+runtimePublicRouter.post('/subscription-false-expired-repair', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { repairFalseExpiredSubscriptions } = await import('../lib/subscriptionFalseExpiredRepair.js')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const confirm = String(req.query.confirm ?? b.confirm ?? '0').trim() === '1'
+    const report = await repairFalseExpiredSubscriptions({ dryRun, confirm })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-false-expired-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Bounded batch repair — avoids nginx 504 on full restore (call until remaining=0). */
 runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdminToken, async (req, res) => {
   try {

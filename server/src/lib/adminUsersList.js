@@ -141,8 +141,8 @@ function mapSubscriptionRow(r, nowMs = Date.now()) {
       ? startedAtDate.toISOString()
       : null
   const remainingMs = expiresAt != null ? Math.max(0, new Date(expiresAt).getTime() - nowMs) : 0
-  const active =
-    r.status === 'active' && expiresAt != null && new Date(expiresAt).getTime() > nowMs
+  const futureExpiry = expiresAt != null && new Date(expiresAt).getTime() > nowMs
+  const active = r.status === 'active' && futureExpiry
   const txnId = String(r.transaction_id ?? '')
   let source = String(r.provider ?? 'zenopay')
   if (txnId.startsWith('manual_grant:')) source = 'manual_grant'
@@ -153,7 +153,7 @@ function mapSubscriptionRow(r, nowMs = Date.now()) {
     plan_id: r.plan_id != null ? Number(r.plan_id) : null,
     plan_name: r.plan_name != null ? String(r.plan_name) : null,
     amount: r.amount != null ? Number(r.amount) : null,
-    status: active ? 'active' : 'expired',
+    status: active ? 'active' : futureExpiry && r.status === 'pending' ? 'revoked' : 'expired',
     started_at: startedAt,
     expires_at: expiresAt,
     remaining: remainingMs,
