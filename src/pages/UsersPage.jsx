@@ -190,14 +190,20 @@ function UsersPageContent() {
   const [plans, setPlans] = useState([])
   const [editing, setEditing] = useState(null)
   const [flash, setFlash] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [tableLoading, setTableLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [selected, setSelected] = useState(() => new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [confirm, setConfirm] = useState(null)
   const [remainingClock, setRemainingClock] = useState(0)
   const loadedTabsRef = useRef(new Set())
   const loadTabGenRef = useRef(0)
+  const loadSummaryGenRef = useRef(0)
   const sseRefreshTimerRef = useRef(null)
+  const fetchAbortRef = useRef(null)
+  const hasTableDataRef = useRef(false)
+  const pageRef = useRef(page)
+  pageRef.current = page
 
   useEffect(() => {
     const t = window.setTimeout(() => setSearchDebounced(search.trim()), 300)
@@ -207,6 +213,7 @@ function UsersPageContent() {
   useEffect(() => {
     setPage(1)
     setSelected(new Set())
+    hasTableDataRef.current = false
   }, [tab, expiringWithin, searchDebounced])
 
   const planMap = useMemo(() => {
@@ -216,7 +223,7 @@ function UsersPageContent() {
   }, [plans])
 
   const fetchTab = useCallback(
-    async (opts = {}) => {
+    async (opts = {}, signal) => {
       const params = {
         page: opts.page ?? page,
         limit: PAGE_SIZE,
@@ -224,21 +231,25 @@ function UsersPageContent() {
         sort: tab === 'expiring' || tab === 'active_paid' ? 'expiry_soonest' : 'newest',
       }
       if (tab === 'expiring') params.within = expiringWithin
+      const reqOpts = signal ? { signal } : {}
       let res
-      if (tab === 'active_paid') res = await getUsersActive(params)
-      else if (tab === 'expiring') res = await getUsersExpiring(params)
-      else if (tab === 'failed') res = await getUsersFailedPayments(params)
-      else res = await getUsers(params)
+      if (tab === 'active_paid') res = await getUsersActive(params, reqOpts)
+      else if (tab === 'expiring') res = await getUsersExpiring(params, reqOpts)
+      else if (tab === 'failed') res = await getUsersFailedPayments(params, reqOpts)
+      else res = await getUsers(params, reqOpts)
       return res
     },
     [tab, page, searchDebounced, expiringWithin],
   )
 
-  const loadSummary = useCallback(async () => {
+  const loadSummary = useCallback(async (signal) => {
+    const gen = ++loadSummaryGenRef.current
     try {
-      const res = await getUsersSummary()
+      const res = await getUsersSummary(signal ? { signal } : {})
+      if (gen !== loadSummaryGenRef.current) return
       if (res?.summary) setSummary(res.summary)
-    } catch {
+    } catch (e) {
+      if (e?.name === 'AbortError') return
       /* badge counts are optional */
     }
   }, [])
@@ -246,21 +257,30 @@ function UsersPageContent() {
   const loadTab = useCallback(
     async (opts = {}) => {
       const gen = ++loadTabGenRef.current
-      setLoading(true)
+      fetchAbortRef.current?.abort()
+      const ac = new AbortController()
+      fetchAbortRef.current = ac
+      const showSkeleton = !hasTableDataRef.current
+      if (showSkeleton) setTableLoading(true)
+      else setRefreshing(true)
       try {
-        const res = await fetchTab(opts)
+        const res = await fetchTab(opts, ac.signal)
         if (gen !== loadTabGenRef.current) return
-        setItems(Array.isArray(res?.items) ? res.items : [])
+        const rows = Array.isArray(res?.items) ? res.items : []
+        setItems(rows)
         setPagination(
           res?.pagination ?? { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 },
         )
+        if (rows.length > 0) hasTableDataRef.current = true
         loadedTabsRef.current.add(`${tab}:${expiringWithin}`)
       } catch (e) {
-        if (gen !== loadTabGenRef.current) return
+        if (e?.name === 'AbortError' || gen !== loadTabGenRef.current) return
         showToast('error', e?.message || 'Could not load users')
-        // Keep prior rows visible — clearing on transient API errors looked like data loss.
       } finally {
-        if (gen === loadTabGenRef.current) setLoading(false)
+        if (gen === loadTabGenRef.current) {
+          setTableLoading(false)
+          setRefreshing(false)
+        }
       }
     },
     [fetchTab, showToast, tab, expiringWithin],
@@ -284,7 +304,7 @@ function UsersPageContent() {
       sseRefreshTimerRef.current = window.setTimeout(() => {
         sseRefreshTimerRef.current = null
         void loadSummary()
-        void loadTab({ page })
+        void loadTab({ page: pageRef.current })
       }, 400)
     }
     es.addEventListener('analytics.subscription_updated', scheduleRefresh)
@@ -296,7 +316,7 @@ function UsersPageContent() {
       if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current)
       es.close()
     }
-  }, [loadSummary, loadTab, page])
+  }, [loadSummary, loadTab])
 
   useEffect(() => {
     const id = window.setInterval(() => setRemainingClock((t) => t + 1), 60_000)
@@ -453,7 +473,13 @@ function UsersPageContent() {
             </h1>
             <p className="mt-1 text-sm text-slate-400">
               Paginated views — device subscriptions (EAT display)
-              {!loading && pagination.total > 0 ? (
+              {refreshing ? (
+                <span className="ml-2 inline-flex items-center gap-1 text-amber-200/90">
+                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                  Updating…
+                </span>
+              ) : null}
+              {!tableLoading && pagination.total > 0 ? (
                 <span className="ml-2 text-slate-500">· {pagination.total} in this view</span>
               ) : null}
             </p>
@@ -555,7 +581,9 @@ function UsersPageContent() {
           />
         </div>
 
-        <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
+        <div
+          className={`overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04] transition-opacity ${refreshing ? 'opacity-80' : ''}`}
+        >
           <div className="overflow-x-auto">
             {tab === 'failed' ? (
               <table className="w-full min-w-[1100px] border-collapse text-left text-sm">
@@ -572,7 +600,7 @@ function UsersPageContent() {
                     <th className="px-4 py-3 font-semibold">Contact / retry</th>
                   </tr>
                 </thead>
-                {loading ? (
+                {tableLoading ? (
                   <TableSkeleton cols={9} />
                 ) : (
                   <tbody>
@@ -633,7 +661,7 @@ function UsersPageContent() {
                     ) : null}
                   </tr>
                 </thead>
-                {loading ? (
+                {tableLoading ? (
                   <TableSkeleton cols={tab === 'all' ? 11 : 9} />
                 ) : (
                   <tbody>
@@ -713,14 +741,14 @@ function UsersPageContent() {
               </table>
             )}
           </div>
-          {!loading && items.length === 0 ? (
+          {!tableLoading && items.length === 0 ? (
             <p className="py-12 text-center text-slate-500">{emptyMessage}</p>
           ) : null}
           <PaginationBar
             page={pagination.page}
             totalPages={pagination.totalPages}
             total={pagination.total}
-            disabled={loading}
+            disabled={tableLoading || refreshing}
             onPageChange={setPage}
           />
         </div>

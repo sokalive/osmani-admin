@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "verify:final-migration": "node deploy/contabo/verify-final-migration-audit.mjs",
     "verify:cutover": "node deploy/contabo/verify-cutover.mjs",
-    "verify:subscription-admin-stability": "node server/scripts/verify-subscription-admin-stability.mjs"
+    "verify:subscription-admin-stability": "node server/scripts/verify-subscription-admin-stability.mjs",
+    "verify:admin-instability": "node server/scripts/live-admin-instability-audit.mjs"
   },
   "dependencies": {
     "framer-motion": "^12.38.0",

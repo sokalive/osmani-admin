@@ -182,10 +182,27 @@ function mapFailedPaymentRow(r) {
   }
 }
 
-async function countQuery(sql, params) {
-  const pool = requirePool()
-  const { rows } = await pool.query(sql, params)
+async function countQuery(sql, params, client = null) {
+  const runner = client ?? requirePool()
+  const { rows } = await runner.query(sql, params)
   return Number(rows[0]?.total) || 0
+}
+
+/** Consistent COUNT + list snapshot (avoids pagination total drifting mid-request). */
+async function withReadSnapshot(fn) {
+  const pool = requirePool()
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    const result = await fn(client)
+    await client.query('COMMIT')
+    return result
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
 }
 
 function buildSubscriptionWhere({ search, planId, provider, status, extraWhere, params, startI = 1 }) {
@@ -232,40 +249,42 @@ async function listSubscriptions({
     extraWhere,
     params,
   })
-  const total = await countQuery(
-    `SELECT COUNT(*)::int AS total ${SUBSCRIPTION_FROM} ${where}`,
-    params,
-  )
-  const listParams = [...params, l, offset]
-  const pool = requirePool()
-  const { rows } = await pool.query(
-    `SELECT
-       ds.device_id,
-       ds.status,
-       ds.started_at,
-       ds.expires_at,
-       ds.transaction_id,
-       COALESCE(lt.phone, pay.phone, '') AS phone_number,
-       COALESCE(pay.plan_id, lt.plan_id) AS plan_id,
-       p.name AS plan_name,
-       COALESCE(pay.amount, lt.amount) AS amount,
-       ${providerSql('pay')} AS provider
-     ${SUBSCRIPTION_FROM}
-     ${where}
-     ORDER BY ${subscriptionSortSql(sort)}
-     LIMIT $${nextI} OFFSET $${nextI + 1}`,
-    listParams,
-  )
-  const nowMs = Date.now()
-  return {
-    items: rows.map((r) => mapSubscriptionRow(r, nowMs)),
-    pagination: {
-      page: p,
-      limit: l,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / l)),
-    },
-  }
+  return withReadSnapshot(async (client) => {
+    const total = await countQuery(
+      `SELECT COUNT(*)::int AS total ${SUBSCRIPTION_FROM} ${where}`,
+      params,
+      client,
+    )
+    const listParams = [...params, l, offset]
+    const { rows } = await client.query(
+      `SELECT
+         ds.device_id,
+         ds.status,
+         ds.started_at,
+         ds.expires_at,
+         ds.transaction_id,
+         COALESCE(lt.phone, pay.phone, '') AS phone_number,
+         COALESCE(pay.plan_id, lt.plan_id) AS plan_id,
+         p.name AS plan_name,
+         COALESCE(pay.amount, lt.amount) AS amount,
+         ${providerSql('pay')} AS provider
+       ${SUBSCRIPTION_FROM}
+       ${where}
+       ORDER BY ${subscriptionSortSql(sort)}
+       LIMIT $${nextI} OFFSET $${nextI + 1}`,
+      listParams,
+    )
+    const nowMs = Date.now()
+    return {
+      items: rows.map((r) => mapSubscriptionRow(r, nowMs)),
+      pagination: {
+        page: p,
+        limit: l,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / l)),
+      },
+    }
+  })
 }
 
 /** Active paid subscriptions (excludes manual grants, offer codes, admin-blocked). */
@@ -301,40 +320,42 @@ export async function listAdminExpiringSoonUsers(filters = {}) {
     params,
     startI: 2,
   })
-  const total = await countQuery(
-    `SELECT COUNT(*)::int AS total ${SUBSCRIPTION_FROM} ${where}`,
-    params,
-  )
-  const listParams = [...params, l, offset]
-  const pool = requirePool()
-  const { rows } = await pool.query(
-    `SELECT
-       ds.device_id,
-       ds.status,
-       ds.started_at,
-       ds.expires_at,
-       ds.transaction_id,
-       COALESCE(lt.phone, pay.phone, '') AS phone_number,
-       COALESCE(pay.plan_id, lt.plan_id) AS plan_id,
-       p.name AS plan_name,
-       COALESCE(pay.amount, lt.amount) AS amount,
-       ${providerSql('pay')} AS provider
-     ${SUBSCRIPTION_FROM}
-     ${where}
-     ORDER BY ${subscriptionSortSql(filters.sort ?? 'expiry_soonest')}
-     LIMIT $${nextI} OFFSET $${nextI + 1}`,
-    listParams,
-  )
-  const nowMs = Date.now()
-  return {
-    items: rows.map((r) => mapSubscriptionRow(r, nowMs)),
-    pagination: {
-      page: p,
-      limit: l,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / l)),
-    },
-  }
+  return withReadSnapshot(async (client) => {
+    const total = await countQuery(
+      `SELECT COUNT(*)::int AS total ${SUBSCRIPTION_FROM} ${where}`,
+      params,
+      client,
+    )
+    const listParams = [...params, l, offset]
+    const { rows } = await client.query(
+      `SELECT
+         ds.device_id,
+         ds.status,
+         ds.started_at,
+         ds.expires_at,
+         ds.transaction_id,
+         COALESCE(lt.phone, pay.phone, '') AS phone_number,
+         COALESCE(pay.plan_id, lt.plan_id) AS plan_id,
+         p.name AS plan_name,
+         COALESCE(pay.amount, lt.amount) AS amount,
+         ${providerSql('pay')} AS provider
+       ${SUBSCRIPTION_FROM}
+       ${where}
+       ORDER BY ${subscriptionSortSql(filters.sort ?? 'expiry_soonest')}
+       LIMIT $${nextI} OFFSET $${nextI + 1}`,
+      listParams,
+    )
+    const nowMs = Date.now()
+    return {
+      items: rows.map((r) => mapSubscriptionRow(r, nowMs)),
+      pagination: {
+        page: p,
+        limit: l,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / l)),
+      },
+    }
+  })
 }
 
 /** All device subscriptions (paginated). */
@@ -389,42 +410,44 @@ export async function listAdminFailedPayments(filters = {}) {
     i,
   )
   const where = `WHERE ${cond.join(' AND ')}`
-  const total = await countQuery(
-    `SELECT COUNT(*)::int AS total
-     FROM transactions t
-     ${where}`,
-    params,
-  )
-  const listParams = [...params, l, offset]
-  const pool = requirePool()
-  const { rows } = await pool.query(
-    `SELECT
-       t.order_id,
-       t.device_id,
-       t.phone,
-       t.plan_id,
-       p.name AS plan_name,
-       t.amount,
-       t.status,
-       t.created_at,
-       ${providerSql('t')} AS provider,
-       ${failureReasonSql('t')} AS failure_reason
-     FROM transactions t
-     LEFT JOIN plans p ON p.id = t.plan_id AND p.deleted_at IS NULL
-     ${where}
-     ORDER BY ${transactionSortSql(filters.sort ?? 'newest')}
-     LIMIT $${i} OFFSET $${i + 1}`,
-    listParams,
-  )
-  return {
-    items: rows.map(mapFailedPaymentRow),
-    pagination: {
-      page: p,
-      limit: l,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / l)),
-    },
-  }
+  return withReadSnapshot(async (client) => {
+    const total = await countQuery(
+      `SELECT COUNT(*)::int AS total
+       FROM transactions t
+       ${where}`,
+      params,
+      client,
+    )
+    const listParams = [...params, l, offset]
+    const { rows } = await client.query(
+      `SELECT
+         t.order_id,
+         t.device_id,
+         t.phone,
+         t.plan_id,
+         p.name AS plan_name,
+         t.amount,
+         t.status,
+         t.created_at,
+         ${providerSql('t')} AS provider,
+         ${failureReasonSql('t')} AS failure_reason
+       FROM transactions t
+       LEFT JOIN plans p ON p.id = t.plan_id AND p.deleted_at IS NULL
+       ${where}
+       ORDER BY ${transactionSortSql(filters.sort ?? 'newest')}
+       LIMIT $${i} OFFSET $${i + 1}`,
+      listParams,
+    )
+    return {
+      items: rows.map(mapFailedPaymentRow),
+      pagination: {
+        page: p,
+        limit: l,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / l)),
+      },
+    }
+  })
 }
 
 /** Tab badge counts (cheap aggregate queries). */

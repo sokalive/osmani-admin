@@ -351,22 +351,22 @@ function usersListQuery(params = {}) {
   return q.toString()
 }
 
-export const getUsersSummary = () => adminApiGet('/users/summary')
-export const getUsersActive = (params = {}) => {
+export const getUsersSummary = (opts = {}) => adminApiGet('/users/summary', opts)
+export const getUsersActive = (params = {}, opts = {}) => {
   const qs = usersListQuery(params)
-  return adminApiGet(qs ? `/users/active?${qs}` : '/users/active')
+  return adminApiGet(qs ? `/users/active?${qs}` : '/users/active', opts)
 }
-export const getUsersExpiring = (params = {}) => {
+export const getUsersExpiring = (params = {}, opts = {}) => {
   const qs = usersListQuery(params)
-  return adminApiGet(qs ? `/users/expiring?${qs}` : '/users/expiring')
+  return adminApiGet(qs ? `/users/expiring?${qs}` : '/users/expiring', opts)
 }
-export const getUsersFailedPayments = (params = {}) => {
+export const getUsersFailedPayments = (params = {}, opts = {}) => {
   const qs = usersListQuery(params)
-  return adminApiGet(qs ? `/users/failed-payments?${qs}` : '/users/failed-payments')
+  return adminApiGet(qs ? `/users/failed-payments?${qs}` : '/users/failed-payments', opts)
 }
-export const getUsers = (params = {}) => {
+export const getUsers = (params = {}, opts = {}) => {
   const qs = usersListQuery(params)
-  return adminApiGet(qs ? `/users?${qs}` : '/users')
+  return adminApiGet(qs ? `/users?${qs}` : '/users', opts)
 }
 /** Full list for legacy admin screens (e.g. Plans subscriber counts). Prefer paginated getUsers. */
 export const getUsersLegacy = () => adminApiGet('/users?legacy=1')
@@ -519,12 +519,13 @@ export function adminSecurityApiHeaders() {
   return h
 }
 
-export async function adminApiRequest(path, { method = 'GET', body, allowNoContent = false } = {}) {
+export async function adminApiRequest(path, { method = 'GET', body, allowNoContent = false, signal } = {}) {
   const res = await fetch(joinPath(path), {
     ...ADMIN_FETCH_DEFAULTS,
     method,
     headers: adminPanelApiHeaders(),
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(signal ? { signal } : {}),
   })
   const parsed = res.status === 204 && allowNoContent ? null : await parseJsonSafe(res)
   if (!res.ok && !(allowNoContent && res.status === 204)) {
@@ -533,8 +534,8 @@ export async function adminApiRequest(path, { method = 'GET', body, allowNoConte
   return parsed
 }
 
-export function adminApiGet(path) {
-  return adminApiRequest(path)
+export function adminApiGet(path, opts = {}) {
+  return adminApiRequest(path, opts)
 }
 
 function adminApiPost(path, body = {}) {
