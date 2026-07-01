@@ -39,8 +39,8 @@ async function bundleInfo(admin) {
     // UsersPage stability markers (minified)
     keepsRowsOnError: !js.includes('setItems([])') || js.includes('Keep prior rows') === false,
     sseDebounce1500: js.includes(',1500)'),
-    userProfileDrawer: js.includes('User profile'),
-    noUpdatingLabel: !js.includes('Updating'),
+    userProfileDrawer: js.includes('Wasifu wa mtumiaji') || js.includes('Muhtasari'),
+    noUpdatingLabel: !js.includes('Updating\u2026') && !js.includes('Updating…'),
   }
 }
 
