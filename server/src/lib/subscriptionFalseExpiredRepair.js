@@ -72,13 +72,26 @@ export async function findFalseExpiredSubscriptions(pool = requirePool()) {
          ds.status <> 'active'
          OR COALESCE(ds.manual_admin_blocked, false) = true
        )
+       AND COALESCE(ds.transaction_id, '') NOT LIKE 'moved:%'
      ORDER BY ds.expires_at DESC`,
   )
 
   const affected = []
   const skippedTransferSources = []
+  const skippedMovedSources = []
   for (const row of rows) {
     const deviceId = String(row.device_id ?? '')
+    const txnId = String(row.transaction_id ?? '')
+    if (txnId.startsWith('moved:')) {
+      skippedMovedSources.push({
+        device_id: deviceId,
+        status: row.status,
+        expires_at: toIso(row.expires_at),
+        transaction_id: txnId,
+        reason: 'subscription_moved_to_another_device',
+      })
+      continue
+    }
     if (transferSources.has(deviceId)) {
       skippedTransferSources.push({
         device_id: deviceId,
@@ -113,10 +126,12 @@ export async function findFalseExpiredSubscriptions(pool = requirePool()) {
     total_future_expiry_rows: rows.length,
     affected_count: affected.length,
     skipped_transfer_source_count: skippedTransferSources.length,
+    skipped_moved_source_count: skippedMovedSources.length,
     affected,
     skipped_transfer_sources: skippedTransferSources.slice(0, 25),
+    skipped_moved_sources: skippedMovedSources.slice(0, 25),
     root_cause:
-      'device_subscriptions.status was not active (often pending after incomplete recovery/transfer) while expires_at remained in the future. Admin maps status!==active to EXPIRED; verify cache zeroes remaining_seconds for non-active rows so the app shows renew.',
+      'device_subscriptions.status was not active (often pending after incomplete recovery/transfer) while expires_at remained in the future. Admin maps status!==active to EXPIRED; verify cache zeroes remaining_seconds for non-active rows so the app shows renew. Rows with transaction_id moved:* are intentional post-migration revokes on the old device_id.',
   }
 }
 
@@ -186,7 +201,8 @@ export async function repairFalseExpiredSubscriptions(opts = {}) {
            SET status = 'active', updated_at = now()
            WHERE device_id = $1
              AND expires_at > now()
-             AND status <> 'active'`,
+             AND status <> 'active'
+             AND COALESCE(transaction_id, '') NOT LIKE 'moved:%'`,
           [deviceId],
         )
         invalidateSubscriptionAccessCache(deviceId)
