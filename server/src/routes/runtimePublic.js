@@ -293,6 +293,45 @@ runtimePublicRouter.post('/subscription-false-expired-repair', requireLegacyAdmi
   }
 })
 
+/** Audit moved:* devices that lost active sub to a same-phone sibling (wrong migration direction). */
+runtimePublicRouter.get('/subscription-wrong-direction-audit', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { findWrongDirectionMigrationVictims, countDeniedFutureEntitlement } = await import(
+      '../lib/subscriptionWrongDirectionRepair.js'
+    )
+    const victims = await findWrongDirectionMigrationVictims()
+    const counts = await countDeniedFutureEntitlement()
+    res.json({
+      ok: true,
+      victims_count: victims.length,
+      counts,
+      victims: victims.slice(0, 100),
+      commit: getServerGitCommit(),
+    })
+  } catch (e) {
+    console.error('[runtime/subscription-wrong-direction-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Reclaim subscription onto user's current device_id from same-phone active sibling. */
+runtimePublicRouter.post('/subscription-wrong-direction-repair', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { repairWrongDirectionMigrations } = await import('../lib/subscriptionWrongDirectionRepair.js')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const confirm = String(req.query.confirm ?? b.confirm ?? '0').trim() === '1'
+    const limit = Number(req.query.limit ?? b.limit ?? 50)
+    const report = await repairWrongDirectionMigrations({ dryRun, confirm, limit })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-wrong-direction-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Bounded batch repair — avoids nginx 504 on full restore (call until remaining=0). */
 runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdminToken, async (req, res) => {
   try {

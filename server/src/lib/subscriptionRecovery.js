@@ -228,7 +228,7 @@ export async function migrateSubscriptionFromSourceDevice(
   if (!allowReverseTransfer && (await isCompletedTransferSourceDevice(target))) {
     return { recovered: false, reason: 'transfer_revoked_source' }
   }
-  if (await isIntentionalMigrationRevokedDevice(target)) {
+  if (!opts.allowRevokedTarget && (await isIntentionalMigrationRevokedDevice(target))) {
     return { recovered: false, reason: 'migration_revoked_target' }
   }
 
@@ -474,12 +474,12 @@ async function resolveFingerprintForDevice(deviceId, explicitFingerprint) {
   return String(intel?.deviceFingerprint ?? '').trim() || null
 }
 
-async function tryLinkFromSource(target, sourceId, fpHash, method) {
+async function tryLinkFromSource(target, sourceId, fpHash, method, opts = {}) {
   if (!sourceId || sourceId === target) return { linked: false, reason: 'no_source' }
-  if (await isReverseTransferMigrationBlocked(target, sourceId)) {
+  if (!opts.allowReverseTransfer && (await isReverseTransferMigrationBlocked(target, sourceId))) {
     return { linked: false, reason: 'transfer_revoked_source' }
   }
-  const migrated = await migrateSubscriptionFromSourceDevice(target, sourceId, fpHash)
+  const migrated = await migrateSubscriptionFromSourceDevice(target, sourceId, fpHash, opts)
   if (migrated.recovered) {
     return { linked: true, method, recovered_from: migrated.recovered_from, recovered_to: migrated.recovered_to }
   }
@@ -497,6 +497,23 @@ export async function ensureSubscriptionLinkedForDevice(
   if (!d) return { linked: false, reason: 'missing_device_id' }
   if (await isCompletedTransferSourceDevice(d)) {
     return { linked: false, reason: 'transfer_revoked_source' }
+  }
+
+  const revokedVictim = await isIntentionalMigrationRevokedDevice(d)
+  if (revokedVictim) {
+    const reclaimPhones = new Set()
+    const reqDigits = normalizePhoneDigits(phone)
+    if (reqDigits && reqDigits.length >= 10) reclaimPhones.add(reqDigits)
+    for (const p of await collectPaymentPhonesForDevice(d)) reclaimPhones.add(p)
+    if (reclaimPhones.size > 0) {
+      const clusterSource = await findUniqueActiveDeviceIdForPhoneCluster([...reclaimPhones], d)
+      if (clusterSource) {
+        const linked = await tryLinkFromSource(d, clusterSource, null, 'reclaim_wrong_migration', {
+          allowRevokedTarget: true,
+        })
+        if (linked.linked) return linked
+      }
+    }
   }
 
   const state = await getDeviceSubscriptionAccessState(d, fingerprint)

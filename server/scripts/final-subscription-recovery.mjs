@@ -86,6 +86,13 @@ async function main() {
   report.false_expired = await call(VPS, 'GET', '/runtime/subscription-false-expired-audit')
   console.log('false_expired_affected', report.false_expired.affected_count)
 
+  try {
+    report.wrong_direction_before = await call(VPS, 'GET', '/runtime/subscription-wrong-direction-audit')
+    console.log('wrong_direction_victims', report.wrong_direction_before.victims_count)
+  } catch (e) {
+    console.warn('wrong_direction audit not available yet:', e.message)
+  }
+
   if (report.false_expired.affected_count > 0) {
     const dry = await call(VPS, 'POST', '/runtime/subscription-false-expired-repair?dry_run=1')
     console.log('false_expired_would_repair', dry.repaired_count)
@@ -95,6 +102,22 @@ async function main() {
       '/runtime/subscription-false-expired-repair?dry_run=0&confirm=1',
     )
     console.log('false_expired_repaired', report.false_expired_repair.repaired_count)
+  }
+
+  try {
+    const wdDry = await call(VPS, 'POST', '/runtime/subscription-wrong-direction-repair?dry_run=1')
+    console.log('wrong_direction_would_repair', wdDry.repaired_count)
+    for (let i = 0; i < 20; i++) {
+      const wd = await call(VPS, 'POST', '/runtime/subscription-wrong-direction-repair?dry_run=0&confirm=1&limit=25')
+      console.log(
+        `wrong_direction round ${i + 1}: repaired=${wd.repaired_count} remaining=${wd.remaining_victims}`,
+      )
+      report.wrong_direction_repair = wd
+      if ((wd.remaining_victims ?? 0) === 0) break
+      if ((wd.repaired_count ?? 0) === 0) break
+    }
+  } catch (e) {
+    console.warn('wrong_direction repair skipped:', e.message)
   }
 
   if (!shadowOnly) {
@@ -137,6 +160,7 @@ async function main() {
 
   report.final_audit = {
     false_expired: await call(VPS, 'GET', '/runtime/subscription-false-expired-audit'),
+    wrong_direction: await call(VPS, 'GET', '/runtime/subscription-wrong-direction-audit').catch(() => null),
     incident: await call(VPS, 'GET', '/runtime/subscription-incident-audit'),
     shadow_batch: await shadowBatch(VPS, 1),
   }
@@ -144,6 +168,7 @@ async function main() {
   const counts = report.final_audit.incident?.counts || {}
   report.summary = {
     false_expired_remaining: report.final_audit.false_expired.affected_count ?? -1,
+    wrong_direction_remaining: report.final_audit.wrong_direction?.victims_count ?? -1,
     migration_shadows_remaining: counts.incorrectly_revoked_migration_shadow ?? -1,
     restoration_unresolved: counts.restoration_unresolved ?? report.restoration?.unresolved_users_count ?? -1,
     active_subs: counts.active_subscriptions ?? -1,
@@ -152,6 +177,7 @@ async function main() {
 
   report.pass =
     report.summary.false_expired_remaining === 0 &&
+    (report.summary.wrong_direction_remaining ?? 0) === 0 &&
     report.summary.migration_shadows_remaining === 0 &&
     report.summary.shadow_unique_remaining === 0
 
