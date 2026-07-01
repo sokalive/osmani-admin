@@ -19,6 +19,41 @@ function phoneDigitsSql(expr) {
   return `regexp_replace(COALESCE(${expr}::text, ''), '[^0-9]', '', 'g')`
 }
 
+/** Best device_id to own the subscription for this payment phone (VPS/telemetry wins over legacy hash). */
+async function resolveCanonicalDeviceForPhone(pool, phoneDigits) {
+  const digits = String(phoneDigits ?? '').trim()
+  if (digits.length < 10) return null
+  const { rows } = await pool.query(
+    `WITH linked AS (
+       SELECT DISTINCT device_id::text AS device_id
+       FROM transactions
+       WHERE status = 'completed'
+         AND ${phoneDigitsSql('phone')} = $1
+       UNION
+       SELECT DISTINCT device_id::text
+       FROM device_phone_registry
+       WHERE phone_number_normalized = $1
+     ),
+     scored AS (
+       SELECT l.device_id,
+              (SELECT MAX(tel.created_at) FROM client_api_telemetry tel
+               WHERE tel.device_id = l.device_id
+                 AND tel.created_at > now() - interval '14 days') AS last_telemetry,
+              length(l.device_id) AS id_len
+       FROM linked l
+     )
+     SELECT device_id
+     FROM scored
+     ORDER BY (last_telemetry IS NOT NULL) DESC,
+              last_telemetry DESC NULLS LAST,
+              id_len ASC,
+              device_id ASC
+     LIMIT 1`,
+    [digits],
+  )
+  return rows[0]?.device_id ? String(rows[0].device_id) : null
+}
+
 /**
  * Devices with moved:* revoke that still use the app but lost active sub to a phone sibling.
  */
@@ -99,7 +134,32 @@ export async function findWrongDirectionMigrationVictims(pool = requirePool()) {
      WHERE rn = 1
      ORDER BY victim_device_id`,
   )
-  return rows
+
+  const out = []
+  for (const row of rows) {
+    const victim = String(row.victim_device_id || '').trim()
+    if (!victim) continue
+    const { rows: phoneRows } = await pool.query(
+      `SELECT DISTINCT ${phoneDigitsSql('t.phone')} AS phone_digits
+       FROM transactions t
+       WHERE t.device_id = $1 AND t.status = 'completed' AND trim(coalesce(t.phone::text,'')) <> ''
+       UNION
+       SELECT DISTINCT phone_number_normalized FROM device_phone_registry WHERE device_id = $1`,
+      [victim],
+    )
+    let isCanonical = phoneRows.length > 0
+    for (const pr of phoneRows) {
+      const digits = String(pr.phone_digits ?? '').trim()
+      if (digits.length < 10) continue
+      const pick = await resolveCanonicalDeviceForPhone(pool, digits)
+      if (pick && pick !== victim) {
+        isCanonical = false
+        break
+      }
+    }
+    if (isCanonical) out.push(row)
+  }
+  return out
 }
 
 /** All future-expiry rows shown EXPIRED (non-active), including moved:* victims. */
