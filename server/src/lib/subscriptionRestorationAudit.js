@@ -191,6 +191,15 @@ export async function findOrphanCompletedActivations(pool = requirePool()) {
          WHERE ds_mov.device_id = t.device_id
            AND COALESCE(ds_mov.transaction_id, '') LIKE 'moved:%'
        )
+       AND NOT EXISTS (
+         SELECT 1 FROM device_transfers dt
+         INNER JOIN device_subscriptions ds_tgt
+           ON ds_tgt.device_id = dt.target_device_id
+          AND ds_tgt.status = 'active'
+          AND ds_tgt.expires_at > now()
+         WHERE dt.status = 'completed'
+           AND dt.source_device_id = t.device_id
+       )
      ORDER BY t.device_id
      LIMIT 500`,
   )
