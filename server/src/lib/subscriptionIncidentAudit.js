@@ -38,7 +38,17 @@ export async function findIncorrectlySuspendedActive(pool = requirePool()) {
  * Device has no active sub but shares install/phone/fingerprint with another device that does
  * (incorrectly revoked on this device_id).
  */
-export async function findIncorrectlyRevokedMigrationShadows(pool = requirePool()) {
+export async function findIncorrectlyRevokedMigrationShadows(
+  pool = requirePool(),
+  { requireTelemetry = true } = {},
+) {
+  const telemetryClause = requireTelemetry
+    ? `AND EXISTS (
+       SELECT 1 FROM client_api_telemetry tel
+       WHERE tel.device_id = shadow.shadow_device_id
+         AND tel.created_at > now() - interval '14 days'
+     )`
+    : ''
   const { rows } = await pool.query(
     `WITH shadow AS (
        SELECT DISTINCT shadow_device_id, source_device_id, match_reason
@@ -98,6 +108,24 @@ export async function findIncorrectlyRevokedMigrationShadows(pool = requirePool(
          WHERE ds_source.status = 'active'
            AND ds_source.expires_at > now()
            AND ds_new.device_id IS NULL
+         UNION ALL
+         SELECT dpr_new.device_id::text,
+                ds_source.device_id::text,
+                'payment_phone_shadow'
+         FROM device_subscriptions ds_source
+         INNER JOIN device_phone_registry dpr_src
+           ON dpr_src.device_id = ds_source.device_id
+          AND trim(dpr_src.phone_number_normalized) <> ''
+         INNER JOIN device_phone_registry dpr_new
+           ON dpr_new.phone_number_normalized = dpr_src.phone_number_normalized
+          AND dpr_new.device_id <> ds_source.device_id
+         LEFT JOIN device_subscriptions ds_new
+           ON ds_new.device_id = dpr_new.device_id
+          AND ds_new.status = 'active'
+          AND ds_new.expires_at > now()
+         WHERE ds_source.status = 'active'
+           AND ds_source.expires_at > now()
+           AND ds_new.device_id IS NULL
        ) u
      )
      SELECT shadow_device_id AS device_id,
@@ -113,11 +141,7 @@ export async function findIncorrectlyRevokedMigrationShadows(pool = requirePool(
          AND ds_ok.status = 'active'
          AND ds_ok.expires_at > now()
      )
-     AND EXISTS (
-       SELECT 1 FROM client_api_telemetry tel
-       WHERE tel.device_id = shadow.shadow_device_id
-         AND tel.created_at > now() - interval '14 days'
-     )
+     ${telemetryClause}
      ORDER BY shadow_device_id`,
   )
   return rows

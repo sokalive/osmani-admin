@@ -45,7 +45,7 @@ async function resolveMigrationDirection(pair, probeActive) {
   if (aActive && bActive) return null
   if (aActive && !bActive) return { target: pair.b, source: pair.a, reason: pair.reason }
   if (!aActive && bActive) return { target: pair.a, source: pair.b, reason: pair.reason }
-  return { target: pair.a, source: pair.b, reason: pair.reason }
+  return null
 }
 
 /**
@@ -56,13 +56,15 @@ export async function runDirectShadowRepairBatch(opts = {}) {
   const shadowLimit = Math.max(0, Math.min(50, Number(opts.shadowLimit) || 10))
   const orphanLimit = Math.max(0, Math.min(20, Number(opts.orphanLimit) || 5))
 
+  const shadowOpts = { requireTelemetry: false }
+
   const before = {
-    shadows: (await findIncorrectlyRevokedMigrationShadows(pool)).length,
+    shadows: (await findIncorrectlyRevokedMigrationShadows(pool, shadowOpts)).length,
     suspended: (await findIncorrectlySuspendedActive(pool)).length,
     orphans: (await findOrphanCompletedActivations(pool)).length,
   }
 
-  const pairs = dedupeShadowPairs(await findIncorrectlyRevokedMigrationShadows(pool))
+  const pairs = dedupeShadowPairs(await findIncorrectlyRevokedMigrationShadows(pool, shadowOpts))
   const resolved = []
   for (const pair of pairs) {
     const dir = await resolveMigrationDirection(pair, probeActive)
@@ -118,7 +120,7 @@ export async function runDirectShadowRepairBatch(opts = {}) {
   }
 
   const after = {
-    shadows: (await findIncorrectlyRevokedMigrationShadows(pool)).length,
+    shadows: (await findIncorrectlyRevokedMigrationShadows(pool, shadowOpts)).length,
     suspended: (await findIncorrectlySuspendedActive(pool)).length,
     orphans: (await findOrphanCompletedActivations(pool)).length,
   }
@@ -128,7 +130,7 @@ export async function runDirectShadowRepairBatch(opts = {}) {
     before,
     after,
     remaining_unique_shadows: (await (async () => {
-      const raw = dedupeShadowPairs(await findIncorrectlyRevokedMigrationShadows(pool))
+      const raw = dedupeShadowPairs(await findIncorrectlyRevokedMigrationShadows(pool, shadowOpts))
       let n = 0
       for (const pair of raw) {
         const dir = await resolveMigrationDirection(pair, probeActive)
@@ -140,5 +142,39 @@ export async function runDirectShadowRepairBatch(opts = {}) {
     migrated,
     orphans_finalized: orphansFinalized,
     failed,
+  }
+}
+
+/**
+ * Run shadow repair batches until remaining_unique_shadows reaches 0 or no progress.
+ */
+export async function runDirectShadowRepairUntilZero(opts = {}) {
+  const maxRounds = Math.max(1, Math.min(100, Number(opts.maxRounds) || 50))
+  const shadowLimit = Math.max(1, Math.min(50, Number(opts.shadowLimit) || 20))
+  const orphanLimit = Math.max(0, Math.min(20, Number(opts.orphanLimit) || 5))
+  const rounds = []
+  let last = null
+
+  for (let i = 0; i < maxRounds; i++) {
+    last = await runDirectShadowRepairBatch({ shadowLimit, orphanLimit })
+    rounds.push({
+      round: i + 1,
+      migrated: last.migrated?.length ?? 0,
+      failed: last.failed?.length ?? 0,
+      remaining_unique_shadows: last.remaining_unique_shadows,
+      shadows: last.after?.shadows,
+    })
+    if ((last.remaining_unique_shadows ?? 0) === 0 && (last.after?.shadows ?? 0) === 0) {
+      return { ok: true, rounds, last }
+    }
+    const progressed =
+      (last.migrated?.length ?? 0) > 0 || (last.orphans_finalized?.length ?? 0) > 0
+    if (!progressed) break
+  }
+
+  return {
+    ok: (last?.remaining_unique_shadows ?? 1) === 0 && (last?.after?.shadows ?? 1) === 0,
+    rounds,
+    last,
   }
 }

@@ -685,19 +685,25 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     }
   }
 
-  const needsMigrationLink =
-    !isAccessRowActive(row) &&
-    explicitMigration &&
-    hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountId })
+  const needsMigrationLink = !isAccessRowActive(row)
 
   if (needsMigrationLink) {
     const tLink0 = Date.now()
+    let phoneHint = paymentPhone
+    if (!phoneHint) {
+      try {
+        const resolved = await withVerifyDbSlot(() => billing.resolvePaymentPhoneForDevice(d))
+        phoneHint = resolved?.phone || null
+      } catch (_) {
+        phoneHint = null
+      }
+    }
     let link = { linked: false, reason: 'skipped' }
     try {
       link = await withVerifyDbSlot(() =>
         ensureSubscriptionLinkedForDevice(d, {
           fingerprint: fp || null,
-          phone: paymentPhone || null,
+          phone: phoneHint || null,
           legacyDeviceId: legacyDeviceId || null,
           accountId: accountId || null,
         }),

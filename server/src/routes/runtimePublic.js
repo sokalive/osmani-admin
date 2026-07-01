@@ -297,10 +297,15 @@ runtimePublicRouter.post('/subscription-false-expired-repair', requireLegacyAdmi
 runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdminToken, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
-    const { runDirectShadowRepairBatch } = await import('../lib/subscriptionShadowRepairBatch.js')
+    const { runDirectShadowRepairBatch, runDirectShadowRepairUntilZero } = await import(
+      '../lib/subscriptionShadowRepairBatch.js'
+    )
+    const untilZero = String(req.query.until_zero ?? req.query.untilZero ?? '').trim() === '1'
     const shadowLimit = Number(req.query.shadow_limit ?? req.query.limit ?? 10)
     const orphanLimit = Number(req.query.orphan_limit ?? 5)
-    const report = await runDirectShadowRepairBatch({ shadowLimit, orphanLimit })
+    const report = untilZero
+      ? await runDirectShadowRepairUntilZero({ shadowLimit, orphanLimit })
+      : await runDirectShadowRepairBatch({ shadowLimit, orphanLimit })
     res.json({ ...report, commit: getServerGitCommit() })
   } catch (e) {
     console.error('[runtime/subscription-shadow-repair-batch]', e)

@@ -266,7 +266,7 @@ export async function migrateSubscriptionFromSourceDevice(
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
-         started_at = COALESCE(device_subscriptions.started_at, EXCLUDED.started_at),
+         started_at = EXCLUDED.started_at,
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
@@ -393,7 +393,7 @@ async function resolveActiveDeviceIdByLegacyHint(hint, excludeDeviceId) {
   )
   if (rows.length !== 1) return null
   const candidate = String(rows[0].device_id)
-  if (await isReverseTransferMigrationBlocked(target, candidate)) return null
+  if (await isReverseTransferMigrationBlocked(exclude, candidate)) return null
   return candidate
 }
 
@@ -420,7 +420,7 @@ async function findUniqueActiveDeviceIdByIntelligencePhone(phoneInput, excludeDe
   )
   if (rows.length !== 1) return null
   const candidate = String(rows[0].device_id)
-  if (await isReverseTransferMigrationBlocked(target, candidate)) return null
+  if (await isReverseTransferMigrationBlocked(exclude, candidate)) return null
   return candidate
 }
 
@@ -516,8 +516,11 @@ export async function ensureSubscriptionLinkedForDevice(
   }
 
   if (!shouldRunFullMigrationScan(d, { phone, legacyDeviceId, accountId }) && !explicitHints) {
-    if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)
-    return { linked: false, reason: 'migration_throttled' }
+    const registryPhones = await collectPaymentPhonesForDevice(d)
+    if (!registryPhones.length) {
+      if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)
+      return { linked: false, reason: 'migration_throttled' }
+    }
   }
 
   const legacyHints = [legacyDeviceId, accountId].filter(Boolean)
@@ -529,8 +532,7 @@ export async function ensureSubscriptionLinkedForDevice(
     }
   }
 
-  // Phone-only migration removed: shared payment phones in device_intelligence_registry
-  // caused false "package transferred" popups when unrelated devices registered the same number.
+  // Phone-only migration uses completed transactions + device_phone_registry (not intelligence registry).
 
   const androidSource = await findActiveDeviceIdBySharedAndroidId(d)
   if (androidSource) {
@@ -544,7 +546,27 @@ export async function ensureSubscriptionLinkedForDevice(
     if (linked.linked) return linked
   }
 
-  if (!explicitHints && !fpHash) {
+  const phones = new Set()
+  const reqDigits = normalizePhoneDigits(phone)
+  if (reqDigits && reqDigits.length >= 10) phones.add(reqDigits)
+  for (const p of await collectPaymentPhonesForDevice(d)) phones.add(p)
+
+  if (phones.size > 0) {
+    const clusterSource = await findUniqueActiveDeviceIdForPhoneCluster([...phones], d)
+    if (clusterSource) {
+      const linked = await tryLinkFromSource(d, clusterSource, fpHash, 'payment_phone_cluster')
+      if (linked.linked) return linked
+    }
+    for (const p of phones) {
+      const sourceId = await findActiveDeviceIdForPaymentPhone(p, { proofDeviceId: d })
+      if (sourceId && sourceId !== d) {
+        const linked = await tryLinkFromSource(d, sourceId, fpHash, 'payment_phone')
+        if (linked.linked) return linked
+      }
+    }
+  }
+
+  if (!explicitHints && !fpHash && phones.size === 0) {
     return { linked: false, reason: 'no_migration_hints' }
   }
 
