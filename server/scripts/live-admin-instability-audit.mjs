@@ -38,8 +38,9 @@ async function bundleInfo(admin) {
     renderDefaultApi: /var \w+=`https:\/\/osmani-admin-api\.onrender\.com`/.test(js),
     // UsersPage stability markers (minified)
     keepsRowsOnError: !js.includes('setItems([])') || js.includes('Keep prior rows') === false,
-    sseDebounce400: js.includes(',400)'),
-    loadingSkeleton: js.includes('TableSkeleton'),
+    sseDebounce1500: js.includes(',1500)'),
+    userProfileDrawer: js.includes('User profile'),
+    noUpdatingLabel: !js.includes('Updating'),
   }
 }
 

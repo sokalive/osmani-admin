@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Component } from 'react'
-import { Loader2, Pencil, Trash2 } from 'lucide-react'
+import { Eye, Loader2, Pencil, Trash2 } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import SubscriptionEditModal from '../components/SubscriptionEditModal'
 import Topbar from '../components/Topbar'
+import UserProfileDrawer from '../components/UserProfileDrawer'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   deleteUser,
@@ -18,6 +19,12 @@ import {
 } from '../lib/api'
 import { formatAdminDateTime, formatAdminRemainingFromExpiry } from '../lib/formatAdminDateTime'
 import { formatTsh } from '../lib/formatMoney'
+import {
+  fingerprintPagination,
+  fingerprintSummary,
+  fingerprintUserRows,
+  mergeUserRows,
+} from '../lib/usersPageRefresh'
 
 const PAGE_SIZE = 25
 
@@ -191,7 +198,7 @@ function UsersPageContent() {
   const [editing, setEditing] = useState(null)
   const [flash, setFlash] = useState(null)
   const [tableLoading, setTableLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
+  const [profileRow, setProfileRow] = useState(null)
   const [selected, setSelected] = useState(() => new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [confirm, setConfirm] = useState(null)
@@ -199,11 +206,18 @@ function UsersPageContent() {
   const loadedTabsRef = useRef(new Set())
   const loadTabGenRef = useRef(0)
   const loadSummaryGenRef = useRef(0)
+  const silentTabGenRef = useRef(0)
   const sseRefreshTimerRef = useRef(null)
   const fetchAbortRef = useRef(null)
-  const hasTableDataRef = useRef(false)
+  const silentFetchAbortRef = useRef(null)
+  const hasEverLoadedTableRef = useRef(false)
+  const itemsFingerprintRef = useRef('')
+  const paginationFingerprintRef = useRef('')
+  const summaryFingerprintRef = useRef('')
   const pageRef = useRef(page)
+  const tabRef = useRef(tab)
   pageRef.current = page
+  tabRef.current = tab
 
   useEffect(() => {
     const t = window.setTimeout(() => setSearchDebounced(search.trim()), 300)
@@ -213,7 +227,6 @@ function UsersPageContent() {
   useEffect(() => {
     setPage(1)
     setSelected(new Set())
-    hasTableDataRef.current = false
   }, [tab, expiringWithin, searchDebounced])
 
   const planMap = useMemo(() => {
@@ -242,17 +255,65 @@ function UsersPageContent() {
     [tab, page, searchDebounced, expiringWithin],
   )
 
-  const loadSummary = useCallback(async (signal) => {
+  const loadSummary = useCallback(async (signal, { silent = false } = {}) => {
     const gen = ++loadSummaryGenRef.current
     try {
       const res = await getUsersSummary(signal ? { signal } : {})
       if (gen !== loadSummaryGenRef.current) return
-      if (res?.summary) setSummary(res.summary)
+      if (res?.summary) {
+        const fp = fingerprintSummary(res.summary)
+        if (!silent || fp !== summaryFingerprintRef.current) {
+          summaryFingerprintRef.current = fp
+          setSummary(res.summary)
+        }
+      }
     } catch (e) {
       if (e?.name === 'AbortError') return
       /* badge counts are optional */
     }
   }, [])
+
+  const applyTabResult = useCallback(
+    (res, { silent = false, currentTab = tab } = {}) => {
+      const rows = Array.isArray(res?.items) ? res.items : []
+      const nextPagination = res?.pagination ?? { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 }
+      const pagFp = fingerprintPagination(nextPagination)
+      const pagChanged = pagFp !== paginationFingerprintRef.current
+
+      setItems((prev) => {
+        const nextRows = silent ? mergeUserRows(prev, rows, currentTab) : rows
+        const nextFp = fingerprintUserRows(nextRows, currentTab)
+        if (nextFp === itemsFingerprintRef.current && !pagChanged) return prev
+        itemsFingerprintRef.current = nextFp
+        return nextRows
+      })
+
+      if (pagChanged) {
+        paginationFingerprintRef.current = pagFp
+        setPagination(nextPagination)
+      }
+
+      if (rows.length > 0) hasEverLoadedTableRef.current = true
+      loadedTabsRef.current.add(`${currentTab}:${expiringWithin}`)
+    },
+    [tab, expiringWithin],
+  )
+
+  const loadTabSilent = useCallback(async () => {
+    const gen = ++silentTabGenRef.current
+    silentFetchAbortRef.current?.abort()
+    const ac = new AbortController()
+    silentFetchAbortRef.current = ac
+    const currentTab = tabRef.current
+    try {
+      const res = await fetchTab({ page: pageRef.current }, ac.signal)
+      if (gen !== silentTabGenRef.current) return
+      applyTabResult(res, { silent: true, currentTab })
+    } catch (e) {
+      if (e?.name === 'AbortError') return
+      /* keep existing rows on silent background errors */
+    }
+  }, [fetchTab, applyTabResult])
 
   const loadTab = useCallback(
     async (opts = {}) => {
@@ -260,30 +321,20 @@ function UsersPageContent() {
       fetchAbortRef.current?.abort()
       const ac = new AbortController()
       fetchAbortRef.current = ac
-      const showSkeleton = !hasTableDataRef.current
+      const showSkeleton = !hasEverLoadedTableRef.current
       if (showSkeleton) setTableLoading(true)
-      else setRefreshing(true)
       try {
         const res = await fetchTab(opts, ac.signal)
         if (gen !== loadTabGenRef.current) return
-        const rows = Array.isArray(res?.items) ? res.items : []
-        setItems(rows)
-        setPagination(
-          res?.pagination ?? { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 },
-        )
-        if (rows.length > 0) hasTableDataRef.current = true
-        loadedTabsRef.current.add(`${tab}:${expiringWithin}`)
+        applyTabResult(res, { silent: false })
       } catch (e) {
         if (e?.name === 'AbortError' || gen !== loadTabGenRef.current) return
         showToast('error', e?.message || 'Could not load users')
       } finally {
-        if (gen === loadTabGenRef.current) {
-          setTableLoading(false)
-          setRefreshing(false)
-        }
+        if (gen === loadTabGenRef.current) setTableLoading(false)
       }
     },
-    [fetchTab, showToast, tab, expiringWithin],
+    [fetchTab, showToast, applyTabResult],
   )
 
   useEffect(() => {
@@ -303,20 +354,18 @@ function UsersPageContent() {
       if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current)
       sseRefreshTimerRef.current = window.setTimeout(() => {
         sseRefreshTimerRef.current = null
-        void loadSummary()
-        void loadTab({ page: pageRef.current })
-      }, 400)
+        void loadSummary(undefined, { silent: true })
+        void loadTabSilent()
+      }, 1500)
     }
     es.addEventListener('analytics.subscription_updated', scheduleRefresh)
     es.addEventListener('analytics.transaction_updated', scheduleRefresh)
-    es.onerror = () => {
-      scheduleRefresh()
-    }
     return () => {
       if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current)
+      silentFetchAbortRef.current?.abort()
       es.close()
     }
-  }, [loadSummary, loadTab])
+  }, [loadSummary, loadTabSilent])
 
   useEffect(() => {
     const id = window.setInterval(() => setRemainingClock((t) => t + 1), 60_000)
@@ -473,12 +522,6 @@ function UsersPageContent() {
             </h1>
             <p className="mt-1 text-sm text-slate-400">
               Paginated views — device subscriptions (EAT display)
-              {refreshing ? (
-                <span className="ml-2 inline-flex items-center gap-1 text-amber-200/90">
-                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-                  Updating…
-                </span>
-              ) : null}
               {!tableLoading && pagination.total > 0 ? (
                 <span className="ml-2 text-slate-500">· {pagination.total} in this view</span>
               ) : null}
@@ -570,20 +613,18 @@ function UsersPageContent() {
 
         <div className="max-w-md">
           <label className={labelClass()} htmlFor="user-search">
-            Search phone or device ID
+            Search
           </label>
           <input
             id="user-search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Device ID or phone…"
+            placeholder="Phone, device ID, transaction ID, reference, user name…"
             className={inputClass()}
           />
         </div>
 
-        <div
-          className={`overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04] transition-opacity ${refreshing ? 'opacity-80' : ''}`}
-        >
+        <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
           <div className="overflow-x-auto">
             {tab === 'failed' ? (
               <table className="w-full min-w-[1100px] border-collapse text-left text-sm">
@@ -598,10 +639,11 @@ function UsersPageContent() {
                     <th className="px-4 py-3 font-semibold">Created (EAT)</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
                     <th className="px-4 py-3 font-semibold">Contact / retry</th>
+                    <th className="px-4 py-3 font-semibold text-right">Profile</th>
                   </tr>
                 </thead>
-                {tableLoading ? (
-                  <TableSkeleton cols={9} />
+                {tableLoading && items.length === 0 ? (
+                  <TableSkeleton cols={10} />
                 ) : (
                   <tbody>
                     {items.map((r) => (
@@ -626,6 +668,16 @@ function UsersPageContent() {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-xs text-slate-500">{r.retry_hint || '-'}</td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setProfileRow(r)}
+                            className="inline-flex rounded-lg p-2 text-slate-400 hover:bg-cyan-500/10 hover:text-cyan-300"
+                            aria-label="View profile"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -656,13 +708,11 @@ function UsersPageContent() {
                     <th className="px-4 py-3 font-semibold">Remaining</th>
                     <th className="px-4 py-3 font-semibold">Provider</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
-                    {tab === 'all' ? (
-                      <th className="px-4 py-3 font-semibold text-right">Actions</th>
-                    ) : null}
+                    <th className="px-4 py-3 font-semibold text-right">Actions</th>
                   </tr>
                 </thead>
-                {tableLoading ? (
-                  <TableSkeleton cols={tab === 'all' ? 11 : 9} />
+                {tableLoading && items.length === 0 ? (
+                  <TableSkeleton cols={tab === 'all' ? 11 : 10} />
                 ) : (
                   <tbody>
                     {items.map((r) => {
@@ -715,6 +765,14 @@ function UsersPageContent() {
                             <td className="px-4 py-3 text-right">
                               <button
                                 type="button"
+                                onClick={() => setProfileRow(r)}
+                                className="mr-1 inline-flex rounded-lg p-2 text-slate-400 hover:bg-cyan-500/10 hover:text-cyan-300"
+                                aria-label="View profile"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => setEditing(r)}
                                 disabled={bulkDeleting}
                                 className="mr-1 inline-flex rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-amber-300 disabled:opacity-40"
@@ -732,7 +790,18 @@ function UsersPageContent() {
                                 <Trash2 className="h-4 w-4" />
                               </button>
                             </td>
-                          ) : null}
+                          ) : (
+                            <td className="px-4 py-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => setProfileRow(r)}
+                                className="inline-flex rounded-lg p-2 text-slate-400 hover:bg-cyan-500/10 hover:text-cyan-300"
+                                aria-label="View profile"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       )
                     })}
@@ -748,10 +817,20 @@ function UsersPageContent() {
             page={pagination.page}
             totalPages={pagination.totalPages}
             total={pagination.total}
-            disabled={tableLoading || refreshing}
+            disabled={tableLoading}
             onPageChange={setPage}
           />
         </div>
+
+        <UserProfileDrawer
+          row={profileRow}
+          tab={tab}
+          onClose={() => setProfileRow(null)}
+          onEditSubscription={(r) => {
+            setProfileRow(null)
+            setEditing(r)
+          }}
+        />
 
         <SubscriptionEditModal
           row={editing}

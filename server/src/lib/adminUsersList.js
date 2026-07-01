@@ -84,6 +84,22 @@ function appendSubscriptionSearch(search, cond, params, i) {
   const parts = [`ds.device_id ILIKE $${i}`]
   params.push(`%${esc}%`)
   let idx = i + 1
+  parts.push(`ds.transaction_id ILIKE $${idx}`)
+  params.push(`%${esc}%`)
+  idx += 1
+  parts.push(`pay.order_id ILIKE $${idx}`)
+  params.push(`%${esc}%`)
+  idx += 1
+  parts.push(`pay.external_id ILIKE $${idx}`)
+  params.push(`%${esc}%`)
+  idx += 1
+  parts.push(`EXISTS (
+    SELECT 1 FROM device_intelligence_registry ir_q
+    WHERE ir_q.device_id = ds.device_id
+      AND (ir_q.user_id ILIKE $${idx} OR ir_q.account_id ILIKE $${idx})
+  )`)
+  params.push(`%${esc}%`)
+  idx += 1
   const phoneExprs = [`COALESCE(lt.phone, pay.phone, '')`]
   for (const expr of phoneExprs) {
     parts.push(`${expr} ILIKE $${idx}`)
@@ -409,6 +425,21 @@ export async function listAdminFailedPayments(filters = {}) {
     params,
     i,
   )
+  const txnSearch = String(filters.search ?? '').trim()
+  if (txnSearch) {
+    const esc = txnSearch.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+    cond.push(`(
+      t.order_id ILIKE $${i}
+      OR t.external_id ILIKE $${i + 1}
+      OR EXISTS (
+        SELECT 1 FROM device_intelligence_registry ir_f
+        WHERE ir_f.device_id = t.device_id
+          AND (ir_f.user_id ILIKE $${i + 2} OR ir_f.account_id ILIKE $${i + 2})
+      )
+    )`)
+    params.push(`%${esc}%`, `%${esc}%`, `%${esc}%`)
+    i += 3
+  }
   const where = `WHERE ${cond.join(' AND ')}`
   return withReadSnapshot(async (client) => {
     const total = await countQuery(
