@@ -345,6 +345,22 @@ runtimePublicRouter.get('/subscription-api-parity-audit', requireLegacyAdminToke
   }
 })
 
+/** Consolidate duplicate active subscriptions on the same payment phone. */
+runtimePublicRouter.post('/subscription-duplicate-phone-repair', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { repairDuplicatePhoneClusters } = await import('../lib/subscriptionApiParityAudit.js')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const confirm = String(req.query.confirm ?? b.confirm ?? '0').trim() === '1'
+    const report = await repairDuplicatePhoneClusters({ dryRun, confirm })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-duplicate-phone-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Run false-expired + wrong-direction + duplicate-phone + shadow repair until clear. */
 runtimePublicRouter.post('/subscription-api-parity-repair', requireLegacyAdminToken, async (req, res) => {
   try {

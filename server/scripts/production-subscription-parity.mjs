@@ -54,12 +54,31 @@ async function main() {
   console.log(JSON.stringify(before.counts, null, 2))
 
   if (doRepair) {
-    console.log('\n=== REPAIR ===')
-    const repair = await call(VPS, 'POST', '/runtime/subscription-api-parity-repair?confirm=1&max_rounds=10')
-    console.log('ok', repair.ok)
-    console.log('before', repair.before)
-    console.log('after', repair.after)
-    console.log('rounds', repair.rounds?.length)
+    console.log('\n=== REPAIR (stepped) ===')
+    const steps = [
+      ['false-expired', () => call(VPS, 'POST', '/runtime/subscription-false-expired-repair?dry_run=0&confirm=1')],
+      ['wrong-direction', () => call(VPS, 'POST', '/runtime/subscription-wrong-direction-repair?dry_run=0&confirm=1&limit=25')],
+      ['duplicate-phone', () => call(VPS, 'POST', '/runtime/subscription-duplicate-phone-repair?dry_run=0&confirm=1')],
+      ['shadow', () => call(VPS, 'POST', '/runtime/subscription-shadow-repair-batch?shadow_limit=25&orphan_limit=10')],
+    ]
+    for (const [name, fn] of steps) {
+      try {
+        const r = await fn()
+        console.log(name, JSON.stringify(r.counts || r.repaired_count || r.remaining_clusters || r.after || r))
+      } catch (e) {
+        console.warn(name, 'failed:', e.message)
+      }
+    }
+    for (let i = 0; i < 5; i++) {
+      try {
+        const dup = await call(VPS, 'POST', '/runtime/subscription-duplicate-phone-repair?dry_run=0&confirm=1')
+        console.log(`duplicate-phone round ${i + 1} remaining=${dup.remaining_clusters} repaired=${dup.repaired_count}`)
+        if ((dup.remaining_clusters ?? 0) === 0) break
+        if ((dup.repaired_count ?? 0) === 0) break
+      } catch (e) {
+        break
+      }
+    }
   }
 
   console.log('\n=== AFTER PARITY AUDIT (VPS) ===')
