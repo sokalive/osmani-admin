@@ -24,6 +24,20 @@ function requirePool() {
   return pool
 }
 
+/** Subscriptions revoked by completed package migration (source device keeps moved:* row). */
+function migrationRevokedSql(dsAlias = 'ds') {
+  return `COALESCE(${dsAlias}.transaction_id::text, '') NOT LIKE 'moved:%'`
+}
+
+/** Transfer sources must not count as active phone owners after completed migration. */
+function notCompletedTransferSourceSql(dsAlias = 'ds') {
+  return `NOT EXISTS (
+    SELECT 1 FROM device_transfers dt
+    WHERE dt.status = 'completed'
+      AND dt.source_device_id::text = ${dsAlias}.device_id::text
+  )`
+}
+
 function phoneDevicesCteSql() {
   return `
     phone_devices AS (
@@ -98,6 +112,8 @@ export async function listActivePhoneSubscriptionDevices(phoneInput) {
      WHERE ds.expires_at > now()
        AND LOWER(COALESCE(NULLIF(trim(ds.status::text), ''), 'active')) = 'active'
        AND COALESCE(ds.manual_admin_blocked, false) = false
+       AND ${migrationRevokedSql('ds')}
+       AND ${notCompletedTransferSourceSql('ds')}
      ORDER BY ds.expires_at DESC`,
     [digits],
   )
@@ -169,6 +185,8 @@ export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInp
        AND expires_at > now()
        AND LOWER(COALESCE(NULLIF(trim(status::text), ''), 'active')) = 'active'
        AND COALESCE(manual_admin_blocked, false) = false
+       AND ${migrationRevokedSql('device_subscriptions')}
+       AND ${notCompletedTransferSourceSql('device_subscriptions')}
      LIMIT 1`,
     [paying],
   )

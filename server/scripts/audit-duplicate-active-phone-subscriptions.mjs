@@ -55,6 +55,12 @@ async function main() {
        WHERE ds.expires_at > now()
          AND LOWER(COALESCE(NULLIF(trim(ds.status::text), ''), 'active')) = 'active'
          AND COALESCE(ds.manual_admin_blocked, false) = false
+         AND COALESCE(ds.transaction_id::text, '') NOT LIKE 'moved:%'
+         AND NOT EXISTS (
+           SELECT 1 FROM device_transfers dt
+           WHERE dt.status = 'completed'
+             AND dt.source_device_id::text = ds.device_id::text
+         )
          AND length(pd.phone_digits) >= 10
      )
      SELECT
@@ -79,6 +85,12 @@ async function main() {
        WHERE ds.expires_at > now()
          AND LOWER(COALESCE(NULLIF(trim(ds.status::text), ''), 'active')) = 'active'
          AND COALESCE(ds.manual_admin_blocked, false) = false
+         AND COALESCE(ds.transaction_id::text, '') NOT LIKE 'moved:%'
+         AND NOT EXISTS (
+           SELECT 1 FROM device_transfers dt
+           WHERE dt.status = 'completed'
+             AND dt.source_device_id::text = ds.device_id::text
+         )
          AND length(pd.phone_digits) >= 10
      )
      SELECT count(DISTINCT phone_digits)::int AS phones_with_active_sub
