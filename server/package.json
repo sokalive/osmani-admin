@@ -34,6 +34,7 @@
     "verify:sms-integration": "node scripts/verify-sms-integration.mjs",
     "verify:phone-subscription-guard": "node scripts/verify-phone-subscription-guard.mjs",
     "verify:payment-activation-latency": "node scripts/verify-payment-activation-latency.mjs",
+    "verify:payment-create-order-latency": "node scripts/verify-payment-create-order-latency.mjs",
     "verify:payment-production": "node scripts/verify-payment-production.mjs",
     "backfill:transaction-phone": "node scripts/backfill-transaction-phone-from-payload.mjs",
     "audit:duplicate-active-phones": "node scripts/audit-duplicate-active-phone-subscriptions.mjs"

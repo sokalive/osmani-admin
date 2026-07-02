@@ -10,6 +10,10 @@ import {
   resolveAuraxpayCredentials,
 } from '../lib/payments/providers/auraxpay.js'
 import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
+import {
+  respondCreateOrderAccepted,
+  runProviderCreateOrderInBackground,
+} from '../lib/paymentCreateOrderPipeline.js'
 import { formatPhone } from '../zenopayClient.js'
 
 export const auraxpayPaymentsRouter = Router()
@@ -107,76 +111,39 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
       status: 'pending',
       deviceId,
     })
-    const ax = await createOrder(cred, { phone, amount, orderId, currency: 'TZS' })
-    void billing
-      .recordAuraxpayCreateOrderAttempt({
-        url: ax.collectUrl || resolveAuraxpayCollectPostUrl(cred),
-        apiStyle: ax.apiStyle,
-        httpStatus: ax.status,
-        responseBody: ax.body,
-        providerMessage: ax.providerMessage,
-      })
-      .catch((e) => console.warn('[auraxpay] record create-order attempt failed', e))
-    const providerOrderId =
-      ax.normalized?.providerOrderId ??
-      (ax.body?.data?.order_id != null ? String(ax.body.data.order_id) : null)
     const prevPayload =
       tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}
-    await billing.updateTransactionByOrderId(orderId, {
-      status: ax.ok ? 'pending' : 'failed',
-      external_id: providerOrderId,
-      raw_payload: {
-        ...prevPayload,
-        auraxpay: ax.body,
-        provider_order_id: providerOrderId,
-        httpStatus: ax.status,
+    runProviderCreateOrderInBackground({
+      provider: 'auraxpay',
+      orderId,
+      deviceId,
+      prevPayload,
+      cred,
+      phone,
+      amount,
+      initiate: createOrder,
+      providerBodyKey: 'auraxpay',
+      onProviderResult: async (ax) => {
+        await billing.recordAuraxpayCreateOrderAttempt({
+          url: ax.collectUrl || resolveAuraxpayCollectPostUrl(cred),
+          apiStyle: ax.apiStyle,
+          httpStatus: ax.status,
+          responseBody: ax.body,
+          providerMessage: ax.providerMessage,
+        })
       },
     })
-    if (!ax.ok) {
-      const providerMessage = String(
-        ax.providerMessage ?? ax.body?.message ?? ax.body?.error ?? ax.body?.data?.message ?? '',
-      ).trim()
-      const clientError = ax.status === 0 && ax.body?.error
-      console.warn('[auraxpay] create-order provider failed', {
-        context,
-        orderId,
-        apiStyle: ax.apiStyle,
-        httpStatus: ax.status,
-        providerMessage: providerMessage || null,
-        body: ax.body,
-      })
-      liveSyncBus.publish('analytics.transaction_updated', {
-        topics: ['analytics'],
-        orderId,
-        status: 'failed',
-        deviceId,
-      })
-      return res.status(clientError ? 400 : 502).json({
-        error: providerMessage || ax.body?.error || 'Aurax Pay payment initiation failed',
-        providerMessage: providerMessage || null,
-        providerError: ax.body,
-        apiStyle: ax.apiStyle || null,
-        collectUrl: ax.collectUrl || null,
-        attemptedUrls: ax.attemptedUrls || null,
-        orderId,
-        transactionId: tx.id,
-        httpStatus: ax.status,
-        details: ax.body,
-      })
-    }
-    console.log('[auraxpay] create-order accepted', { context, orderId, providerOrderId })
     schedulePostPaymentActivationPolls(orderId, deviceId)
-    res.status(201).json({
+    console.log('[auraxpay] create-order accepted (async provider)', { context, orderId })
+    respondCreateOrderAccepted(res, {
       ok: true,
       provider: 'auraxpay',
       provider_alias: 'aurax',
       orderId,
-      provider_order_id: providerOrderId,
       deviceId,
       transactionId: tx.id,
       amount,
       currency: 'TZS',
-      auraxpay: ax.body,
     })
   } catch (e) {
     console.error('[auraxpay] create-order error', { context, error: e })

@@ -10,7 +10,10 @@ import {
 } from '../lib/payments/providers/sonicpesa.js'
 import { formatPhone } from '../zenopayClient.js'
 import { hashDeviceFingerprint } from '../billingStore.js'
-import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
+import {
+  respondCreateOrderAccepted,
+  runProviderCreateOrderInBackground,
+} from '../lib/paymentCreateOrderPipeline.js'
 
 export const sonicpesaPaymentsRouter = Router()
 
@@ -101,56 +104,28 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       status: 'pending',
       deviceId,
     })
-    const sp = await createOrder(cred, { phone, amount, orderId, currency: 'TZS' })
-    const providerOrderId =
-      sp.normalized?.providerOrderId ??
-      (sp.body?.data?.order_id != null ? String(sp.body.data.order_id) : null)
     const prevPayload =
       tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}
-    await billing.updateTransactionByOrderId(orderId, {
-      status: sp.ok ? 'pending' : 'failed',
-      external_id: providerOrderId,
-      raw_payload: {
-        ...prevPayload,
-        sonicpesa: sp.body,
-        provider_order_id: providerOrderId,
-        httpStatus: sp.status,
-      },
+    runProviderCreateOrderInBackground({
+      provider: 'sonicpesa',
+      orderId,
+      deviceId,
+      prevPayload,
+      cred,
+      phone,
+      amount,
+      initiate: createOrder,
+      providerBodyKey: 'sonicpesa',
     })
-    if (!sp.ok) {
-      console.error('[sonicpesa] create-order failed', {
-        orderId,
-        httpStatus: sp.status,
-        httpOk: sp.httpOk,
-        request: sp.requestPayload,
-        response: sp.body,
-      })
-      liveSyncBus.publish('analytics.transaction_updated', {
-        topics: ['analytics'],
-        orderId,
-        status: 'failed',
-        deviceId,
-      })
-      return res.status(502).json({
-        error: 'SonicPesa payment initiation failed',
-        orderId,
-        transactionId: tx.id,
-        httpStatus: sp.status,
-        request: sp.requestPayload,
-        details: sp.body,
-      })
-    }
     schedulePostPaymentActivationPolls(orderId, deviceId)
-    res.status(201).json({
+    respondCreateOrderAccepted(res, {
       ok: true,
       provider: 'sonicpesa',
       orderId,
-      provider_order_id: providerOrderId,
       deviceId,
       transactionId: tx.id,
       amount,
       currency: 'TZS',
-      sonicpesa: sp.body,
     })
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) })

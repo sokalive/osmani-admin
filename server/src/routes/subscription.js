@@ -478,6 +478,8 @@ async function tryLastResortActiveVerifyFallback(req, deviceId, fingerprint) {
 
 function isAccessRowActive(row) {
   if (!row || row.blocked_now === true) return false
+  const rem = Number(row.remaining_seconds ?? 0)
+  if (Number.isFinite(rem) && rem > 0) return true
   return (
     row.active_now === true &&
     String(row.status ?? '').toLowerCase() === 'active'
@@ -685,7 +687,10 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     }
   }
 
-  const needsMigrationLink = !isAccessRowActive(row)
+  const needsMigrationLink =
+    !isAccessRowActive(row) &&
+    explicitMigration &&
+    hasMigrationHintsForVerify({ fp, paymentPhone, legacyDeviceId, accountId })
 
   if (needsMigrationLink) {
     const tLink0 = Date.now()

@@ -21,6 +21,10 @@ import { auraxpayPaymentsRouter, handleAuraxpayCreateOrder } from './auraxpayPay
 import { sonicpesaPaymentsRouter } from './sonicpesaPayments.js'
 import { hashDeviceFingerprint } from '../billingStore.js'
 import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
+import {
+  respondCreateOrderAccepted,
+  runProviderCreateOrderInBackground,
+} from '../lib/paymentCreateOrderPipeline.js'
 
 export const paymentsRouter = Router()
 
@@ -205,42 +209,28 @@ paymentsRouter.post('/create-payment', async (req, res) => {
           status: 'pending',
           deviceId,
         })
-        const sp = await createOrder(scred, { phone, amount, orderId, currency: 'TZS' })
-        const providerOrderId =
-          sp.normalized?.providerOrderId ??
-          (sp.body?.data?.order_id != null ? String(sp.body.data.order_id) : null)
         const prevPayload =
           tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}
-        await billing.updateTransactionByOrderId(orderId, {
-          status: sp.ok ? 'pending' : 'failed',
-          external_id: providerOrderId,
-          raw_payload: {
-            ...prevPayload,
-            sonicpesa: sp.body,
-            provider_order_id: providerOrderId,
-            httpStatus: sp.status,
-          },
+        runProviderCreateOrderInBackground({
+          provider: 'sonicpesa',
+          orderId,
+          deviceId,
+          prevPayload,
+          cred: scred,
+          phone,
+          amount,
+          initiate: createOrder,
+          providerBodyKey: 'sonicpesa',
         })
-        if (!sp.ok) {
-          return res.status(502).json({
-            error: 'SonicPesa payment initiation failed',
-            orderId,
-            transactionId: tx.id,
-            details: sp.body,
-          })
-        }
         schedulePostPaymentActivationPolls(orderId, deviceId)
-        return res.status(201).json({
+        return respondCreateOrderAccepted(res, {
           ok: true,
           provider: 'sonicpesa',
           orderId,
-          provider_order_id: providerOrderId,
           deviceId,
           transactionId: tx.id,
           amount,
           currency: 'TZS',
-          zeno: sp.body,
-          sonicpesa: sp.body,
         })
       }
     }
@@ -268,43 +258,28 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       status: 'pending',
       deviceId,
     })
-    const z = await zenopayCreateCollection(cred, {
-      phone,
-      amount,
-      orderId,
-    })
     const prevPayload =
       tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}
-    await billing.updateTransactionByOrderId(orderId, {
-      status: z.ok ? 'pending' : 'failed',
-      external_id: z.body?.id != null ? String(z.body.id) : null,
-      raw_payload: { ...prevPayload, zeno: z.body, httpStatus: z.status },
+    runProviderCreateOrderInBackground({
+      provider: 'zenopay',
+      orderId,
+      deviceId,
+      prevPayload,
+      cred,
+      phone,
+      amount,
+      initiate: async (c, args) => zenopayCreateCollection(c, args),
+      providerBodyKey: 'zeno',
+      resolveExternalId: (z) => (z.body?.id != null ? String(z.body.id) : null),
     })
-    if (!z.ok) {
-      liveSyncBus.publish('analytics.transaction_updated', {
-        topics: ['analytics'],
-        orderId,
-        status: 'failed',
-        deviceId,
-      })
-    }
-    if (!z.ok) {
-      return res.status(502).json({
-        error: 'ZenoPay collection request failed',
-        orderId,
-        transactionId: tx.id,
-        details: z.body,
-      })
-    }
     schedulePostPaymentActivationPolls(orderId, deviceId)
-    res.status(201).json({
+    respondCreateOrderAccepted(res, {
       ok: true,
       orderId,
       deviceId,
       transactionId: tx.id,
       amount,
       currency: 'TZS',
-      zeno: z.body,
     })
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) })
