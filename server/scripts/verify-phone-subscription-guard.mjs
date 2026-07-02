@@ -1,31 +1,21 @@
 #!/usr/bin/env node
 /**
- * Verify phone subscription ownership guard (production or local API + optional DATABASE_URL).
+ * Verify phone subscription ownership guard (production VPS + Render API parity).
  *
  *   node server/scripts/verify-phone-subscription-guard.mjs
- *   VPS_API=https://api.osmanitv.com ADMIN_TOKEN=3030 node server/scripts/verify-phone-subscription-guard.mjs
- *   INVESTIGATE_PHONE=255678089174 DEVICE_A=c172c09cedb35d39 DEVICE_B=abf0a53f6059e87b node server/scripts/verify-phone-subscription-guard.mjs
+ *   VPS_API=https://api.osmanitv.com RENDER_API=https://osmani-admin-api.onrender.com node server/scripts/verify-phone-subscription-guard.mjs
  */
 import crypto from 'node:crypto'
 
 const VPS = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/$/, '')
-const API = `${VPS}/api`
+const RENDER = String(process.env.RENDER_API || 'https://osmani-admin-api.onrender.com').replace(/\/$/, '')
 const TOKEN = String(process.env.ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '3030').trim()
 const INVESTIGATE_PHONE = String(process.env.INVESTIGATE_PHONE || '255678089174').trim()
 const DEVICE_A = String(process.env.DEVICE_A || 'c172c09cedb35d39').trim()
 const DEVICE_B = String(process.env.DEVICE_B || 'abf0a53f6059e87b').trim()
+const CODE = 'PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION'
 
-const report = {
-  time: new Date().toISOString(),
-  api: API,
-  commit: null,
-  health: null,
-  phoneAudit: null,
-  deviceA: null,
-  deviceB: null,
-  prePaymentBlock: null,
-  pass: true,
-}
+const report = { time: new Date().toISOString(), pass: true, apis: {} }
 
 function fail(section, msg) {
   report.pass = false
@@ -36,8 +26,8 @@ function pass(section, msg) {
   console.log(`PASS [${section}]`, msg)
 }
 
-async function jsonFetch(url, opts = {}) {
-  const res = await fetch(url, {
+async function jsonFetch(base, path, opts = {}) {
+  const res = await fetch(`${base}${path}`, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',
@@ -49,117 +39,82 @@ async function jsonFetch(url, opts = {}) {
   return { res, body }
 }
 
-async function deviceStatus(deviceId) {
-  const { res, body } = await jsonFetch(
-    `${API}/subscription-status?device_id=${encodeURIComponent(deviceId)}`,
+async function verifyApi(label, base) {
+  const out = { base, commit: null, audit: null, block: null }
+  const health = await jsonFetch(base, '/api/health')
+  out.commit = health.body?.commit || null
+  console.log(`\n[${label}] commit:`, String(out.commit || 'unknown').slice(0, 12))
+  if (!health.res.ok) {
+    fail(`${label}-health`, `HTTP ${health.res.status}`)
+    return out
+  }
+  pass(`${label}-health`, 'reachable')
+
+  const audit = await jsonFetch(
+    base,
+    `/api/runtime/phone-subscription-audit?phone=${encodeURIComponent(INVESTIGATE_PHONE)}&device_id=${encodeURIComponent(DEVICE_B)}`,
+    { headers: { 'X-Admin-Token': TOKEN } },
   )
-  return { status: res.status, body }
+  out.audit = { status: audit.res.status, body: audit.body }
+  if (audit.res.status === 404) {
+    fail(`${label}-audit`, 'phone-subscription-audit not deployed (404)')
+  } else if (!audit.res.ok || audit.body?.ok !== true) {
+    fail(`${label}-audit`, `HTTP ${audit.res.status}`)
+  } else {
+    pass(`${label}-audit`, `${audit.body.active_devices?.length ?? 0} active device(s)`)
+    const probe = audit.body.probe_assessment
+    if (probe?.allowed === false && probe?.reason === CODE) {
+      pass(`${label}-probe`, `Device B blocked (${CODE})`)
+    } else if (probe?.allowed === true) {
+      console.log(`  [${label}] probe allowed:`, probe.reason)
+    }
+  }
+
+  const probeDevice = `verify-guard-${label}-${crypto.randomBytes(3).toString('hex')}`
+  const block = await jsonFetch(base, '/api/payments/auraxpay/create-order', {
+    method: 'POST',
+    body: JSON.stringify({ deviceId: probeDevice, planId: 3, phone: INVESTIGATE_PHONE }),
+  })
+  out.block = { status: block.res.status, body: block.body }
+
+  if (block.res.status === 409 && block.body?.code === CODE) {
+    pass(`${label}-prePayment`, `409 ${CODE}`)
+    const required = ['existing_device_id', 'existing_expiry', 'remaining_days', 'message_sw']
+    for (const k of required) {
+      if (block.body[k] == null && k !== 'remaining_days') {
+        fail(`${label}-fields`, `missing ${k}`)
+      }
+    }
+    if (block.body.existing_device_id) {
+      pass(`${label}-fields`, `existing_device_id=${String(block.body.existing_device_id).slice(0, 16)}…`)
+    }
+  } else if (block.res.status === 404 || block.res.status === 503) {
+    const block2 = await jsonFetch(base, '/api/payments/create-payment', {
+      method: 'POST',
+      body: JSON.stringify({ deviceId: probeDevice, planId: 3, phone: INVESTIGATE_PHONE }),
+    })
+    out.block.fallback = { status: block2.res.status, body: block2.body }
+    if (block2.res.status === 409 && block2.body?.code === CODE) {
+      pass(`${label}-prePayment`, `create-payment 409 ${CODE}`)
+    } else if (audit.res.status !== 404) {
+      fail(`${label}-prePayment`, `expected 409 ${CODE}, got ${block2.res.status}`)
+    }
+  } else if (audit.res.status !== 404) {
+    fail(`${label}-prePayment`, `expected 409 ${CODE}, got ${block.res.status}`)
+  }
+
+  return out
 }
 
 async function main() {
   console.log('=== Phone subscription guard verification ===')
-  console.log('API:', API)
+  report.apis.vps = await verifyApi('VPS', VPS)
+  report.apis.render = await verifyApi('Render', RENDER)
 
-  const health = await jsonFetch(`${API}/health`)
-  report.health = health.body
-  report.commit = health.body?.commit || health.body?.git_commit || null
-  console.log('commit:', String(report.commit || 'unknown').slice(0, 12))
-  if (!health.res.ok) {
-    fail('health', `HTTP ${health.res.status}`)
-  } else {
-    pass('health', 'API reachable')
-  }
-
-  const audit = await jsonFetch(
-    `${API}/runtime/phone-subscription-audit?phone=${encodeURIComponent(INVESTIGATE_PHONE)}&device_id=${encodeURIComponent(DEVICE_B)}`,
-    { headers: { 'X-Admin-Token': TOKEN } },
-  )
-  report.phoneAudit = { status: audit.res.status, body: audit.body }
-  if (audit.res.status === 404) {
-    fail('audit', 'phone-subscription-audit endpoint not deployed yet (404)')
-  } else if (!audit.res.ok || audit.body?.ok !== true) {
-    fail('audit', `phone-subscription-audit HTTP ${audit.res.status}`)
-  } else {
-    pass('audit', `phone audit OK — ${audit.body.active_devices?.length ?? 0} active device(s)`)
-    if (Array.isArray(audit.body.active_devices) && audit.body.active_devices.length > 1) {
-      console.log(
-        '  NOTE: legacy multiple active devices on same phone (pre-guard data):',
-        audit.body.active_devices.map((d) => d.device_id?.slice(0, 16)).join(', '),
-      )
-    }
-    const probe = audit.body.probe_assessment
-    if (probe) {
-      if (probe.allowed === false && probe.reason === 'phone_subscription_conflict') {
-        pass('probe', `Device B (${DEVICE_B.slice(0, 12)}…) correctly blocked for payment`)
-      } else if (probe.allowed === true && probe.reason === 'same_device_renewal') {
-        pass('probe', 'Device has own active sub — renewal allowed')
-      } else {
-        console.log('  probe_assessment:', JSON.stringify(probe))
-      }
-    }
-  }
-
-  report.deviceA = await deviceStatus(DEVICE_A)
-  report.deviceB = await deviceStatus(DEVICE_B)
-  const aActive = report.deviceA.body?.active === true || report.deviceA.body?.status === 'active'
-  const bActive = report.deviceB.body?.active === true || report.deviceB.body?.status === 'active'
-  console.log(`Device A ${DEVICE_A}: active=${aActive}`)
-  console.log(`Device B ${DEVICE_B}: active=${bActive}`)
-
-  if (!aActive) {
-    fail('deviceA', `${DEVICE_A} should remain active (valid customer)`)
-  } else {
-    pass('deviceA', `${DEVICE_A} still active`)
-  }
-
-  // Pre-payment block: try create-order on random device with known conflict phone (no provider charge if blocked before insert)
-  const probeDevice = `verify-phone-guard-${crypto.randomBytes(4).toString('hex')}`
-  const block = await jsonFetch(`${API}/payments/auraxpay/create-order`, {
-    method: 'POST',
-    body: JSON.stringify({
-      deviceId: probeDevice,
-      planId: 3,
-      phone: INVESTIGATE_PHONE,
-    }),
-  })
-  report.prePaymentBlock = { status: block.res.status, body: block.body }
-  if (block.res.status === 409 && block.body?.code === 'phone_subscription_conflict') {
-    pass('prePayment', 'create-order returns 409 phone_subscription_conflict')
-  } else if (block.res.status === 404 || block.res.status === 503) {
-    console.log('SKIP [prePayment] auraxpay not available — try sonicpesa path if needed')
-    const block2 = await jsonFetch(`${API}/payments/create-payment`, {
-      method: 'POST',
-      body: JSON.stringify({
-        deviceId: probeDevice,
-        planId: 3,
-        phone: INVESTIGATE_PHONE,
-      }),
-    })
-    report.prePaymentBlock.fallback = { status: block2.res.status, body: block2.body }
-    if (block2.res.status === 409 && block2.body?.code === 'phone_subscription_conflict') {
-      pass('prePayment', 'create-payment returns 409 phone_subscription_conflict')
-    } else if (audit.res.status === 404) {
-      fail('prePayment', 'guard endpoint not deployed; cannot verify block')
-    } else {
-      fail('prePayment', `expected 409 conflict, got HTTP ${block2.res.status}`)
-    }
-  } else if (audit.res.status !== 404) {
-    fail('prePayment', `expected 409 conflict, got HTTP ${block.res.status}`)
-  }
-
-  // Same-device renewal probe: paying device with active sub should be allowed (dry — only if audit shows same_device)
-  if (audit.body?.probe_assessment && DEVICE_A) {
-    const renewProbe = await jsonFetch(
-      `${API}/runtime/phone-subscription-audit?phone=${encodeURIComponent(INVESTIGATE_PHONE)}&device_id=${encodeURIComponent(DEVICE_A)}`,
-      { headers: { 'X-Admin-Token': TOKEN } },
-    )
-    const ra = renewProbe.body?.probe_assessment
-    if (ra?.allowed === true && ra?.reason === 'same_device_renewal') {
-      pass('renewal', 'Same phone + Device A allows renewal')
-    } else if (renewProbe.res.ok) {
-      console.log('  renewal probe:', JSON.stringify(ra))
-    }
-  }
+  const a = await jsonFetch(VPS, `/api/subscription-status?device_id=${encodeURIComponent(DEVICE_A)}`)
+  const aActive = a.body?.active === true || a.body?.status === 'active'
+  if (aActive) pass('deviceA', `${DEVICE_A} active`)
+  else fail('deviceA', `${DEVICE_A} not active`)
 
   console.log('\n=== SUMMARY ===')
   console.log(JSON.stringify(report, null, 2))

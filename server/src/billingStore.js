@@ -1646,9 +1646,15 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
       return {
         activated: false,
         skipped: true,
-        reason: 'phone_subscription_conflict',
+        reason: 'PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION',
+        code: 'PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION',
         ownerDeviceId: gate.ownerDeviceId,
+        existing_device_id: gate.existing_device_id ?? gate.ownerDeviceId,
+        existing_expiry: gate.existing_expiry ?? null,
+        remaining_days: gate.remaining_days ?? null,
+        existing_package: gate.existing_package ?? null,
         message: gate.message,
+        message_sw: gate.message_sw ?? gate.message,
         deviceId,
         orderId,
       }

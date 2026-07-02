@@ -10,8 +10,13 @@ import {
 } from '../billingStore.js'
 import { getPool } from '../db/pool.js'
 
+export const PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION = 'PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION'
+
+/** @deprecated use PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION */
+export const PHONE_SUBSCRIPTION_CONFLICT_LEGACY = 'phone_subscription_conflict'
+
 export const PHONE_SUBSCRIPTION_CONFLICT_MESSAGE =
-  'Namba hii tayari ina kifurushi kinachoendelea kwenye kifaa kingine. Tafadhali tumia namba nyingine au subiri kifurushi kilichopo kiishe.'
+  'Namba hii tayari ina kifurushi kinachoendelea kwenye kifaa kingine. Subiri kifurushi kiishe au tumia kifaa kilicholipiwa.'
 
 function requirePool() {
   const pool = getPool()
@@ -44,8 +49,33 @@ function phoneDevicesCteSql() {
     )`
 }
 
+function computeRemainingDays(expiresAt) {
+  if (!expiresAt) return 0
+  const exp = expiresAt instanceof Date ? expiresAt : new Date(String(expiresAt))
+  if (Number.isNaN(exp.getTime())) return 0
+  return Math.max(0, Math.ceil((exp.getTime() - Date.now()) / 86400000))
+}
+
+async function loadOwnerPackageDetails(deviceId) {
+  const id = String(deviceId ?? '').trim()
+  if (!id) return { plan_name: null }
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT p.name AS plan_name
+     FROM device_subscriptions ds
+     LEFT JOIN transactions t ON t.order_id = ds.transaction_id
+     LEFT JOIN plans p ON p.id = t.plan_id
+     WHERE ds.device_id = $1
+     ORDER BY ds.expires_at DESC NULLS LAST
+     LIMIT 1`,
+    [id],
+  )
+  return { plan_name: rows[0]?.plan_name != null ? String(rows[0].plan_name) : null }
+}
+
 /**
- * Active subscriptions on devices directly bound to this payment phone (no install_instance expansion).
+ * Active subscriptions on devices bound to this payment phone (no install_instance expansion).
+ * Active = status active (or unset) AND expires_at > now() AND not admin-blocked.
  */
 export async function listActivePhoneSubscriptionDevices(phoneInput) {
   const digits = normalizePhoneDigits(phoneInput)
@@ -59,10 +89,14 @@ export async function listActivePhoneSubscriptionDevices(phoneInput) {
        ds.status,
        ds.transaction_id,
        ds.started_at,
-       ds.updated_at
+       ds.updated_at,
+       p.name AS plan_name
      FROM device_subscriptions ds
      INNER JOIN phone_devices pd ON pd.device_id = ds.device_id::text
+     LEFT JOIN transactions t ON t.order_id = ds.transaction_id
+     LEFT JOIN plans p ON p.id = t.plan_id
      WHERE ds.expires_at > now()
+       AND LOWER(COALESCE(NULLIF(trim(ds.status::text), ''), 'active')) = 'active'
        AND COALESCE(ds.manual_admin_blocked, false) = false
      ORDER BY ds.expires_at DESC`,
     [digits],
@@ -70,15 +104,38 @@ export async function listActivePhoneSubscriptionDevices(phoneInput) {
   return rows.map((r) => ({
     device_id: String(r.device_id ?? ''),
     expires_at: r.expires_at,
-    status: String(r.status ?? ''),
+    status: String(r.status ?? 'active'),
     transaction_id: r.transaction_id != null ? String(r.transaction_id) : null,
     started_at: r.started_at,
     updated_at: r.updated_at,
+    plan_name: r.plan_name != null ? String(r.plan_name) : null,
   }))
 }
 
+async function buildConflictAssessment(owner, activeDevices) {
+  const details = owner.plan_name ? { plan_name: owner.plan_name } : await loadOwnerPackageDetails(owner.device_id)
+  const expiresIso =
+    owner.expires_at instanceof Date
+      ? owner.expires_at.toISOString()
+      : owner.expires_at
+        ? String(owner.expires_at)
+        : null
+  return {
+    allowed: false,
+    reason: PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION,
+    ownerDeviceId: owner.device_id,
+    existing_device_id: owner.device_id,
+    existing_expiry: expiresIso,
+    remaining_days: computeRemainingDays(owner.expires_at),
+    existing_package: details.plan_name,
+    activeDevices,
+    message: PHONE_SUBSCRIPTION_CONFLICT_MESSAGE,
+    message_sw: PHONE_SUBSCRIPTION_CONFLICT_MESSAGE,
+  }
+}
+
 /**
- * @returns {{ allowed: boolean, reason: string, ownerDeviceId: string|null, activeDevices: object[], message: string|null }}
+ * @returns {Promise<{ allowed: boolean, reason: string, ownerDeviceId: string|null, existing_device_id?: string, existing_expiry?: string|null, remaining_days?: number, existing_package?: string|null, activeDevices: object[], message: string|null, message_sw?: string|null }>}
  */
 export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInput) {
   const paying = String(payingDeviceId ?? '').trim()
@@ -104,13 +161,13 @@ export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInp
 
   const activeDevices = await listActivePhoneSubscriptionDevices(digits)
 
-  // Paying device with its own active subscription may renew/stack (legacy rows may lack phone binding).
   const pool = requirePool()
   const { rows: payingSubRows } = await pool.query(
     `SELECT device_id::text AS device_id, expires_at, status, transaction_id
      FROM device_subscriptions
      WHERE device_id = $1
        AND expires_at > now()
+       AND LOWER(COALESCE(NULLIF(trim(status::text), ''), 'active')) = 'active'
        AND COALESCE(manual_admin_blocked, false) = false
      LIMIT 1`,
     [paying],
@@ -148,14 +205,7 @@ export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInp
 
   const otherActive = activeDevices.filter((d) => d.device_id !== paying)
   if (otherActive.length > 0) {
-    const owner = otherActive[0]
-    return {
-      allowed: false,
-      reason: 'phone_subscription_conflict',
-      ownerDeviceId: owner.device_id,
-      activeDevices,
-      message: PHONE_SUBSCRIPTION_CONFLICT_MESSAGE,
-    }
+    return buildConflictAssessment(otherActive[0], activeDevices)
   }
 
   return {
@@ -173,12 +223,29 @@ export async function assertPhoneSubscriptionPaymentAllowed(payingDeviceId, phon
 }
 
 export function phoneSubscriptionConflictHttpBody(assessment) {
+  const existingDeviceId = assessment.existing_device_id ?? assessment.ownerDeviceId ?? null
+  const existingExpiry = assessment.existing_expiry ?? null
+  const remainingDays =
+    assessment.remaining_days != null
+      ? assessment.remaining_days
+      : computeRemainingDays(assessment.activeDevices?.find((d) => d.device_id === existingDeviceId)?.expires_at)
+  const existingPackage =
+    assessment.existing_package ??
+    assessment.activeDevices?.find((d) => d.device_id === existingDeviceId)?.plan_name ??
+    null
+
   return {
-    error: 'phone_subscription_conflict',
-    code: 'phone_subscription_conflict',
-    message: assessment.message || PHONE_SUBSCRIPTION_CONFLICT_MESSAGE,
-    ownerDeviceId: assessment.ownerDeviceId ?? null,
-    reason: assessment.reason,
+    success: false,
+    code: PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION,
+    message_sw: PHONE_SUBSCRIPTION_CONFLICT_MESSAGE,
+    existing_device_id: existingDeviceId,
+    existing_expiry: existingExpiry,
+    remaining_days: remainingDays,
+    existing_package: existingPackage,
+    error: PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION,
+    message: PHONE_SUBSCRIPTION_CONFLICT_MESSAGE,
+    ownerDeviceId: existingDeviceId,
+    reason: assessment.reason || PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION,
   }
 }
 
@@ -194,11 +261,12 @@ export async function markTransactionPhoneActivationConflict(orderId, meta = {})
     ...prev,
     phone_conflict: true,
     manual_review: true,
-    activation_skipped_reason: 'phone_subscription_conflict',
+    activation_skipped_reason: PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION,
     phone_conflict_owner_device_id: meta.ownerDeviceId ?? null,
     phone_conflict_paying_device_id: meta.payingDeviceId ?? null,
     phone_conflict_at: new Date().toISOString(),
     phone_conflict_message: PHONE_SUBSCRIPTION_CONFLICT_MESSAGE,
+    phone_conflict_code: PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION,
   }
   return updateTransactionByOrderId(oid, {
     status: txn.status === 'completed' ? 'completed' : txn.status,

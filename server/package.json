@@ -31,7 +31,9 @@
     "verify:app-update-targeting": "node scripts/verify-app-update-targeting.mjs",
     "verify:analytics-widgets": "node scripts/verify-analytics-widgets.mjs",
     "verify:subscription-timing": "node scripts/verify-subscription-timing.mjs",
-    "verify:sms-integration": "node scripts/verify-sms-integration.mjs"
+    "verify:sms-integration": "node scripts/verify-sms-integration.mjs",
+    "verify:phone-subscription-guard": "node scripts/verify-phone-subscription-guard.mjs",
+    "audit:duplicate-active-phones": "node scripts/audit-duplicate-active-phone-subscriptions.mjs"
   },
   "dependencies": {
     "@devicefarmer/adbkit-apkreader": "^3.2.4",
