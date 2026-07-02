@@ -235,6 +235,13 @@ paymentsRouter.post('/create-payment', async (req, res) => {
           { orderId, deviceId },
         )
       }
+      console.warn('[create-payment] sonicpesa selected but not enabled/configured', {
+        enabled: srow?.enabled === true,
+        hasApiKey: Boolean(scred.apiKey),
+      })
+      return res.status(503).json({
+        error: 'SonicPesa is selected as checkout provider but not enabled or configured in admin',
+      })
     }
 
     const row = await billing.getZenopayRow()
@@ -252,7 +259,13 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       currency: 'TZS',
       status: 'pending',
       device_id: deviceId,
-      raw_payload: { step: 'created', phoneNorm: phone, device_id: deviceId, ...fingerprintPayload },
+      raw_payload: {
+        step: 'created',
+        payment_provider: 'zenopay',
+        phoneNorm: phone,
+        device_id: deviceId,
+        ...fingerprintPayload,
+      },
     })
     liveSyncBus.publish('analytics.transaction_updated', {
       topics: ['analytics'],

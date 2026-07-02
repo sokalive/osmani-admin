@@ -1486,8 +1486,8 @@ export async function upsertDeviceSubscriptionActive(
   }
   try {
     await q(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2::timestamptz, now(), $3, now(), $4)
+      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash, manual_admin_blocked)
+       VALUES ($1, 'active', $2::timestamptz, now(), $3, now(), $4, false)
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
@@ -1497,6 +1497,7 @@ export async function upsertDeviceSubscriptionActive(
          END,
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
+         manual_admin_blocked = false,
          fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
       [d, expiresAt, oid, fp],
     )
@@ -1538,19 +1539,18 @@ export async function upsertDeviceSubscriptionActiveAt(
   }
   try {
     await q(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at)
-       VALUES ($1, 'active', $2::timestamptz, $3::timestamptz, $4, now())
+      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, manual_admin_blocked)
+       VALUES ($1, 'active', $2::timestamptz, $3::timestamptz, $4, now(), false)
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
          started_at = EXCLUDED.started_at,
          transaction_id = EXCLUDED.transaction_id,
-         updated_at = now()`,
+         updated_at = now(),
+         manual_admin_blocked = false`,
       [d, exp.toISOString(), start.toISOString(), oid],
     )
-    void import('./lib/subscriptionAccessCache.js')
-      .then((m) => m.invalidateSubscriptionAccessCache(d))
-      .catch(() => {})
+    invalidateSubscriptionAccessCache(d)
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)
@@ -1911,6 +1911,12 @@ function timestampMs(v) {
   return Number.isFinite(t) ? t : 0
 }
 
+function toIsoTimestamp(v) {
+  if (v == null || v === '') return null
+  const d = v instanceof Date ? v : new Date(v)
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null
+}
+
 /** Latest non-deleted manual / offer-code grant row for a device. */
 export async function getLatestManualSubscriptionGrantRecord(deviceId) {
   const pool = requirePool()
@@ -1995,7 +2001,13 @@ async function buildManualGrantSubscriptionTxnSummary(grant, transactionId = nul
     amount: plan?.price != null ? Number(plan.price) : null,
     currency: 'TZS',
     plan_id: plan?.id != null ? Number(plan.id) : storedPlanId,
+    plan_name: plan?.name != null ? String(plan.name).trim() || null : null,
     plan_duration_days: effectiveDurationDays,
+    started_at:
+      grant?.custom_expiry === true && grant?.started_at_custom
+        ? toIsoTimestamp(grant.started_at_custom)
+        : null,
+    activated_at: toIsoTimestamp(grant?.created_at),
     source: 'manual_grant',
     transaction_id: tid,
     grant_id: grantId,
@@ -2015,7 +2027,8 @@ async function getManualGrantSummaryFromSubscriptionTransactionId(deviceId) {
        g.plan_id,
        g.custom_expiry,
        g.started_at_custom,
-       g.expires_at_custom
+       g.expires_at_custom,
+       g.created_at
      FROM device_subscriptions ds
      LEFT JOIN manual_subscription_grants g
        ON (
@@ -2040,6 +2053,7 @@ async function getManualGrantSummaryFromSubscriptionTransactionId(deviceId) {
         custom_expiry: row.custom_expiry,
         started_at_custom: row.started_at_custom,
         expires_at_custom: row.expires_at_custom,
+        created_at: row.created_at,
       },
       row.transaction_id,
     )
@@ -2331,11 +2345,18 @@ async function buildTxnSummaryFromRow(txn) {
     const n = Number(planRow.duration_days)
     if (Number.isFinite(n) && n >= 0) planDurationDays = Math.trunc(n)
   }
+  const status = String(txn.status ?? '').trim().toLowerCase()
   return {
     amount: txn.amount != null ? Number(txn.amount) : null,
     currency: txn.currency != null ? String(txn.currency).trim() || 'TZS' : 'TZS',
     plan_id: planId,
+    plan_name: planRow?.name != null ? String(planRow.name).trim() || null : null,
     plan_duration_days: planDurationDays,
+    activated_at:
+      status === 'completed'
+        ? toIsoTimestamp(txn.updated_at ?? txn.created_at)
+        : null,
+    source: 'payment',
   }
 }
 
@@ -2366,6 +2387,8 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
       if (sourceDev && sourceDev !== d) {
         txn = await getLatestCompletedTransactionForDevice(sourceDev)
       }
+    } else if (linkedId.startsWith('transfer:')) {
+      txn = await getLatestCompletedTransactionForDevice(d)
     } else if (linkedId) {
       const { rows: orderRows } = await pool.query(
         `SELECT * FROM transactions
@@ -2380,6 +2403,12 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
 
   const out = await buildTxnSummaryFromRow(txn)
   if (!out) return null
+  const linkedId = String(
+    (await getDeviceSubscriptionByDeviceId(d))?.transaction_id ?? '',
+  ).trim()
+  if (linkedId.startsWith('transfer:')) {
+    out.source = 'transfer'
+  }
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
     console.log('[subscription_duration_debug]', {

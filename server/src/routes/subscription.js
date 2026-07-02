@@ -194,6 +194,13 @@ function rowToPublicStatus(row) {
     row.blocked_now === true ? 'blocked' : active ? 'active' : row.status === 'active' ? 'expired' : row.status
   const exp = row.expires_at
   const expiresAt = exp instanceof Date ? exp.toISOString() : exp != null ? String(exp) : null
+  const startedRaw = row.started_at
+  const startedAt =
+    startedRaw instanceof Date
+      ? startedRaw.toISOString()
+      : startedRaw != null
+        ? String(startedRaw)
+        : null
   return {
     active,
     /** legacy alias used by RN clients */
@@ -201,6 +208,8 @@ function rowToPublicStatus(row) {
     status,
     expiresAt,
     expires_at: expiresAt,
+    startedAt,
+    started_at: startedAt,
     blocked: row.blocked_now === true,
     blockReason: row.block_reason ? String(row.block_reason) : null,
     ...reminderFieldsFromRow(row),
@@ -229,6 +238,15 @@ export function normalizeVerifyResponse(pub, txnSummary) {
       ? String(txnSummary.currency).trim() || null
       : null
   const planDurationDays = coercePlanDurationDays(txnSummary)
+  const planNameRaw =
+    txnSummary?.plan_name != null ? String(txnSummary.plan_name).trim() : ''
+  const planName = planNameRaw || null
+  const startedAt =
+    pub.startedAt ??
+    pub.started_at ??
+    (txnSummary?.started_at != null ? String(txnSummary.started_at) : null)
+  const activatedAt =
+    txnSummary?.activated_at != null ? String(txnSummary.activated_at) : null
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
     console.log('[subscription_duration_normalized]', {
@@ -243,8 +261,16 @@ export function normalizeVerifyResponse(pub, txnSummary) {
     expires_at: expiresAt,
     amount,
     currency,
+    planName,
+    plan_name: planName,
     plan_duration_days: planDurationDays,
     planDurationDays: planDurationDays,
+    duration: planDurationDays,
+    durationDays: planDurationDays,
+    startedAt,
+    started_at: startedAt,
+    activatedAt,
+    activated_at: activatedAt,
     subscription_extension_policy: 'stack_on_active',
     subscriptionExtensionPolicy: 'stack_on_active',
     entitlement_remaining_days: pub.remaining_days ?? pub.remainingDays ?? 0,
@@ -772,10 +798,13 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const tParallel0 = Date.now()
   if (isActiveNow && !needsMigrationLink) {
     if (timing.access_cache_hit) {
-      modesPayload = await loadGlobalAppModesPayload().catch(() => modesFallback())
-      txnSummary = null
+      ;[modesPayload, txnSummary] = await Promise.all([
+        loadGlobalAppModesPayload().catch(() => modesFallback()),
+        billing.getLatestCompletedSubscriptionTxnSummary(d).catch(() => null),
+      ])
       securityPolicy = null
-      timing.active_zero_db = true
+      timing.active_zero_db = false
+      timing.active_cache_metadata_fetch = true
     } else {
       ;[txnSummary, modesPayload, securityPolicy] = await Promise.all([
         billing.getLatestCompletedSubscriptionTxnSummary(d).catch(() => null),
