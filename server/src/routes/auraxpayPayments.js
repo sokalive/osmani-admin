@@ -9,7 +9,6 @@ import {
   resolveAuraxpayCollectPostUrl,
   resolveAuraxpayCredentials,
 } from '../lib/payments/providers/auraxpay.js'
-import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
 import {
   respondCreateOrderAccepted,
   runProviderCreateOrderInBackground,
@@ -133,18 +132,21 @@ export async function handleAuraxpayCreateOrder(req, res, opts = {}) {
         })
       },
     })
-    schedulePostPaymentActivationPolls(orderId, deviceId)
     console.log('[auraxpay] create-order accepted (async provider)', { context, orderId })
-    respondCreateOrderAccepted(res, {
-      ok: true,
-      provider: 'auraxpay',
-      provider_alias: 'aurax',
-      orderId,
-      deviceId,
-      transactionId: tx.id,
-      amount,
-      currency: 'TZS',
-    })
+    respondCreateOrderAccepted(
+      res,
+      {
+        ok: true,
+        provider: 'auraxpay',
+        provider_alias: 'aurax',
+        orderId,
+        deviceId,
+        transactionId: tx.id,
+        amount,
+        currency: 'TZS',
+      },
+      { orderId, deviceId },
+    )
   } catch (e) {
     console.error('[auraxpay] create-order error', { context, error: e })
     res.status(500).json({ error: String(e.message || e) })

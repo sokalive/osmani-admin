@@ -20,7 +20,6 @@ import {
 import { auraxpayPaymentsRouter, handleAuraxpayCreateOrder } from './auraxpayPayments.js'
 import { sonicpesaPaymentsRouter } from './sonicpesaPayments.js'
 import { hashDeviceFingerprint } from '../billingStore.js'
-import { schedulePostPaymentActivationPolls } from '../lib/paymentActivationBoost.js'
 import {
   respondCreateOrderAccepted,
   runProviderCreateOrderInBackground,
@@ -222,16 +221,19 @@ paymentsRouter.post('/create-payment', async (req, res) => {
           initiate: createOrder,
           providerBodyKey: 'sonicpesa',
         })
-        schedulePostPaymentActivationPolls(orderId, deviceId)
-        return respondCreateOrderAccepted(res, {
-          ok: true,
-          provider: 'sonicpesa',
-          orderId,
-          deviceId,
-          transactionId: tx.id,
-          amount,
-          currency: 'TZS',
-        })
+        return respondCreateOrderAccepted(
+          res,
+          {
+            ok: true,
+            provider: 'sonicpesa',
+            orderId,
+            deviceId,
+            transactionId: tx.id,
+            amount,
+            currency: 'TZS',
+          },
+          { orderId, deviceId },
+        )
       }
     }
 
@@ -272,15 +274,18 @@ paymentsRouter.post('/create-payment', async (req, res) => {
       providerBodyKey: 'zeno',
       resolveExternalId: (z) => (z.body?.id != null ? String(z.body.id) : null),
     })
-    schedulePostPaymentActivationPolls(orderId, deviceId)
-    respondCreateOrderAccepted(res, {
-      ok: true,
-      orderId,
-      deviceId,
-      transactionId: tx.id,
-      amount,
-      currency: 'TZS',
-    })
+    respondCreateOrderAccepted(
+      res,
+      {
+        ok: true,
+        orderId,
+        deviceId,
+        transactionId: tx.id,
+        amount,
+        currency: 'TZS',
+      },
+      { orderId, deviceId },
+    )
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) })
   }

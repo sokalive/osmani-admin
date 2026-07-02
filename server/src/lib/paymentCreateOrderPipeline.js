@@ -11,8 +11,14 @@ const LOG = '[create-order-pipeline]'
 /**
  * @param {import('express').Response} res
  * @param {object} body
+ * @param {{ orderId?: string, deviceId?: string }} [watch]
  */
-export function respondCreateOrderAccepted(res, body) {
+export function respondCreateOrderAccepted(res, body, watch = {}) {
+  const orderId = String(watch.orderId ?? body.orderId ?? '').trim()
+  const deviceId = String(watch.deviceId ?? body.deviceId ?? '').trim()
+  if (orderId && deviceId) {
+    schedulePostPaymentActivationPolls(orderId, deviceId)
+  }
   res.status(201).json({
     provider_initiation: 'pending',
     ...body,
@@ -81,7 +87,6 @@ export function runProviderCreateOrderInBackground(opts) {
         deviceId,
       })
       if (result.ok) {
-        schedulePostPaymentActivationPolls(orderId, deviceId)
         console.log(LOG, 'provider accepted', {
           provider,
           orderId,

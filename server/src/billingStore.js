@@ -2056,12 +2056,19 @@ export function phoneFromTransactionRow(txn) {
   const pollData = poll.data && typeof poll.data === 'object' ? poll.data : {}
   const sonic = raw.sonicpesa && typeof raw.sonicpesa === 'object' ? raw.sonicpesa : {}
   const sonicData = sonic.data && typeof sonic.data === 'object' ? sonic.data : {}
+  const aurax = raw.auraxpay && typeof raw.auraxpay === 'object' ? raw.auraxpay : {}
+  const auraxData = aurax.data && typeof aurax.data === 'object' ? aurax.data : {}
   return String(
     raw.phoneNorm ??
       raw.phone ??
       raw.buyer_phone ??
+      raw.customer_phone ??
       pollData.msisdn ??
+      pollData.phone ??
       sonicData.msisdn ??
+      aurax.customer_phone ??
+      auraxData.phone ??
+      auraxData.customer_phone ??
       '',
   ).trim()
 }

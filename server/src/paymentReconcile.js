@@ -25,6 +25,17 @@ function emitIfActivated(act, orderId) {
   notifySubscriptionActivatedFromAct(act, orderId)
 }
 
+async function recordReconcilePollAttempt(oid, txn, body) {
+  const prevPayload = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+  await billing.updateTransactionByOrderId(oid, {
+    raw_payload: {
+      ...prevPayload,
+      order_status_poll: body,
+      orderStatusPolledAt: new Date().toISOString(),
+    },
+  })
+}
+
 /**
  * Poll ZenoPay order-status for pending txns; complete + activate (same as webhook path).
  * Idempotent for already-completed rows (runs activation repair).
@@ -133,6 +144,7 @@ export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
 
     if (nextStatus === txn.status) {
       out.phase = 'still_pending_or_unknown'
+      await recordReconcilePollAttempt(oid, txn, body)
       console.log('[activation-sync] SonicPesa still pending', {
         orderId: shortId(oid),
         verifyId: shortId(verifyId),
@@ -208,6 +220,7 @@ export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
 
     if (nextStatus === txn.status) {
       out.phase = 'still_pending_or_unknown'
+      await recordReconcilePollAttempt(oid, txn, body)
       return out
     }
 
@@ -265,6 +278,7 @@ export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
 
   if (nextStatus === txn.status) {
     out.phase = 'still_pending_or_unknown'
+    await recordReconcilePollAttempt(oid, txn, body)
     console.log('[activation-sync] provider did not confirm payment yet', {
       orderId: shortId(oid),
       resultcode: body?.resultcode,

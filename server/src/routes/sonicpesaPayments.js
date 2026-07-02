@@ -117,16 +117,19 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       initiate: createOrder,
       providerBodyKey: 'sonicpesa',
     })
-    schedulePostPaymentActivationPolls(orderId, deviceId)
-    respondCreateOrderAccepted(res, {
-      ok: true,
-      provider: 'sonicpesa',
-      orderId,
-      deviceId,
-      transactionId: tx.id,
-      amount,
-      currency: 'TZS',
-    })
+    respondCreateOrderAccepted(
+      res,
+      {
+        ok: true,
+        provider: 'sonicpesa',
+        orderId,
+        deviceId,
+        transactionId: tx.id,
+        amount,
+        currency: 'TZS',
+      },
+      { orderId, deviceId },
+    )
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) })
   }

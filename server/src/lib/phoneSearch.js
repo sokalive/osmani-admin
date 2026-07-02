@@ -41,6 +41,8 @@ export function appendAdminPhoneDeviceSearch(search, deviceCol, phoneExprs, cond
           OR ${tzPhoneCanonicalSql("t_s.raw_payload->>'phoneNorm'")} = $${idx}
           OR ${tzPhoneCanonicalSql("t_s.raw_payload->>'phone'")} = $${idx}
           OR ${tzPhoneCanonicalSql("t_s.raw_payload->'sonicpesa'->'data'->>'msisdn'")} = $${idx}
+          OR ${tzPhoneCanonicalSql("t_s.raw_payload->'auraxpay'->>'customer_phone'")} = $${idx}
+          OR ${tzPhoneCanonicalSql("t_s.raw_payload->'auraxpay'->'data'->>'phone'")} = $${idx}
           OR ${tzPhoneCanonicalSql("t_s.raw_payload->'order_status_poll'->'data'->>'msisdn'")} = $${idx}
         )
     )`)
