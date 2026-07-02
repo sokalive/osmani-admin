@@ -1501,6 +1501,7 @@ export async function upsertDeviceSubscriptionActive(
       .then((m) => m.notifySubscriptionActivated({ deviceId: d, orderId: oid, expiresAt }))
       .catch((err) => console.warn('[sms] activation notify failed:', err))
     invalidateSubscriptionAccessCache(d)
+    void persistDevicePhoneFromTransaction(d, oid)
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)
@@ -1624,7 +1625,10 @@ export async function tryActivateDeviceSubscriptionFromCompletedTxn(txn) {
     })
   }
 
-  const phone = String(txn.phone ?? '').trim()
+  const phone = String(txn.phone ?? '').trim() || phoneFromTransactionRow(txn)
+  if (phone && !String(txn.phone ?? '').trim()) {
+    await backfillTransactionPhoneIfMissing(orderId, phone)
+  }
   if (phone) {
     const { assessPhoneSubscriptionActivation, markTransactionPhoneActivationConflict } =
       await import('./lib/phoneSubscriptionGuard.js')
@@ -2043,12 +2047,50 @@ async function getLatestManualGrantSubscriptionTxnSummary(deviceId) {
   return getManualGrantSummaryFromSubscriptionTransactionId(d)
 }
 
-function phoneFromTransactionRow(txn) {
+export function phoneFromTransactionRow(txn) {
   if (!txn) return ''
   const direct = String(txn.phone ?? '').trim()
   if (direct) return direct
   const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
-  return String(raw.phoneNorm ?? raw.phone ?? raw.buyer_phone ?? '').trim()
+  const poll = raw.order_status_poll && typeof raw.order_status_poll === 'object' ? raw.order_status_poll : {}
+  const pollData = poll.data && typeof poll.data === 'object' ? poll.data : {}
+  const sonic = raw.sonicpesa && typeof raw.sonicpesa === 'object' ? raw.sonicpesa : {}
+  const sonicData = sonic.data && typeof sonic.data === 'object' ? sonic.data : {}
+  return String(
+    raw.phoneNorm ??
+      raw.phone ??
+      raw.buyer_phone ??
+      pollData.msisdn ??
+      sonicData.msisdn ??
+      '',
+  ).trim()
+}
+
+/** Backfill transactions.phone when provider stored MSISDN only in raw_payload. */
+export async function backfillTransactionPhoneIfMissing(orderId, phoneCandidate) {
+  const oid = String(orderId ?? '').trim()
+  const candidate = String(phoneCandidate ?? '').trim()
+  if (!oid || !candidate) return null
+  const txn = await getTransactionByOrderId(oid)
+  if (!txn || String(txn.phone ?? '').trim()) return txn
+  const digits = normalizePhoneDigits(candidate)
+  const phone = /^255\d{9}$/.test(digits) ? `+${digits}` : candidate.slice(0, 32)
+  return updateTransactionByOrderId(oid, { phone })
+}
+
+async function persistDevicePhoneFromTransaction(deviceId, orderId) {
+  const d = String(deviceId ?? '').trim()
+  const oid = String(orderId ?? '').trim()
+  if (!d || !oid) return
+  const txn = await getTransactionByOrderId(oid)
+  const phone = phoneFromTransactionRow(txn)
+  if (!phone) return
+  try {
+    const { saveDevicePhoneOnce } = await import('./lib/devicePhoneStore.js')
+    await saveDevicePhoneOnce({ deviceId: d, phone })
+  } catch (e) {
+    console.warn('[device_phone_registry] payment phone persist skipped:', e?.message || e)
+  }
 }
 
 /** E.164-style +255… when digits look like Tanzania mobile; otherwise trimmed raw. */

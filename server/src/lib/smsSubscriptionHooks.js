@@ -1,6 +1,7 @@
 import {
   getPlanRowByIdAny,
   getTransactionByOrderId,
+  phoneFromTransactionRow,
   resolvePaymentPhoneForDevice,
 } from '../billingStore.js'
 import {
@@ -10,10 +11,6 @@ import {
 import { resolveSmsPhoneForDevice, sendTransactionalSms } from './smsService.js'
 
 const LOG_PREFIX = '[sms-payment-success]'
-
-function isManualGrantOrder(orderId) {
-  return String(orderId ?? '').trim().startsWith('manual_grant:')
-}
 
 function isManualGrantOrder(orderId) {
   return String(orderId ?? '').trim().startsWith('manual_grant:')
@@ -99,8 +96,9 @@ export async function notifySubscriptionActivated({ deviceId, orderId, expiresAt
     }
 
     const plan = txn.plan_id ? await getPlanRowByIdAny(txn.plan_id) : null
+    const txnPhone = phoneFromTransactionRow(txn)
     const { phone: fallbackPhone } = await resolvePaymentPhoneForDevice(d)
-    const resolved = await resolveSmsPhoneForDevice(d, fallbackPhone)
+    const resolved = await resolveSmsPhoneForDevice(d, txnPhone || fallbackPhone)
     const message = buildPaymentSuccessSms({
       planName: plan?.name ?? txn.plan_name,
       price: txn.amount ?? plan?.price,

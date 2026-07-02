@@ -117,6 +117,21 @@ async function devicesForPhone(pool, digits) {
            ${tzPhoneCanonicalSql('ir.phone_number')} = $1
            OR ${tzPhoneCanonicalSql('ir.account_id')} = $1
          )
+       UNION
+       SELECT DISTINCT trim(t.device_id::text) AS device_id
+       FROM transactions t
+       WHERE trim(coalesce(t.device_id::text, '')) <> ''
+         AND (
+           ${tzPhoneCanonicalSql("t.raw_payload->>'phoneNorm'")} = $1
+           OR ${tzPhoneCanonicalSql("t.raw_payload->>'phone'")} = $1
+           OR ${tzPhoneCanonicalSql("t.raw_payload->'sonicpesa'->'data'->>'msisdn'")} = $1
+           OR ${tzPhoneCanonicalSql("t.raw_payload->'order_status_poll'->'data'->>'msisdn'")} = $1
+         )
+       UNION
+       SELECT DISTINCT trim(dpr.device_id::text) AS device_id
+       FROM device_phone_registry dpr
+       WHERE trim(coalesce(dpr.device_id::text, '')) <> ''
+         AND trim(coalesce(dpr.phone_number_normalized::text, '')) = $1
      ),
      linked_devices AS (
        SELECT device_id FROM phone_txn_devices
@@ -233,6 +248,20 @@ async function loadTransactions(pool, { deviceIds, orderId, externalId, phoneDig
   }
   if (phoneDigits && phoneDigits.length >= 9) {
     parts.push(`${tzPhoneCanonicalSql('t.phone::text')} = $${i}`)
+    params.push(phoneDigits)
+    i += 1
+    parts.push(`(
+      ${tzPhoneCanonicalSql("t.raw_payload->>'phoneNorm'")} = $${i}
+      OR ${tzPhoneCanonicalSql("t.raw_payload->>'phone'")} = $${i}
+      OR ${tzPhoneCanonicalSql("t.raw_payload->'sonicpesa'->'data'->>'msisdn'")} = $${i}
+      OR ${tzPhoneCanonicalSql("t.raw_payload->'order_status_poll'->'data'->>'msisdn'")} = $${i}
+    )`)
+    params.push(phoneDigits)
+    i += 1
+    parts.push(`t.device_id IN (
+      SELECT dpr.device_id::text FROM device_phone_registry dpr
+      WHERE dpr.phone_number_normalized = $${i}
+    )`)
     params.push(phoneDigits)
     i += 1
   }

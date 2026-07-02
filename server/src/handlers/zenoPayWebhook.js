@@ -1,6 +1,6 @@
 import * as billing from '../billingStore.js'
-import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { notifySubscriptionActivatedFromAct } from '../lib/subscriptionActivationNotify.js'
 
 /** Flat objects to scan (excludes arrays mistaken as objects). */
 function walkPaymentPayloadObjects(body) {
@@ -232,12 +232,7 @@ export async function handleZenoPayWebhook(req, res) {
           orderId,
         )
       } else if (!act.skipped && act.deviceId) {
-        deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
-        liveSyncBus.publish('analytics.subscription_updated', {
-          topics: ['analytics'],
-          deviceId: act.deviceId,
-          orderId,
-        })
+        notifySubscriptionActivatedFromAct(act, orderId)
       }
       console.log('DEVICE SUBSCRIPTION WEBHOOK:', { ...act, orderId })
     }

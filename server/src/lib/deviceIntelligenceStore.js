@@ -127,7 +127,11 @@ export async function listDeviceIntelligenceRegistry({ q, limit = 100, offset = 
     params.push(`%${term}%`)
     const p3 = params.length
     const phoneClause = phone
-      ? ` OR phone_number = $${params.length + 1} OR account_id = $${params.length + 1}`
+      ? ` OR phone_number = $${params.length + 1} OR account_id = $${params.length + 1}
+          OR device_id IN (
+            SELECT device_id::text FROM device_phone_registry
+            WHERE phone_number_normalized = $${params.length + 1}
+          )`
       : ''
     if (phone) params.push(phone)
     where = `WHERE (

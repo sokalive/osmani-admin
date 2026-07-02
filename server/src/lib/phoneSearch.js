@@ -26,6 +26,26 @@ export function appendAdminPhoneDeviceSearch(search, deviceCol, phoneExprs, cond
       params.push(digits)
       idx += 1
     }
+    parts.push(`EXISTS (
+      SELECT 1 FROM device_phone_registry dpr_s
+      WHERE dpr_s.device_id::text = ${deviceCol}
+        AND dpr_s.phone_number_normalized = $${idx}
+    )`)
+    params.push(digits)
+    idx += 1
+    parts.push(`EXISTS (
+      SELECT 1 FROM transactions t_s
+      WHERE t_s.device_id::text = ${deviceCol}
+        AND (
+          ${tzPhoneCanonicalSql('t_s.phone::text')} = $${idx}
+          OR ${tzPhoneCanonicalSql("t_s.raw_payload->>'phoneNorm'")} = $${idx}
+          OR ${tzPhoneCanonicalSql("t_s.raw_payload->>'phone'")} = $${idx}
+          OR ${tzPhoneCanonicalSql("t_s.raw_payload->'sonicpesa'->'data'->>'msisdn'")} = $${idx}
+          OR ${tzPhoneCanonicalSql("t_s.raw_payload->'order_status_poll'->'data'->>'msisdn'")} = $${idx}
+        )
+    )`)
+    params.push(digits)
+    idx += 1
   }
   cond.push(`(${parts.join(' OR ')})`)
   return idx

@@ -548,6 +548,59 @@ runtimePublicRouter.post('/subscription-shadow-migrate', requireLegacyAdminToken
   }
 })
 
+/** Backfill empty transactions.phone from raw_payload (admin repair). */
+runtimePublicRouter.post('/backfill-transaction-phones', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const apply = String(req.query.apply ?? b.apply ?? '0').trim() === '1'
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? b.limit ?? 200)))
+    const { rows } = await pool.query(
+      `SELECT order_id, device_id, phone, raw_payload, status, created_at
+       FROM transactions
+       WHERE plan_id IS NOT NULL AND trim(coalesce(phone::text, '')) = ''
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    )
+    const { phoneFromTransactionRow, normalizePhoneDigits, backfillTransactionPhoneIfMissing } =
+      await import('../billingStore.js')
+    const candidates = []
+    for (const r of rows) {
+      const inferred = phoneFromTransactionRow(r)
+      const digits = normalizePhoneDigits(inferred)
+      if (!digits || digits.length < 10) continue
+      candidates.push({
+        order_id: String(r.order_id ?? ''),
+        device_id: r.device_id != null ? String(r.device_id) : '',
+        phone: /^255\d{9}$/.test(digits) ? `+${digits}` : inferred,
+        status: String(r.status ?? ''),
+      })
+    }
+    let updated = 0
+    if (apply) {
+      for (const c of candidates) {
+        const row = await backfillTransactionPhoneIfMissing(c.order_id, c.phone)
+        if (row && String(row.phone ?? '').trim()) updated += 1
+      }
+    }
+    res.json({
+      ok: true,
+      commit: getServerGitCommit(),
+      dry_run: !apply,
+      scanned: rows.length,
+      candidates: candidates.length,
+      updated,
+      sample: candidates.slice(0, 15),
+    })
+  } catch (e) {
+    console.error('[runtime/backfill-transaction-phones]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Payment activation timing stats from completed transactions (last 7 days). */
 runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, async (_req, res) => {
   try {

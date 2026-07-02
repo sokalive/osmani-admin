@@ -310,7 +310,7 @@ restApi.get('/payment-status/:order_id', async (req, res) => {
     if (!orderId) {
       return res.status(400).json({ error: 'order_id is required' })
     }
-    const rec = await reconcileOrderWithZenoPay(orderId)
+    const rec = await reconcileOrderWithZenoPay(orderId, { forcePoll: true })
     const txn = await billing.getTransactionByOrderId(orderId)
     if (!txn) {
       return res.status(404).json({ error: 'Unknown order' })
