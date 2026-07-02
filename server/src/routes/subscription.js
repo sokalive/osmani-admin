@@ -113,7 +113,7 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
       })
       return
     }
-    await reconcileOrderWithZenoPay(orderId, { forcePoll: Boolean(hint) })
+    await reconcileOrderWithZenoPay(orderId, { forcePoll: true })
   }
 
   if (hint) {
@@ -124,7 +124,7 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   } else {
     const pend = await billing.getLatestRecentPendingTransactionForDevice(d)
     if (pend?.order_id) {
-      await reconcileOrderWithZenoPay(String(pend.order_id))
+      await reconcileOrderWithZenoPay(String(pend.order_id), { forcePoll: true })
     }
   }
 
@@ -1359,6 +1359,14 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   liveSyncBus.on('sync', catalogSyncHandler)
   liveSyncBus.on('sync', phoneGateSyncHandler)
 
+  const subscriptionUpdatedSyncHandler = (packet) => {
+    if (String(packet?.event || '') !== 'analytics.subscription_updated') return
+    const did = String(packet?.payload?.deviceId ?? '').trim()
+    if (!did || did !== deviceId) return
+    void handler({ deviceId: did })
+  }
+  liveSyncBus.on('sync', subscriptionUpdatedSyncHandler)
+
   const modePoll = setInterval(() => {
     void writeAppModesEvent('poll')
     void writePhoneGateEvent('poll')
@@ -1405,6 +1413,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     liveSyncBus.off('sync', appUpdateSyncHandler)
     liveSyncBus.off('sync', catalogSyncHandler)
     liveSyncBus.off('sync', phoneGateSyncHandler)
+    liveSyncBus.off('sync', subscriptionUpdatedSyncHandler)
     try {
       res.end()
     } catch (e) {

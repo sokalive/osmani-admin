@@ -4,8 +4,9 @@
  */
 import * as billing from './billingStore.js'
 import { webhookExplicitFailure, webhookSuccess } from './handlers/zenoPayWebhook.js'
-import { deviceSubscriptionBus } from './lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from './lib/liveSyncBus.js'
+import { notifySubscriptionActivatedFromAct } from './lib/subscriptionActivationNotify.js'
+import { notifySubscriptionActivatedFromAct } from './lib/subscriptionActivationNotify.js'
 import { auraxpayGetOrderStatus, resolveAuraxpayCredentials } from './auraxpayClient.js'
 import { resolveSonicpesaCredentials, sonicpesaGetOrderStatus } from './sonicpesaClient.js'
 import { resolveZenopayCredentials, zenopayGetOrderStatus } from './zenopayClient.js'
@@ -22,13 +23,7 @@ function shortId(s, n = 10) {
 }
 
 function emitIfActivated(act, orderId) {
-  if (!act || act.skipped || !act.deviceId) return
-  deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
-  liveSyncBus.publish('analytics.subscription_updated', {
-    topics: ['analytics'],
-    deviceId: act.deviceId,
-    orderId,
-  })
+  notifySubscriptionActivatedFromAct(act, orderId)
 }
 
 /**

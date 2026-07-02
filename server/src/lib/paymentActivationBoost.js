@@ -1,36 +1,45 @@
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import * as billing from '../billingStore.js'
-import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
-import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
+import { notifySubscriptionActivatedFromAct } from './subscriptionActivationNotify.js'
 
-const DEFAULT_DELAYS_MS = String(process.env.PAYMENT_ACTIVATION_POLL_MS || '2000,5000,12000,25000')
-  .split(',')
-  .map((s) => Number(s.trim()))
-  .filter((n) => Number.isFinite(n) && n > 0)
+function parsePollDelaysMs() {
+  const raw = String(process.env.PAYMENT_ACTIVATION_POLL_MS || '0,750,2000,5000')
+  const parsed = raw
+    .split(',')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n >= 0)
+  return parsed.length > 0 ? parsed : [0, 750, 2000, 5000]
+}
+
+async function runActivationBoostTick(oid, did) {
+  const rec = await reconcileOrderWithZenoPay(oid, { forcePoll: true })
+  const fin = await billing.tryFinalizeActivationForDevice(did)
+  if (rec?.activation?.activated) {
+    notifySubscriptionActivatedFromAct(rec.activation, oid)
+  } else if (fin?.activated) {
+    notifySubscriptionActivatedFromAct(
+      { skipped: false, deviceId: fin.deviceId, orderId: fin.orderId },
+      fin.orderId ?? oid,
+    )
+  }
+}
 
 /**
  * Poll provider + finalize activation after payment initiation (webhook may lag).
- * Fire-and-forget; idempotent reconcile paths.
+ * First tick runs immediately; follow-ups are backoff polls. Fire-and-forget; idempotent.
  */
 export function schedulePostPaymentActivationPolls(orderId, deviceId) {
   const oid = String(orderId ?? '').trim()
   const did = String(deviceId ?? '').trim()
   if (!oid || !did) return
 
-  for (const delayMs of DEFAULT_DELAYS_MS) {
-    setTimeout(() => {
-      void (async () => {
-        try {
-          const rec = await reconcileOrderWithZenoPay(oid, { forcePoll: true })
-          const fin = await billing.tryFinalizeActivationForDevice(did)
-          if (rec?.activation?.activated || fin?.activated) {
-            invalidateSubscriptionAccessCache(did)
-            deviceSubscriptionBus.emit('update', { deviceId: did })
-          }
-        } catch (e) {
-          console.warn('[payment-activation-boost] poll failed:', oid, e?.message || e)
-        }
-      })()
-    }, delayMs)
+  for (const delayMs of parsePollDelaysMs()) {
+    const run = () => {
+      void runActivationBoostTick(oid, did).catch((e) => {
+        console.warn('[payment-activation-boost] poll failed:', oid, e?.message || e)
+      })
+    }
+    if (delayMs <= 0) run()
+    else setTimeout(run, delayMs)
   }
 }

@@ -6,6 +6,7 @@ import { ensureBillingTables } from './db/billingTables.js'
 import { getPool } from './db/pool.js'
 import { normalizeLocationPayload } from './lib/analyticsLocation.js'
 import { upsertLiveSession } from './lib/liveSessionStore.js'
+import { invalidateSubscriptionAccessCache } from './lib/subscriptionAccessCache.js'
 
 export async function ensureBillingStorage() {
   const pool = getPool()
@@ -1499,9 +1500,7 @@ export async function upsertDeviceSubscriptionActive(
     void import('./lib/smsSubscriptionHooks.js')
       .then((m) => m.notifySubscriptionActivated({ deviceId: d, orderId: oid, expiresAt }))
       .catch((err) => console.warn('[sms] activation notify failed:', err))
-    void import('./lib/subscriptionAccessCache.js')
-      .then((m) => m.invalidateSubscriptionAccessCache(d))
-      .catch(() => {})
+    invalidateSubscriptionAccessCache(d)
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)

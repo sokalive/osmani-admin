@@ -7,6 +7,7 @@ import {
   webhookExplicitFailure,
   webhookSuccess,
 } from '../../../handlers/zenoPayWebhook.js'
+import { notifySubscriptionActivatedFromAct } from '../../subscriptionActivationNotify.js'
 
 const DEFAULT_API_BASE = 'https://api.sonicpesa.com/api/v1'
 const LOG_PREFIX = '[sonicpesa]'
@@ -373,7 +374,19 @@ export async function handleWebhook(req, res, deps) {
       return res.sendStatus(200)
     }
     if (txn.status === 'completed') {
-      console.log(LOG_PREFIX, 'webhook already completed', merchantOrderId)
+      const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn({
+        ...txn,
+        status: 'completed',
+        order_id: merchantOrderId,
+      })
+      if (!act.skipped && act.deviceId) {
+        notifySubscriptionActivatedFromAct(act, merchantOrderId)
+      }
+      console.log(LOG_PREFIX, 'webhook already completed — activation repair', {
+        merchantOrderId,
+        activated: act.activated === true,
+        reason: act.reason,
+      })
       return res.sendStatus(200)
     }
     const ok = sonicPaymentSucceeded(body)
@@ -422,12 +435,7 @@ export async function handleWebhook(req, res, deps) {
         deviceId: act.deviceId ? `${String(act.deviceId).slice(0, 12)}…` : null,
       })
       if (!act.skipped && act.deviceId) {
-        deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
-        liveSyncBus.publish('analytics.subscription_updated', {
-          topics: ['analytics'],
-          deviceId: act.deviceId,
-          orderId: merchantOrderId,
-        })
+        notifySubscriptionActivatedFromAct(act, merchantOrderId)
       }
     }
     return res.sendStatus(200)

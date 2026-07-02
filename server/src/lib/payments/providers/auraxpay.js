@@ -9,7 +9,7 @@ import {
   webhookSuccess,
 } from '../../../handlers/zenoPayWebhook.js'
 import { formatPhone } from '../../../zenopayClient.js'
-import { invalidateSubscriptionAccessCache } from '../../../lib/subscriptionAccessCache.js'
+import { notifySubscriptionActivatedFromAct } from '../../subscriptionActivationNotify.js'
 
 const DEFAULT_API_BASE = ''
 const LOG_PREFIX = '[auraxpay]'
@@ -896,6 +896,14 @@ export async function handleWebhook(req, res, deps) {
       return res.sendStatus(200)
     }
     if (txn.status === 'completed') {
+      const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn({
+        ...txn,
+        status: 'completed',
+        order_id: merchantOrderId,
+      })
+      if (!act.skipped && act.deviceId) {
+        notifySubscriptionActivatedFromAct(act, merchantOrderId)
+      }
       return res.sendStatus(200)
     }
     const ok = auraxPaymentSucceeded(body)
@@ -929,13 +937,7 @@ export async function handleWebhook(req, res, deps) {
         order_id: merchantOrderId,
       })
       if (!act.skipped && act.deviceId) {
-        invalidateSubscriptionAccessCache(act.deviceId)
-        deviceSubscriptionBus.emit('update', { deviceId: act.deviceId })
-        liveSyncBus.publish('analytics.subscription_updated', {
-          topics: ['analytics'],
-          deviceId: act.deviceId,
-          orderId: merchantOrderId,
-        })
+        notifySubscriptionActivatedFromAct(act, merchantOrderId)
       }
     }
     return res.sendStatus(200)

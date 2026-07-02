@@ -33,6 +33,7 @@
     "verify:subscription-timing": "node scripts/verify-subscription-timing.mjs",
     "verify:sms-integration": "node scripts/verify-sms-integration.mjs",
     "verify:phone-subscription-guard": "node scripts/verify-phone-subscription-guard.mjs",
+    "verify:payment-activation-latency": "node scripts/verify-payment-activation-latency.mjs",
     "audit:duplicate-active-phones": "node scripts/audit-duplicate-active-phone-subscriptions.mjs"
   },
   "dependencies": {
