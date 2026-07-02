@@ -1009,6 +1009,12 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
     throw new Error(`Invalid device_id or duration_days (allowed: ${list})`)
   }
 
+  let smsPhone = phone
+  if (!smsPhone) {
+    const resolved = await resolvePaymentPhoneForDevice(d)
+    smsPhone = String(resolved?.phone ?? '').trim()
+  }
+
   const plan = await getActivePlanByDurationDays(days)
 
   const ins = await q(
@@ -1036,11 +1042,11 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   )
 
   await recordManualGrantPhoneAndTransaction(
-    { deviceId: d, grantId, planId: plan?.id ?? null, phone },
+    { deviceId: d, grantId, planId: plan?.id ?? null, phone: smsPhone || phone },
     client,
   )
 
-  if (phone) {
+  if (smsPhone) {
     void import('./lib/smsSubscriptionHooks.js')
       .then((m) =>
         m.notifyManualGrantActivated({
@@ -1050,7 +1056,7 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
           planName: plan?.name ?? '',
           price: plan?.price != null ? Number(plan.price) : null,
           expiresAt,
-          phone,
+          phone: smsPhone,
         }),
       )
       .catch((err) => console.warn('[sms] manual grant notify failed:', err))
@@ -1104,7 +1110,8 @@ export async function grantCustomManualDeviceSubscription(
   if (!plan || plan.deleted_at) {
     throw new Error('Plan not found')
   }
-  const days = Math.max(1, Math.floor(Number(plan.duration_days) || 0))
+  const calendarMs = exp.getTime() - start.getTime()
+  const days = Math.max(1, Math.ceil(calendarMs / (24 * 60 * 60 * 1000)))
   const creator = String(createdBy ?? 'admin').trim().slice(0, 256) || 'admin'
 
   const ins = await q(
@@ -1910,7 +1917,7 @@ export async function getLatestManualSubscriptionGrantRecord(deviceId) {
   const d = String(deviceId ?? '').trim()
   if (!d) return null
   const { rows } = await pool.query(
-    `SELECT id, duration_days, created_at
+    `SELECT id, duration_days, plan_id, created_at, custom_expiry, started_at_custom, expires_at_custom
      FROM manual_subscription_grants
      WHERE device_id = $1 AND deleted_at IS NULL
      ORDER BY created_at DESC
@@ -1973,12 +1980,22 @@ async function buildManualGrantSubscriptionTxnSummary(grant, transactionId = nul
       : grantId != null
         ? `manual_grant:${grantId}`
         : ''
-  const plan = await getActivePlanByDurationDays(durationDays)
+  const storedPlanId = grant?.plan_id != null ? Number(grant.plan_id) : null
+  let plan = storedPlanId ? await getPlanRowByIdAny(storedPlanId) : null
+  if (!plan) plan = await getActivePlanByDurationDays(durationDays)
+  let effectiveDurationDays = Math.trunc(durationDays)
+  if (grant?.custom_expiry === true && grant?.started_at_custom && grant?.expires_at_custom) {
+    const startMs = new Date(grant.started_at_custom).getTime()
+    const endMs = new Date(grant.expires_at_custom).getTime()
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+      effectiveDurationDays = Math.max(1, Math.ceil((endMs - startMs) / (24 * 60 * 60 * 1000)))
+    }
+  }
   return {
     amount: plan?.price != null ? Number(plan.price) : null,
     currency: 'TZS',
-    plan_id: plan?.id != null ? Number(plan.id) : null,
-    plan_duration_days: Math.trunc(durationDays),
+    plan_id: plan?.id != null ? Number(plan.id) : storedPlanId,
+    plan_duration_days: effectiveDurationDays,
     source: 'manual_grant',
     transaction_id: tid,
     grant_id: grantId,
@@ -1994,7 +2011,11 @@ async function getManualGrantSummaryFromSubscriptionTransactionId(deviceId) {
     `SELECT
        ds.transaction_id,
        g.id AS grant_id,
-       g.duration_days
+       g.duration_days,
+       g.plan_id,
+       g.custom_expiry,
+       g.started_at_custom,
+       g.expires_at_custom
      FROM device_subscriptions ds
      LEFT JOIN manual_subscription_grants g
        ON (
@@ -2010,6 +2031,20 @@ async function getManualGrantSummaryFromSubscriptionTransactionId(deviceId) {
   const row = rows[0]
   if (!row) return null
 
+  if (row.grant_id != null) {
+    return await buildManualGrantSubscriptionTxnSummary(
+      {
+        id: row.grant_id,
+        duration_days: row.duration_days,
+        plan_id: row.plan_id,
+        custom_expiry: row.custom_expiry,
+        started_at_custom: row.started_at_custom,
+        expires_at_custom: row.expires_at_custom,
+      },
+      row.transaction_id,
+    )
+  }
+
   let durationDays = Number(row.duration_days)
   if (!Number.isFinite(durationDays) || durationDays < 1) {
     const fallback = await getLatestManualSubscriptionGrantRecord(d)
@@ -2017,16 +2052,10 @@ async function getManualGrantSummaryFromSubscriptionTransactionId(deviceId) {
     return await buildManualGrantSubscriptionTxnSummary(fallback, row.transaction_id)
   }
 
-  const plan = await getActivePlanByDurationDays(durationDays)
-  return {
-    amount: plan?.price != null ? Number(plan.price) : null,
-    currency: 'TZS',
-    plan_id: plan?.id != null ? Number(plan.id) : null,
-    plan_duration_days: Math.trunc(durationDays),
-    source: 'manual_grant',
-    transaction_id: String(row.transaction_id ?? ''),
-    grant_id: row.grant_id != null ? Number(row.grant_id) : null,
-  }
+  return await buildManualGrantSubscriptionTxnSummary(
+    { id: row.grant_id, duration_days: durationDays },
+    row.transaction_id,
+  )
 }
 
 /**
