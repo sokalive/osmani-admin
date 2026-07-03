@@ -22,11 +22,36 @@ import { formatTsh } from '../lib/formatMoney'
 import {
   fingerprintPagination,
   fingerprintSummary,
-  fingerprintUserRows,
+  fingerprintUserRowsContent,
   mergeUserRows,
 } from '../lib/usersPageRefresh'
 
 const PAGE_SIZE = 25
+
+const PROVIDER_FILTERS = [
+  { id: 'all', label: 'All providers' },
+  { id: 'sonicpesa', label: 'SonicPesa' },
+  { id: 'zenopay', label: 'ZenoPay' },
+  { id: 'auraxpay', label: 'AuraxPay' },
+  { id: 'manual_grant', label: 'Manual grant' },
+  { id: 'transfer', label: 'Transfer' },
+  { id: 'recovery', label: 'Recovery' },
+]
+
+const STATUS_FILTERS = [
+  { id: 'all', label: 'All statuses' },
+  { id: 'active', label: 'Active' },
+  { id: 'expired', label: 'Expired' },
+]
+
+function RemainingCell({ expiresAt }) {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+  return <>{formatAdminRemainingFromExpiry(expiresAt, new Date())}</>
+}
 
 const TABS = [
   { id: 'active_paid', label: 'Active Paid', countKey: 'active_paid' },
@@ -191,6 +216,9 @@ function UsersPageContent() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
+  const [planFilter, setPlanFilter] = useState('all')
+  const [providerFilter, setProviderFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [items, setItems] = useState([])
   const [pagination, setPagination] = useState({ page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 })
   const [summary, setSummary] = useState(null)
@@ -202,7 +230,6 @@ function UsersPageContent() {
   const [selected, setSelected] = useState(() => new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [confirm, setConfirm] = useState(null)
-  const [remainingClock, setRemainingClock] = useState(0)
   const loadedTabsRef = useRef(new Set())
   const loadTabGenRef = useRef(0)
   const loadSummaryGenRef = useRef(0)
@@ -227,7 +254,7 @@ function UsersPageContent() {
   useEffect(() => {
     setPage(1)
     setSelected(new Set())
-  }, [tab, expiringWithin, searchDebounced])
+  }, [tab, expiringWithin, searchDebounced, planFilter, providerFilter, statusFilter])
 
   const planMap = useMemo(() => {
     const m = new Map()
@@ -241,7 +268,15 @@ function UsersPageContent() {
         page: opts.page ?? page,
         limit: PAGE_SIZE,
         search: searchDebounced || undefined,
-        sort: tab === 'expiring' || tab === 'active_paid' ? 'expiry_soonest' : 'newest',
+        sort:
+          tab === 'expiring'
+            ? 'expiry_soonest'
+            : tab === 'failed'
+              ? 'newest'
+              : 'started_newest',
+        plan_id: planFilter !== 'all' ? planFilter : undefined,
+        provider: providerFilter !== 'all' ? providerFilter : undefined,
+        status: tab === 'all' && statusFilter !== 'all' ? statusFilter : undefined,
       }
       if (tab === 'expiring') params.within = expiringWithin
       const reqOpts = signal ? { signal } : {}
@@ -252,7 +287,7 @@ function UsersPageContent() {
       else res = await getUsers(params, reqOpts)
       return res
     },
-    [tab, page, searchDebounced, expiringWithin],
+    [tab, page, searchDebounced, expiringWithin, planFilter, providerFilter, statusFilter],
   )
 
   const loadSummary = useCallback(async (signal, { silent = false } = {}) => {
@@ -281,8 +316,8 @@ function UsersPageContent() {
       const pagChanged = pagFp !== paginationFingerprintRef.current
 
       setItems((prev) => {
-        const nextRows = silent ? mergeUserRows(prev, rows, currentTab) : rows
-        const nextFp = fingerprintUserRows(nextRows, currentTab)
+        const nextRows = silent ? mergeUserRows(prev, rows, currentTab, { silent: true }) : rows
+        const nextFp = fingerprintUserRowsContent(nextRows, currentTab)
         if (nextFp === itemsFingerprintRef.current && !pagChanged) return prev
         itemsFingerprintRef.current = nextFp
         return nextRows
@@ -350,7 +385,10 @@ function UsersPageContent() {
 
   useEffect(() => {
     const es = new EventSource(syncStreamUrl(['analytics']))
-    const scheduleRefresh = () => {
+    const scheduleRefresh = (kind) => {
+      const current = tabRef.current
+      if (kind === 'subscription' && current === 'failed') return
+      if (kind === 'transaction' && current !== 'failed' && current !== 'all') return
       if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current)
       sseRefreshTimerRef.current = window.setTimeout(() => {
         sseRefreshTimerRef.current = null
@@ -358,19 +396,14 @@ function UsersPageContent() {
         void loadTabSilent()
       }, 1500)
     }
-    es.addEventListener('analytics.subscription_updated', scheduleRefresh)
-    es.addEventListener('analytics.transaction_updated', scheduleRefresh)
+    es.addEventListener('analytics.subscription_updated', () => scheduleRefresh('subscription'))
+    es.addEventListener('analytics.transaction_updated', () => scheduleRefresh('transaction'))
     return () => {
       if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current)
       silentFetchAbortRef.current?.abort()
       es.close()
     }
   }, [loadSummary, loadTabSilent])
-
-  useEffect(() => {
-    const id = window.setInterval(() => setRemainingClock((t) => t + 1), 60_000)
-    return () => window.clearInterval(id)
-  }, [])
 
   function showFlash(type, message) {
     setFlash({ type, message })
@@ -611,17 +644,97 @@ function UsersPageContent() {
           </div>
         ) : null}
 
-        <div className="max-w-md">
-          <label className={labelClass()} htmlFor="user-search">
-            Search
-          </label>
-          <input
-            id="user-search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Phone, device ID, transaction ID, reference, user name…"
-            className={inputClass()}
-          />
+        <div className="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-end">
+          <div className="min-w-[240px] flex-1 max-w-md">
+            <label className={labelClass()} htmlFor="user-search">
+              Search
+            </label>
+            <input
+              id="user-search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Phone, device ID, order ID, transaction ID, reference…"
+              className={inputClass()}
+            />
+          </div>
+          {subscriptionRows ? (
+            <>
+              <div className="min-w-[140px]">
+                <label className={labelClass()} htmlFor="user-plan-filter">
+                  Plan
+                </label>
+                <select
+                  id="user-plan-filter"
+                  value={planFilter}
+                  onChange={(e) => setPlanFilter(e.target.value)}
+                  className={inputClass()}
+                >
+                  <option value="all">All plans</option>
+                  {plans.map((p) => (
+                    <option key={p.id} value={String(p.id)}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="min-w-[160px]">
+                <label className={labelClass()} htmlFor="user-provider-filter">
+                  Source
+                </label>
+                <select
+                  id="user-provider-filter"
+                  value={providerFilter}
+                  onChange={(e) => setProviderFilter(e.target.value)}
+                  className={inputClass()}
+                >
+                  {PROVIDER_FILTERS.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {tab === 'all' ? (
+                <div className="min-w-[140px]">
+                  <label className={labelClass()} htmlFor="user-status-filter">
+                    Status
+                  </label>
+                  <select
+                    id="user-status-filter"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className={inputClass()}
+                  >
+                    {STATUS_FILTERS.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="min-w-[160px]">
+              <label className={labelClass()} htmlFor="failed-provider-filter">
+                Provider
+              </label>
+              <select
+                id="failed-provider-filter"
+                value={providerFilter}
+                onChange={(e) => setProviderFilter(e.target.value)}
+                className={inputClass()}
+              >
+                {PROVIDER_FILTERS.filter((f) => f.id !== 'manual_grant' && f.id !== 'transfer' && f.id !== 'recovery').map(
+                  (f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ),
+                )}
+              </select>
+            </div>
+          )}
         </div>
 
         <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
@@ -750,8 +863,7 @@ function UsersPageContent() {
                             {formatAdminDateTime(r.expires_at, { fallback: '-' })}
                           </td>
                           <td className="px-4 py-3 text-slate-300">
-                            {remainingClock >= 0 &&
-                              formatAdminRemainingFromExpiry(r.expires_at, new Date())}
+                            <RemainingCell expiresAt={r.expires_at} />
                           </td>
                           <td className="px-4 py-3 text-slate-400">{providerLabel(r)}</td>
                           <td className="px-4 py-3">

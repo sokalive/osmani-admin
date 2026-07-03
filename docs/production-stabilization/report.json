@@ -1,0 +1,365 @@
+{
+  "generated_at": "2026-07-03T16:27:35.404Z",
+  "finished_at": "2026-07-03T16:28:02.660Z",
+  "environments": {
+    "vps": {
+      "api": "https://api.osmanitv.com/api",
+      "health": {
+        "ok": true,
+        "service": "osmani-admin-api",
+        "time": "2026-07-03T16:27:36.196Z",
+        "commit": "57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43",
+        "startup": {
+          "ready": true,
+          "error": null,
+          "render": false,
+          "uptime_sec": 10169
+        },
+        "pool": {
+          "totalCount": 12,
+          "idleCount": 5,
+          "waitingCount": 0,
+          "max": 30
+        },
+        "verify_db": {
+          "inFlight": 0,
+          "maxConcurrent": 25,
+          "pool": {
+            "totalCount": 12,
+            "idleCount": 5,
+            "waitingCount": 0,
+            "max": 30
+          }
+        }
+      }
+    },
+    "render": {
+      "api": "https://osmani-admin-api.onrender.com/api",
+      "health": {
+        "ok": true,
+        "service": "osmani-admin-api",
+        "time": "2026-07-03T16:27:35.874Z",
+        "commit": "57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43",
+        "startup": {
+          "ready": true,
+          "error": null,
+          "render": true,
+          "uptime_sec": 9540
+        },
+        "pool": {
+          "totalCount": 3,
+          "idleCount": 2,
+          "waitingCount": 0,
+          "max": 8
+        },
+        "verify_db": {
+          "inFlight": 0,
+          "maxConcurrent": 6,
+          "pool": {
+            "totalCount": 3,
+            "idleCount": 2,
+            "waitingCount": 0,
+            "max": 8
+          }
+        }
+      }
+    }
+  },
+  "part1_false_expired": {
+    "before": {
+      "ok": true,
+      "server_time": "2026-07-03T16:27:37.069Z",
+      "database_timezone": "Etc/UTC",
+      "total_future_expiry_rows": 0,
+      "affected_count": 0,
+      "skipped_transfer_source_count": 0,
+      "skipped_moved_source_count": 0,
+      "affected": [],
+      "skipped_transfer_sources": [],
+      "skipped_moved_sources": [],
+      "root_cause": "device_subscriptions.status was not active (often pending after incomplete recovery/transfer) while expires_at remained in the future. Admin maps status!==active to EXPIRED; verify cache zeroes remaining_seconds for non-active rows so the app shows renew. Rows with transaction_id moved:* are intentional post-migration revokes on the old device_id.",
+      "commit": "57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43"
+    },
+    "repair": null,
+    "after": {
+      "ok": true,
+      "server_time": "2026-07-03T16:27:37.626Z",
+      "database_timezone": "Etc/UTC",
+      "total_future_expiry_rows": 0,
+      "affected_count": 0,
+      "skipped_transfer_source_count": 0,
+      "skipped_moved_source_count": 0,
+      "affected": [],
+      "skipped_transfer_sources": [],
+      "skipped_moved_sources": [],
+      "root_cause": "device_subscriptions.status was not active (often pending after incomplete recovery/transfer) while expires_at remained in the future. Admin maps status!==active to EXPIRED; verify cache zeroes remaining_seconds for non-active rows so the app shows renew. Rows with transaction_id moved:* are intentional post-migration revokes on the old device_id.",
+      "commit": "57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43"
+    }
+  },
+  "part2_revoked": {
+    "before": {
+      "ok": true,
+      "server_time": "2026-07-03T16:27:48.098Z",
+      "counts": {
+        "total_affected_users": 0,
+        "incorrectly_suspended_active": 0,
+        "incorrectly_revoked_migration_shadow": 0,
+        "render_users_affected": 0,
+        "vps_users_affected": 0,
+        "restoration_affected": 0,
+        "restoration_unresolved": 0
+      },
+      "before": {
+        "incorrectly_suspended_active": 0,
+        "incorrectly_revoked_migration_shadow": 0,
+        "total_active_subscriptions": 325,
+        "suspended_devices": [],
+        "revoked_shadow_devices": []
+      },
+      "after": {
+        "incorrectly_suspended_active": 0,
+        "incorrectly_revoked_migration_shadow": 0,
+        "total_active_subscriptions": 325,
+        "suspended_devices": [],
+        "revoked_shadow_devices": []
+      },
+      "recovered_users": [],
+      "restoration": {
+        "ok": true,
+        "server_time": "2026-07-03T16:27:42.017Z",
+        "total_active_subscriptions": 325,
+        "affected_users_count": 0,
+        "migration_shadow_count": 0,
+        "migration_phone_shadow_count": 0,
+        "migration_install_shadow_count": 0,
+        "migration_intelligence_phone_shadow_count": 0,
+        "orphan_activation_count": 0,
+        "missing_fingerprint_count": 24,
+        "expired_users_ignored_count": 187,
+        "restored_users_count": 0,
+        "unresolved_users_count": 0,
+        "repairs": {
+          "fingerprints_backfilled": 0,
+          "migrations_recovered": 0,
+          "phone_migrations_recovered": 0,
+          "install_migrations_recovered": 0,
+          "intelligence_migrations_recovered": 0,
+          "auto_link_recovered": 0,
+          "activations_finalized": 0
+        },
+        "migration_pairs": [],
+        "unresolved": [],
+        "evidence": [
+          {
+            "active_subscriptions": 325,
+            "migration_shadow_remaining": 0,
+            "migration_phone_shadow_remaining": 0,
+            "migration_install_shadow_remaining": 0,
+            "migration_intelligence_phone_shadow_remaining": 0,
+            "orphan_activation_remaining": 0,
+            "expired_users_ignored": 187,
+            "missing_fingerprint_remaining": 24
+          }
+        ]
+      },
+      "reconcile": null,
+      "host_attribution": {},
+      "root_cause_summary": [
+        "Render startup crash (cache invalidation loop + process.exit) caused HTTP 502 during deploy windows.",
+        "Verify errors could return transient inactive (active=false, blocked=false) — client shows Kifurushi kimezuiwa.",
+        "VPS/APK reinstall migration shadows: active sub on old device_id, new device_id unlinked (revoked shape).",
+        "SSE subscription-stream never writes revoked; device_subscription triggers verify refresh only.",
+        "Cache pressure fallback cannot downgrade fingerprinted or cached-active users (verifyDbResilience guards)."
+      ],
+      "verification_queries": {
+        "suspended_active": "SELECT device_id FROM device_subscriptions WHERE status='active' AND expires_at > now() AND manual_admin_blocked = true",
+        "migration_shadow_install": "See findMigrationShadowByInstallInstance in subscriptionRestorationAudit.js",
+        "restoration_audit": "GET /api/runtime/subscription-restoration-audit"
+      },
+      "commit": "57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43"
+    },
+    "repair": null,
+    "after": {
+      "ok": true,
+      "server_time": "2026-07-03T16:27:58.195Z",
+      "counts": {
+        "total_affected_users": 0,
+        "incorrectly_suspended_active": 0,
+        "incorrectly_revoked_migration_shadow": 0,
+        "render_users_affected": 0,
+        "vps_users_affected": 0,
+        "restoration_affected": 0,
+        "restoration_unresolved": 0
+      },
+      "before": {
+        "incorrectly_suspended_active": 0,
+        "incorrectly_revoked_migration_shadow": 0,
+        "total_active_subscriptions": 325,
+        "suspended_devices": [],
+        "revoked_shadow_devices": []
+      },
+      "after": {
+        "incorrectly_suspended_active": 0,
+        "incorrectly_revoked_migration_shadow": 0,
+        "total_active_subscriptions": 325,
+        "suspended_devices": [],
+        "revoked_shadow_devices": []
+      },
+      "recovered_users": [],
+      "restoration": {
+        "ok": true,
+        "server_time": "2026-07-03T16:27:52.910Z",
+        "total_active_subscriptions": 325,
+        "affected_users_count": 0,
+        "migration_shadow_count": 0,
+        "migration_phone_shadow_count": 0,
+        "migration_install_shadow_count": 0,
+        "migration_intelligence_phone_shadow_count": 0,
+        "orphan_activation_count": 0,
+        "missing_fingerprint_count": 24,
+        "expired_users_ignored_count": 187,
+        "restored_users_count": 0,
+        "unresolved_users_count": 0,
+        "repairs": {
+          "fingerprints_backfilled": 0,
+          "migrations_recovered": 0,
+          "phone_migrations_recovered": 0,
+          "install_migrations_recovered": 0,
+          "intelligence_migrations_recovered": 0,
+          "auto_link_recovered": 0,
+          "activations_finalized": 0
+        },
+        "migration_pairs": [],
+        "unresolved": [],
+        "evidence": [
+          {
+            "active_subscriptions": 325,
+            "migration_shadow_remaining": 0,
+            "migration_phone_shadow_remaining": 0,
+            "migration_install_shadow_remaining": 0,
+            "migration_intelligence_phone_shadow_remaining": 0,
+            "orphan_activation_remaining": 0,
+            "expired_users_ignored": 187,
+            "missing_fingerprint_remaining": 24
+          }
+        ]
+      },
+      "reconcile": null,
+      "host_attribution": {},
+      "root_cause_summary": [
+        "Render startup crash (cache invalidation loop + process.exit) caused HTTP 502 during deploy windows.",
+        "Verify errors could return transient inactive (active=false, blocked=false) — client shows Kifurushi kimezuiwa.",
+        "VPS/APK reinstall migration shadows: active sub on old device_id, new device_id unlinked (revoked shape).",
+        "SSE subscription-stream never writes revoked; device_subscription triggers verify refresh only.",
+        "Cache pressure fallback cannot downgrade fingerprinted or cached-active users (verifyDbResilience guards)."
+      ],
+      "verification_queries": {
+        "suspended_active": "SELECT device_id FROM device_subscriptions WHERE status='active' AND expires_at > now() AND manual_admin_blocked = true",
+        "migration_shadow_install": "See findMigrationShadowByInstallInstance in subscriptionRestorationAudit.js",
+        "restoration_audit": "GET /api/runtime/subscription-restoration-audit"
+      },
+      "commit": "57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43"
+    },
+    "evidence": {
+      "legitimate_transfer_sources": [],
+      "legitimate_transfer_source_count": 0,
+      "incorrect_false_expired_before": [],
+      "incorrect_false_expired_repaired": [],
+      "incident_suspended_before": [],
+      "incident_shadows_before": [],
+      "incident_recovered": [],
+      "restoration_unresolved_before": [],
+      "restoration_restored": []
+    }
+  },
+  "restoration": {
+    "before": {
+      "ok": true,
+      "server_time": "2026-07-03T16:27:58.972Z",
+      "total_active_subscriptions": 325,
+      "affected_users_count": 0,
+      "migration_shadow_count": 0,
+      "migration_phone_shadow_count": 0,
+      "migration_install_shadow_count": 0,
+      "migration_intelligence_phone_shadow_count": 0,
+      "orphan_activation_count": 0,
+      "missing_fingerprint_count": 24,
+      "expired_users_ignored_count": 187,
+      "restored_users_count": 0,
+      "unresolved_users_count": 0,
+      "repairs": {
+        "fingerprints_backfilled": 0,
+        "migrations_recovered": 0,
+        "phone_migrations_recovered": 0,
+        "install_migrations_recovered": 0,
+        "intelligence_migrations_recovered": 0,
+        "auto_link_recovered": 0,
+        "activations_finalized": 0
+      },
+      "migration_pairs": [],
+      "unresolved": [],
+      "evidence": [
+        {
+          "active_subscriptions": 325,
+          "migration_shadow_remaining": 0,
+          "migration_phone_shadow_remaining": 0,
+          "migration_install_shadow_remaining": 0,
+          "migration_intelligence_phone_shadow_remaining": 0,
+          "orphan_activation_remaining": 0,
+          "expired_users_ignored": 187,
+          "missing_fingerprint_remaining": 24
+        }
+      ],
+      "commit": "57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43"
+    },
+    "repair": null,
+    "after": {
+      "ok": true,
+      "server_time": "2026-07-03T16:28:00.877Z",
+      "total_active_subscriptions": 325,
+      "affected_users_count": 0,
+      "migration_shadow_count": 0,
+      "migration_phone_shadow_count": 0,
+      "migration_install_shadow_count": 0,
+      "migration_intelligence_phone_shadow_count": 0,
+      "orphan_activation_count": 0,
+      "missing_fingerprint_count": 24,
+      "expired_users_ignored_count": 187,
+      "restored_users_count": 0,
+      "unresolved_users_count": 0,
+      "repairs": {
+        "fingerprints_backfilled": 0,
+        "migrations_recovered": 0,
+        "phone_migrations_recovered": 0,
+        "install_migrations_recovered": 0,
+        "intelligence_migrations_recovered": 0,
+        "auto_link_recovered": 0,
+        "activations_finalized": 0
+      },
+      "migration_pairs": [],
+      "unresolved": [],
+      "evidence": [
+        {
+          "active_subscriptions": 325,
+          "migration_shadow_remaining": 0,
+          "migration_phone_shadow_remaining": 0,
+          "migration_install_shadow_remaining": 0,
+          "migration_intelligence_phone_shadow_remaining": 0,
+          "orphan_activation_remaining": 0,
+          "expired_users_ignored": 187,
+          "missing_fingerprint_remaining": 24
+        }
+      ],
+      "commit": "57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43"
+    }
+  },
+  "checks": {
+    "false_expired_clear": true,
+    "incident_clear": true,
+    "restoration_clear": true,
+    "vps_health": true,
+    "render_health": true,
+    "commit_parity": true
+  },
+  "overall": "PASS"
+}

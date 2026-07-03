@@ -61,12 +61,14 @@ function subscriptionSortSql(sort) {
   switch (s) {
     case 'expiry_soonest':
       return 'ds.expires_at ASC NULLS LAST, ds.device_id ASC'
+    case 'started_newest':
+      return 'ds.started_at DESC NULLS LAST, ds.device_id ASC'
     case 'amount':
-      return 'COALESCE(pay.amount, 0) DESC NULLS LAST, ds.updated_at DESC'
+      return 'COALESCE(pay.amount, 0) DESC NULLS LAST, ds.updated_at DESC, ds.device_id ASC'
     case 'status':
-      return 'ds.status ASC, ds.updated_at DESC'
+      return 'ds.status ASC, ds.updated_at DESC, ds.device_id ASC'
     default:
-      return 'ds.updated_at DESC'
+      return 'ds.started_at DESC NULLS LAST, ds.device_id ASC'
   }
 }
 
@@ -74,13 +76,13 @@ function transactionSortSql(sort) {
   const s = String(sort ?? 'newest').toLowerCase()
   switch (s) {
     case 'amount':
-      return 't.amount DESC NULLS LAST, t.created_at DESC'
+      return 't.amount DESC NULLS LAST, t.created_at DESC, t.order_id ASC'
     case 'status':
-      return 't.status ASC, t.created_at DESC'
+      return 't.status ASC, t.created_at DESC, t.order_id ASC'
     case 'expiry_soonest':
-      return 't.created_at ASC'
+      return 't.created_at ASC, t.order_id ASC'
     default:
-      return 't.created_at DESC'
+      return 't.created_at DESC, t.order_id ASC'
   }
 }
 

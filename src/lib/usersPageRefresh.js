@@ -44,6 +44,15 @@ export function fingerprintUserRows(rows, tab = 'all') {
   return rows.map((r) => fingerprintUserRow(r, tab)).join('\n')
 }
 
+/** Order-independent fingerprint — ignores row reordering from server sort. */
+export function fingerprintUserRowsContent(rows, tab = 'all') {
+  if (!Array.isArray(rows)) return ''
+  return rows
+    .map((r) => fingerprintUserRow(r, tab))
+    .sort()
+    .join('\n')
+}
+
 export function fingerprintPagination(pagination) {
   if (!pagination) return ''
   return `${pagination.page}|${pagination.total}|${pagination.totalPages}|${pagination.limit}`
@@ -64,39 +73,50 @@ export function fingerprintSummary(summary) {
 }
 
 /**
- * Merge fetched rows into current page by key — updates changed rows in place, preserves order from server.
- * If server returns fewer rows on same page (edge), use server list as source of truth.
+ * Merge fetched rows into current page by key.
+ * On silent refresh with the same key set, preserve client row order to prevent jumpiness.
  */
-export function mergeUserRows(prev, next, tab = 'all') {
+export function mergeUserRows(prev, next, tab = 'all', { silent = false } = {}) {
   if (!Array.isArray(next) || next.length === 0) {
     return Array.isArray(prev) ? prev : []
   }
   if (!Array.isArray(prev) || prev.length === 0) return next
 
   const prevByKey = new Map(prev.map((r) => [userRowKey(r, tab), r]))
+  const nextByKey = new Map(next.map((r) => [userRowKey(r, tab), r]))
+  const prevKeys = prev.map((r) => userRowKey(r, tab))
+  const nextKeys = next.map((r) => userRowKey(r, tab))
+  const sameKeySet =
+    prevKeys.length === nextKeys.length && prevKeys.every((k) => nextByKey.has(k))
+
+  const orderSource = silent && sameKeySet ? prev : next
   let anyChange = prev.length !== next.length
 
-  const merged = next.map((row) => {
+  const merged = orderSource.map((row) => {
     const key = userRowKey(row, tab)
-    const old = prevByKey.get(key)
-    if (!old) {
+    const fresh = nextByKey.get(key)
+    if (!fresh) {
       anyChange = true
       return row
     }
-    const fpOld = fingerprintUserRow(old, tab)
-    const fpNew = fingerprintUserRow(row, tab)
+    const fpOld = fingerprintUserRow(row, tab)
+    const fpNew = fingerprintUserRow(fresh, tab)
     if (fpOld !== fpNew) anyChange = true
-    return fpOld === fpNew ? old : row
+    return fpOld === fpNew ? row : fresh
   })
 
-  if (!anyChange && fingerprintUserRows(prev, tab) === fingerprintUserRows(merged, tab)) {
+  if (
+    !anyChange &&
+    fingerprintUserRowsContent(prev, tab) === fingerprintUserRowsContent(merged, tab)
+  ) {
     return prev
   }
   return merged
 }
 
 export function shouldApplyTabFetch(prev, next, tab) {
-  const rowsChanged = fingerprintUserRows(prev.items, tab) !== fingerprintUserRows(next.items, tab)
+  const rowsChanged =
+    fingerprintUserRowsContent(prev.items, tab) !== fingerprintUserRowsContent(next.items, tab)
   const paginationChanged =
     fingerprintPagination(prev.pagination) !== fingerprintPagination(next.pagination)
   return rowsChanged || paginationChanged

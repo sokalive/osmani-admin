@@ -202,8 +202,16 @@ function buildTimeline(report, intelligence) {
     events.push({ kind, at, title, detail, tone })
   }
 
+  const accountCreated =
+    intelligence?.device?.firstSeenAt ||
+    intelligence?.registry?.firstSeenAt ||
+    intelligence?.account?.securityProfile?.firstSeenAt
+  if (accountCreated) {
+    push('login', accountCreated, 'Akaunti iliundwa', intelligence?.device?.deviceId || '', 'success')
+  }
+
   for (const p of report?.payments?.completed || []) {
-    push('payment', p.created_at, 'Malipo yamefanikiwa', `${formatTsh(p.amount)} · ${p.plan_name || 'kifurushi'}`, 'success')
+    push('payment', p.created_at, 'Malipo yamefanikiwa', `${formatTsh(p.amount)} · ${p.plan_name || 'kifurushi'} · ${p.order_id || ''}`, 'success')
   }
   for (const p of report?.payments?.pending || []) {
     push('payment', p.created_at, 'Malipo yanasubiri', `${formatTsh(p.amount)} · ${p.order_id}`, 'warn')
@@ -212,17 +220,45 @@ function buildTimeline(report, intelligence) {
     push('payment', p.created_at, 'Malipo yameshindwa', p.last_provider_response || p.order_id, 'danger')
   }
   for (const s of [...(report?.subscriptions?.active || []), ...(report?.subscriptions?.expired || [])]) {
-    push('renew', s.started_at, 'Usajili umeanza', s.device_id, 'neutral')
+    const txn = String(s.transaction_id || '')
+    if (txn.startsWith('recovery:')) {
+      push('renew', s.started_at, 'Urejeshaji wa usajili', `Kutoka ${txn.slice('recovery:'.length)}`, 'success')
+    } else if (txn.startsWith('offer_code:')) {
+      push('manual', s.started_at, 'Msimbo wa ofa umetumika', txn.slice('offer_code:'.length), 'success')
+    } else if (txn.startsWith('moved:')) {
+      push('transfer', s.started_at, 'Uhamisho (chanzo)', `Kwenda ${txn.slice('moved:'.length)}`, 'warn')
+    } else {
+      push('renew', s.started_at, 'Usajili umeanza', s.device_id, 'neutral')
+    }
     if (s.expires_at) push('renew', s.expires_at, 'Usajili unaisha', statusLabelSw(s.status), 'neutral')
   }
   for (const g of intelligence?.manualGrants || []) {
-    push('manual', g.created_at, 'Ongezeko la muda (mkono)', `${g.duration_days || '—'} siku`, 'success')
+    const code = g.offer_code || g.code
+    const detail = code
+      ? `${g.duration_days || '—'} siku · ${code}`
+      : `${g.duration_days || '—'} siku`
+    push('manual', g.created_at, 'Ongezeko la muda (mkono)', detail, 'success')
   }
   for (const t of intelligence?.packageTransferHistory || []) {
-    push('transfer', t.created_at, 'Uhamisho wa kifurushi (toka)', t.target_device_id, 'warn')
+    push('transfer', t.created_at, 'Uhamisho wa kifurushi (toka)', `${t.target_device_id} · ${t.transfer_code || ''}`, 'warn')
   }
   for (const t of intelligence?.receivedTransfers || []) {
-    push('migration', t.created_at, 'Uhamisho wa kifurushi (kuingia)', t.source_device_id, 'warn')
+    push('migration', t.created_at, 'Uhamisho wa kifurushi (kuingia)', `${t.source_device_id} · ${t.transfer_code || ''}`, 'warn')
+  }
+  for (const h of intelligence?.deviceHistory || []) {
+    push(
+      'audit',
+      h.recorded_at || h.created_at,
+      'Badiliko la kifaa',
+      [h.device_model, h.device_brand, h.os_version, h.app_version].filter(Boolean).join(' · ') || h.device_id,
+      'neutral',
+    )
+  }
+  for (const ph of intelligence?.paymentHistory || []) {
+    const digits = String(ph.phone || '').trim()
+    if (digits) {
+      push('payment', ph.created_at, 'Simu kwenye muamala', `${digits} · ${ph.order_id || ''}`, 'neutral')
+    }
   }
   for (const l of report?.audit_logs || []) {
     const t = String(l.event_type || '').toLowerCase()
@@ -431,7 +467,13 @@ export default function UserProfileDrawer({ row, onClose, onEditSubscription }) 
     const fromReport = [...(report?.subscriptions?.active || []), ...(report?.subscriptions?.expired || [])].map(
       (s, idx) => {
         const pay = completed.find((p) => p.device_id === s.device_id) || completed[0]
-        const manual = [...manualByDate.values()][0]
+        const txn = String(s.transaction_id || '')
+        let offerCode = '—'
+        if (txn.startsWith('offer_code:')) offerCode = txn.slice('offer_code:'.length)
+        const manual = [...manualByDate.values()].find(
+          (g) => g.created_at && new Date(g.created_at) >= new Date(s.started_at || 0),
+        )
+        if (manual?.offer_code || manual?.code) offerCode = manual.offer_code || manual.code
         const mig = transfers.find((t) => t.created_at && new Date(t.created_at) >= new Date(s.started_at || 0))
         const repair = (report?.audit_logs || []).find((l) =>
           String(l.event_type || '').toLowerCase().includes('repair'),
@@ -449,7 +491,7 @@ export default function UserProfileDrawer({ row, onClose, onEditSubscription }) 
           manual_grant: manual ? `${manual.duration_days || '—'} siku` : '—',
           migration: mig ? (mig._dir === 'in' ? `Kutoka ${mig.source_device_id || '—'}` : `Kwenda ${mig.target_device_id || '—'}`) : '—',
           repair: repair ? formatAdminDateTime(repair.created_at) : '—',
-          offer_code: '—',
+          offer_code: offerCode,
         }
       },
     )
