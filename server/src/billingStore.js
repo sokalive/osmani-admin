@@ -2045,8 +2045,11 @@ async function getManualGrantSummaryFromSubscriptionTransactionId(deviceId) {
      FROM device_subscriptions ds
      LEFT JOIN manual_subscription_grants g
        ON (
-         ds.transaction_id ~ '^manual_grant:[0-9]+$'
-         AND g.id = regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint
+         g.deleted_at IS NULL
+         AND g.id = CASE
+           WHEN ds.transaction_id ~ '^manual_grant:[0-9]+$'
+           THEN (substring(ds.transaction_id from 14))::bigint
+         END
        )
      WHERE ds.device_id = $1
        AND ds.transaction_id LIKE 'manual_grant:%'

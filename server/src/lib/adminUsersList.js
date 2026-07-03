@@ -172,14 +172,19 @@ function appendSubscriptionSearch(search, cond, params, i) {
   return idx
 }
 
+/** Safe manual-grant join: CASE short-circuits so payment refs (osm_*, force:*, etc.) are never cast to bigint. */
+const MANUAL_GRANT_JOIN_SQL = `LEFT JOIN manual_subscription_grants mg ON (
+    mg.deleted_at IS NULL
+    AND mg.id = CASE
+      WHEN ds.transaction_id ~ '^manual_grant:[0-9]+$'
+      THEN (substring(ds.transaction_id from 14))::bigint
+    END
+  )`
+
 const SUBSCRIPTION_FROM = `
   FROM device_subscriptions ds
   LEFT JOIN transactions pay ON pay.order_id = ds.transaction_id
-  LEFT JOIN manual_subscription_grants mg ON (
-    ds.transaction_id ~ '^manual_grant:[0-9]+$'
-    AND mg.id = regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint
-    AND mg.deleted_at IS NULL
-  )
+  ${MANUAL_GRANT_JOIN_SQL}
   LEFT JOIN LATERAL (
     SELECT t.phone, t.plan_id, t.amount
     FROM transactions t
@@ -267,9 +272,12 @@ function buildSubscriptionWhere({ search, planId, provider, status, extraWhere, 
   const cond = [...extraWhere]
   let i = startI
   if (planId != null && planId !== '' && planId !== 'all') {
-    cond.push(`COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) = $${i}`)
-    params.push(Number(planId))
-    i += 1
+    const pid = Number(planId)
+    if (Number.isFinite(pid) && pid > 0) {
+      cond.push(`COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) = $${i}`)
+      params.push(pid)
+      i += 1
+    }
   }
   if (provider && provider !== 'all') {
     cond.push(`${subscriptionSourceSql('ds', 'pay')} = $${i}`)
@@ -440,9 +448,12 @@ export async function listAdminFailedPayments(filters = {}) {
   const params = [PENDING_STALE_MINUTES]
   let i = 2
   if (filters.planId != null && filters.planId !== '' && filters.planId !== 'all') {
-    cond.push(`t.plan_id = $${i}`)
-    params.push(Number(filters.planId))
-    i += 1
+    const pid = Number(filters.planId)
+    if (Number.isFinite(pid) && pid > 0) {
+      cond.push(`t.plan_id = $${i}`)
+      params.push(pid)
+      i += 1
+    }
   }
   if (filters.provider && filters.provider !== 'all') {
     cond.push(`${providerSql('t')} = $${i}`)
