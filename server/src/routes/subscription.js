@@ -797,25 +797,27 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
 
   const tParallel0 = Date.now()
   if (isActiveNow && !needsMigrationLink) {
+    const pendingGiftPromise = billing.getOldestPendingManualGrant(d).catch(() => null)
     if (timing.access_cache_hit) {
-      ;[modesPayload, txnSummary] = await Promise.all([
+      ;[modesPayload, txnSummary, pendingGift] = await Promise.all([
         loadGlobalAppModesPayload().catch(() => modesFallback()),
         billing.getLatestCompletedSubscriptionTxnSummary(d).catch(() => null),
+        pendingGiftPromise,
       ])
       securityPolicy = null
       timing.active_zero_db = false
       timing.active_cache_metadata_fetch = true
     } else {
-      ;[txnSummary, modesPayload, securityPolicy] = await Promise.all([
+      ;[txnSummary, modesPayload, securityPolicy, pendingGift] = await Promise.all([
         billing.getLatestCompletedSubscriptionTxnSummary(d).catch(() => null),
         loadGlobalAppModesPayload().catch(() => modesFallback()),
         import('../lib/deviceSecurityStore.js')
           .then((m) => m.getPlaybackSecurityPolicy(d))
           .catch(() => null),
+        pendingGiftPromise,
       ])
     }
     trialStatus = trialDisabledPublic
-    pendingGift = null
     trialWatchSettings = trialSettingsFallback
     plansRows = null
   } else if (!isActiveNow) {
@@ -1021,12 +1023,6 @@ subscriptionRouter.post('/subscription/redeem-offer-code', async (req, res) => {
     const manualGift = manualGiftPayloadFromGrant(grant)
     const manualGiftAckKey = grant ? String(grant.grantId) : ''
 
-    deviceSubscriptionBus.emit('update', { deviceId })
-    liveSyncBus.publish('analytics.subscription_updated', {
-      topics: ['analytics'],
-      deviceId,
-      orderId: `offer_code:${grant?.grantId ?? ''}`,
-    })
     void recordSystemNotificationEvent('subscription_offer_code_redeemed', {
       device_id: deviceId,
       grant_id: grant?.grantId ?? null,
@@ -1411,6 +1407,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   const handler = async (payload) => {
     if (!payload || payload.deviceId !== deviceId) return
     try {
+      invalidateSubscriptionAccessCache(deviceId)
       const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
       const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
       res.write(`event: device_subscription\ndata: ${JSON.stringify(toSsePayload(row))}\n\n`)

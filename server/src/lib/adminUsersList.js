@@ -32,6 +32,17 @@ function providerSql(alias = 'pay') {
   return `COALESCE(NULLIF(${alias}.raw_payload->>'payment_provider',''), 'zenopay')`
 }
 
+/** Subscription row source for admin lists (payment, grant, transfer, recovery). */
+function subscriptionSourceSql(dsAlias = 'ds', payAlias = 'pay') {
+  return `CASE
+    WHEN ${dsAlias}.transaction_id LIKE 'manual_grant:%' THEN 'manual_grant'
+    WHEN ${dsAlias}.transaction_id LIKE 'offer_code:%' THEN 'offer_code'
+    WHEN ${dsAlias}.transaction_id LIKE 'transfer:%' THEN 'transfer'
+    WHEN ${dsAlias}.transaction_id LIKE 'recovery:%' THEN 'recovery'
+    ELSE ${providerSql(payAlias)}
+  END`
+}
+
 function failureReasonSql(alias = 't') {
   return `COALESCE(
     NULLIF(${alias}.raw_payload->>'failure_reason',''),
@@ -133,6 +144,13 @@ function appendSubscriptionSearch(search, cond, params, i) {
     params.push(digits)
     idx += 1
     parts.push(`EXISTS (
+      SELECT 1 FROM transactions t_s
+      WHERE t_s.device_id = ds.device_id
+        AND t_s.order_id ILIKE $${idx}
+    )`)
+    params.push(`%${esc}%`)
+    idx += 1
+    parts.push(`EXISTS (
       SELECT 1 FROM device_phone_registry dpr_s
       WHERE dpr_s.device_id::text = ds.device_id::text
         AND dpr_s.phone_number_normalized = $${idx}
@@ -157,6 +175,11 @@ function appendSubscriptionSearch(search, cond, params, i) {
 const SUBSCRIPTION_FROM = `
   FROM device_subscriptions ds
   LEFT JOIN transactions pay ON pay.order_id = ds.transaction_id
+  LEFT JOIN manual_subscription_grants mg ON (
+    ds.transaction_id ~ '^manual_grant:[0-9]+$'
+    AND mg.id = regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint
+    AND mg.deleted_at IS NULL
+  )
   LEFT JOIN LATERAL (
     SELECT t.phone, t.plan_id, t.amount
     FROM transactions t
@@ -164,7 +187,7 @@ const SUBSCRIPTION_FROM = `
     ORDER BY t.created_at DESC
     LIMIT 1
   ) lt ON true
-  LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, lt.plan_id) AND p.deleted_at IS NULL
+  LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AND p.deleted_at IS NULL
 `
 
 function mapSubscriptionRow(r, nowMs = Date.now()) {
@@ -244,12 +267,12 @@ function buildSubscriptionWhere({ search, planId, provider, status, extraWhere, 
   const cond = [...extraWhere]
   let i = startI
   if (planId != null && planId !== '' && planId !== 'all') {
-    cond.push(`COALESCE(pay.plan_id, lt.plan_id) = $${i}`)
+    cond.push(`COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) = $${i}`)
     params.push(Number(planId))
     i += 1
   }
   if (provider && provider !== 'all') {
-    cond.push(`${providerSql('pay')} = $${i}`)
+    cond.push(`${subscriptionSourceSql('ds', 'pay')} = $${i}`)
     params.push(String(provider).toLowerCase())
     i += 1
   }
@@ -299,10 +322,10 @@ async function listSubscriptions({
          ds.expires_at,
          ds.transaction_id,
          COALESCE(lt.phone, pay.phone, '') AS phone_number,
-         COALESCE(pay.plan_id, lt.plan_id) AS plan_id,
+         COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
-         COALESCE(pay.amount, lt.amount) AS amount,
-         ${providerSql('pay')} AS provider
+         COALESCE(pay.amount, lt.amount, p.price) AS amount,
+         ${subscriptionSourceSql('ds', 'pay')} AS provider
        ${SUBSCRIPTION_FROM}
        ${where}
        ORDER BY ${subscriptionSortSql(sort)}
@@ -370,10 +393,10 @@ export async function listAdminExpiringSoonUsers(filters = {}) {
          ds.expires_at,
          ds.transaction_id,
          COALESCE(lt.phone, pay.phone, '') AS phone_number,
-         COALESCE(pay.plan_id, lt.plan_id) AS plan_id,
+         COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
-         COALESCE(pay.amount, lt.amount) AS amount,
-         ${providerSql('pay')} AS provider
+         COALESCE(pay.amount, lt.amount, p.price) AS amount,
+         ${subscriptionSourceSql('ds', 'pay')} AS provider
        ${SUBSCRIPTION_FROM}
        ${where}
        ORDER BY ${subscriptionSortSql(filters.sort ?? 'expiry_soonest')}
@@ -450,14 +473,15 @@ export async function listAdminFailedPayments(filters = {}) {
     cond.push(`(
       t.order_id ILIKE $${i}
       OR t.external_id ILIKE $${i + 1}
+      OR t.device_id ILIKE $${i + 2}
       OR EXISTS (
         SELECT 1 FROM device_intelligence_registry ir_f
         WHERE ir_f.device_id = t.device_id
-          AND (ir_f.user_id ILIKE $${i + 2} OR ir_f.account_id ILIKE $${i + 2})
+          AND (ir_f.user_id ILIKE $${i + 3} OR ir_f.account_id ILIKE $${i + 3})
       )
     )`)
-    params.push(`%${esc}%`, `%${esc}%`, `%${esc}%`)
-    i += 3
+    params.push(`%${esc}%`, `%${esc}%`, `%${esc}%`, `%${esc}%`)
+    i += 4
   }
   const where = `WHERE ${cond.join(' AND ')}`
   return withReadSnapshot(async (client) => {

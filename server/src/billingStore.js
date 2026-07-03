@@ -7,6 +7,7 @@ import { getPool } from './db/pool.js'
 import { normalizeLocationPayload } from './lib/analyticsLocation.js'
 import { upsertLiveSession } from './lib/liveSessionStore.js'
 import { invalidateSubscriptionAccessCache } from './lib/subscriptionAccessCache.js'
+import { notifySubscriptionActivated } from './lib/subscriptionActivationNotify.js'
 
 export async function ensureBillingStorage() {
   const pool = getPool()
@@ -982,8 +983,8 @@ export async function recordManualGrantPhoneAndTransaction(
   }
 
   await q(
-    `INSERT INTO transactions (order_id, plan_id, phone, amount, currency, status, device_id)
-     VALUES ($1, $2, $3, $4, 'TZS', 'completed', $5)
+    `INSERT INTO transactions (order_id, plan_id, phone, amount, currency, status, device_id, raw_payload)
+     VALUES ($1, $2, $3, $4, 'TZS', 'completed', $5, $6::jsonb)
      ON CONFLICT (order_id) DO UPDATE SET
        phone = CASE
          WHEN trim(coalesce(EXCLUDED.phone::text, '')) <> '' THEN EXCLUDED.phone
@@ -991,8 +992,16 @@ export async function recordManualGrantPhoneAndTransaction(
        END,
        plan_id = COALESCE(EXCLUDED.plan_id, transactions.plan_id),
        device_id = COALESCE(EXCLUDED.device_id, transactions.device_id),
+       raw_payload = COALESCE(transactions.raw_payload, '{}'::jsonb) || EXCLUDED.raw_payload,
        updated_at = now()`,
-    [orderId, resolvedPlanId, phoneRaw || null, amount, d],
+    [
+      orderId,
+      resolvedPlanId,
+      phoneRaw || null,
+      amount,
+      d,
+      JSON.stringify({ payment_provider: 'manual_grant', source: 'manual_grant' }),
+    ],
   )
 
   return { recorded: true, orderId }
@@ -1061,6 +1070,8 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
       )
       .catch((err) => console.warn('[sms] manual grant notify failed:', err))
   }
+
+  notifySubscriptionActivated(d, orderId)
 
   return {
     grantId,
@@ -1156,6 +1167,8 @@ export async function grantCustomManualDeviceSubscription(
       }),
     )
     .catch((err) => console.warn('[sms] manual custom grant notify failed:', err))
+
+  notifySubscriptionActivated(d, orderId)
 
   return {
     grantId,
