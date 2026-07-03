@@ -2044,7 +2044,9 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
     amount,
     currency: String(row.currency ?? 'TZS').trim() || 'TZS',
     plan_id: planId,
-    plan_name: planName,
+    plan_name:
+      planName ||
+      (planDurationDays != null ? `Kifurushi ${planDurationDays} siku` : 'Kifurushi'),
     plan_duration_days: planDurationDays,
     started_at: toIsoTimestamp(row.started_at),
     activated_at: toIsoTimestamp(row.activated_at),
@@ -2507,8 +2509,13 @@ async function buildTxnSummaryFromRow(txn) {
 }
 
 export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
+  return resolveVerifyTxnSummaryForDevice(deviceId, new Set())
+}
+
+async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
   const d = String(deviceId ?? '').trim()
-  if (!d) return null
+  if (!d || visited.has(d)) return null
+  visited.add(d)
 
   const manualSummary = await getLatestManualGrantSubscriptionTxnSummary(d)
   if (manualSummary != null) {
@@ -2516,6 +2523,7 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
   }
 
   let txn = await getLatestCompletedTransactionForDevice(deviceId)
+  let recoverySource = null
   if (!txn) {
     const pool = requirePool()
     const { rows: subRows } = await pool.query(
@@ -2529,9 +2537,13 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
     )
     const linkedId = String(subRows[0]?.transaction_id ?? '').trim()
     if (linkedId.startsWith('recovery:')) {
-      const sourceDev = linkedId.slice('recovery:'.length).trim()
-      if (sourceDev && sourceDev !== d) {
-        txn = await getLatestCompletedTransactionForDevice(sourceDev)
+      recoverySource = linkedId.slice('recovery:'.length).trim()
+      if (recoverySource && recoverySource !== d) {
+        txn = await getLatestCompletedTransactionForDevice(recoverySource)
+        if (!txn) {
+          const srcSummary = await resolveVerifyTxnSummaryForDevice(recoverySource, visited)
+          if (srcSummary) return { ...srcSummary, source: 'recovery' }
+        }
       }
     } else if (linkedId.startsWith('transfer:') || linkedId.startsWith('force:')) {
       txn = await getLatestCompletedTransactionForDevice(d)
@@ -2550,7 +2562,9 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
     }
   }
   if (!txn) {
-    return buildEntitlementVerifyTxnSummary(d)
+    const entitlement = await buildEntitlementVerifyTxnSummary(d)
+    if (entitlement && recoverySource) return { ...entitlement, source: 'recovery' }
+    return entitlement
   }
 
   const out = await buildTxnSummaryFromRow(txn)

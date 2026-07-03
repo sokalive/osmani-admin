@@ -66,10 +66,12 @@ async function auditApi(label, base) {
     let sparseCount = 0
     for (const sample of rows.slice(0, 5)) {
       const deviceId = sample.device_id
-      const verify = await fetch(
-        `${base}/api/subscription/verify?device_id=${encodeURIComponent(deviceId)}`,
-        { method: 'POST', cache: 'no-store' },
-      ).then((r) => r.json())
+      const verify = await fetch(`${base}/api/subscription/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: deviceId }),
+        cache: 'no-store',
+      }).then((r) => r.json())
       const missing = REQUIRED_VERIFY.filter((k) => verify[k] === undefined)
       const sparse =
         verify.active === true &&

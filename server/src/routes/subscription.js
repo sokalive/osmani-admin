@@ -263,6 +263,7 @@ export function normalizeVerifyResponse(pub, txnSummary) {
     currency,
     planName,
     plan_name: planName,
+    source: txnSummary?.source != null ? String(txnSummary.source) : null,
     plan_duration_days: planDurationDays,
     planDurationDays: planDurationDays,
     duration: planDurationDays,

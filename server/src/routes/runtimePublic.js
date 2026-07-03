@@ -636,7 +636,8 @@ runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, as
            AND t.plan_id IS NOT NULL
            AND t.created_at > now() - interval '7 days'
            AND ds.status = 'active'
-           AND ds.updated_at >= t.updated_at - interval '2 minutes'
+           AND ds.updated_at >= t.updated_at
+           AND ds.updated_at <= t.updated_at + interval '5 seconds'
        ) s`,
     )
     const medianServer = Number(rows[0]?.median_server_activation_seconds ?? 0)
