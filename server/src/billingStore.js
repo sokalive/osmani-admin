@@ -2075,11 +2075,19 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
   if (amount == null && planDurationDays != null) {
     const { rows: priceRows } = await pool.query(
       `SELECT price FROM plans
-       WHERE deleted_at IS NULL AND is_active = true AND duration_days = $1
-       ORDER BY id ASC LIMIT 1`,
+       WHERE deleted_at IS NULL AND duration_days = $1
+       ORDER BY is_active DESC, id ASC LIMIT 1`,
       [planDurationDays],
     )
     if (priceRows[0]?.price != null) amount = Number(priceRows[0].price)
+  }
+  if (amount == null && planDurationDays != null && planDurationDays > 60) {
+    const { rows: tierRows } = await pool.query(
+      `SELECT price FROM plans
+       WHERE deleted_at IS NULL AND duration_days >= 30
+       ORDER BY duration_days DESC, id ASC LIMIT 1`,
+    )
+    if (tierRows[0]?.price != null) amount = Number(tierRows[0].price)
   }
 
   return {
@@ -2591,7 +2599,7 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
           const srcSummary = await resolveVerifyTxnSummaryForDevice(recoverySource, visited)
           if (srcSummary) {
             const ent = await buildEntitlementVerifyTxnSummary(d)
-            return mergeVerifyTxnSummaries(srcSummary, { ...ent, source: 'recovery' })
+            return mergeVerifyTxnSummaries({ ...ent, source: 'recovery' }, srcSummary)
           }
         }
       }
