@@ -610,21 +610,48 @@ runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, as
     const { rows } = await pool.query(
       `SELECT
          COUNT(*)::int AS completed_count,
-         COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::float AS avg_activation_seconds,
-         COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::float AS median_activation_seconds
-       FROM transactions
-       WHERE status = 'completed'
-         AND plan_id IS NOT NULL
-         AND created_at > now() - interval '7 days'`,
+         COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::float AS avg_checkout_to_complete_seconds,
+         COALESCE(
+           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))),
+           0
+         )::float AS median_checkout_to_complete_seconds,
+         COALESCE(AVG(server_activation_seconds), 0)::float AS avg_server_activation_seconds,
+         COALESCE(
+           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY server_activation_seconds),
+           0
+         )::float AS median_server_activation_seconds
+       FROM (
+         SELECT
+           t.created_at,
+           t.updated_at,
+           GREATEST(
+             0,
+             EXTRACT(EPOCH FROM (ds.updated_at - t.updated_at))
+           )::float AS server_activation_seconds
+         FROM transactions t
+         INNER JOIN device_subscriptions ds
+           ON ds.device_id = t.device_id
+          AND ds.transaction_id = t.order_id
+         WHERE t.status = 'completed'
+           AND t.plan_id IS NOT NULL
+           AND t.created_at > now() - interval '7 days'
+           AND ds.status = 'active'
+           AND ds.updated_at >= t.updated_at - interval '2 minutes'
+       ) s`,
     )
+    const medianServer = Number(rows[0]?.median_server_activation_seconds ?? 0)
+    const medianCheckout = Number(rows[0]?.median_checkout_to_complete_seconds ?? 0)
     res.json({
       ok: true,
       commit: getServerGitCommit(),
-      audit_version: 1,
+      audit_version: 2,
       window_days: 7,
       completed_count: rows[0]?.completed_count ?? 0,
-      payment_activation_average_seconds: Number(rows[0]?.avg_activation_seconds ?? 0).toFixed(2),
-      payment_activation_median_seconds: Number(rows[0]?.median_activation_seconds ?? 0).toFixed(2),
+      payment_activation_average_seconds: Number(rows[0]?.avg_checkout_to_complete_seconds ?? 0).toFixed(2),
+      payment_activation_median_seconds: medianCheckout.toFixed(2),
+      checkout_to_complete_median_seconds: medianCheckout.toFixed(2),
+      server_activation_average_seconds: Number(rows[0]?.avg_server_activation_seconds ?? 0).toFixed(2),
+      server_activation_median_seconds: medianServer.toFixed(2),
     })
   } catch (e) {
     console.error('[runtime/payment-activation-stats]', e)

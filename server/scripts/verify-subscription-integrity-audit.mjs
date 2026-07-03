@@ -58,27 +58,41 @@ async function auditApi(label, base) {
   }
   pass(`${label}-checkout`, JSON.stringify(out.checkout))
 
-  const active = await adminGet(base, '/api/users/active?page=1&limit=5')
-  const rows = active.body?.rows || []
+  const active = await adminGet(base, '/api/users/active?page=1&limit=10')
+  const rows = active.body?.items || active.body?.rows || []
   if (rows.length === 0) {
     pass(`${label}-verify-fields`, 'no active rows to sample')
   } else {
-    const sample = rows[0]
-    const deviceId = sample.device_id
-    const verify = await fetch(
-      `${base}/api/subscription/verify?device_id=${encodeURIComponent(deviceId)}`,
-      { method: 'POST', cache: 'no-store' },
-    ).then((r) => r.json())
-    const missing = REQUIRED_VERIFY.filter((k) => verify[k] === undefined)
-    if (missing.length) fail(`${label}-verify-fields`, `missing ${missing.join(', ')}`)
-    else pass(`${label}-verify-fields`, `device=${String(deviceId).slice(0, 12)}…`)
-    out.verifySample = {
-      device_id: deviceId,
-      active: verify.active,
-      planName: verify.planName,
-      duration: verify.duration,
-      startedAt: verify.startedAt,
-      activatedAt: verify.activatedAt,
+    let sparseCount = 0
+    for (const sample of rows.slice(0, 5)) {
+      const deviceId = sample.device_id
+      const verify = await fetch(
+        `${base}/api/subscription/verify?device_id=${encodeURIComponent(deviceId)}`,
+        { method: 'POST', cache: 'no-store' },
+      ).then((r) => r.json())
+      const missing = REQUIRED_VERIFY.filter((k) => verify[k] === undefined)
+      const sparse =
+        verify.active === true &&
+        (verify.amount == null || verify.planName == null || verify.duration == null)
+      if (missing.length) fail(`${label}-verify-fields`, `missing ${missing.join(', ')}`)
+      if (sparse) {
+        sparseCount += 1
+        fail(`${label}-verify-sparse`, `device=${String(deviceId).slice(0, 8)}… amount/plan/duration null`)
+      }
+      if (!out.verifySample) {
+        out.verifySample = {
+          device_id: deviceId,
+          active: verify.active,
+          planName: verify.planName,
+          duration: verify.duration,
+          amount: verify.amount,
+          startedAt: verify.startedAt,
+          activatedAt: verify.activatedAt,
+        }
+      }
+    }
+    if (sparseCount === 0) {
+      pass(`${label}-verify-fields`, `checked ${Math.min(rows.length, 5)} active devices — full metadata`)
     }
   }
 

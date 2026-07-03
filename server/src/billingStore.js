@@ -1930,6 +1930,136 @@ function toIsoTimestamp(v) {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null
 }
 
+function mergeVerifyTxnSummaries(primary, fallback) {
+  if (!primary) return fallback
+  if (!fallback) return primary
+  return {
+    ...fallback,
+    ...primary,
+    amount: primary.amount != null ? primary.amount : fallback.amount,
+    currency: primary.currency != null ? primary.currency : fallback.currency,
+    plan_id: primary.plan_id != null ? primary.plan_id : fallback.plan_id,
+    plan_name: primary.plan_name != null ? primary.plan_name : fallback.plan_name,
+    plan_duration_days:
+      primary.plan_duration_days != null ? primary.plan_duration_days : fallback.plan_duration_days,
+    started_at: primary.started_at != null ? primary.started_at : fallback.started_at,
+    activated_at: primary.activated_at != null ? primary.activated_at : fallback.activated_at,
+    source: primary.source != null ? primary.source : fallback.source,
+    transaction_id: primary.transaction_id != null ? primary.transaction_id : fallback.transaction_id,
+    grant_id: primary.grant_id != null ? primary.grant_id : fallback.grant_id,
+  }
+}
+
+function verifySourceFromTransactionId(txnId) {
+  const t = String(txnId ?? '').trim()
+  if (t.startsWith('manual_grant:')) return 'manual_grant'
+  if (t.startsWith('offer_code:')) return 'offer_code'
+  if (t.startsWith('transfer:') || t.startsWith('force:')) return 'transfer'
+  if (t.startsWith('recovery:')) return 'recovery'
+  return 'payment'
+}
+
+/** Resolve plan/amount/duration from active entitlement when payment txn lookup is incomplete. */
+async function buildEntitlementVerifyTxnSummary(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT
+       ds.transaction_id,
+       ds.started_at,
+       ds.expires_at,
+       COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
+       COALESCE(pay.amount, lt.amount, p.price) AS amount,
+       COALESCE(pay.currency, lt.currency, 'TZS') AS currency,
+       COALESCE(pay.updated_at, lt.updated_at, mg.created_at, ds.updated_at) AS activated_at,
+       p.name AS plan_name,
+       p.duration_days AS plan_duration_days,
+       mg.duration_days AS grant_duration_days
+     FROM device_subscriptions ds
+     LEFT JOIN transactions pay
+       ON pay.order_id = ds.transaction_id AND pay.status = 'completed'
+     LEFT JOIN manual_subscription_grants mg ON (
+       mg.deleted_at IS NULL
+       AND mg.id = CASE
+         WHEN ds.transaction_id ~ '^manual_grant:[0-9]+$'
+         THEN (substring(ds.transaction_id from 14))::bigint
+       END
+     )
+     LEFT JOIN LATERAL (
+       SELECT t.plan_id, t.amount, t.currency, t.updated_at
+       FROM transactions t
+       WHERE t.device_id = ds.device_id AND t.status = 'completed'
+       ORDER BY COALESCE(t.updated_at, t.created_at) DESC
+       LIMIT 1
+     ) lt ON true
+     LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AND p.deleted_at IS NULL
+     WHERE ds.device_id = $1
+       AND ds.status = 'active'
+       AND ds.expires_at > now()
+     LIMIT 1`,
+    [d],
+  )
+  const row = rows[0]
+  if (!row) return null
+
+  const txnId = String(row.transaction_id ?? '').trim()
+  let planDurationDays =
+    row.plan_duration_days != null ? Math.trunc(Number(row.plan_duration_days)) : null
+  if (planDurationDays == null || !Number.isFinite(planDurationDays) || planDurationDays < 1) {
+    const grantDays = Number(row.grant_duration_days)
+    if (Number.isFinite(grantDays) && grantDays >= 1) {
+      planDurationDays = Math.trunc(grantDays)
+    }
+  }
+  if (planDurationDays == null || planDurationDays < 1) {
+    const startMs = toMs(row.started_at)
+    const endMs = toMs(row.expires_at)
+    if (startMs != null && endMs != null && endMs > startMs) {
+      planDurationDays = Math.max(1, Math.ceil((endMs - startMs) / 86400000))
+    }
+  }
+
+  let planName = row.plan_name != null ? String(row.plan_name).trim() || null : null
+  let amount = row.amount != null ? Number(row.amount) : null
+  const planId = row.plan_id != null ? Number(row.plan_id) : null
+  if ((!planName || amount == null) && planDurationDays != null) {
+    const plan = await getActivePlanByDurationDays(planDurationDays)
+    if (plan) {
+      const full = await getPlanRowByIdAny(plan.id)
+      if (!planName && full?.name) planName = String(full.name).trim() || null
+      if (amount == null && plan.price != null) amount = Number(plan.price)
+    }
+  }
+  if (!planName && planId != null) {
+    const plan = await getPlanRowByIdAny(planId)
+    if (plan?.name) planName = String(plan.name).trim() || null
+    if (amount == null && plan?.price != null) amount = Number(plan.price)
+    if ((planDurationDays == null || planDurationDays < 1) && plan?.duration_days != null) {
+      planDurationDays = Math.trunc(Number(plan.duration_days))
+    }
+  }
+
+  return {
+    amount,
+    currency: String(row.currency ?? 'TZS').trim() || 'TZS',
+    plan_id: planId,
+    plan_name: planName,
+    plan_duration_days: planDurationDays,
+    started_at: toIsoTimestamp(row.started_at),
+    activated_at: toIsoTimestamp(row.activated_at),
+    source: verifySourceFromTransactionId(txnId),
+    transaction_id: txnId || null,
+  }
+}
+
+function toMs(v) {
+  if (v == null) return null
+  const d = v instanceof Date ? v : new Date(v)
+  const ms = d.getTime()
+  return Number.isFinite(ms) ? ms : null
+}
+
 /** Latest non-deleted manual / offer-code grant row for a device. */
 export async function getLatestManualSubscriptionGrantRecord(deviceId) {
   const pool = requirePool()
@@ -2403,7 +2533,11 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
       if (sourceDev && sourceDev !== d) {
         txn = await getLatestCompletedTransactionForDevice(sourceDev)
       }
-    } else if (linkedId.startsWith('transfer:')) {
+    } else if (linkedId.startsWith('transfer:') || linkedId.startsWith('force:')) {
+      txn = await getLatestCompletedTransactionForDevice(d)
+    } else if (linkedId.startsWith('offer_code:')) {
+      const offerGrant = await getManualGrantSummaryFromSubscriptionTransactionId(d)
+      if (offerGrant) return offerGrant
       txn = await getLatestCompletedTransactionForDevice(d)
     } else if (linkedId) {
       const { rows: orderRows } = await pool.query(
@@ -2415,16 +2549,26 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
       txn = orderRows[0] ?? null
     }
   }
-  if (!txn) return null
+  if (!txn) {
+    return buildEntitlementVerifyTxnSummary(d)
+  }
 
   const out = await buildTxnSummaryFromRow(txn)
-  if (!out) return null
+  if (!out) return buildEntitlementVerifyTxnSummary(d)
+
   const linkedId = String(
     (await getDeviceSubscriptionByDeviceId(d))?.transaction_id ?? '',
   ).trim()
-  if (linkedId.startsWith('transfer:')) {
+  if (linkedId.startsWith('transfer:') || linkedId.startsWith('force:')) {
     out.source = 'transfer'
+  } else if (linkedId.startsWith('recovery:')) {
+    out.source = 'recovery'
+  } else if (linkedId.startsWith('offer_code:')) {
+    out.source = 'offer_code'
   }
+
+  const entitlement = await buildEntitlementVerifyTxnSummary(d)
+  const merged = mergeVerifyTxnSummaries(out, entitlement)
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
     console.log('[subscription_duration_debug]', {
@@ -2435,11 +2579,14 @@ export async function getLatestCompletedSubscriptionTxnSummary(deviceId) {
         amount: txn.amount,
         currency: txn.currency,
       },
-      normalizedPlanDurationDays: out.plan_duration_days,
+      normalizedPlanDurationDays: merged.plan_duration_days,
+      entitlementFilled:
+        entitlement != null &&
+        (out.plan_name == null || out.amount == null || out.plan_duration_days == null),
     })
   }
 
-  return out
+  return merged
 }
 
 /** Repair path: completed txn exists but device_subscriptions not yet updated. */

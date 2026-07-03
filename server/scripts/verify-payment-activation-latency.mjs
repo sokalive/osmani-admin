@@ -55,17 +55,21 @@ async function verifyApi(label, base) {
   if (!stats.res.ok || stats.body?.ok !== true) {
     fail(`${label}-stats`, `HTTP ${stats.res.status}`)
   } else {
-    const median = Number(stats.body.payment_activation_median_seconds || 0)
-    const avg = Number(stats.body.payment_activation_avg_seconds || stats.body.payment_activation_average_seconds || 0)
+    const medianCheckout = Number(
+      stats.body.payment_activation_median_seconds ||
+        stats.body.checkout_to_complete_median_seconds ||
+        0,
+    )
+    const medianServer = Number(stats.body.server_activation_median_seconds || 0)
     const count = Number(stats.body.completed_count || 0)
     pass(
       `${label}-stats`,
-      `n=${count} median=${median.toFixed(2)}s avg=${avg.toFixed(2)}s (7d txn updated_at-created_at)`,
+      `n=${count} checkout_median=${medianCheckout.toFixed(2)}s server_median=${medianServer.toFixed(2)}s`,
     )
-    if (count > 0 && median > MAX_MEDIAN_SEC) {
-      fail(`${label}-median`, `median ${median.toFixed(2)}s > ${MAX_MEDIAN_SEC}s target`)
+    if (count > 0 && medianServer > MAX_MEDIAN_SEC) {
+      fail(`${label}-median`, `server median ${medianServer.toFixed(2)}s > ${MAX_MEDIAN_SEC}s target`)
     } else if (count > 0) {
-      pass(`${label}-median`, `<= ${MAX_MEDIAN_SEC}s`)
+      pass(`${label}-median`, `server pipeline <= ${MAX_MEDIAN_SEC}s`)
     }
   }
 

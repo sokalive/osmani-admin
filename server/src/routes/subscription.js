@@ -427,7 +427,10 @@ async function buildInactiveVerifyFallbackResponse(req, deviceId) {
 async function buildActiveVerifyFallbackFromCache(req, deviceId, row) {
   const pub = rowToPublicStatus(row)
   const modesPayload = await loadGlobalAppModesPayload().catch(() => modesFallbackPayload())
-  const normalized = normalizeVerifyResponse(pub, null)
+  const txnSummary = await billing
+    .getLatestCompletedSubscriptionTxnSummary(deviceId)
+    .catch(() => null)
+  const normalized = normalizeVerifyResponse(pub, txnSummary)
   const runtimeModes = appModesForVerify(modesPayload)
   const playbackGate = derivePlaybackGate(pub, modesPayload, null, trialDisabledPublicPayload)
   const trialWatchPublic = trialWatchSettingsToPublicPayload(

@@ -72,6 +72,21 @@ for (const [label, base] of [
     fail(`${label}-expiry-audit`, `under_credited=${audit.body?.summary?.under_credited}`)
   }
 
+  const replayRows = (audit.body?.rows || []).filter((r) => r.category === 'replay_match').slice(0, 5)
+  for (const row of replayRows) {
+    const lastDays = row.last_package_duration_days
+    const actual = row.actual_expires_at
+    const expected = row.expected_expires_at
+    if (lastDays != null && actual && expected) {
+      const deltaH = Math.abs(new Date(actual) - new Date(expected)) / 3600000
+      if (deltaH <= 0.05) {
+        pass(`${label}-plan-${lastDays}d-replay`, `device …${String(row.device_id_masked || '').slice(-4)}`)
+      } else {
+        fail(`${label}-plan-${lastDays}d-replay`, `delta ${deltaH.toFixed(2)}h`)
+      }
+    }
+  }
+
   const inv = await jfetch(base, `/api/admin/customer-investigation/investigate?phone=${encodeURIComponent(PHONE)}`)
   out.investigate = {
     payments: (inv.body?.payments?.completed?.length ?? 0) + (inv.body?.payments?.pending?.length ?? 0),
