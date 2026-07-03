@@ -1,0 +1,77 @@
+{
+  "title": "Production Manual Gift Repeat Popup — Investigation Report",
+  "generated_at": "2026-07-03T23:32:00.000Z",
+  "status": "VPS_VERIFIED",
+  "root_cause": {
+    "repeat_popup": "ACK worked (acknowledged_at updated) but getOldestPendingManualGrant() uses FIFO — after acknowledging grant N, verify on next poll (~3s) returned grant N+1 when multiple unacknowledged grants existed on the same device with transaction_id manual_grant:{latest}.",
+    "proof_device": "c8a894198a39ddc3",
+    "proof_timeline": [
+      "Grant #71 (custom, legacy_token) and #72 (standard) both unacknowledged; transaction_id=manual_grant:72",
+      "Verify returned manualGift.grantId=71",
+      "POST acknowledge-manual-gift with grantId=71 → ok=true, acknowledged_at set on grant 71",
+      "Immediate verify returned manualGift.grantId=72 showPopup=true (repeat)",
+      "After cascade-ack deploy (8944a46): single ack of grant 72 → manualGift=null on next verify"
+    ],
+    "not_client_bug": "Backend returned a new legitimate pending grant each poll; client correctly showed popup each time.",
+    "not_ack_failure": "recent_ack_sample shows grant 71 acked at 2026-07-03T23:27:24Z on c8a894198a39ddc3"
+  },
+  "sql_answers": {
+    "q1_devices_with_pending_grants": 13,
+    "q2_grants_before_strict_fix_deploy": 13,
+    "q3_testing_grants_pending": 0,
+    "q4_devices_popup_while_non_manual_txn": 0,
+    "q5_paid_users_with_strict_popup": 0,
+    "q6_recovery_users_with_unacked": 0,
+    "q7_transfer_users_with_unacked": 1,
+    "q8_ack_works_total_acked": 57,
+    "q8_acked_last_24h": 26,
+    "q9_after_single_ack_before_fix": "next FIFO grant returned on verify",
+    "q9_after_cascade_fix": "all pending grants id<=txn manual_grant id acked in one ASANTE",
+    "q10_devices_multiple_pending": 0
+  },
+  "totals": {
+    "devices_with_pending_gifts": 13,
+    "popup_eligible_devices": 12,
+    "strict_legitimate_popup_grants": 12,
+    "stale_false_positive_grants": 1,
+    "repaired_this_incident": {
+      "stale_grants": 0,
+      "testing_grants": 0,
+      "note": "Prior session repaired 25 stale; testing queue empty"
+    },
+    "remaining_popup_eligible": 12,
+    "remaining_pending_grants": 13
+  },
+  "example_timelines": [
+    {
+      "device_id": "c8a894198a39ddc3",
+      "grants": [
+        { "id": 71, "granted_at": "2026-07-02T22:49:11Z", "custom": true, "acked": "2026-07-03T23:27:24Z" },
+        { "id": 72, "granted_at": "2026-07-02T22:52:52Z", "transaction_id": "manual_grant:72", "acked": "2026-07-03T23:31:58Z" }
+      ],
+      "repeat_cause": "FIFO second grant after first ack"
+    },
+    {
+      "device_id": "f5e0b133c5eb8f6a",
+      "grant_id": 45,
+      "note": "1 stale grant (transfer source pending sub) — eligible for stale repair only, not testing"
+    }
+  ],
+  "fixes_applied": {
+    "8944a46": "Cascade acknowledge through current manual_grant transaction id on ASANTE",
+    "a5117c0": "Strict getOldestPendingManualGrant eligibility",
+    "grants_table_only": true
+  },
+  "commits": {
+    "github_main": "8944a46",
+    "vps": "8944a46ecc8f3dfc42fe106233199b817c72483a",
+    "render": "80788903732098f5701928235e7d59285cdf9567"
+  },
+  "production_verification": {
+    "cascade_ack_c8a894": "PASS — after ack grant 72, verify manualGift=null",
+    "paid_subscribers_strict_popup": 0,
+    "recover_endpoint_manualGift": "never returned",
+    "testing_grants_pending": 0
+  },
+  "raw_investigation": "docs/manual-gift-popup/PRODUCTION_INVESTIGATION.json"
+}
