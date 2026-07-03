@@ -245,6 +245,19 @@ runtimePublicRouter.get('/manual-gift-database-report', requireLegacyAdminToken,
   }
 })
 
+/** Full read-only manual gift production investigation (exact PostgreSQL). */
+runtimePublicRouter.get('/manual-gift-production-investigation', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runManualGiftProductionInvestigation } = await import('../lib/manualGiftAudit.js')
+    const report = await runManualGiftProductionInvestigation()
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/manual-gift-production-investigation]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Acknowledge stale pending manual grants (grants table only — no subscription mutation). */
 runtimePublicRouter.post('/manual-gift-repair', requireLegacyAdminToken, async (req, res) => {
   try {

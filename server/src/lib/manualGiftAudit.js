@@ -142,3 +142,167 @@ export async function runManualGiftDatabaseReport() {
     stale_sample: staleSample.slice(0, 24),
   }
 }
+
+/** Full read-only production PostgreSQL investigation for manual gift popup eligibility. */
+export async function runManualGiftProductionInvestigation() {
+  const pool = requirePool()
+
+  const { rows: grantCounts } = await pool.query(
+    `SELECT
+       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE acknowledged_at IS NOT NULL)::int AS acknowledged,
+       COUNT(*) FILTER (WHERE acknowledged_at IS NULL AND deleted_at IS NULL)::int AS unacknowledged,
+       COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS deleted,
+       COUNT(*) FILTER (
+         WHERE deleted_at IS NULL
+           AND expires_at_snapshot IS NOT NULL
+           AND expires_at_snapshot <= now()
+       )::int AS expired_by_snapshot,
+       COUNT(*) FILTER (
+         WHERE deleted_at IS NULL
+           AND acknowledged_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM device_subscriptions ds
+             WHERE ds.device_id = manual_subscription_grants.device_id
+               AND ds.status = 'active'
+               AND ds.expires_at > now()
+               AND ds.transaction_id ~ $1
+           )
+       )::int AS active_unacked_with_manual_sub
+     FROM manual_subscription_grants`,
+    [MANUAL_GRANT_TXN_RE],
+  )
+
+  const { rows: testPending } = await pool.query(
+    `SELECT g.id, g.device_id, g.duration_days, g.created_at, g.acknowledged_at, g.deleted_at,
+            ds.status AS sub_status, ds.expires_at, ds.transaction_id
+     FROM manual_subscription_grants g
+     LEFT JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     WHERE g.deleted_at IS NULL
+       AND g.acknowledged_at IS NULL
+       AND (
+         g.device_id ~ '^verify[_-]'
+         OR lower(g.device_id) IN ('x', 'test', 'probe')
+         OR g.device_id ~ '^test[_-]'
+       )
+     ORDER BY g.created_at ASC`,
+  )
+
+  const { rows: popupDevices } = await pool.query(
+    `WITH strict_pending AS (
+       SELECT
+         g.device_id,
+         g.id AS grant_id,
+         g.duration_days,
+         g.created_at AS granted_at,
+         g.acknowledged_at,
+         g.deleted_at,
+         ds.status AS sub_status,
+         ds.expires_at AS sub_expires_at,
+         ds.transaction_id AS sub_transaction_id,
+         ROW_NUMBER() OVER (PARTITION BY g.device_id ORDER BY g.created_at ASC) AS rn
+       FROM manual_subscription_grants g
+       INNER JOIN device_subscriptions ds ON ds.device_id = g.device_id
+       WHERE g.acknowledged_at IS NULL
+         AND g.deleted_at IS NULL
+         AND ds.status = 'active'
+         AND ds.expires_at > now()
+         AND COALESCE(ds.manual_admin_blocked, false) = false
+         AND ds.transaction_id ~ $1
+         AND g.id <= (regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint)
+     )
+     SELECT
+       device_id,
+       grant_id,
+       duration_days,
+       granted_at,
+       acknowledged_at,
+       deleted_at,
+       sub_status,
+       sub_expires_at,
+       sub_transaction_id,
+       'active_manual_grant_unacknowledged' AS qualify_reason
+     FROM strict_pending
+     WHERE rn = 1
+     ORDER BY granted_at ASC`,
+    [MANUAL_GRANT_TXN_RE],
+  )
+
+  const { rows: paymentWithUnacked } = await pool.query(
+    `SELECT DISTINCT ON (g.device_id)
+       g.device_id,
+       g.id AS grant_id,
+       ds.transaction_id AS sub_transaction_id,
+       ds.status AS sub_status,
+       ds.expires_at AS sub_expires_at,
+       CASE
+         WHEN ds.transaction_id ~ '^manual_grant:[0-9]+$' THEN false
+         ELSE true
+       END AS would_legacy_popup,
+       EXISTS (
+         SELECT 1
+         FROM manual_subscription_grants g2
+         INNER JOIN device_subscriptions ds2 ON ds2.device_id = g2.device_id
+         WHERE g2.device_id = g.device_id
+           AND g2.acknowledged_at IS NULL
+           AND g2.deleted_at IS NULL
+           AND ds2.status = 'active'
+           AND ds2.expires_at > now()
+           AND COALESCE(ds2.manual_admin_blocked, false) = false
+           AND ds2.transaction_id ~ $1
+           AND g2.id <= (regexp_replace(ds2.transaction_id, '^manual_grant:', '')::bigint)
+       ) AS strict_popup_now
+     FROM manual_subscription_grants g
+     INNER JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     WHERE g.acknowledged_at IS NULL
+       AND g.deleted_at IS NULL
+       AND ds.status = 'active'
+       AND ds.expires_at > now()
+       AND COALESCE(ds.transaction_id, '') !~ $1
+     ORDER BY g.device_id, g.created_at ASC`,
+    [MANUAL_GRANT_TXN_RE],
+  )
+
+  const { rows: legacyOnlyFalsePositives } = await pool.query(
+    `WITH pending AS (
+       SELECT g.id, g.device_id
+       FROM manual_subscription_grants g
+       WHERE g.acknowledged_at IS NULL AND g.deleted_at IS NULL
+     ),
+     strict AS (
+       SELECT g.id, g.device_id
+       FROM manual_subscription_grants g
+       INNER JOIN device_subscriptions ds ON ds.device_id = g.device_id
+       WHERE g.acknowledged_at IS NULL
+         AND g.deleted_at IS NULL
+         AND ds.status = 'active'
+         AND ds.expires_at > now()
+         AND COALESCE(ds.manual_admin_blocked, false) = false
+         AND ds.transaction_id ~ $1
+         AND g.id <= (regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint)
+     )
+     SELECT p.device_id, MIN(p.id) AS oldest_pending_grant_id
+     FROM pending p
+     WHERE p.id NOT IN (SELECT id FROM strict)
+     GROUP BY p.device_id
+     ORDER BY p.device_id`,
+    [MANUAL_GRANT_TXN_RE],
+  )
+
+  const stats = await countManualGiftAuditStats()
+  const stale = await findStalePendingManualGiftGrants({ limit: 5000 })
+
+  return {
+    generated_at: new Date().toISOString(),
+    grant_counts: grantCounts[0] ?? {},
+    audit_stats: stats,
+    test_grants_still_pending: testPending,
+    popup_devices: popupDevices,
+    popup_device_count: popupDevices.length,
+    payment_subscribers_with_unacked_grants: paymentWithUnacked,
+    payment_subscribers_strict_popup_count: paymentWithUnacked.filter((r) => r.strict_popup_now).length,
+    non_manual_legacy_false_positive_devices: legacyOnlyFalsePositives,
+    stale_grants_for_repair: stale,
+    stale_grant_count: stale.length,
+  }
+}
