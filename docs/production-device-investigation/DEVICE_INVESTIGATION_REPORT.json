@@ -1,0 +1,126 @@
+{
+  "generated_at": "2026-07-03T18:38:30.000Z",
+  "audit_method": "Live production PostgreSQL via VPS runtime APIs (commit c4b276e)",
+  "devices": [
+    {
+      "device_id": "a05c6bbed811e16e",
+      "phone_numbers": [],
+      "customer_actually_paid_on_this_device_id": "NO",
+      "customer_actually_paid_on_linked_cluster": "YES",
+      "payment_history": [],
+      "sms_history": [],
+      "subscription_history": [
+        {
+          "device_id": "a05c6bbed811e16e",
+          "status": "pending",
+          "expires_at": "2026-07-06T17:30:08.485Z",
+          "started_at": "2026-07-01T15:38:42.336Z",
+          "transaction_id": "moved:a05c6bbed811e16e:osm_sp_1782754125808_d775ae793e",
+          "fingerprint_hash": "78e455cd2366b73a0d498da3863d408c161bbb82533dd0d6fcf6b70457240ccd"
+        }
+      ],
+      "related_payment_device": {
+        "device_id": "6387606dfe223411537dd1b8ce6573e7bf1d12e99cb9ef77d54634a5027a93d7",
+        "order_id": "osm_sp_1782754125808_d775ae793e",
+        "provider": "sonicpesa",
+        "amount": 3000,
+        "phone": "+255798827208",
+        "payment_status": "completed",
+        "completed_at": "2026-06-29T17:30:08.422Z",
+        "activated_at": "2026-06-29T17:30:08.564Z",
+        "expires_at": "2026-07-06T17:30:08.485Z",
+        "current_status": "ACTIVE",
+        "same_fingerprint_hash": true
+      },
+      "related_sms": [
+        {
+          "recipient": "255798827208",
+          "device_id": "6387606dfe223411537dd1b8ce6573e7bf1d12e99cb9ef77d54634a5027a93d7",
+          "sms_type": "payment_success",
+          "status": "sent",
+          "created_at": "2026-06-29T17:30:08.678Z",
+          "payment_id": "osm_sp_1782754125808_d775ae793e"
+        }
+      ],
+      "timeline": [
+        { "at": "2026-06-29T17:28:45.817Z", "event": "SonicPesa payment initiated", "device": "6387606…", "order_id": "osm_sp_1782754125808_d775ae793e" },
+        { "at": "2026-06-29T17:30:08.422Z", "event": "Payment completed", "amount": 3000, "provider": "sonicpesa" },
+        { "at": "2026-06-29T17:30:08.564Z", "event": "Subscription activated", "device": "6387606…", "status": "active" },
+        { "at": "2026-06-29T17:30:08.678Z", "event": "SMS payment_success sent", "phone": "255798827208" },
+        { "at": "2026-07-01T15:38:42.336Z", "event": "Transfer source marked on a05c6bbed811e16e", "transaction_id": "moved:a05c6bbed811e16e:osm_sp_1782754125808_d775ae793e", "status": "pending" }
+      ],
+      "root_cause": "This device_id is a post-transfer SOURCE (moved:*). Payment and active entitlement live on sibling device 6387606… with the same fingerprint. a05c6bbed811e16e correctly shows pending/revoked — not a false-expired incident.",
+      "should_be_active": "NO",
+      "repair_performed": false,
+      "repair_reason": "Legitimate moved:* transfer source — restoring would duplicate entitlement. Active subscription exists on target device until 2026-07-06.",
+      "current_status": "EXPIRED (transfer source revoked)",
+      "expiry_date": "2026-07-06T17:30:08.485Z",
+      "remaining_days": 2,
+      "evidence": {
+        "sql_transactions_on_device": 0,
+        "sql_completed_payments_on_device": 0,
+        "is_false_expired_audit": false,
+        "verify_active": false,
+        "verify_playback_allowed": false
+      }
+    },
+    {
+      "device_id": "3C849B55163CF",
+      "phone_numbers": [],
+      "customer_actually_paid": "NO",
+      "payment_history": [],
+      "sms_history": [],
+      "subscription_history": [],
+      "timeline": [],
+      "root_cause": "No rows in device_subscriptions, transactions, security_events, sms_send_log, device_phone_registry, or app_installs for this device_id (case variants 3C849B55163CF and 3c849b55163cf also empty).",
+      "should_be_active": "NO",
+      "repair_performed": false,
+      "repair_reason": "No completed payment and no entitlement row — nothing to restore.",
+      "current_status": "EXPIRED (no subscription)",
+      "expiry_date": null,
+      "remaining_days": 0,
+      "evidence": {
+        "sql_transactions": 0,
+        "sql_subscriptions": 0,
+        "sql_security_events": 0,
+        "sql_sms_events": 0,
+        "users_search_match": 0
+      },
+      "statement": "This customer has no completed payment."
+    },
+    {
+      "device_id": "58b32841ec6ae98",
+      "phone_numbers": [],
+      "customer_actually_paid": "NO",
+      "payment_history": [],
+      "sms_history": [],
+      "subscription_history": [],
+      "timeline": [],
+      "root_cause": "No rows in device_subscriptions, transactions, security_events, sms_send_log, device_phone_registry, or app_installs for this device_id.",
+      "should_be_active": "NO",
+      "repair_performed": false,
+      "repair_reason": "No completed payment and no entitlement row — nothing to restore.",
+      "current_status": "EXPIRED (no subscription)",
+      "expiry_date": null,
+      "remaining_days": 0,
+      "evidence": {
+        "sql_transactions": 0,
+        "sql_subscriptions": 0,
+        "sql_security_events": 0,
+        "sql_sms_events": 0,
+        "users_search_match": 0
+      },
+      "statement": "This customer has no completed payment."
+    }
+  ],
+  "deployments": {
+    "vps_commit": "c4b276e4c4fbaab73376f6813f1989f2087b3c3a",
+    "render_commit": "72ce16fb61eada0febda66aba05622aa6acbf2ce",
+    "github_commit": "c4b276e",
+    "code_changed_this_investigation": [
+      "server/src/lib/deviceProductionInvestigation.js",
+      "server/src/routes/runtimePublic.js"
+    ]
+  },
+  "conclusion": "No repairs required. Device a05c6bbed811e16e is a legitimate transfer source; active paid subscription is on sibling 6387606… until 2026-07-06. Devices 3C849B55163CF and 58b32841ec6ae98 have zero production database records."
+}

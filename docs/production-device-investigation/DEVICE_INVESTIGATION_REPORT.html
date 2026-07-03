@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><title>Production Device Investigation</title>
+<style>body{font-family:system-ui;background:#0a0e16;color:#e2e8f0;padding:2rem;line-height:1.55}
+section{background:#0f172a;border:1px solid #334155;border-radius:12px;padding:1.25rem;margin:1rem 0}
+.pass{color:#34d399;font-weight:700}.warn{color:#fbbf24;font-weight:700}.no{color:#f87171;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{border-bottom:1px solid #1e293b;padding:.5rem;text-align:left}
+code{background:#1e293b;padding:.1rem .35rem;border-radius:4px}</style></head><body>
+<h1>Production Device Investigation</h1>
+<p>2026-07-03 · VPS commit <code>c4b276e</code> · PostgreSQL evidence only</p>
+
+<section><h2>1. a05c6bbed811e16e</h2>
+<p><strong>Phone:</strong> none on this device · cluster phone <code>+255798827208</code> on sibling</p>
+<p><strong>Paid on THIS device_id?</strong> <span class="no">NO</span> · <strong>Paid in cluster?</strong> <span class="pass">YES</span> (SonicPesa 3,000 TZS)</p>
+<table>
+<tr><th>order_id</th><td>osm_sp_1782754125808_d775ae793e</td></tr>
+<tr><th>provider</th><td>SonicPesa</td></tr>
+<tr><th>amount</th><td>3,000 TZS</td></tr>
+<tr><th>completed_at</th><td>2026-06-29T17:30:08.422Z</td></tr>
+<tr><th>Active device</th><td>6387606dfe223411537dd1b8ce6573e7bf1d12e99cb9ef77d54634a5027a93d7</td></tr>
+</table>
+<p><strong>Should be ACTIVE?</strong> <span class="no">NO</span> — legitimate <code>moved:*</code> transfer source</p>
+<p><strong>Current status:</strong> EXPIRED (revoked source) · expiry 2026-07-06 · 2 days remaining on row</p>
+<p><strong>Repair:</strong> None — would duplicate entitlement; target device is ACTIVE</p>
+<p><strong>SMS:</strong> 1 payment_success to 255798827208 (on sibling device)</p>
+</section>
+
+<section><h2>2. 3C849B55163CF</h2>
+<p><strong>Paid?</strong> <span class="no">NO</span></p>
+<p class="no"><strong>This customer has no completed payment.</strong></p>
+<p>SQL: 0 transactions · 0 subscriptions · 0 security_events · 0 SMS · 0 installs</p>
+<p><strong>Should be ACTIVE?</strong> NO · <strong>Repair:</strong> None</p>
+</section>
+
+<section><h2>3. 58b32841ec6ae98</h2>
+<p><strong>Paid?</strong> <span class="no">NO</span></p>
+<p class="no"><strong>This customer has no completed payment.</strong></p>
+<p>SQL: 0 transactions · 0 subscriptions · 0 security_events · 0 SMS · 0 installs</p>
+<p><strong>Should be ACTIVE?</strong> NO · <strong>Repair:</strong> None</p>
+</section>
+
+<section><h2>Deployments</h2>
+<p>VPS: <code>c4b276e</code> · Render: <code>72ce16f</code> · GitHub: <code>c4b276e</code></p>
+</section>
+</body></html>
