@@ -4,10 +4,10 @@
  *
  * Usage:
  *   node scripts/verify-manual-subscription-restoration.mjs
- *   VPS_API=https://api.osmanitv.com RENDER_API=https://osmani-admin-mpya.onrender.com node scripts/verify-manual-subscription-restoration.mjs
+ *   VPS_API=https://api.osmanitv.com RENDER_API=https://osmani-admin-api.onrender.com node scripts/verify-manual-subscription-restoration.mjs
  */
 const VPS = String(process.env.VPS_API || 'https://api.osmanitv.com').replace(/\/+$/, '')
-const RENDER = String(process.env.RENDER_API || 'https://osmani-admin-mpya.onrender.com').replace(/\/+$/, '')
+const RENDER = String(process.env.RENDER_API || 'https://osmani-admin-api.onrender.com').replace(/\/+$/, '')
 const TOKEN = String(process.env.ADMIN_TOKEN || process.env.APP_UPDATE_ADMIN_TOKEN || '3030').trim()
 
 let failed = 0
