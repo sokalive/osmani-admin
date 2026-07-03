@@ -1211,13 +1211,16 @@ export async function getOldestPendingManualGrant(deviceId) {
 
 /**
  * Acknowledge a pending manual gift by grant id (numeric string), UUID nonce, or nonce text match.
- * Does not cast arbitrary input to UUID (avoids errors for keys like "5").
+ * After a successful ack, clears the FIFO queue up to the current manual_grant transaction id
+ * so verify does not return another popup on the next poll.
  */
 export async function acknowledgeManualGrantFlexible(deviceId, ackKeyRaw) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   const key = String(ackKeyRaw ?? '').trim()
   if (!d || !key) return false
+
+  let acked = false
 
   const digitsOnly = /^\d+$/.test(key)
   if (digitsOnly) {
@@ -1229,17 +1232,37 @@ export async function acknowledgeManualGrantFlexible(deviceId, ackKeyRaw) {
        WHERE device_id = $1 AND id = $2 AND acknowledged_at IS NULL AND deleted_at IS NULL`,
       [d, id],
     )
-    if (Number(byId.rowCount) > 0) return true
+    if (Number(byId.rowCount) > 0) acked = true
   }
 
-  const byNonceText = await pool.query(
-    `UPDATE manual_subscription_grants
-     SET acknowledged_at = now()
-     WHERE device_id = $1 AND acknowledged_at IS NULL AND deleted_at IS NULL
-       AND lower(trim(nonce::text)) = lower(trim($2::text))`,
-    [d, key],
+  if (!acked) {
+    const byNonceText = await pool.query(
+      `UPDATE manual_subscription_grants
+       SET acknowledged_at = now()
+       WHERE device_id = $1 AND acknowledged_at IS NULL AND deleted_at IS NULL
+         AND lower(trim(nonce::text)) = lower(trim($2::text))`,
+      [d, key],
+    )
+    acked = Number(byNonceText.rowCount) > 0
+  }
+
+  if (!acked) return false
+
+  await pool.query(
+    `UPDATE manual_subscription_grants g
+     SET acknowledged_at = COALESCE(g.acknowledged_at, now())
+     FROM device_subscriptions ds
+     WHERE g.device_id = ds.device_id
+       AND g.device_id = $1
+       AND g.acknowledged_at IS NULL
+       AND g.deleted_at IS NULL
+       AND ds.status = 'active'
+       AND ds.expires_at > now()
+       AND ds.transaction_id ~ '^manual_grant:[0-9]+$'
+       AND g.id <= (regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint)`,
+    [d],
   )
-  return Number(byNonceText.rowCount) > 0
+  return true
 }
 
 /** @deprecated Prefer acknowledgeManualGrantFlexible — kept for call sites */

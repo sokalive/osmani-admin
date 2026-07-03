@@ -11,6 +11,15 @@ function requirePool() {
 }
 
 const MANUAL_GRANT_TXN_RE = '^manual_grant:[0-9]+$'
+/** Approximate deploy time of strict getOldestPendingManualGrant (e9b92ff). */
+const MANUAL_GIFT_STRICT_FIX_AT = '2026-07-03T20:49:00.000Z'
+
+const TESTING_DEVICE_SQL = `(
+  g.device_id ~ '^verify[_-]'
+  OR lower(g.device_id) IN ('x', 'test', 'probe')
+  OR g.device_id ~ '^test[_-]'
+  OR g.device_id ~ '^probe[_-]'
+)`
 
 /** Unacknowledged grants that would wrongly trigger popup under legacy lookup. */
 export async function findStalePendingManualGiftGrants({ limit = 500 } = {}) {
@@ -127,6 +136,40 @@ export async function repairStaleManualGiftAcknowledgements({ dryRun = false, li
   }
 }
 
+/** Acknowledge obsolete testing grants only (grants table — no subscription mutation). */
+export async function repairObsoleteTestingManualGrants({ dryRun = false, limit = 5000 } = {}) {
+  const pool = requirePool()
+  const lim = Math.min(10000, Math.max(1, Number(limit) || 5000))
+  const { rows } = await pool.query(
+    `SELECT g.id AS grant_id, g.device_id, g.created_at AS granted_at
+     FROM manual_subscription_grants g
+     WHERE g.deleted_at IS NULL
+       AND g.acknowledged_at IS NULL
+       AND ${TESTING_DEVICE_SQL}
+     ORDER BY g.created_at ASC
+     LIMIT $1`,
+    [lim],
+  )
+  if (dryRun || rows.length === 0) {
+    return { dryRun: Boolean(dryRun), repaired: 0, testingPendingCount: rows.length, sample: rows.slice(0, 24) }
+  }
+  const ids = rows.map((r) => Number(r.grant_id)).filter((id) => Number.isFinite(id) && id > 0)
+  const { rowCount } = await pool.query(
+    `UPDATE manual_subscription_grants
+     SET acknowledged_at = COALESCE(acknowledged_at, now())
+     WHERE id = ANY($1::bigint[])
+       AND acknowledged_at IS NULL
+       AND deleted_at IS NULL`,
+    [ids],
+  )
+  return {
+    dryRun: false,
+    repaired: Number(rowCount) || 0,
+    testingPendingCount: rows.length,
+    sample: rows.slice(0, 24),
+  }
+}
+
 export async function runManualGiftDatabaseReport() {
   const stats = await countManualGiftAuditStats()
   const staleSample = await findStalePendingManualGiftGrants({ limit: 40 })
@@ -184,6 +227,7 @@ export async function runManualGiftProductionInvestigation() {
          g.device_id ~ '^verify[_-]'
          OR lower(g.device_id) IN ('x', 'test', 'probe')
          OR g.device_id ~ '^test[_-]'
+         OR g.device_id ~ '^probe[_-]'
        )
      ORDER BY g.created_at ASC`,
   )
@@ -292,13 +336,135 @@ export async function runManualGiftProductionInvestigation() {
   const stats = await countManualGiftAuditStats()
   const stale = await findStalePendingManualGiftGrants({ limit: 5000 })
 
+  const { rows: q1 } = await pool.query(
+    `SELECT COUNT(DISTINCT device_id)::int AS devices_with_pending_grants
+     FROM manual_subscription_grants
+     WHERE acknowledged_at IS NULL AND deleted_at IS NULL`,
+  )
+
+  const { rows: q2 } = await pool.query(
+    `SELECT COUNT(*)::int AS grants_before_strict_fix
+     FROM manual_subscription_grants
+     WHERE acknowledged_at IS NULL AND deleted_at IS NULL AND created_at < $1::timestamptz`,
+    [MANUAL_GIFT_STRICT_FIX_AT],
+  )
+
+  const { rows: q3 } = await pool.query(
+    `SELECT COUNT(*)::int AS testing_grants_pending
+     FROM manual_subscription_grants g
+     WHERE g.deleted_at IS NULL AND g.acknowledged_at IS NULL AND ${TESTING_DEVICE_SQL}`,
+  )
+
+  const { rows: q4 } = await pool.query(
+    `SELECT COUNT(DISTINCT g.device_id)::int AS devices_popup_while_non_manual_txn
+     FROM manual_subscription_grants g
+     INNER JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     WHERE g.acknowledged_at IS NULL AND g.deleted_at IS NULL
+       AND ds.status = 'active' AND ds.expires_at > now()
+       AND COALESCE(ds.transaction_id, '') !~ $1`,
+    [MANUAL_GRANT_TXN_RE],
+  )
+
+  const { rows: q5 } = await pool.query(
+    `SELECT COUNT(DISTINCT g.device_id)::int AS paid_users_with_strict_popup
+     FROM manual_subscription_grants g
+     INNER JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     INNER JOIN transactions t ON t.order_id = ds.transaction_id AND t.status = 'completed'
+     WHERE g.acknowledged_at IS NULL AND g.deleted_at IS NULL
+       AND ds.status = 'active' AND ds.expires_at > now()
+       AND ds.transaction_id ~ '^osm(_sp)?_'
+       AND EXISTS (
+         SELECT 1 FROM manual_subscription_grants g2
+         INNER JOIN device_subscriptions ds2 ON ds2.device_id = g2.device_id
+         WHERE g2.device_id = g.device_id AND g2.acknowledged_at IS NULL AND g2.deleted_at IS NULL
+           AND ds2.status = 'active' AND ds2.expires_at > now()
+           AND ds2.transaction_id ~ $1
+           AND g2.id <= (regexp_replace(ds2.transaction_id, '^manual_grant:', '')::bigint)
+       )`,
+    [MANUAL_GRANT_TXN_RE],
+  )
+
+  const { rows: q6 } = await pool.query(
+    `SELECT COUNT(DISTINCT g.device_id)::int AS recovery_users_with_unacked
+     FROM manual_subscription_grants g
+     INNER JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     WHERE g.acknowledged_at IS NULL AND g.deleted_at IS NULL
+       AND ds.status = 'active' AND ds.expires_at > now()
+       AND ds.transaction_id LIKE 'recovery:%'`,
+  )
+
+  const { rows: q7 } = await pool.query(
+    `SELECT COUNT(DISTINCT g.device_id)::int AS transfer_users_with_unacked
+     FROM manual_subscription_grants g
+     INNER JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     WHERE g.acknowledged_at IS NULL AND g.deleted_at IS NULL
+       AND ds.transaction_id LIKE 'moved:%'`,
+  )
+
+  const { rows: q8 } = await pool.query(
+    `SELECT COUNT(*)::int AS total_acked_grants,
+            COUNT(*) FILTER (WHERE acknowledged_at >= now() - interval '24 hours')::int AS acked_last_24h
+     FROM manual_subscription_grants
+     WHERE acknowledged_at IS NOT NULL`,
+  )
+
+  const { rows: multiPending } = await pool.query(
+    `SELECT
+       g.device_id,
+       COUNT(*)::int AS pending_grant_count,
+       MIN(g.id) AS oldest_grant_id,
+       MAX(g.id) AS newest_grant_id,
+       (SELECT ds.transaction_id FROM device_subscriptions ds WHERE ds.device_id = g.device_id LIMIT 1) AS sub_transaction_id,
+       (SELECT COUNT(*)::int
+        FROM manual_subscription_grants g2
+        INNER JOIN device_subscriptions ds2 ON ds2.device_id = g2.device_id
+        WHERE g2.device_id = g.device_id
+          AND g2.acknowledged_at IS NULL AND g2.deleted_at IS NULL
+          AND ds2.status = 'active' AND ds2.expires_at > now()
+          AND ds2.transaction_id ~ $1
+          AND g2.id <= (regexp_replace(ds2.transaction_id, '^manual_grant:', '')::bigint)
+       ) AS strict_popup_eligible_count
+     FROM manual_subscription_grants g
+     WHERE g.acknowledged_at IS NULL AND g.deleted_at IS NULL
+     GROUP BY g.device_id
+     HAVING COUNT(*) > 1
+     ORDER BY pending_grant_count DESC, g.device_id
+     LIMIT 40`,
+    [MANUAL_GRANT_TXN_RE],
+  )
+
+  const { rows: ackSample } = await pool.query(
+    `SELECT device_id, id AS grant_id, acknowledged_at
+     FROM manual_subscription_grants
+     WHERE acknowledged_at IS NOT NULL
+     ORDER BY acknowledged_at DESC
+     LIMIT 5`,
+  )
+
   return {
     generated_at: new Date().toISOString(),
+    strict_fix_deployed_at: MANUAL_GIFT_STRICT_FIX_AT,
+    answers: {
+      q1_devices_with_pending_grants: q1[0]?.devices_with_pending_grants ?? 0,
+      q2_grants_before_strict_fix: q2[0]?.grants_before_strict_fix ?? 0,
+      q3_testing_grants_pending: q3[0]?.testing_grants_pending ?? 0,
+      q4_devices_popup_while_non_manual_txn: q4[0]?.devices_popup_while_non_manual_txn ?? 0,
+      q5_paid_users_with_strict_popup: q5[0]?.paid_users_with_strict_popup ?? 0,
+      q6_recovery_users_with_unacked: q6[0]?.recovery_users_with_unacked ?? 0,
+      q7_transfer_users_with_unacked: q7[0]?.transfer_users_with_unacked ?? 0,
+      q8_acknowledged_grants_total: q8[0]?.total_acked_grants ?? 0,
+      q8_acknowledged_last_24h: q8[0]?.acked_last_24h ?? 0,
+      q9_multi_grant_after_single_ack:
+        'ACK updates one row; getOldestPendingManualGrant returns next FIFO grant if another pending exists (see multi_pending_devices)',
+      q10_devices_with_multiple_pending: multiPending.length,
+    },
     grant_counts: grantCounts[0] ?? {},
     audit_stats: stats,
     test_grants_still_pending: testPending,
     popup_devices: popupDevices,
     popup_device_count: popupDevices.length,
+    multi_pending_devices: multiPending,
+    recent_ack_sample: ackSample,
     payment_subscribers_with_unacked_grants: paymentWithUnacked,
     payment_subscribers_strict_popup_count: paymentWithUnacked.filter((r) => r.strict_popup_now).length,
     non_manual_legacy_false_positive_devices: legacyOnlyFalsePositives,

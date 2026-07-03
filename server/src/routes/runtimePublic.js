@@ -273,6 +273,21 @@ runtimePublicRouter.post('/manual-gift-repair', requireLegacyAdminToken, async (
   }
 })
 
+/** Acknowledge obsolete testing-device grants only. */
+runtimePublicRouter.post('/manual-gift-repair-testing', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '').trim() === '1'
+    const { repairObsoleteTestingManualGrants } = await import('../lib/manualGiftAudit.js')
+    const out = await repairObsoleteTestingManualGrants({ dryRun })
+    res.json({ ok: true, ...out, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/manual-gift-repair-testing]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Read-only subscription restoration audit (admin token). */
 runtimePublicRouter.get('/subscription-restoration-audit', requireLegacyAdminToken, async (_req, res) => {
   try {
