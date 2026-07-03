@@ -2039,6 +2039,48 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
       planDurationDays = Math.trunc(Number(plan.duration_days))
     }
   }
+  if (amount == null) {
+    const { rows: amtRows } = await pool.query(
+      `SELECT amount, plan_id
+       FROM transactions
+       WHERE device_id = $1 AND status = 'completed' AND amount IS NOT NULL
+       ORDER BY COALESCE(updated_at, created_at) DESC
+       LIMIT 1`,
+      [d],
+    )
+    if (amtRows[0]?.amount != null) amount = Number(amtRows[0].amount)
+    else if (amtRows[0]?.plan_id != null) {
+      const p = await getPlanRowByIdAny(Number(amtRows[0].plan_id))
+      if (p?.price != null) amount = Number(p.price)
+    }
+  }
+  if (amount == null && txnId.startsWith('recovery:')) {
+    const sourceDev = txnId.slice('recovery:'.length).trim()
+    if (sourceDev && sourceDev !== d) {
+      const { rows: srcAmt } = await pool.query(
+        `SELECT amount, plan_id
+         FROM transactions
+         WHERE device_id = $1 AND status = 'completed' AND amount IS NOT NULL
+         ORDER BY COALESCE(updated_at, created_at) DESC
+         LIMIT 1`,
+        [sourceDev],
+      )
+      if (srcAmt[0]?.amount != null) amount = Number(srcAmt[0].amount)
+      else if (srcAmt[0]?.plan_id != null) {
+        const p = await getPlanRowByIdAny(Number(srcAmt[0].plan_id))
+        if (p?.price != null) amount = Number(p.price)
+      }
+    }
+  }
+  if (amount == null && planDurationDays != null) {
+    const { rows: priceRows } = await pool.query(
+      `SELECT price FROM plans
+       WHERE deleted_at IS NULL AND is_active = true AND duration_days = $1
+       ORDER BY id ASC LIMIT 1`,
+      [planDurationDays],
+    )
+    if (priceRows[0]?.price != null) amount = Number(priceRows[0].price)
+  }
 
   return {
     amount,
@@ -2495,7 +2537,12 @@ async function buildTxnSummaryFromRow(txn) {
   }
   const status = String(txn.status ?? '').trim().toLowerCase()
   return {
-    amount: txn.amount != null ? Number(txn.amount) : null,
+    amount:
+      txn.amount != null
+        ? Number(txn.amount)
+        : planRow?.price != null
+          ? Number(planRow.price)
+          : null,
     currency: txn.currency != null ? String(txn.currency).trim() || 'TZS' : 'TZS',
     plan_id: planId,
     plan_name: planRow?.name != null ? String(planRow.name).trim() || null : null,
@@ -2542,7 +2589,10 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
         txn = await getLatestCompletedTransactionForDevice(recoverySource)
         if (!txn) {
           const srcSummary = await resolveVerifyTxnSummaryForDevice(recoverySource, visited)
-          if (srcSummary) return { ...srcSummary, source: 'recovery' }
+          if (srcSummary) {
+            const ent = await buildEntitlementVerifyTxnSummary(d)
+            return mergeVerifyTxnSummaries(srcSummary, { ...ent, source: 'recovery' })
+          }
         }
       }
     } else if (linkedId.startsWith('transfer:') || linkedId.startsWith('force:')) {
