@@ -5,6 +5,7 @@ import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { adminSecurityPinFromBody, verifyAdminSecurityPin } from '../lib/adminSecurityPin.js'
+import { verifyAdminSensitiveActionPassword } from '../lib/adminSensitiveActionPassword.js'
 
 export const manualSubscriptionAdminRouter = Router()
 manualSubscriptionAdminRouter.use(requireAdminPanelAccess)
@@ -53,8 +54,12 @@ function rateLimitSetup(req, res, next) {
 
 manualSubscriptionAdminRouter.get('/pin-status', async (_req, res) => {
   try {
-    const configured = await billing.isManualSubscriptionPinConfigured()
-    res.json({ ok: true, configured })
+    res.json({
+      ok: true,
+      configured: true,
+      usesSharedActionPassword: true,
+      legacyPinConfigured: await billing.isManualSubscriptionPinConfigured(),
+    })
   } catch (e) {
     console.error('[manual_subscription pin-status]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
@@ -364,6 +369,16 @@ manualSubscriptionAdminRouter.delete('/history/:grantId', async (req, res) => {
 manualSubscriptionAdminRouter.post('/grant-custom', rateLimitGrant, async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const pin = String(body.pin ?? body.security_pin ?? '').trim()
+    if (!pin) {
+      return res.status(400).json({ ok: false, error: 'PIN is required' })
+    }
+    if (!verifyAdminSensitiveActionPassword(pin)) {
+      console.warn('[manual_grant_custom] invalid sensitive-action password', {
+        ip: String(req.headers['x-forwarded-for'] ?? '').slice(0, 40),
+      })
+      return res.status(403).json({ ok: false, error: 'Invalid PIN' })
+    }
 
     const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
     const planId = Number(body.plan_id ?? body.planId)
@@ -386,6 +401,13 @@ manualSubscriptionAdminRouter.post('/grant-custom', rateLimitGrant, async (req, 
       expiresAt,
       phone,
       createdBy: adminCreatedByLabel(req),
+    })
+
+    deviceSubscriptionBus.emit('update', { deviceId })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId,
+      orderId: `manual_grant:${result.grantId}`,
     })
 
     void recordSystemNotificationEvent('subscription_manual_grant', {
@@ -431,6 +453,16 @@ manualSubscriptionAdminRouter.post('/grant-custom', rateLimitGrant, async (req, 
 manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {}
+    const pin = String(body.pin ?? body.security_pin ?? '').trim()
+    if (!pin) {
+      return res.status(400).json({ ok: false, error: 'PIN is required' })
+    }
+    if (!verifyAdminSensitiveActionPassword(pin)) {
+      console.warn('[manual_grant] invalid sensitive-action password', {
+        ip: String(req.headers['x-forwarded-for'] ?? '').slice(0, 40),
+      })
+      return res.status(403).json({ ok: false, error: 'Invalid PIN' })
+    }
 
     const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
     const durationDays = Number(body.duration_days ?? body.durationDays)
@@ -448,6 +480,13 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
     }
 
     const result = await billing.grantManualDeviceSubscription(deviceId, durationDays, null, { phone })
+
+    deviceSubscriptionBus.emit('update', { deviceId })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId,
+      orderId: `manual_grant:${result.grantId}`,
+    })
 
     void recordSystemNotificationEvent('subscription_manual_grant', {
       device_id: deviceId,

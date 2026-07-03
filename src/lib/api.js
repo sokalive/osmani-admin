@@ -766,8 +766,33 @@ export async function postAdminDeviceForceOtp(id, opts = {}) {
   return body
 }
 
-/** Admin: grant stacked subscription days (admin session auth). */
-export async function postManualSubscriptionGrant({ deviceId, durationDays, phone }) {
+/** Admin: grant stacked subscription days (PIN + phone validated on server). */
+export async function getManualSubscriptionPinStatus() {
+  const res = await fetch(joinPath('/admin/manual-subscription/pin-status'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    headers: adminPanelApiHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionSetupPin({ pin, confirmPin }) {
+  const res = await fetch(joinPath('/admin/manual-subscription/setup-pin'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      pin: String(pin ?? ''),
+      confirm_pin: String(confirmPin ?? pin ?? ''),
+    }),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionGrant({ deviceId, durationDays, phone, pin }) {
   const res = await fetch(joinPath('/admin/manual-subscription/grant'), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
@@ -776,6 +801,7 @@ export async function postManualSubscriptionGrant({ deviceId, durationDays, phon
       device_id: String(deviceId ?? '').trim(),
       duration_days: Number(durationDays),
       phone: String(phone ?? '').trim(),
+      pin: String(pin ?? ''),
     }),
   })
   const body = await parseJsonSafe(res)
@@ -790,6 +816,7 @@ export async function postManualSubscriptionGrantCustom({
   startedAt,
   expiresAt,
   phone,
+  pin,
 }) {
   const res = await fetch(joinPath('/admin/manual-subscription/grant-custom'), {
     ...ADMIN_FETCH_DEFAULTS,
@@ -801,6 +828,7 @@ export async function postManualSubscriptionGrantCustom({
       started_at: startedAt,
       expires_at: expiresAt,
       phone: String(phone ?? '').trim(),
+      pin: String(pin ?? ''),
     }),
   })
   const body = await parseJsonSafe(res)

@@ -92,11 +92,12 @@ async function testGrantCustomEndpointValidation() {
       plan_id: plan.id,
       started_at: eatIso(2026, 8, 1, 10, 0),
       expires_at: eatIso(2026, 7, 1, 10, 0),
+      phone: '+255712345678',
       pin: 'wrong-pin-probe',
     }),
   })
   if (bad.status === 400 && String(bad.body?.error || '').includes('later')) {
-    ok('grant-custom rejects invalid date range without valid PIN')
+    ok('grant-custom rejects invalid date range')
   } else if (bad.status === 403) {
     ok('grant-custom reached server (PIN gate before date check is acceptable)')
   } else {
@@ -104,17 +105,21 @@ async function testGrantCustomEndpointValidation() {
   }
 }
 
-async function testStandardGrantUnchanged() {
+async function testStandardGrantPinGate() {
   const { status, body } = await fetchJson('/api/admin/manual-subscription/grant', {
     method: 'POST',
     body: JSON.stringify({
-      device_id: 'verify_standard_unchanged',
+      device_id: 'verify_standard_pin_gate',
       duration_days: 7,
+      phone: '+255712345678',
       pin: 'wrong-pin',
     }),
   })
-  if (status === 403 || status === 400) ok('standard /grant endpoint still active')
-  else fail(`standard grant unexpected HTTP ${status} ${JSON.stringify(body)}`)
+  if (status === 403 || (status === 400 && String(body?.error || '').includes('PIN'))) {
+    ok('standard /grant endpoint PIN gate active')
+  } else {
+    fail(`standard grant unexpected HTTP ${status} ${JSON.stringify(body)}`)
+  }
 }
 
 async function main() {
@@ -125,7 +130,7 @@ async function main() {
   }
   await testHistoryShape()
   await testGrantCustomEndpointValidation()
-  await testStandardGrantUnchanged()
+  await testStandardGrantPinGate()
 
   if (failed > 0) {
     console.error(`\n${failed} check(s) failed`)

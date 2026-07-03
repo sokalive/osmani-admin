@@ -101,6 +101,7 @@ function ManualSubscriptionPage() {
   const [tab, setTab] = useState('grant')
   const [deviceId, setDeviceId] = useState('')
   const [grantPhone, setGrantPhone] = useState('')
+  const [pin, setPin] = useState('')
   const [plans, setPlans] = useState([])
   const [plansLoading, setPlansLoading] = useState(true)
   const [selectedPlanId, setSelectedPlanId] = useState('')
@@ -372,6 +373,10 @@ function ManualSubscriptionPage() {
       showToast('error', 'Ingiza namba ya simu')
       return
     }
+    if (!pin.trim()) {
+      showToast('error', 'Ingiza Security PIN kabla ya kuweka kifurushi')
+      return
+    }
     const days = planDurationDays(selectedPlan)
     if (!days || !selectedPlan) {
       showToast('error', 'Chagua kifurushi')
@@ -383,6 +388,7 @@ function ManualSubscriptionPage() {
         deviceId: d,
         durationDays: days,
         phone,
+        pin: pin.trim(),
       })
       setFlash({
         type: 'success',
@@ -408,6 +414,10 @@ function ManualSubscriptionPage() {
       showToast('error', 'Ingiza namba ya simu')
       return
     }
+    if (!pin.trim()) {
+      showToast('error', 'Ingiza Security PIN kabla ya kuweka kifurushi')
+      return
+    }
     if (!customSelectedPlan) {
       showToast('error', 'Chagua kifurushi')
       return
@@ -430,6 +440,7 @@ function ManualSubscriptionPage() {
         startedAt,
         expiresAt,
         phone,
+        pin: pin.trim(),
       })
       setFlash({
         type: 'success',
@@ -639,6 +650,23 @@ function ManualSubscriptionPage() {
                 />
               </div>
 
+              <div>
+                <label htmlFor="ms-pin" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Security PIN
+                </label>
+                <input
+                  id="ms-pin"
+                  type="password"
+                  className={inputClass()}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  placeholder="Ingiza Security PIN"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </div>
+
               <button
                 type="submit"
                 disabled={busy || plansLoading || !selectedPlan}
@@ -760,6 +788,23 @@ function ManualSubscriptionPage() {
                   onChange={(e) => setCustomPhone(e.target.value)}
                   placeholder="+2557XXXXXXXX"
                   autoComplete="tel"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="cs-pin" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Security PIN
+                </label>
+                <input
+                  id="cs-pin"
+                  type="password"
+                  className={inputClass()}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  placeholder="Ingiza Security PIN"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                 />
               </div>
 

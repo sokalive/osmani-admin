@@ -115,7 +115,7 @@ async function testLocalCustomGrantDates() {
   else ok('manual grant completed transaction has phone')
 }
 
-async function testPinRemoved(base, label) {
+async function testPinAndPhoneRequired(base, label) {
   const plansRes = await fetchJson(base, '/api/plans')
   const plans = Array.isArray(plansRes.body) ? plansRes.body : []
   const plan = plans.find((p) => p?.isActive !== false && p?.durationDays > 0)
@@ -124,19 +124,54 @@ async function testPinRemoved(base, label) {
     return
   }
 
+  const pinStatus = await fetchJson(base, '/api/admin/manual-subscription/pin-status')
+  if (pinStatus.status === 200 && pinStatus.body?.usesSharedActionPassword === true) {
+    ok(`${label} pin-status usesSharedActionPassword`)
+  } else {
+    fail(`${label} pin-status missing usesSharedActionPassword`)
+  }
+
+  const missingPin = await fetchJson(base, '/api/admin/manual-subscription/grant', {
+    method: 'POST',
+    body: JSON.stringify({
+      device_id: `verify_pin_${Date.now()}`,
+      duration_days: plan.durationDays || plan.duration_days || 7,
+      phone: '+255712345678',
+    }),
+  })
+  if (missingPin.status === 400 && String(missingPin.body?.error || '').includes('PIN')) {
+    ok(`${label} /grant requires PIN`)
+  } else {
+    fail(`${label} /grant missing PIN gate (HTTP ${missingPin.status})`)
+  }
+
   const missingPhone = await fetchJson(base, '/api/admin/manual-subscription/grant', {
     method: 'POST',
     body: JSON.stringify({
-      device_id: `verify_pin_removed_${Date.now()}`,
+      device_id: `verify_phone_${Date.now()}`,
       duration_days: plan.durationDays || plan.duration_days || 7,
+      pin: '3030',
     }),
   })
   if (missingPhone.status === 400 && String(missingPhone.body?.error || '').includes('phone')) {
-    ok(`${label} /grant no longer requires PIN (phone required instead)`)
-  } else if (missingPhone.status !== 403 || !String(missingPhone.body?.error || '').includes('PIN')) {
-    ok(`${label} /grant PIN gate removed (HTTP ${missingPhone.status})`)
+    ok(`${label} /grant requires phone (Osmani extension)`)
   } else {
-    fail(`${label} /grant still requires PIN`)
+    fail(`${label} /grant missing phone gate (HTTP ${missingPhone.status})`)
+  }
+
+  const badPin = await fetchJson(base, '/api/admin/manual-subscription/grant', {
+    method: 'POST',
+    body: JSON.stringify({
+      device_id: `verify_bad_pin_${Date.now()}`,
+      duration_days: plan.durationDays || plan.duration_days || 7,
+      phone: '+255712345678',
+      pin: 'wrong-pin-probe',
+    }),
+  })
+  if (badPin.status === 403 && String(badPin.body?.error || '').includes('PIN')) {
+    ok(`${label} /grant rejects invalid PIN`)
+  } else {
+    fail(`${label} /grant invalid PIN unexpected HTTP ${badPin.status}`)
   }
 
   const customBad = await fetchJson(base, '/api/admin/manual-subscription/grant-custom', {
@@ -146,12 +181,17 @@ async function testPinRemoved(base, label) {
       plan_id: plan.id,
       started_at: eatIso(2026, 8, 1, 10, 0),
       expires_at: eatIso(2026, 7, 1, 10, 0),
+      phone: '+255712345678',
     }),
   })
-  if (customBad.status === 403 && String(customBad.body?.error || '').includes('PIN')) {
-    fail(`${label} grant-custom still requires PIN`)
+  if (customBad.status === 400 && String(customBad.body?.error || '').includes('PIN')) {
+    ok(`${label} grant-custom requires PIN`)
+  } else if (customBad.status === 403) {
+    ok(`${label} grant-custom PIN gate active`)
+  } else if (customBad.status === 400 && String(customBad.body?.error || '').includes('later')) {
+    ok(`${label} grant-custom reached date validation (PIN accepted or checked first)`)
   } else {
-    ok(`${label} grant-custom PIN gate removed`)
+    fail(`${label} grant-custom unexpected HTTP ${customBad.status} ${JSON.stringify(customBad.body)}`)
   }
 }
 
@@ -165,9 +205,9 @@ async function main() {
   testCustomReplayAudit()
   await testLocalCustomGrantDates()
   await testHealth(BASE, 'VPS')
-  await testPinRemoved(BASE, 'VPS')
+  await testPinAndPhoneRequired(BASE, 'VPS')
   await testHealth(RENDER_API, 'Render')
-  await testPinRemoved(RENDER_API, 'Render')
+  await testPinAndPhoneRequired(RENDER_API, 'Render')
 
   if (failed > 0) {
     console.error(`\n${failed} check(s) failed`)
