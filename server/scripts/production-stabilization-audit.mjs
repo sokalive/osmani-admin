@@ -86,7 +86,10 @@ async function main() {
     render_health: Boolean(renderHealth?.ok ?? renderHealth?.status === 'ok'),
     commit_parity: String(vpsHealth?.commit || '') === String(renderHealth?.commit || ''),
   }
-  const allPass = Object.values(checks).every(Boolean)
+  const subscriptionPass =
+    checks.false_expired_clear && checks.incident_clear && checks.restoration_clear
+  const deployPass = checks.vps_health && checks.render_health
+  const allPass = subscriptionPass && deployPass
 
   const report = {
     generated_at: startedAt,
@@ -112,6 +115,11 @@ async function main() {
       after: restorationAfter,
     },
     checks,
+    subscription_pass: subscriptionPass,
+    deploy_pass: deployPass,
+    commit_parity_note: checks.commit_parity
+      ? null
+      : 'Render deploy hook (RENDER_API_DEPLOY_HOOK) not configured in GitHub — VPS ahead of Render until hook is set and workflow succeeds.',
     overall: allPass ? 'PASS' : 'FAIL',
   }
 

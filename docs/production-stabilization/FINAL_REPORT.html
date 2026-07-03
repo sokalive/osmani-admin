@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Production Stabilization — Final Report</title>
+  <style>
+    :root { --bg:#0a0e16; --card:#0f172a; --text:#e2e8f0; --muted:#94a3b8; --ok:#34d399; --warn:#fbbf24; --bad:#f87171; --accent:#f5b301; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 2rem; line-height: 1.55; }
+    h1,h2,h3 { color: #fff; }
+    h1 { font-size: 1.75rem; margin-bottom: .25rem; }
+    .meta { color: var(--muted); font-size: .9rem; margin-bottom: 2rem; }
+    section { background: var(--card); border: 1px solid #334155; border-radius: 1rem; padding: 1.25rem 1.5rem; margin-bottom: 1.25rem; }
+    .pass { color: var(--ok); font-weight: 700; }
+    .fail { color: var(--bad); font-weight: 700; }
+    .warn { color: var(--warn); font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+    th, td { text-align: left; padding: .5rem .65rem; border-bottom: 1px solid #1e293b; vertical-align: top; }
+    th { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+    code { background: #1e293b; padding: .1rem .35rem; border-radius: .25rem; font-size: .85em; }
+    ul { margin: .5rem 0; padding-left: 1.25rem; }
+    pre { background: #020617; border: 1px solid #1e293b; border-radius: .5rem; padding: .75rem; overflow: auto; font-size: .78rem; }
+  </style>
+</head>
+<body>
+  <h1>FINAL ADMIN + BACKEND STABILIZATION REPORT</h1>
+  <p class="meta">Generated 2026-07-03 · Commit <code>838b7e6</code> on GitHub &amp; VPS</p>
+
+  <section>
+    <h2>Executive summary</h2>
+    <p><span class="pass">SUBSCRIPTION STABILIZATION: PASS</span> — All active subscriptions with future <code>expires_at</code> are correctly <code>active</code>. False-expired, incident, and restoration audits report zero remaining issues.</p>
+    <p><span class="pass">VPS DEPLOY: PASS</span> — <code>api.osmanitv.com</code> and <code>admin.osmanitv.com</code> on commit <code>838b7e6</code>.</p>
+    <p><span class="warn">RENDER DEPLOY: PENDING</span> — Render API healthy on <code>57f3b9c</code> (one commit behind VPS). GitHub workflow <code>Deploy Render API</code> fails: <code>RENDER_API_DEPLOY_HOOK</code> secret not configured. Subscription logic unchanged between commits; only admin list sort tiebreakers differ.</p>
+  </section>
+
+  <section>
+    <h2>Part 1 — Restore incorrect subscription states</h2>
+    <ul>
+      <li>Audited all subscriptions with future <code>expires_at</code>.</li>
+      <li>Earlier session repaired <strong>12</strong> false-expired rows (pending + future expiry / manual blocks).</li>
+      <li>Post-stabilization audit: <code>affected_count: 0</code>, <code>skipped_transfer_source_count</code> preserves legitimate <code>moved:*</code> revocations.</li>
+      <li>No expiry dates altered; no extensions applied.</li>
+    </ul>
+    <p>Repair report: <code>docs/production-stabilization/report.json</code> → <code>part1_false_expired</code></p>
+  </section>
+
+  <section>
+    <h2>Part 2 — REVOKED subscription investigation</h2>
+    <table>
+      <thead><tr><th>Category</th><th>Count</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Legitimate transfer revocations (<code>moved:*</code>)</td><td>Preserved</td><td>Never restored</td></tr>
+        <tr><td>Incorrect false-expired (pending + future expiry)</td><td>0 remaining</td><td>Auto-restored earlier</td></tr>
+        <tr><td>Incorrect suspended (active + blocked)</td><td>0</td><td>—</td></tr>
+        <tr><td>Incorrect migration shadows</td><td>0</td><td>—</td></tr>
+        <tr><td>Restoration unresolved</td><td>0</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <p>Evidence in <code>report.json</code> → <code>part2_revoked.evidence</code></p>
+  </section>
+
+  <section>
+    <h2>Part 3 — Users page stabilization (root cause)</h2>
+    <ol>
+      <li><strong>SSE double-refresh</strong> — Both <code>subscription_updated</code> and <code>transaction_updated</code> triggered silent refetch on every tab.</li>
+      <li><strong>Row jumping</strong> — <code>mergeUserRows()</code> always adopted server sort order; unstable SQL tiebreakers on equal timestamps.</li>
+      <li><strong>Fingerprint reorder noise</strong> — Order-sensitive row fingerprint treated reorder as data change.</li>
+      <li><strong>Table-wide timer</strong> — 60s <code>remainingClock</code> state re-rendered entire table.</li>
+    </ol>
+    <h3>Fixes (SSE preserved)</h3>
+    <ul>
+      <li>Tab-scoped SSE: subscription events skip Failed tab; transaction events only refresh Failed (+ summary).</li>
+      <li>Silent merge preserves client row order when key set unchanged.</li>
+      <li>Order-independent content fingerprint.</li>
+      <li><code>RemainingCell</code> isolates per-row countdown timer.</li>
+      <li>SQL tiebreakers: <code>device_id</code> / <code>order_id</code> on equal timestamps.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Part 4 — Modern Users module</h2>
+    <ul>
+      <li>Default sort: <strong>newest subscriptions first</strong> (<code>started_at DESC</code>).</li>
+      <li>Filters: plan, provider/source, status (All tab).</li>
+      <li>Search: phone, device ID, order ID, transaction ID, reference (partial match).</li>
+      <li>Customer Investigation timeline extended: account creation, recovery, offer codes, device history, phone on transactions.</li>
+      <li>All actions preserved: View, Edit, Block, Delete, Grant, Transfer, Recovery.</li>
+      <li>No payment or subscription business logic modified.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Part 5 — Historical comparison</h2>
+    <p>Compared against commits <code>41032d7</code>, <code>b2d7e12</code>, <code>1f539e7</code> (stable Users page iterations):</p>
+    <ul>
+      <li>Restored stable silent-merge / fingerprint patterns from <code>b2d7e12</code>.</li>
+      <li>Kept paginated tabs, profile drawer, and SSE from <code>1f539e7</code>.</li>
+      <li>Re-applied newest-first sort (requested; was expiry-soonest on Active Paid in intermediate builds).</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Part 6 — Verification &amp; deployment</h2>
+    <table>
+      <thead><tr><th>Check</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>false_expired_clear</td><td class="pass">PASS</td></tr>
+        <tr><td>incident_clear</td><td class="pass">PASS</td></tr>
+        <tr><td>restoration_clear</td><td class="pass">PASS</td></tr>
+        <tr><td>vps_health</td><td class="pass">PASS (838b7e6)</td></tr>
+        <tr><td>render_health</td><td class="pass">PASS (57f3b9c)</td></tr>
+        <tr><td>commit_parity</td><td class="warn">PENDING Render hook</td></tr>
+        <tr><td>GitHub push</td><td class="pass">838b7e6 on main</td></tr>
+        <tr><td>Contabo workflow</td><td class="pass">run 28672694991</td></tr>
+        <tr><td>Users API sort</td><td class="pass">started_newest verified</td></tr>
+      </tbody>
+    </table>
+    <h3>Commits</h3>
+    <pre>838b7e6 Stabilize Users page refresh and complete production subscription audit.
+57f3b9c Prefer entitlement catalog amount over null recovery source summary.</pre>
+    <h3>Files changed (838b7e6)</h3>
+    <ul>
+      <li><code>server/src/lib/adminUsersList.js</code></li>
+      <li><code>src/lib/usersPageRefresh.js</code></li>
+      <li><code>src/pages/UsersPage.jsx</code></li>
+      <li><code>src/components/UserProfileDrawer.jsx</code></li>
+      <li><code>server/scripts/production-stabilization-audit.mjs</code></li>
+    </ul>
+    <h3>Render deploy action required</h3>
+    <p>Add <code>RENDER_API_DEPLOY_HOOK</code> to GitHub repo secrets (see <code>docs/RENDER_DEPLOY.md</code>), then re-run workflow or push to <code>server/**</code>.</p>
+  </section>
+
+  <section>
+    <h2>Deployment evidence</h2>
+    <pre>VPS health:  {"ok":true,"commit":"838b7e60552387d507018735cf4a1edffe99dfa4"}
+Render health: {"ok":true,"commit":"57f3b9c236bc0fbb5ccb0433fa8f59226d3c6e43"}
+GitHub Actions: Deploy Contabo #28672694991 — success
+GitHub Actions: Deploy Render API #28672694935 — failed (missing hook)</pre>
+  </section>
+</body>
+</html>
