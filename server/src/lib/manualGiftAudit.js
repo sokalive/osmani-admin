@@ -80,7 +80,7 @@ export async function countManualGiftAuditStats() {
          AND g.id <= (regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint)
      ),
      stale AS (
-       SELECT p.id FROM pending p
+       SELECT p.id, p.device_id FROM pending p
        WHERE p.id NOT IN (SELECT id FROM strict_popup)
      )
      SELECT
