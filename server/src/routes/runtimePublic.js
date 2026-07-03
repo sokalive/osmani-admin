@@ -188,6 +188,19 @@ runtimePublicRouter.get('/vps-migration-audit', requireLegacyAdminToken, async (
   }
 })
 
+/** Read-only exact SQL subscription incident statistics. */
+runtimePublicRouter.get('/subscription-incident-database-report', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runSubscriptionIncidentDatabaseReport } = await import('../lib/subscriptionIncidentDatabaseReport.js')
+    const report = await runSubscriptionIncidentDatabaseReport()
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-incident-database-report]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Read-only subscription restoration audit (admin token). */
 runtimePublicRouter.get('/subscription-restoration-audit', requireLegacyAdminToken, async (_req, res) => {
   try {
