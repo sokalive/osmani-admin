@@ -1,0 +1,141 @@
+{
+  "generated_at": "2026-07-03T18:16:00.000Z",
+  "audit_method": "Live production PostgreSQL via VPS runtime APIs only — no estimates",
+  "direct_answers": {
+    "how_many_users_lost_subscriptions": {
+      "value": "Not stored as a dedicated ledger in production database",
+      "database_evidence": {
+        "security_events_subscription_recovery_distinct_actors": 369,
+        "security_events_subscription_recovery_total_events": 2782,
+        "device_subscriptions_with_recovery_transaction_id": 98,
+        "note": "Recovery events include reinstall/recovery flows; they do not equal incorrect subscription loss count"
+      }
+    },
+    "how_many_users_already_restored": {
+      "value": "Not stored as a cumulative repair ledger in production database",
+      "database_evidence": {
+        "restored_during_this_audit_session": 7,
+        "breakdown": {
+          "false_expired_status_restored": 5,
+          "wrong_direction_migration_recovered": 1,
+          "transfer_source_revoked": 1
+        }
+      }
+    },
+    "users_still_requiring_restoration": 0
+  },
+  "part1_incident_summary": {
+    "root_cause": "device_subscriptions.status was not active (often pending after incomplete recovery/transfer) while expires_at remained in the future. Admin maps status!==active to EXPIRED; verify cache zeroes remaining_seconds for non-active rows so the app shows renew. Rows with transaction_id moved:* are intentional post-migration revokes on the old device_id.",
+    "first_incident_signal_at_utc": "2026-06-18T15:24:42.790Z",
+    "first_incident_signal_source": "security_events MIN(created_at) WHERE event_type IN ('Subscription recovery','Subscription revoked')",
+    "commits_introducing_regression": "Not stored in production database (see sql_evidence_note)",
+    "subscription_types_affected_mechanism": [
+      "pending status with future expires_at (false-expired / wrongly REVOKED in admin UI)",
+      "migration shadows after reinstall (install_instance / payment phone)",
+      "orphan activations (completed payment, status not finalized to active)",
+      "wrong-direction migration (subscription on sibling device_id)"
+    ],
+    "activation_methods_with_pending_future_non_moved_at_peak": [
+      { "activation_method": "recovery", "count": 1 }
+    ],
+    "activation_methods_active_now": [
+      { "activation_method": "payment", "count": 165 },
+      { "activation_method": "recovery", "count": 83 },
+      { "activation_method": "other", "count": 57 },
+      { "activation_method": "manual_grant", "count": 15 },
+      { "activation_method": "transfer_source_revoked", "count": 2 },
+      { "activation_method": "transfer", "count": 1 }
+    ],
+    "users_never_in_current_issue_set": 935,
+    "total_unique_devices": 936
+  },
+  "part2_exact_counts_current": {
+    "false_expired": 0,
+    "incorrect_revoked_shadows": 0,
+    "incorrectly_suspended": 0,
+    "restoration_unresolved": 0,
+    "wrong_direction_victims": 0,
+    "transfer_source_still_active": 0,
+    "duplicate_phone_active_excess": 0,
+    "missing_verify_amount_on_active_devices": 11,
+    "sparse_account_cards_amount_null": 11,
+    "manual_grant_activation_delay_users": 0,
+    "offer_code_issues": 0,
+    "reinstall_subscription_loss_shadows": 0,
+    "legitimate_transfer_sources_pending_future": 1,
+    "legitimate_moved_sources_total": 342,
+    "pending_future_expiry_all": 307,
+    "note_moved_pending": "306–342 pending+f future rows are moved:* or post-transfer sources — legitimate revocations, not incidents"
+  },
+  "part2_verify_sparse_scan": {
+    "active_devices_checked": 293,
+    "sparse_count_amount_null": 11,
+    "sparse_breakdown": {
+      "recovery_source": 10,
+      "payment_source": 1
+    },
+    "all_have_plan_name_and_duration": true
+  },
+  "part3_restoration_audit_final": {
+    "false_expired_affected_count": 0,
+    "incident_incorrectly_revoked_migration_shadow": 0,
+    "incident_incorrectly_suspended_active": 0,
+    "restoration_unresolved_users_count": 0,
+    "transfer_source_unresolved": 0,
+    "expires_at_unchanged_on_all_repairs": true
+  },
+  "part4_verification": {
+    "total_active_subscriptions": 324,
+    "total_expired_subscriptions": 306,
+    "total_legitimate_revoked_moved_sources": 342,
+    "total_restored_this_audit_session": 7,
+    "total_untouched_legitimate_subscriptions": 935,
+    "remaining_subscription_access_issues": 0,
+    "remaining_verify_metadata_amount_gaps": 11,
+    "payment_activation_server_median_seconds": 0.14,
+    "payment_checkout_median_seconds": 31.26
+  },
+  "part5_guarantee_checks": {
+    "false_expired_clear": true,
+    "incident_clear": true,
+    "restoration_clear": true,
+    "transfer_revocation_clear": true,
+    "server_activation_instant": true,
+    "verify_plan_and_duration_on_all_active": true,
+    "verify_amount_on_all_active": false,
+    "verify_amount_gap_count": 11,
+    "verify_amount_gap_is_recovery_or_legacy_payment": true
+  },
+  "deployments": {
+    "github_commit": "06144057d0607444ec390b4bb045a0b9f57ba2a7",
+    "vps_commit": "06144057d0607444ec390b4bb045a0b9f57ba2a7",
+    "render_commit": "4e15c545a00267f75eb4de77c45d2e5a7be84eb1",
+    "vps_api": "https://api.osmanitv.com",
+    "render_api": "https://osmani-admin-api.onrender.com"
+  },
+  "files_changed_this_audit": [
+    "server/src/lib/subscriptionIncidentDatabaseReport.js",
+    "server/src/routes/runtimePublic.js",
+    "server/scripts/final-production-subscription-incident-report.mjs"
+  ],
+  "git_commits_this_audit": [
+    "0614405 Add production subscription incident database report and final audit script"
+  ],
+  "sql_evidence_endpoints": [
+    "GET /api/runtime/subscription-incident-database-report",
+    "GET /api/runtime/subscription-false-expired-audit",
+    "GET /api/runtime/subscription-incident-audit",
+    "GET /api/runtime/subscription-restoration-audit",
+    "GET /api/runtime/subscription-api-parity-audit",
+    "GET /api/runtime/transfer-source-revocation-audit",
+    "GET /api/runtime/payment-activation-stats"
+  ],
+  "regression_verification": {
+    "false_expired_audit": "PASS — affected_count 0",
+    "incident_audit": "PASS — incorrectly_revoked_migration_shadow 0, incorrectly_suspended_active 0",
+    "restoration_audit": "PASS — unresolved_users_count 0",
+    "transfer_revocation_audit": "PASS — source_still_active_after_transfer 0",
+    "verify_integrity_sample": "PARTIAL — 11/293 active devices have amount=null (planName+duration present)"
+  },
+  "conclusion": "All subscription ACCESS restoration audits pass with remaining_incorrect_users = 0. Production database shows 324 active subscriptions, 0 false-expired, 0 migration shadows, 0 restoration unresolved, 0 transfer-source leaks. Eleven active devices return verify amount=null (10 recovery, 1 payment) while planName and duration are populated — account card amount display gap, not subscription access loss. Git commit causation is not stored in the production database. First security_events subscription signal: 2026-06-18 UTC."
+}

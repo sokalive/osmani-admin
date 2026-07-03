@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Final Production Subscription Incident Report</title>
+  <style>
+    body{font-family:system-ui;background:#0a0e16;color:#e2e8f0;margin:0;padding:2rem;line-height:1.55}
+    h1,h2{color:#fff} section{background:#0f172a;border:1px solid #334155;border-radius:12px;padding:1.25rem 1.5rem;margin:1rem 0}
+    .pass{color:#34d399;font-weight:700}.warn{color:#fbbf24;font-weight:700}
+    table{width:100%;border-collapse:collapse;font-size:.9rem} th,td{border-bottom:1px solid #1e293b;padding:.5rem;text-align:left}
+    th{color:#94a3b8;font-size:.75rem;text-transform:uppercase} code{background:#1e293b;padding:.1rem .35rem;border-radius:4px}
+  </style>
+</head>
+<body>
+  <h1>FINAL PRODUCTION SUBSCRIPTION INCIDENT REPORT</h1>
+  <p>Generated 2026-07-03 · Evidence: live PostgreSQL via <code>api.osmanitv.com</code> runtime APIs · Commit <code>0614405</code></p>
+
+  <section>
+    <h2>Direct answers (production database evidence only)</h2>
+    <table>
+      <tr><th>Question</th><th>Answer</th></tr>
+      <tr><td>How many users lost subscriptions?</td><td>No dedicated loss ledger in DB. Closest signals: <strong>369</strong> distinct devices invoked <code>Subscription recovery</code> security events since 2026-06-18; <strong>98</strong> rows with <code>recovery:</code> transaction_id. These are recovery-flow signals, not a loss count.</td></tr>
+      <tr><td>How many users have already been restored?</td><td>No cumulative repair ledger in DB. This audit session restored <strong>7</strong> devices (5 false-expired status, 1 wrong-direction migration, 1 transfer-source revocation).</td></tr>
+      <tr><td>Users still requiring restoration</td><td class="pass"><strong>0</strong></td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Part 1 — Incident summary</h2>
+    <p><strong>Root cause (from live audit):</strong> <code>device_subscriptions.status</code> was <code>pending</code> while <code>expires_at</code> remained in the future — admin/verify treated these as EXPIRED/REVOKED. Legitimate <code>moved:*</code> transfer sources excluded.</p>
+    <p><strong>First incident signal (SQL):</strong> <code>2026-06-18T15:24:42.790Z</code> — earliest <code>Subscription recovery</code> in <code>security_events</code>.</p>
+    <p><strong>Commits introducing regression:</strong> <span class="warn">Not stored in production database</span>.</p>
+    <p><strong>Active subscriptions by method (SQL):</strong> payment 165 · recovery 83 · manual_grant 15 · other 57 · transfer 1 · transfer_source_revoked 2</p>
+    <p><strong>Users never in current issue set:</strong> 935 of 936 unique devices</p>
+  </section>
+
+  <section>
+    <h2>Part 2 — Exact current counts</h2>
+    <table>
+      <tr><td>False Expired</td><td class="pass">0</td></tr>
+      <tr><td>Incorrect Revoked (shadows)</td><td class="pass">0</td></tr>
+      <tr><td>Incorrect Suspended</td><td class="pass">0</td></tr>
+      <tr><td>Restoration Unresolved</td><td class="pass">0</td></tr>
+      <tr><td>Transfer source still active</td><td class="pass">0</td></tr>
+      <tr><td>Missing verify amount (active scan 293 devices)</td><td class="warn">11</td></tr>
+      <tr><td>Sparse account cards (amount null, plan+duration OK)</td><td class="warn">11</td></tr>
+      <tr><td>Manual grant activation delay</td><td class="pass">0</td></tr>
+      <tr><td>Offer code issues</td><td class="pass">0</td></tr>
+      <tr><td>Reinstall shadow loss (unresolved)</td><td class="pass">0</td></tr>
+      <tr><td>Legitimate moved:* pending (not incidents)</td><td>342 sources / 1 skipped in last audit</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Part 4 — Final verification</h2>
+    <table>
+      <tr><td>Total active subscriptions</td><td>324</td></tr>
+      <tr><td>Total expired</td><td>306</td></tr>
+      <tr><td>Legitimate revoked (moved:*)</td><td>342 rows</td></tr>
+      <tr><td>Restored this audit</td><td>7</td></tr>
+      <tr><td>Remaining subscription access issues</td><td class="pass">0</td></tr>
+      <tr><td>Server activation median</td><td>0.14s (7-day SQL window, n=8)</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Deployments</h2>
+    <table>
+      <tr><td>VPS</td><td><code>06144057d0607444ec390b4bb045a0b9f57ba2a7</code></td></tr>
+      <tr><td>Render</td><td><code>4e15c545a00267f75eb4de77c45d2e5a7be84eb1</code></td></tr>
+      <tr><td>GitHub main</td><td><code>0614405</code></td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Conclusion</h2>
+    <p class="pass">Subscription ACCESS stabilization: PASS — remaining users requiring restoration = 0.</p>
+    <p>Eleven active devices have <code>verify.amount=null</code> (10 recovery, 1 payment) while <code>planName</code> and <code>duration</code> are present. This is a verify metadata display gap, not lost entitlement.</p>
+    <p>Full machine-readable evidence: <code>docs/production-subscription-incident/FINAL_INCIDENT_REPORT.json</code></p>
+  </section>
+</body>
+</html>
