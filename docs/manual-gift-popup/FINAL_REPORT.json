@@ -1,0 +1,63 @@
+{
+  "title": "Manual Gift False Popup — Engineering Report",
+  "generated_at": "2026-07-03T22:28:00.000Z",
+  "status": "VPS_PASS_RENDER_PENDING",
+  "root_cause": {
+    "summary": "getOldestPendingManualGrant() returned ANY unacknowledged manual_subscription_grants row for a device_id without validating that the active subscription was actually activated by that manual grant.",
+    "mechanism": "After commit d59dc3f restored pending-gift fetch on the active verify fast path, executeSubscriptionVerify() called getOldestPendingManualGrant() for every active subscriber. The legacy SQL only checked acknowledged_at IS NULL and deleted_at IS NULL. Payment subscribers (transaction_id osm_sp_*), recovery subscribers (recovery:*), and expired/inactive devices with old unacknowledged grants still received manualGift.showPopup=true.",
+    "ota_cache_note": "POST /subscription/recover never returns manualGift. Stale client-side popup state can persist until the next verify refresh; backend fix ensures verify returns manualGift=null for non-manual entitlements so OTA clients self-heal on next poll.",
+    "not_client_bug": "Production device d647ed5740ab1d… had active SonicPesa subscription (osm_sp_1783093130959_3add1c8919) plus unacknowledged manual grant #74 — verify correctly returned popup under legacy logic."
+  },
+  "sql_evidence": {
+    "pre_repair_dry_run": {
+      "stale_count": 25,
+      "top_stale_reasons": {
+        "subscription_inactive": 18,
+        "non_manual_transaction": 3,
+        "no_subscription_row": 2
+      },
+      "smoking_gun": {
+        "grant_id": 74,
+        "device_id": "d647ed5740ab1d93355fc1491caeed1d1e2c92107e87f90e4d9a86b2468ec95b",
+        "sub_transaction_id": "osm_sp_1783093130959_3add1c8919",
+        "stale_reason": "non_manual_transaction"
+      }
+    },
+    "post_repair": {
+      "pending_unacked_total": 14,
+      "strict_legitimate_popup": 14,
+      "stale_false_positive_grants": 0,
+      "stale_false_positive_devices": 0
+    }
+  },
+  "rows_repaired": {
+    "count": 25,
+    "action": "SET acknowledged_at = now() on manual_subscription_grants only",
+    "subscriptions_modified": false,
+    "payments_modified": false,
+    "expiry_modified": false
+  },
+  "files_changed": [
+    "server/src/billingStore.js — tightened getOldestPendingManualGrant JOIN + manual_grant transaction guard",
+    "server/src/lib/manualGiftAudit.js — SQL audit + safe repair",
+    "server/src/routes/runtimePublic.js — GET /manual-gift-database-report, POST /manual-gift-repair",
+    "server/scripts/verify-manual-gift-popup.mjs — production verification"
+  ],
+  "commits": {
+    "github_main": "a5117c0",
+    "vps_api_osmanitv": "a5117c04c62bbf4d28dc013dab0619596d4cbfc1",
+    "render_api": "4644a1adbf7c25c37e1190100249b7fadaf02d41",
+    "commit_parity": false,
+    "render_blocker": "RENDER_API_DEPLOY_HOOK not configured — Render deploy workflow fails"
+  },
+  "production_verification_vps": {
+    "paid_subscriber_d647ed": { "active": true, "manualGift": null, "pass": true },
+    "manual_subscriber_c8a894198a39ddc3": { "active": true, "manualGift.showPopup": true, "grantId": 71, "pass": true },
+    "recover_endpoint": { "manualGift": null, "pass": true },
+    "inactive_device": { "manualGift": null, "pass": true },
+    "stale_grants_remaining": 0,
+    "verify_script": "verify-manual-gift-popup.mjs VPS checks PASS"
+  },
+  "strict_eligibility_rule": "manualGift only when: acknowledged_at IS NULL, deleted_at IS NULL, device_id matches, subscription active (expires_at > now(), status=active, not manual_admin_blocked), transaction_id ~ ^manual_grant:[0-9]+$, grant.id <= current manual_grant id in transaction_id",
+  "confirmation": "Only devices with an active manual_grant-linked entitlement and a legitimate unacknowledged grant now receive manualGift popup on VPS. 25 stale grant rows were safely acknowledged. Existing subscription expiry, payment rows, transfers, and offer codes were not modified."
+}
