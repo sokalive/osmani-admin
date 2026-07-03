@@ -232,6 +232,34 @@ runtimePublicRouter.get('/subscription-incident-database-report', requireLegacyA
   }
 })
 
+/** Read-only manual gift false-positive audit (SQL evidence). */
+runtimePublicRouter.get('/manual-gift-database-report', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runManualGiftDatabaseReport } = await import('../lib/manualGiftAudit.js')
+    const report = await runManualGiftDatabaseReport()
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/manual-gift-database-report]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Acknowledge stale pending manual grants (grants table only — no subscription mutation). */
+runtimePublicRouter.post('/manual-gift-repair', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '').trim() === '1'
+    const { repairStaleManualGiftAcknowledgements } = await import('../lib/manualGiftAudit.js')
+    const out = await repairStaleManualGiftAcknowledgements({ dryRun })
+    res.json({ ok: true, ...out, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/manual-gift-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Read-only subscription restoration audit (admin token). */
 runtimePublicRouter.get('/subscription-restoration-audit', requireLegacyAdminToken, async (_req, res) => {
   try {

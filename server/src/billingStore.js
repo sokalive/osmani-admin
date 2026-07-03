@@ -1191,10 +1191,18 @@ export async function getOldestPendingManualGrant(deviceId) {
   const d = String(deviceId ?? '').trim()
   if (!d) return null
   const { rows } = await pool.query(
-    `SELECT id, nonce, duration_days, created_at
-     FROM manual_subscription_grants
-     WHERE device_id = $1 AND acknowledged_at IS NULL AND deleted_at IS NULL
-     ORDER BY created_at ASC
+    `SELECT g.id, g.nonce, g.duration_days, g.created_at
+     FROM manual_subscription_grants g
+     INNER JOIN device_subscriptions ds ON ds.device_id = g.device_id
+     WHERE g.device_id = $1
+       AND g.acknowledged_at IS NULL
+       AND g.deleted_at IS NULL
+       AND ds.status = 'active'
+       AND ds.expires_at > now()
+       AND COALESCE(ds.manual_admin_blocked, false) = false
+       AND ds.transaction_id ~ '^manual_grant:[0-9]+$'
+       AND g.id <= (regexp_replace(ds.transaction_id, '^manual_grant:', '')::bigint)
+     ORDER BY g.created_at ASC
      LIMIT 1`,
     [d],
   )
