@@ -188,6 +188,37 @@ runtimePublicRouter.get('/vps-migration-audit', requireLegacyAdminToken, async (
   }
 })
 
+/** Full production device investigation (read-only SQL + access state). */
+runtimePublicRouter.get('/device-production-investigation', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const deviceId = String(req.query.device_id ?? '').trim()
+    if (!deviceId) return res.status(400).json({ ok: false, error: 'device_id is required' })
+    const { runDeviceProductionInvestigation } = await import('../lib/deviceProductionInvestigation.js')
+    const report = await runDeviceProductionInvestigation(deviceId)
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/device-production-investigation]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Repair false-expired for one device if eligible. */
+runtimePublicRouter.post('/device-production-repair', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = String(req.query.device_id ?? b.device_id ?? '').trim()
+    if (!deviceId) return res.status(400).json({ ok: false, error: 'device_id is required' })
+    const { repairDeviceIfEligible } = await import('../lib/deviceProductionInvestigation.js')
+    const report = await repairDeviceIfEligible(deviceId)
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/device-production-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Read-only exact SQL subscription incident statistics. */
 runtimePublicRouter.get('/subscription-incident-database-report', requireLegacyAdminToken, async (_req, res) => {
   try {
