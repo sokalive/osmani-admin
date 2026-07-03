@@ -1,0 +1,74 @@
+{
+  "title": "MFALME Manual Subscription Architecture Restoration",
+  "generated_at": "2026-07-03T20:58:00.000Z",
+  "status": "PARTIAL_PASS",
+  "summary": "MFALME PIN/security architecture restored on VPS production. Osmani phone-number extensions preserved. Render deploy blocked by missing RENDER_API_DEPLOY_HOOK.",
+  "root_cause": {
+    "description": "Osmani Admin diverged from MFALME TV Admin (E:\\MFALME ADMIN\\OsmaniAdmin) by removing the shared sensitive-action PIN gate on manual grant endpoints and replacing it with phone-only validation. MFALME uses verifyAdminSensitiveActionPassword (default 3030) on POST /grant, pin-status with usesSharedActionPassword, and explicit deviceSubscriptionBus/liveSyncBus emits in the grant route. Osmani retained phone storage/SMS/custom subscription but dropped PIN verification, pin-status parity, and route-level SSE bus emits.",
+    "reference": "E:\\MFALME ADMIN\\OsmaniAdmin @ 2d28f33",
+    "regression_introduced": "Commit e318ee0 (Fix manual subscription grants: custom dates, phone SMS, auth persistence) removed PIN requirement in favor of phone-only grant auth"
+  },
+  "files_restored": [
+    "server/src/lib/adminSensitiveActionPassword.js (new — MFALME parity)",
+    "server/src/routes/manualSubscriptionAdmin.js (PIN gate, pin-status, bus emits on grant/grant-custom)",
+    "src/lib/api.js (getManualSubscriptionPinStatus, postManualSubscriptionSetupPin, pin+phone on grant APIs)",
+    "src/pages/ManualSubscriptionPage.jsx (Security PIN + Phone Number on grant/custom tabs)",
+    "server/scripts/test-admin-sensitive-action-password.mjs (new)",
+    "server/scripts/verify-manual-subscription-restoration.mjs (new)",
+    "server/scripts/verify-manual-subscription-fixes.mjs (updated for PIN+phone gates)",
+    "server/scripts/verify-custom-manual-subscription.mjs (updated)",
+    "server/.env.example (ADMIN_SENSITIVE_ACTION_PASSWORD documented)"
+  ],
+  "files_unchanged_by_design": [
+    "server/src/billingStore.js (stacking, manual_grant:{id}, SMS, phone registry, notifySubscriptionActivated — already complete)",
+    "Payment logic, subscription expiry calculations, transfer logic, offer code logic, user balances",
+    "Existing production subscriptions and customer data"
+  ],
+  "database_verification": {
+    "schema_changes": "NONE",
+    "tables": ["manual_subscription_grants", "device_subscriptions", "device_phone_registry", "transactions"],
+    "notes": "No migrations applied. History endpoint returns 62 grant rows with customExpiry, manualCustom, planName, createdBy fields intact."
+  },
+  "commits": {
+    "github_main": "9b2bd28",
+    "github_followup": "pending (Render URL fix in verifier)",
+    "vps_api_osmanitv": "9b2bd28079c0fb8b1cb7345f9ec142957d645964",
+    "render_api": "72ce16fb61eada0febda66aba05622aa6acbf2ce",
+    "commit_parity": false
+  },
+  "deployment": {
+    "github_push": "PASS",
+    "vps_contabo_deploy": "PASS (workflow 28682792496)",
+    "render_deploy": "FAIL — RENDER_API_DEPLOY_HOOK not configured in GitHub secrets"
+  },
+  "api_verification_vps": {
+    "health": "PASS commit=9b2bd28",
+    "pin_status": "PASS usesSharedActionPassword=true, legacyPinConfigured=true",
+    "grant_pin_required": "PASS HTTP 400 PIN is required",
+    "grant_phone_required": "PASS HTTP 400 phone is required (Osmani preserved)",
+    "grant_invalid_pin": "PASS HTTP 403 Invalid PIN",
+    "grant_custom_pin_required": "PASS",
+    "history_endpoint": "PASS 62 rows",
+    "offer_codes_history": "PASS",
+    "block_unblock_bulk": "NOT_MUTATED (read-only gate probes only)",
+    "subscription_stream_sse": "PRESERVED via notifySubscriptionActivated + route-level bus emits",
+    "manual_grant_metadata_live": "PARTIAL 27/51 active devices (pre-existing inactive/superseded grant rows; not introduced by this restore)"
+  },
+  "api_verification_render": {
+    "status": "NOT_VERIFIED — still on 72ce16f, 2 commits behind VPS",
+    "action_required": "Add RENDER_API_DEPLOY_HOOK to GitHub secrets and redeploy osmani-admin-api"
+  },
+  "regression_results": {
+    "phone_number_input": "PASS — Phone Number field on grant and custom tabs unchanged",
+    "phone_storage_sms": "PASS — billingStore recordManualGrantPhoneAndTransaction + notifyManualGrantActivated untouched",
+    "international_numbers": "PASS — no normalization logic modified",
+    "existing_subscriptions": "PASS — no customer data modified",
+    "payment_pipeline": "PASS — not touched"
+  },
+  "production_verification": {
+    "vps_end_to_end_gates": "PASS",
+    "render_end_to_end": "PENDING deploy",
+    "identical_commits_both_servers": false
+  },
+  "confirmation": "All admin users on VPS (api.osmanitv.com) now receive the restored MFALME Manual Subscription PIN architecture with Osmani phone-number functionality preserved. Existing subscriptions, expiry dates, and customer phone records were not modified. Render API requires deploy-hook configuration before parity is complete."
+}
