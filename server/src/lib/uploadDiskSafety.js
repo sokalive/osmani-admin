@@ -54,13 +54,20 @@ export function correlationIdFromReq(req) {
  */
 export function statPathDiskUsage(targetPath) {
   try {
-    const dir = fs.statSync(targetPath).isDirectory() ? targetPath : path.dirname(targetPath)
+    let dir = targetPath
+    try {
+      const st = fs.statSync(targetPath)
+      dir = st.isDirectory() ? targetPath : path.dirname(targetPath)
+    } catch {
+      dir = path.dirname(targetPath)
+    }
     fs.mkdirSync(dir, { recursive: true })
     const st = fs.statfsSync(dir)
-    const freeBytes = Number(st.bfree) * Number(st.bsize)
+    const bavail = Number(st.bavail ?? st.bfree)
+    const freeBytes = bavail * Number(st.bsize)
     const totalBytes = Number(st.blocks) * Number(st.bsize)
     const usedPercent = totalBytes > 0 ? Number((((totalBytes - freeBytes) / totalBytes) * 100).toFixed(2)) : 0
-    return { ok: true, freeBytes, totalBytes, usedPercent }
+    return { ok: true, freeBytes, totalBytes, usedPercent, path: dir }
   } catch (e) {
     return { ok: false, error: String(e?.message || e) }
   }
