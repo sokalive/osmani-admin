@@ -26,6 +26,8 @@ import WhatsAppPage from './pages/WhatsAppPage'
 import ZenoPayPage from './pages/ZenoPayPage'
 import SonicPesaSettingsPage from './pages/SonicPesaSettingsPage'
 import AuraxPaySettingsPage from './pages/AuraxPaySettingsPage'
+import PaymentOrdersPage from './pages/PaymentOrdersPage'
+import SubscriptionRequestsPage from './pages/SubscriptionRequestsPage'
 
 /**
  * Route elements for use under a pathless layout route (`<Route element={…}>`).
@@ -38,6 +40,8 @@ export const dashboardRouteElements = [
   <Route key="banners" path="banners" element={<BannersPage />} />,
   <Route key="plans" path="plans" element={<PlansPage />} />,
   <Route key="transactions" path="transactions" element={<TransactionsPage />} />,
+  <Route key="payment-orders" path="payment-orders" element={<PaymentOrdersPage />} />,
+  <Route key="subscription-requests" path="subscription-requests" element={<SubscriptionRequestsPage />} />,
   <Route key="users" path="users" element={<UsersPage />} />,
   <Route key="customer-investigation" path="customer-investigation" element={<CustomerInvestigationPage />} />,
   <Route key="users-intelligence" path="users-intelligence" element={<UsersIntelligencePage />} />,

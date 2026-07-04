@@ -1,0 +1,58 @@
+{
+  "contract_version": "2026-07-04-payment-recovery-subscription-requests",
+  "authoritative_api": "https://api.osmanitv.com",
+  "system_a_payment_orders": {
+    "admin_list": "GET /api/admin/payment-orders",
+    "admin_detail": "GET /api/admin/payment-orders/:orderId",
+    "admin_approve_recovery": "POST /api/admin/payment-orders/:orderId/approve-recovery",
+    "admin_reject_recovery": "POST /api/admin/payment-orders/:orderId/reject-recovery",
+    "admin_reconcile": "POST /api/admin/payment-orders/:orderId/reconcile",
+    "approve_body": {
+      "pin": "required",
+      "confirm": true,
+      "reason": "optional",
+      "idempotency_key": "optional default admin_recovery:{orderId}"
+    },
+    "ledger_statuses": [
+      "INITIATED",
+      "PENDING",
+      "SUCCESS",
+      "FAILED",
+      "MANUALLY_APPROVED",
+      "RECOVERY_REJECTED"
+    ],
+    "accounting_rule": "Provider status unchanged on manual approve; recovery_state=MANUALLY_APPROVED"
+  },
+  "system_b_subscription_requests": {
+    "public_settings": "GET /api/subscription-request/settings",
+    "public_submit": "POST /api/subscription-request",
+    "public_status": "GET /api/subscription-request/status?device_id=",
+    "admin_list": "GET /api/admin/subscription-requests",
+    "admin_settings": "GET|PUT /api/admin/subscription-requests/settings",
+    "admin_approve": "POST /api/admin/subscription-requests/:id/approve",
+    "admin_reject": "POST /api/admin/subscription-requests/:id/reject",
+    "admin_block": "POST /api/admin/subscription-requests/:id/block",
+    "submit_body": {
+      "device_id": "required",
+      "phone": "required",
+      "plan_id": "required",
+      "app_version": "optional",
+      "runtime_version": "optional"
+    },
+    "disabled_http": 403,
+    "disabled_message_sw": "Huduma hii imezuiliwa na Admin kwa sasa. Wasiliana na muhudumu kwa msaada zaidi.",
+    "duplicate_pending_http": 409
+  },
+  "realtime_on_approve": {
+    "payment_recovery": ["subscription_wake", "device_subscription_updated", "manual_gift if applicable"],
+    "subscription_request": ["subscription_wake", "manual_gift via grantManualDeviceSubscription"],
+    "sse_endpoint": "GET /api/subscription-stream?device_id={device_id}",
+    "authoritative_verify": "POST /api/subscription/verify"
+  },
+  "sse_events": {
+    "subscription_request_updated": {
+      "topics": ["analytics", "config"],
+      "payload": ["requestId", "deviceId", "status"]
+    }
+  }
+}

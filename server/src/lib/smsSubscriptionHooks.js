@@ -129,3 +129,52 @@ export async function notifySubscriptionActivated({ deviceId, orderId, expiresAt
     return { ok: false, error: String(e?.message || e) }
   }
 }
+
+/**
+ * SMS after admin payment recovery (MANUALLY_APPROVED — not provider-completed txn).
+ */
+export async function notifyAdminPaymentRecoveryActivated({
+  deviceId,
+  orderId,
+  expiresAt,
+  planId,
+  amount,
+}) {
+  const d = String(deviceId ?? '').trim()
+  const oid = String(orderId ?? '').trim()
+  if (!d || !oid) return { skipped: true, reason: 'no_device_or_order' }
+
+  try {
+    const plan = planId ? await getPlanRowByIdAny(planId) : null
+    const { phone: fallbackPhone } = await resolvePaymentPhoneForDevice(d)
+    const resolved = await resolveSmsPhoneForDevice(d, fallbackPhone)
+    const message = buildPaymentSuccessSms({
+      planName: plan?.name ?? '',
+      price: amount ?? plan?.price,
+      currency: 'TZS',
+      expiresAt,
+    })
+
+    const idempotencyKey = `admin_recovery_sms:${oid}`
+    const subscriptionId = subscriptionPeriodKey({
+      deviceId: d,
+      transactionId: oid,
+      expiresAt,
+    })
+
+    return await sendTransactionalSms({
+      phone: resolved.normalized || resolved.phone || fallbackPhone,
+      message,
+      deviceId: d,
+      smsType: 'payment_success',
+      subscriptionId,
+      paymentId: oid,
+      triggerType: 'admin_payment_recovery',
+      idempotencyKey,
+      templateKey: 'payment_success',
+    })
+  } catch (e) {
+    console.warn('[sms-admin-recovery]', 'failed', d, e)
+    return { ok: false, error: String(e?.message || e) }
+  }
+}

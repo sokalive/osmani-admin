@@ -1303,3 +1303,39 @@ export const postCustomerInvestigationActivate = (body) =>
   adminApiPost('/admin/customer-investigation/actions/activate-completed', body)
 export const postCustomerInvestigationRefreshSubscription = (body) =>
   adminApiPost('/admin/customer-investigation/actions/refresh-subscription', body)
+
+/** --- Payment orders ledger --- */
+export const getPaymentOrders = (params = {}) => {
+  const q = new URLSearchParams()
+  if (params.status) q.set('status', params.status)
+  if (params.provider) q.set('provider', params.provider)
+  if (params.search) q.set('search', params.search)
+  const s = q.toString()
+  return adminApiGet(s ? `/admin/payment-orders?${s}` : '/admin/payment-orders')
+}
+export const getPaymentOrderDetail = (orderId) =>
+  adminApiGet(`/admin/payment-orders/${encodeURIComponent(orderId)}`)
+export const postPaymentOrderApproveRecovery = (orderId, body) =>
+  adminApiPost(`/admin/payment-orders/${encodeURIComponent(orderId)}/approve-recovery`, body)
+export const postPaymentOrderRejectRecovery = (orderId, body) =>
+  adminApiPost(`/admin/payment-orders/${encodeURIComponent(orderId)}/reject-recovery`, body)
+export const postPaymentOrderReconcile = (orderId, body) =>
+  adminApiPost(`/admin/payment-orders/${encodeURIComponent(orderId)}/reconcile`, body)
+
+/** --- Subscription requests (OMBA KIFURUSHI CHAKO) --- */
+export const getSubscriptionRequests = (params = {}) => {
+  const q = new URLSearchParams()
+  if (params.status) q.set('status', params.status)
+  if (params.search) q.set('search', params.search)
+  const s = q.toString()
+  return adminApiGet(s ? `/admin/subscription-requests?${s}` : '/admin/subscription-requests')
+}
+export const getSubscriptionRequestSettings = () => adminApiGet('/admin/subscription-requests/settings')
+export const putSubscriptionRequestSettings = (body) =>
+  adminApiPut('/admin/subscription-requests/settings', body)
+export const postSubscriptionRequestApprove = (id, body) =>
+  adminApiPost(`/admin/subscription-requests/${encodeURIComponent(id)}/approve`, body)
+export const postSubscriptionRequestReject = (id, body) =>
+  adminApiPost(`/admin/subscription-requests/${encodeURIComponent(id)}/reject`, body)
+export const postSubscriptionRequestBlock = (id, body) =>
+  adminApiPost(`/admin/subscription-requests/${encodeURIComponent(id)}/block`, body)

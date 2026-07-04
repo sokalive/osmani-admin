@@ -959,4 +959,110 @@ export async function ensureBillingTables(client) {
 
   const { ensureClientApiTelemetryTable } = await import('../lib/clientApiTelemetry.js')
   await ensureClientApiTelemetryTable(client)
+
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS normalized_phone TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS mobile_network TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS provider_label TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS recovery_state TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS recovery_approved_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS recovery_approved_by TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transactions_recovery_state_idx
+    ON transactions (recovery_state) WHERE recovery_state IS NOT NULL;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS transactions_provider_label_idx
+    ON transactions (provider_label) WHERE provider_label IS NOT NULL;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_payment_recovery_actions (
+      id SERIAL PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK (action IN ('approve', 'reject', 'block', 'reconcile')),
+      idempotency_key TEXT NOT NULL UNIQUE,
+      admin_identity TEXT NOT NULL DEFAULT 'admin',
+      reason TEXT,
+      original_txn_status TEXT,
+      original_recovery_state TEXT,
+      device_id TEXT,
+      plan_id INTEGER REFERENCES plans (id) ON DELETE SET NULL,
+      subscription_transaction_id TEXT,
+      expires_at TIMESTAMPTZ,
+      sms_sent BOOLEAN NOT NULL DEFAULT false,
+      sms_result JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_payment_recovery_order_idx
+    ON admin_payment_recovery_actions (order_id, created_at DESC);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS subscription_requests (
+      id SERIAL PRIMARY KEY,
+      nonce UUID NOT NULL DEFAULT gen_random_uuid(),
+      device_id TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      normalized_phone TEXT,
+      plan_id INTEGER REFERENCES plans (id) ON DELETE SET NULL,
+      plan_name_snapshot TEXT,
+      duration_days INTEGER,
+      price_snapshot NUMERIC(14,2),
+      status TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'BLOCKED', 'CANCELLED')),
+      app_version TEXT,
+      runtime_version TEXT,
+      request_metadata JSONB,
+      admin_decision_by TEXT,
+      admin_decision_at TIMESTAMPTZ,
+      admin_reason TEXT,
+      approved_plan_id INTEGER REFERENCES plans (id) ON DELETE SET NULL,
+      resulting_grant_id INTEGER,
+      resulting_order_id TEXT,
+      subscription_expires_at TIMESTAMPTZ,
+      sms_sent BOOLEAN NOT NULL DEFAULT false,
+      deleted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS subscription_requests_device_status_idx
+    ON subscription_requests (device_id, status) WHERE deleted_at IS NULL;
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS subscription_requests_status_created_idx
+    ON subscription_requests (status, created_at DESC) WHERE deleted_at IS NULL;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS subscription_request_settings (
+      id SMALLINT PRIMARY KEY DEFAULT 1,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      updated_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT subscription_request_settings_singleton CHECK (id = 1)
+    );
+  `)
+  await client.query(`
+    INSERT INTO subscription_request_settings (id, enabled) VALUES (1, true)
+    ON CONFLICT (id) DO NOTHING;
+  `)
 }

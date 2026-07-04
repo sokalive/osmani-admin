@@ -31,6 +31,9 @@ import { deviceSecurityReportsRouter } from './deviceSecurityReports.js'
 import { adminAuthRouter } from './adminAuth.js'
 import { manualSubscriptionAdminRouter } from './manualSubscriptionAdmin.js'
 import { offerCodesAdminRouter } from './offerCodesAdmin.js'
+import { paymentOrdersAdminRouter } from './paymentOrdersAdmin.js'
+import { subscriptionRequestsAdminRouter } from './subscriptionRequestsAdmin.js'
+import { subscriptionRequestsPublicRouter } from './subscriptionRequestsPublic.js'
 import { notificationsRouter } from './notifications.js'
 import { notificationImageIngestRouter } from './notificationImageIngest.js'
 import { instructionVideoIngestRouter } from './instructionVideoIngest.js'
@@ -355,6 +358,9 @@ restApi.use('/device', deviceProfileRouter)
 restApi.use('/admin/auth', adminAuthRouter)
 restApi.use('/admin/manual-subscription', manualSubscriptionAdminRouter)
 restApi.use('/admin/offer-codes', offerCodesAdminRouter)
+restApi.use('/admin/payment-orders', paymentOrdersAdminRouter)
+restApi.use('/admin/subscription-requests', subscriptionRequestsAdminRouter)
+restApi.use('/subscription-request', subscriptionRequestsPublicRouter)
 restApi.use('/admin/payments/auraxpay', adminAuraxpayPaymentsRouter)
 restApi.use(subscriptionRouter)
 restApi.use(liveSyncRouter)

@@ -246,6 +246,9 @@ export async function insertTransaction(row) {
       deviceId,
     ],
   )
+  void import('./lib/adminPaymentRecovery.js')
+    .then((m) => m.enrichTransactionLedgerFields(row.order_id))
+    .catch(() => {})
   return rows[0]
 }
 
