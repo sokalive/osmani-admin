@@ -36,8 +36,8 @@ deviceSubscriptionBus.on('update', ({ deviceId }) => {
   invalidateSubscriptionAccessCache(deviceId)
 })
 
-/** Cross-instance fallback: modes are in Postgres; keep interval Android-friendly (was 2500ms). */
-const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(250, Number(process.env.MODE_SSE_POLL_MS) || 400))
+/** Cross-instance fallback: modes are in Postgres; 1200ms proven stable at ~500 concurrent (ed9541d). */
+const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(750, Number(process.env.MODE_SSE_POLL_MS) || 1200))
 
 function countryFromRequest(req) {
   const raw =

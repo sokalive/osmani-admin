@@ -1,5 +1,6 @@
 /**
  * Pool query helpers with timeout + slow-query logging.
+ * Uses an explicit checkout so statement_timeout applies and the client is always released.
  */
 import { getPool, getPoolStats } from '../db/pool.js'
 
@@ -29,15 +30,10 @@ export async function poolQuery(text, params = [], opts = {}) {
   const label = String(opts.label || '').trim() || 'query'
   const t0 = performance.now()
 
-  let timer
-  const timeoutPromise = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`query_timeout:${label}:${timeoutMs}ms`))
-    }, timeoutMs)
-  })
-
+  const client = await pool.connect()
   try {
-    const result = await Promise.race([pool.query(text, params), timeoutPromise])
+    await client.query(`SET statement_timeout TO ${Math.trunc(timeoutMs)}`)
+    const result = await client.query(text, params)
     const ms = performance.now() - t0
     if (ms >= SLOW_QUERY_MS) {
       console.warn('[db-slow]', {
@@ -57,6 +53,7 @@ export async function poolQuery(text, params = [], opts = {}) {
     })
     throw e
   } finally {
-    clearTimeout(timer)
+    await client.query('RESET statement_timeout').catch(() => {})
+    client.release()
   }
 }

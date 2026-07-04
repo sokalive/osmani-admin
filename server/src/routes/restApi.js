@@ -260,9 +260,17 @@ restApi.get('/health/db', async (_req, res) => {
     process: readProcessCapacityStats(),
   }
   if (String(process.env.BENCHMARK_SAMPLE_DEVICE || '').trim() === '1') {
-    body.sample_active_device_id = await findSampleActiveDeviceId()
-    const sampleLimit = Math.min(500, Math.max(1, Number(process.env.BENCHMARK_SAMPLE_DEVICE_LIMIT) || 200))
-    body.sample_active_device_ids = await findSampleActiveDeviceIds(sampleLimit)
+    const poolStats = getPoolStats()
+    const poolPressure =
+      poolStats.waitingCount > 0 ||
+      (poolStats.max > 0 && poolStats.totalCount >= poolStats.max && poolStats.idleCount === 0)
+    if (poolPressure) {
+      body.sample_active_device_skipped = 'pool_pressure'
+    } else {
+      body.sample_active_device_id = await findSampleActiveDeviceId()
+      const sampleLimit = Math.min(500, Math.max(1, Number(process.env.BENCHMARK_SAMPLE_DEVICE_LIMIT) || 200))
+      body.sample_active_device_ids = await findSampleActiveDeviceIds(sampleLimit)
+    }
   }
   res.json(body)
 })

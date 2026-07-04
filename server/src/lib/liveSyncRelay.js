@@ -1,11 +1,28 @@
+import pg from 'pg'
 import { getPool } from '../db/pool.js'
 import { liveSyncBus } from './liveSyncBus.js'
+
+const { Client } = pg
 
 const PG_CHANNEL = 'osmani_live_sync'
 const INSTANCE_ORIGIN = `${process.pid}-${Date.now().toString(36)}`
 
 let wired = false
 let relaying = false
+/** @type {import('pg').Client | null} */
+let listenClient = null
+
+function listenClientOptions() {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) return null
+  const isLocal =
+    /localhost|127\.0\.0\.1/i.test(connectionString) ||
+    process.env.PGSSLMODE === 'disable'
+  return {
+    connectionString,
+    ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),
+  }
+}
 
 async function notifyPeers(packet) {
   const pool = getPool()
@@ -25,6 +42,9 @@ async function notifyPeers(packet) {
 /**
  * Fan-out liveSyncBus events across Render + VPS via PostgreSQL NOTIFY/LISTEN.
  * Both instances share the same DB; in-memory EventEmitter alone cannot cross hosts.
+ *
+ * LISTEN uses a dedicated pg.Client (not the query pool) so one permanent slot is not
+ * removed from PG_POOL_MAX checkout capacity.
  */
 export async function wireLiveSyncRelay() {
   if (wired) return
@@ -41,12 +61,15 @@ export async function wireLiveSyncRelay() {
     void notifyPeers(packet)
   })
 
-  let listenClient
+  const opts = listenClientOptions()
+  if (!opts) return
+
   try {
-    listenClient = await pool.connect()
+    listenClient = new Client(opts)
     listenClient.on('error', (err) => {
       console.error('[live-sync-relay] LISTEN client error:', err?.message || err)
     })
+    await listenClient.connect()
     await listenClient.query(`LISTEN ${PG_CHANNEL}`)
     listenClient.on('notification', (msg) => {
       if (!msg?.payload) return
@@ -61,9 +84,25 @@ export async function wireLiveSyncRelay() {
         console.error('[live-sync-relay] NOTIFY parse failed:', e?.message || e)
       }
     })
-    console.log('[live-sync-relay] LISTEN active on', PG_CHANNEL)
+    console.log('[live-sync-relay] LISTEN active on', PG_CHANNEL, '(dedicated client, outside pool)')
   } catch (e) {
     console.error('[live-sync-relay] LISTEN setup failed:', e?.message || e)
-    listenClient?.release?.()
+    try {
+      await listenClient?.end?.()
+    } catch {
+      /* ignore */
+    }
+    listenClient = null
+  }
+}
+
+export async function closeLiveSyncRelay() {
+  if (listenClient) {
+    try {
+      await listenClient.end()
+    } catch {
+      /* ignore */
+    }
+    listenClient = null
   }
 }
