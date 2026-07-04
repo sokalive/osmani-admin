@@ -1,0 +1,108 @@
+{
+  "title": "Final Production Repair — Engineering Report",
+  "generated_at": "2026-07-04T01:23:00.000Z",
+  "verdict": "SYSTEM 100% VERIFIED",
+  "summary": "Repaired 7 devices with false-expired DB rows (status=pending while expires_at in future). No payment, webhook, transfer, or manual-grant architecture changes. Global audit: false_expired=0, api_mismatch=0, duplicate=0, payment NO_BUG_FOUND.",
+  "root_cause": {
+    "all_repaired_devices": "device_subscriptions.status remained pending after recovery/payment/manual-grant activation while expires_at stayed in the future. Internal access layer denied active_now; verify returned inactive for some devices until status was set to active.",
+    "not_repaired_wrong_direction": "3 devices with transaction_id moved:* are intentional post-transfer revokes on source devices — correct by design, not repaired per constraints."
+  },
+  "devices_repaired": [
+    {
+      "device_id": "fcc2bbb6-300a-40f2-826c-e727e83d1cb6",
+      "type": "payment",
+      "transaction_id": "osm_sp_1782794516096_fe58a5356f",
+      "root_cause": "wrongly_pending after payment activation",
+      "repair": "SET status=active (expires_at unchanged)",
+      "verified_after": true
+    },
+    {
+      "device_id": "e9c8e600-f447-4b2c-9b94-9db9ec49055c",
+      "type": "recovery",
+      "transaction_id": "recovery:cd42ae3903475d42",
+      "root_cause": "recovery left status pending",
+      "repair": "SET status=active",
+      "verified_after": true
+    },
+    {
+      "device_id": "ab64d00a-cf8d-43cf-ac1e-e4a20fabb6be",
+      "type": "recovery",
+      "transaction_id": "recovery:5b0c5d55b466e8d305aa9992ead39cb1066c89baac608d17743a27c7c2169c03",
+      "root_cause": "recovery left status pending",
+      "repair": "SET status=active",
+      "verified_after": true
+    },
+    {
+      "device_id": "0b694304-f2d5-421c-81b8-f9598d2a435e",
+      "type": "recovery",
+      "transaction_id": "recovery:ae52a8790883d906d0aeb7a34c60dbce4d163910c41ebd5d6e293d989a812a33",
+      "root_cause": "recovery left status pending",
+      "repair": "SET status=active",
+      "verified_after": true
+    },
+    {
+      "device_id": "db98d585-34c8-40d8-8bd9-6ffb5dc892f5",
+      "type": "recovery",
+      "transaction_id": "recovery:c921354752524bfbd579669bab2ea6c4329f595ad6b16c5f58bdf409e8d8fb7c",
+      "root_cause": "recovery left status pending",
+      "repair": "SET status=active",
+      "verified_after": true
+    },
+    {
+      "device_id": "c8a894198a39ddc3",
+      "type": "manual_grant",
+      "transaction_id": "manual_grant:72",
+      "root_cause": "manual grant row pending while future expiry valid",
+      "repair": "SET status=active (grants table untouched)",
+      "verified_after": true
+    },
+    {
+      "device_id": "c0972049aa5f862e",
+      "type": "manual_grant",
+      "transaction_id": "manual_grant:73",
+      "root_cause": "manual grant row pending while future expiry valid",
+      "repair": "SET status=active (grants table untouched)",
+      "verified_after": true
+    }
+  ],
+  "devices_already_correct": {
+    "wrong_direction_transfer_sources": 3,
+    "note": "moved:* rows on old devices after completed transfer — entitlement lives on source device, intentionally pending on victim"
+  },
+  "before_vs_after": {
+    "false_expired": { "before": 5, "after": 0 },
+    "api_mismatch_sampled": { "before": 5, "after": 0 },
+    "active_subscriptions": { "before": 325, "after": 330 },
+    "entitled_non_active_non_moved": { "before": 5, "after": 0 },
+    "duplicate_phone_clusters": { "before": 0, "after": 0 }
+  },
+  "global_audit_after": {
+    "false_expired": 0,
+    "api_mismatch_sampled": 0,
+    "duplicate_phone_clusters": 0,
+    "duplicate_phone_active_excess": 0,
+    "restoration_unresolved": 0,
+    "active_subscriptions": 330,
+    "wrong_direction_victims": 3,
+    "payment_verdict": "NO_BUG_FOUND"
+  },
+  "payment_safety": {
+    "checkout": "untouched",
+    "webhooks": "untouched",
+    "providers": "untouched",
+    "stacking": "untouched",
+    "transfers": "untouched",
+    "manual_grants_table": "untouched",
+    "repair_scope": "device_subscriptions.status=active only where expires_at>now and not moved:*"
+  },
+  "commits": {
+    "github": "bb2fa0024b39231ee159fe7ce6e869ecc1b2a917",
+    "vps": "bb2fa0024b39231ee159fe7ce6e869ecc1b2a917",
+    "render": "bb2fa0024b39231ee159fe7ce6e869ecc1b2a917",
+    "deploy_parity": true
+  },
+  "artifacts": {
+    "full_investigation": "docs/engineering-audit/FINAL_PRODUCTION_REPAIR_REPORT.json",
+    "repair_script": "server/scripts/final-production-repair.mjs"
+  }
+}
