@@ -21,6 +21,7 @@ import {
   uploadThumbnail,
 } from '../multerUpload.js'
 import { afterImageMulter } from '../lib/imageMulterPipeline.js'
+import { assertUploadedImageFileReady } from '../lib/uploadDiskSafety.js'
 import {
   buildPublicInstructionVideoUrl,
   INSTRUCTION_VIDEO_UPLOAD_LOG,
@@ -173,6 +174,9 @@ channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) 
       }
       return res.status(400).json({ error: 'name and url (stream URL) are required' })
     }
+    if (req.file?.filename) {
+      await assertUploadedImageFileReady(req.file.filename)
+    }
     const nextId = await getNextChannelId()
     const sortOrder = await getNextChannelSortOrder()
     const now = new Date().toISOString()
@@ -271,10 +275,14 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
       return res.status(400).json({ error: 'name and url (stream URL) are required' })
     }
 
+    if (req.file?.filename) {
+      await assertUploadedImageFileReady(req.file.filename)
+    }
+
     const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
     await updateChannel(updated)
 
-    if (req.file && existing.thumbnail?.startsWith('/uploads/')) {
+    if (req.file) {
       const oldFile = uploadsFilePathFromThumbnail(existing.thumbnail)
       if (oldFile && oldFile !== req.file.filename) {
         await fs.unlink(path.join(UPLOADS_DIR, oldFile)).catch(() => {})

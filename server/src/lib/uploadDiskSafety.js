@@ -140,6 +140,36 @@ export async function persistImageBufferToUploads(buffer, opts = {}) {
 }
 
 /**
+ * Confirm uploaded image exists on disk with non-zero size before DB reference update.
+ * @param {string} filename
+ */
+export async function assertUploadedImageFileReady(filename) {
+  const base = path.basename(String(filename || '').trim())
+  if (!base) {
+    throw new UploadDiskError(UPLOAD_STORAGE_UNAVAILABLE_CODE, 'Uploaded image file name missing')
+  }
+  const fullPath = path.join(UPLOADS_DIR, base)
+  let st
+  try {
+    st = await fsPromises.stat(fullPath)
+  } catch (e) {
+    throw new UploadDiskError(
+      UPLOAD_STORAGE_UNAVAILABLE_CODE,
+      'Uploaded image file was not saved correctly. Please try again.',
+      { path: fullPath, cause: e },
+    )
+  }
+  if (!st.isFile() || st.size <= 0) {
+    throw new UploadDiskError(
+      UPLOAD_STORAGE_UNAVAILABLE_CODE,
+      'Uploaded image file is empty. Please try again.',
+      { path: fullPath },
+    )
+  }
+  return { filename: base, fullPath, bytes: st.size, relativePath: `/uploads/${base}` }
+}
+
+/**
  * Materialize multer memoryStorage file onto disk for legacy handlers expecting req.file.filename.
  * @param {import('express').Request} req
  */

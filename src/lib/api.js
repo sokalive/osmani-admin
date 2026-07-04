@@ -6,8 +6,8 @@ const API_BASE_ENV = String(
   import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
 ).trim()
 
-/** Render static admin (no /api proxy) must call the Render Node API host. */
-const RENDER_LEGACY_ADMIN_API = 'https://osmani-admin-api.onrender.com/api'
+/** Render static admin must call the VPS API (shared PostgreSQL; uploads live on VPS disk). */
+const VPS_PRODUCTION_API = 'https://api.osmanitv.com/api'
 
 function resolveBrowserApiBase(origin) {
   const host = String(origin || '')
@@ -15,7 +15,7 @@ function resolveBrowserApiBase(origin) {
     .split('/')[0]
     .toLowerCase()
   if (host === 'osmani-admin-mpya.onrender.com') {
-    return RENDER_LEGACY_ADMIN_API
+    return VPS_PRODUCTION_API
   }
   return `${String(origin).replace(/\/$/, '')}/api`
 }

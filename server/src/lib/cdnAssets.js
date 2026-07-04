@@ -114,9 +114,23 @@ export function isOriginOnlyUploadPath(pathOrUrl) {
   return false
 }
 
-export function isHostedApkPath(pathOrUrl) {
-  const p = extractUploadPath(pathOrUrl) || String(pathOrUrl || '')
-  return p.includes('/uploads/apks/')
+/** True when this process stores uploads on Contabo VPS disk (not Render ephemeral). */
+export function uploadsStoredOnVpsDisk() {
+  if (String(process.env.OSMANI_VPS || '').trim() === '1') return true
+  const uploadDir = String(process.env.UPLOAD_DIR || '').toLowerCase()
+  if (uploadDir.includes('osmani-admin-api') || uploadDir.includes('/var/www/')) return true
+  return false
+}
+
+/**
+ * Channel/banner/logo images on VPS must use API origin URLs until Bunny pull origin
+ * points at api.osmanitv.com. APKs may still use CDN when configured.
+ */
+export function shouldDeliverUploadViaOrigin(uploadPath = '') {
+  if (String(process.env.UPLOADS_SERVE_FROM_ORIGIN || '').trim() === '1') return true
+  if (isHostedApkPath(uploadPath)) return false
+  if (uploadsStoredOnVpsDisk()) return true
+  return false
 }
 
 /**
@@ -202,13 +216,17 @@ export function resolvePublicAssetUrl(value, req, opts = {}) {
   const cdnBase = getCdnBaseUrl()
 
   if (uploadPath) {
-    if (forceOrigin || !cdnBase) return buildAbsoluteUrl(originBase, uploadPath)
+    if (forceOrigin || !cdnBase || shouldDeliverUploadViaOrigin(uploadPath)) {
+      return buildAbsoluteUrl(originBase, uploadPath)
+    }
     return buildAbsoluteUrl(cdnBase, uploadPath)
   }
 
   if (rel.startsWith('/uploads')) {
     const pathOnly = rel.split('?')[0]
-    if (forceOrigin || !cdnBase) return buildAbsoluteUrl(originBase, pathOnly)
+    if (forceOrigin || !cdnBase || shouldDeliverUploadViaOrigin(pathOnly)) {
+      return buildAbsoluteUrl(originBase, pathOnly)
+    }
     return buildAbsoluteUrl(cdnBase, pathOnly)
   }
 

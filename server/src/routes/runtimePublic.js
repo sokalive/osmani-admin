@@ -834,6 +834,34 @@ runtimePublicRouter.post('/storage-cleanup-disposable', requireLegacyAdminToken,
   }
 })
 
+/** Reload nginx from repo snippets (admin token). Applies /uploads routing fixes without full cutover. */
+runtimePublicRouter.post('/reload-nginx', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const root = process.env.OSMANI_ADMIN_ROOT || '/var/www/osmani-admin-api'
+    const script = path.join(root, 'deploy/contabo/reload-osmanitv-nginx.sh')
+    const raw =
+      'https://raw.githubusercontent.com/sokalive/osmani-admin/main/deploy/contabo/reload-osmanitv-nginx.sh'
+    const env = { ...process.env, OSMANI_ADMIN_ROOT: root }
+    const result = fs.existsSync(script)
+      ? spawnSync('bash', [script], { cwd: root, env, encoding: 'utf8', timeout: 120_000 })
+      : spawnSync('bash', ['-c', `curl -fsSL "${raw}" | bash`], { env, encoding: 'utf8', timeout: 120_000 })
+    const output = `${result.stdout || ''}${result.stderr || ''}`.trim()
+    if (result.status !== 0) {
+      return res.status(500).json({
+        ok: false,
+        error: 'reload-nginx failed',
+        exit_code: result.status ?? 1,
+        output: output.slice(-8000),
+      })
+    }
+    res.json({ ok: true, commit: getServerGitCommit(), output: output.slice(-8000) })
+  } catch (e) {
+    console.error('[runtime/reload-nginx]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Provision branded HTTPS on VPS (admin token). Does not affect Render. */
 runtimePublicRouter.post('/provision-https', requireLegacyAdminToken, async (_req, res) => {
   try {
