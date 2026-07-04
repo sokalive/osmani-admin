@@ -114,6 +114,11 @@ export function isOriginOnlyUploadPath(pathOrUrl) {
   return false
 }
 
+export function isHostedApkPath(pathOrUrl) {
+  const p = extractUploadPath(pathOrUrl) || String(pathOrUrl || '')
+  return p.includes('/uploads/apks/')
+}
+
 /** True when this process stores uploads on Contabo VPS disk (not Render ephemeral). */
 export function uploadsStoredOnVpsDisk() {
   if (String(process.env.OSMANI_VPS || '').trim() === '1') return true
