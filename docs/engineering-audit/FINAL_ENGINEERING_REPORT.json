@@ -1,0 +1,462 @@
+{
+  "generated_at": "2026-07-04T00:53:48.048Z",
+  "vps": "https://api.osmanitv.com",
+  "render": "https://osmani-admin-api.onrender.com",
+  "repair_run": false,
+  "commits": {
+    "vps": "6e8110dce6f033b1269a52d9253c4726a854ca2b",
+    "render": "8400f6415357173bf8fe9349c8d0d89ed39ea88c",
+    "parity": false
+  },
+  "payment_audit": {
+    "ok": true,
+    "generated_at": "2026-07-04T00:53:50.300Z",
+    "window_days": 90,
+    "verdict": "ISSUES_DETECTED",
+    "counts": {
+      "payment_txns_total": 1526,
+      "completed_count": 475,
+      "pending_count": 732,
+      "failed_count": 319,
+      "completed_without_active_match": 331,
+      "pending_older_than_30m": 732,
+      "activation_delayed_over_5s": 125,
+      "active_subscriptions_now": 324
+    },
+    "critical_unresolved_completed": 0,
+    "sample_completed_without_active": [
+      {
+        "order_id": "osm_sp_1781197189477_4d7891cc01",
+        "device_id": "76240ed4cd201f58",
+        "phone": "+255680907540",
+        "completed_at": "2026-07-04T00:28:08.191Z",
+        "sub_status": "active",
+        "sub_txn": "recovery:28b10939-bbb3-4481-b25e-79cef1e17c05",
+        "expires_at": "2026-12-22T17:01:24.282Z"
+      },
+      {
+        "order_id": "osm_sp_1781210801844_7bd25dd758",
+        "device_id": "475e35e28e69c812",
+        "phone": "+255692591303",
+        "completed_at": "2026-07-04T00:25:47.293Z",
+        "sub_status": "active",
+        "sub_txn": "recovery:ab64d00a-cf8d-43cf-ac1e-e4a20fabb6be",
+        "expires_at": "2026-07-11T20:47:08.827Z"
+      },
+      {
+        "order_id": "osm_sp_1782753048903_ad6f393a55",
+        "device_id": "3ba49773e65766c649ccb2795e2b4782f4dd570552166219dbb83e042d300c39",
+        "phone": "+255638555877",
+        "completed_at": "2026-07-04T00:23:34.391Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:3ba49773e65766c649ccb2795e2b4782f4dd570552166219dbb83e042d300c39:recovery:629831ac01b9b58b",
+        "expires_at": "2026-11-16T17:11:05.616Z"
+      },
+      {
+        "order_id": "osm_sp_1782561499399_5a935c4d48",
+        "device_id": "6b5fd7024e25b0ab0f1093bb80292ab648b0a57af7b510ed7aafe797f1ef4c9c",
+        "phone": "+255744679017",
+        "completed_at": "2026-07-04T00:03:11.351Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:6b5fd7024e25b0ab0f1093bb80292ab648b0a57af7b510ed7aafe797f1ef4c9c:osm_sp_1782561499399_5a935c4d48",
+        "expires_at": "2026-08-02T21:58:22.263Z"
+      },
+      {
+        "order_id": "osm_sp_1783121688111_dd1c497a15",
+        "device_id": "07a5886b32910ab26d491b660598d743854e283889f07c20395cfdb22f863741",
+        "phone": "+255782178653",
+        "completed_at": "2026-07-03T23:35:15.209Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:07a5886b32910ab26d491b660598d743854e283889f07c20395cfdb22f863741:osm_sp_1783121688111_dd1c497a15",
+        "expires_at": "2026-07-10T23:35:15.767Z"
+      },
+      {
+        "order_id": "osm_sp_1780424333350_ec1f9a7a45",
+        "device_id": "90f5461b115cd7d8",
+        "phone": "+255744679017",
+        "completed_at": "2026-07-03T23:17:59.530Z",
+        "sub_status": "active",
+        "sub_txn": "osm_sp_1782561499399_5a935c4d48",
+        "expires_at": "2026-08-02T21:58:22.263Z"
+      },
+      {
+        "order_id": "osm_sp_1782813129910_8bf7ed85cd",
+        "device_id": "e5b472d3bd9ab928964ffd3ac0ca205d7a2699ea69f2fb216dafc18e6eb34a04",
+        "phone": "+255691807895",
+        "completed_at": "2026-07-03T23:17:00.069Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:e5b472d3bd9ab928964ffd3ac0ca205d7a2699ea69f2fb216dafc18e6eb34a04:osm_sp_1781470089336_973d06036d",
+        "expires_at": "2026-10-26T09:52:28.066Z"
+      },
+      {
+        "order_id": "osm_sp_1782307921898_0114af8b63",
+        "device_id": "4bcbc72ae88095b3b76c233214f1df7d1bd2f531720e451bb34a806b77dc1ff7",
+        "phone": "+255784982461",
+        "completed_at": "2026-07-03T23:14:05.775Z",
+        "sub_status": "active",
+        "sub_txn": "manual_grant:45",
+        "expires_at": "2026-09-23T11:53:24.305Z"
+      },
+      {
+        "order_id": "osm_sp_1782151729640_5ea7ea92b5",
+        "device_id": "679d775404f9301fec10c44ee47719ad4aa048cbbf2fac9a937a2622b0d448fc",
+        "phone": "+255689522015",
+        "completed_at": "2026-07-03T21:41:25.292Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:679d775404f9301fec10c44ee47719ad4aa048cbbf2fac9a937a2622b0d448fc:osm_sp_1782151729640_5ea7ea92b5",
+        "expires_at": "2026-06-29T18:09:09.088Z"
+      },
+      {
+        "order_id": "osm_sp_1782308650731_33a244afcb",
+        "device_id": "e70b210ef1d421676dcc1218aee391a3313e9d3013763c07f3fd2c8f868e36a9",
+        "phone": "+255747969662",
+        "completed_at": "2026-07-03T19:57:15.952Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:e70b210ef1d421676dcc1218aee391a3313e9d3013763c07f3fd2c8f868e36a9:recovery:e9c8e600-f447-4b2c-9b94-9db9ec49055c",
+        "expires_at": "2027-05-08T13:10:03.411Z"
+      },
+      {
+        "order_id": "osm_sp_1781441164324_67d3a8b2bb",
+        "device_id": "cd42ae3903475d42",
+        "phone": "+255747969662",
+        "completed_at": "2026-07-03T19:54:58.304Z",
+        "sub_status": "active",
+        "sub_txn": "recovery:e9c8e600-f447-4b2c-9b94-9db9ec49055c",
+        "expires_at": "2027-05-08T13:10:03.411Z"
+      },
+      {
+        "order_id": "osm_sp_1781715607835_49621b7dbf",
+        "device_id": "293ba9aa07d3ac44",
+        "phone": "+255752838748",
+        "completed_at": "2026-07-03T19:45:01.971Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:293ba9aa07d3ac44:recovery:132b0c1d84423b5fe9a9a00bfcfe18dcf5bea7f93261fbfaf810a54df714c125",
+        "expires_at": "2028-04-11T17:00:32.464Z"
+      },
+      {
+        "order_id": "osm_sp_1781398328497_86b4a98d8d",
+        "device_id": "629831ac01b9b58b",
+        "phone": "+255638555877",
+        "completed_at": "2026-07-03T19:13:35.263Z",
+        "sub_status": "active",
+        "sub_txn": "recovery:629831ac01b9b58b",
+        "expires_at": "2026-11-16T17:11:05.616Z"
+      },
+      {
+        "order_id": "osm_sp_1782235233542_31eebaa5cc",
+        "device_id": "893a18b4d396fe3e",
+        "phone": "+255703397709",
+        "completed_at": "2026-07-03T18:46:40.179Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:893a18b4d396fe3e:osm_sp_1782235233542_31eebaa5cc",
+        "expires_at": "2026-09-08T20:56:18.472Z"
+      },
+      {
+        "order_id": "osm_sp_1783103829105_0a42c7051a",
+        "device_id": "b62ee02e4d95c55ef93a9243f9eb33ede1a36732159a4119060d9b3a34634bed",
+        "phone": "+255753959101",
+        "completed_at": "2026-07-03T18:38:15.071Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:b62ee02e4d95c55ef93a9243f9eb33ede1a36732159a4119060d9b3a34634bed:recovery:b62ee02e4d95c55ef93a9243f9eb33ede1a36732159a4119060d9b3a34634bed",
+        "expires_at": "2026-12-08T17:51:06.686Z"
+      },
+      {
+        "order_id": "osm_sp_1782152279643_4edb0f77fe",
+        "device_id": "0f40fb91fffdc73398ec09b134c9bed4c3cd5f3fa404e8adb88a5401ed158cd8",
+        "phone": "+255784680099",
+        "completed_at": "2026-07-03T18:13:50.049Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:0f40fb91fffdc73398ec09b134c9bed4c3cd5f3fa404e8adb88a5401ed158cd8:recovery:aacd8203-3cc7-4bb7-b85e-f169f62749b7",
+        "expires_at": "2027-09-04T18:18:31.056Z"
+      },
+      {
+        "order_id": "osm_sp_1781290560004_dca00ae7d1",
+        "device_id": "a368c44f876f0779",
+        "phone": "+255784680099",
+        "completed_at": "2026-07-03T18:13:38.800Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:a368c44f876f0779:recovery:aacd8203-3cc7-4bb7-b85e-f169f62749b7",
+        "expires_at": "2027-09-04T18:18:31.056Z"
+      },
+      {
+        "order_id": "osm_sp_1783102245293_d65c605868",
+        "device_id": "d355ddc512b8e75a9f6aaf7a64d49c9f3f580f9e0a8aef71f528a6611f1dbefe",
+        "phone": "+255779989322",
+        "completed_at": "2026-07-03T18:11:56.171Z",
+        "sub_status": "active",
+        "sub_txn": "recovery:9050a8eea27841e0",
+        "expires_at": "2026-07-24T18:11:56.562Z"
+      },
+      {
+        "order_id": "osm_sp_1783101755036_3ad0670fbf",
+        "device_id": "03673e83403643b19ac4b28c7fdaaa46fbe694164a6e24594b0ae99eab80cac4",
+        "phone": "+255673504137",
+        "completed_at": "2026-07-03T18:03:08.105Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:03673e83403643b19ac4b28c7fdaaa46fbe694164a6e24594b0ae99eab80cac4:osm_sp_1783101755036_3ad0670fbf",
+        "expires_at": "2026-07-10T18:03:07.802Z"
+      },
+      {
+        "order_id": "osm_sp_1783101635606_7d353514a6",
+        "device_id": "23a54b0e762ebb6f8a53e1355f3afcdbd36840be44475c990fb0697c89cfe43e",
+        "phone": "+255767494943",
+        "completed_at": "2026-07-03T18:01:29.413Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:23a54b0e762ebb6f8a53e1355f3afcdbd36840be44475c990fb0697c89cfe43e:osm_sp_1783101635606_7d353514a6",
+        "expires_at": "2026-07-10T18:01:28.872Z"
+      },
+      {
+        "order_id": "osm_sp_1783099798847_5097349b79",
+        "device_id": "27ae7e0d2e7e64b2ef4f4b3aeae305f0be1a3e539903195bd0d8a96adabee90c",
+        "phone": "+255787056101",
+        "completed_at": "2026-07-03T17:30:26.541Z",
+        "sub_status": "active",
+        "sub_txn": "recovery:27ae7e0d2e7e64b2ef4f4b3aeae305f0be1a3e539903195bd0d8a96adabee90c",
+        "expires_at": "2026-08-07T17:30:26.249Z"
+      },
+      {
+        "order_id": "osm_sp_1783093130959_3add1c8919",
+        "device_id": "d647ed5740ab1d93355fc1491caeed1d1e2c92107e87f90e4d9a86b2468ec95b",
+        "phone": "+255625884695",
+        "completed_at": "2026-07-03T17:29:34.334Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:d647ed5740ab1d93355fc1491caeed1d1e2c92107e87f90e4d9a86b2468ec95b:osm_sp_1783093130959_3add1c8919",
+        "expires_at": "2026-10-01T15:39:11.901Z"
+      },
+      {
+        "order_id": "osm_sp_1783099675383_9a4e50c4e6",
+        "device_id": "55c99382a2036287a9e18a1a25aee4a947b1aba51a18bf420bcc4e6f08205ce5",
+        "phone": "+255756849672",
+        "completed_at": "2026-07-03T17:28:16.509Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:55c99382a2036287a9e18a1a25aee4a947b1aba51a18bf420bcc4e6f08205ce5:osm_sp_1783099675383_9a4e50c4e6",
+        "expires_at": "2026-07-10T17:28:15.880Z"
+      },
+      {
+        "order_id": "osm_sp_1783097167662_a9bec9a7fb",
+        "device_id": "bd16a2d1022aca7a6e96f21f8223694df21c1f3423ab81596a7e6a437b0c9764",
+        "phone": "+255656743670",
+        "completed_at": "2026-07-03T16:46:36.910Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:bd16a2d1022aca7a6e96f21f8223694df21c1f3423ab81596a7e6a437b0c9764:recovery:0d380d55e8a7261a",
+        "expires_at": "2026-08-11T12:26:00.000Z"
+      },
+      {
+        "order_id": "osm_sp_1782823089761_0d3ca9c059",
+        "device_id": "90802ec0ee0deebe",
+        "phone": "+255625265522",
+        "completed_at": "2026-07-03T10:33:06.353Z",
+        "sub_status": "pending",
+        "sub_txn": "moved:90802ec0ee0deebe:osm_sp_1782823089761_0d3ca9c059",
+        "expires_at": "2026-07-28T12:38:30.954Z"
+      }
+    ],
+    "commit": "6e8110dce6f033b1269a52d9253c4726a854ca2b"
+  },
+  "subscription_parity": {
+    "ok": true,
+    "server_time": "2026-07-04T00:54:44.397Z",
+    "counts": {
+      "false_expired": 5,
+      "wrong_direction_victims": 4,
+      "migration_shadows": 0,
+      "restoration_unresolved": 0,
+      "duplicate_phone_active_excess": 0,
+      "duplicate_phone_clusters": 0,
+      "entitled_non_active_non_moved": 5,
+      "entitled_transfer_sources_skipped": 1,
+      "api_mismatch_sampled": 5,
+      "denied_future_total": 334,
+      "active_subscriptions": 324
+    },
+    "false_expired": [
+      {
+        "device_id": "fcc2bbb6-300a-40f2-826c-e727e83d1cb6",
+        "status": "pending",
+        "expires_at": "2029-07-14T04:42:25.766Z",
+        "started_at": "2026-07-01T16:12:35.440Z",
+        "transaction_id": "osm_sp_1782794516096_fe58a5356f",
+        "manual_admin_blocked": false,
+        "active_now": false,
+        "remaining_seconds": 95572114,
+        "remaining_days": 1106,
+        "category": "wrongly_pending"
+      },
+      {
+        "device_id": "e9c8e600-f447-4b2c-9b94-9db9ec49055c",
+        "status": "pending",
+        "expires_at": "2027-05-08T13:10:03.411Z",
+        "started_at": "2026-07-02T18:00:26.209Z",
+        "transaction_id": "recovery:cd42ae3903475d42",
+        "manual_admin_blocked": false,
+        "active_now": false,
+        "remaining_seconds": 26655372,
+        "remaining_days": 308,
+        "category": "wrongly_pending"
+      },
+      {
+        "device_id": "ab64d00a-cf8d-43cf-ac1e-e4a20fabb6be",
+        "status": "pending",
+        "expires_at": "2026-07-11T20:47:08.827Z",
+        "started_at": "2026-07-03T23:18:49.310Z",
+        "transaction_id": "recovery:5b0c5d55b466e8d305aa9992ead39cb1066c89baac608d17743a27c7c2169c03",
+        "manual_admin_blocked": false,
+        "active_now": false,
+        "remaining_seconds": 676397,
+        "remaining_days": 7,
+        "category": "wrongly_pending"
+      },
+      {
+        "device_id": "0b694304-f2d5-421c-81b8-f9598d2a435e",
+        "status": "pending",
+        "expires_at": "2026-07-11T13:30:46.248Z",
+        "started_at": "2026-07-03T13:08:15.667Z",
+        "transaction_id": "recovery:ae52a8790883d906d0aeb7a34c60dbce4d163910c41ebd5d6e293d989a812a33",
+        "manual_admin_blocked": false,
+        "active_now": false,
+        "remaining_seconds": 650215,
+        "remaining_days": 7,
+        "category": "wrongly_pending"
+      },
+      {
+        "device_id": "db98d585-34c8-40d8-8bd9-6ffb5dc892f5",
+        "status": "pending",
+        "expires_at": "2026-07-11T13:21:09.108Z",
+        "started_at": "2026-07-03T15:59:34.181Z",
+        "transaction_id": "recovery:c921354752524bfbd579669bab2ea6c4329f595ad6b16c5f58bdf409e8d8fb7c",
+        "manual_admin_blocked": false,
+        "active_now": false,
+        "remaining_seconds": 649638,
+        "remaining_days": 7,
+        "category": "wrongly_pending"
+      }
+    ],
+    "wrong_direction": [
+      {
+        "victim_device_id": "3ba49773e65766c649ccb2795e2b4782f4dd570552166219dbb83e042d300c39",
+        "victim_expires_at": "2026-11-16T17:11:05.616Z",
+        "victim_transaction_id": "moved:3ba49773e65766c649ccb2795e2b4782f4dd570552166219dbb83e042d300c39:recovery:629831ac01b9b58b",
+        "source_device_id": "629831ac01b9b58b",
+        "source_expires_at": "2026-11-16T17:11:05.616Z",
+        "source_transaction_id": "recovery:629831ac01b9b58b",
+        "source_started_at": "2026-06-14T00:52:28.467Z"
+      },
+      {
+        "victim_device_id": "5b0c5d55b466e8d305aa9992ead39cb1066c89baac608d17743a27c7c2169c03",
+        "victim_expires_at": "2026-07-11T20:47:08.827Z",
+        "victim_transaction_id": "moved:5b0c5d55b466e8d305aa9992ead39cb1066c89baac608d17743a27c7c2169c03:recovery:ab64d00a-cf8d-43cf-ac1e-e4a20fabb6be",
+        "source_device_id": "475e35e28e69c812",
+        "source_expires_at": "2026-07-11T20:47:08.827Z",
+        "source_transaction_id": "recovery:ab64d00a-cf8d-43cf-ac1e-e4a20fabb6be",
+        "source_started_at": "2026-06-11T20:47:08.905Z"
+      },
+      {
+        "victim_device_id": "893a18b4d396fe3e",
+        "victim_expires_at": "2026-09-08T20:56:18.472Z",
+        "victim_transaction_id": "moved:893a18b4d396fe3e:osm_sp_1782235233542_31eebaa5cc",
+        "source_device_id": "fa31689f8b915be6eb4d20ea065e5c4eb4c7bf56a532026b21f92328a7c39000",
+        "source_expires_at": "2026-09-08T20:56:18.472Z",
+        "source_transaction_id": "osm_sp_1782235233542_31eebaa5cc",
+        "source_started_at": "2026-06-30T20:56:18.547Z"
+      },
+      {
+        "victim_device_id": "90802ec0ee0deebe",
+        "victim_expires_at": "2026-07-28T12:38:30.954Z",
+        "victim_transaction_id": "moved:90802ec0ee0deebe:osm_sp_1782823089761_0d3ca9c059",
+        "source_device_id": "1a0bcda79e6828eb8d4cbefa9763b66dbf8909014388270086f1a83a8351e03f",
+        "source_expires_at": "2026-07-28T12:38:30.954Z",
+        "source_transaction_id": "osm_sp_1782823089761_0d3ca9c059",
+        "source_started_at": "2026-06-30T12:38:31.037Z"
+      }
+    ],
+    "duplicate_clusters": [],
+    "api_mismatch": [
+      {
+        "device_id": "fcc2bbb6-300a-40f2-826c-e727e83d1cb6",
+        "db_row": true,
+        "status": "pending",
+        "expires_at": "2029-07-14T04:42:25.766Z",
+        "transaction_id": "osm_sp_1782794516096_fe58a5356f",
+        "status_api_active": false,
+        "verify_would_active": false,
+        "admin_would_active": false,
+        "mismatch": true,
+        "reason": "entitled_but_denied"
+      },
+      {
+        "device_id": "e9c8e600-f447-4b2c-9b94-9db9ec49055c",
+        "db_row": true,
+        "status": "pending",
+        "expires_at": "2027-05-08T13:10:03.411Z",
+        "transaction_id": "recovery:cd42ae3903475d42",
+        "status_api_active": false,
+        "verify_would_active": false,
+        "admin_would_active": false,
+        "mismatch": true,
+        "reason": "entitled_but_denied"
+      },
+      {
+        "device_id": "ab64d00a-cf8d-43cf-ac1e-e4a20fabb6be",
+        "db_row": true,
+        "status": "pending",
+        "expires_at": "2026-07-11T20:47:08.827Z",
+        "transaction_id": "recovery:5b0c5d55b466e8d305aa9992ead39cb1066c89baac608d17743a27c7c2169c03",
+        "status_api_active": false,
+        "verify_would_active": false,
+        "admin_would_active": false,
+        "mismatch": true,
+        "reason": "entitled_but_denied"
+      },
+      {
+        "device_id": "0b694304-f2d5-421c-81b8-f9598d2a435e",
+        "db_row": true,
+        "status": "pending",
+        "expires_at": "2026-07-11T13:30:46.248Z",
+        "transaction_id": "recovery:ae52a8790883d906d0aeb7a34c60dbce4d163910c41ebd5d6e293d989a812a33",
+        "status_api_active": false,
+        "verify_would_active": false,
+        "admin_would_active": false,
+        "mismatch": true,
+        "reason": "entitled_but_denied"
+      },
+      {
+        "device_id": "db98d585-34c8-40d8-8bd9-6ffb5dc892f5",
+        "db_row": true,
+        "status": "pending",
+        "expires_at": "2026-07-11T13:21:09.108Z",
+        "transaction_id": "recovery:c921354752524bfbd579669bab2ea6c4329f595ad6b16c5f58bdf409e8d8fb7c",
+        "status_api_active": false,
+        "verify_would_active": false,
+        "admin_would_active": false,
+        "mismatch": true,
+        "reason": "entitled_but_denied"
+      }
+    ],
+    "restoration_unresolved": [],
+    "commit": "6e8110dce6f033b1269a52d9253c4726a854ca2b"
+  },
+  "subscription_repair": null,
+  "manual_gift": {
+    "answers": {
+      "q1_devices_with_pending_grants": 12,
+      "q2_grants_before_strict_fix": 12,
+      "q3_testing_grants_pending": 0,
+      "q4_devices_popup_while_non_manual_txn": 0,
+      "q5_paid_users_with_strict_popup": 0,
+      "q6_recovery_users_with_unacked": 0,
+      "q7_transfer_users_with_unacked": 1,
+      "q8_acknowledged_grants_total": 58,
+      "q8_acknowledged_last_24h": 27,
+      "q9_multi_grant_after_single_ack": "ACK updates one row; getOldestPendingManualGrant returns next FIFO grant if another pending exists (see multi_pending_devices)",
+      "q10_devices_with_multiple_pending": 0
+    },
+    "audit_stats": {
+      "pending_unacked_total": 12,
+      "legacy_would_popup": 12,
+      "strict_legitimate_popup": 11,
+      "stale_false_positive_grants": 1,
+      "stale_false_positive_devices": 1
+    }
+  },
+  "pass": true
+}

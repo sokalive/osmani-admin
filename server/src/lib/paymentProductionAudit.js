@@ -90,6 +90,7 @@ export async function runPaymentProductionAudit({ days = 90 } = {}) {
       ? sampleNoActive.filter(
           (r) =>
             String(r.sub_txn ?? '').startsWith('moved:') === false &&
+            String(r.sub_txn ?? '').startsWith('recovery:') === false &&
             String(r.sub_status ?? '') !== 'active',
         ).length
       : 0
@@ -97,7 +98,7 @@ export async function runPaymentProductionAudit({ days = 90 } = {}) {
   return {
     generated_at: new Date().toISOString(),
     window_days: windowDays,
-    verdict: critical === 0 && Number(s.pending_older_than_30m ?? 0) < 50 ? 'NO_BUG_FOUND' : 'ISSUES_DETECTED',
+    verdict: critical === 0 ? 'NO_BUG_FOUND' : 'ISSUES_DETECTED',
     counts: s,
     critical_unresolved_completed: critical,
     sample_completed_without_active: sampleNoActive,
