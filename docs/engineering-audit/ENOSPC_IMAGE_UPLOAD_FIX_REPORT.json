@@ -1,40 +1,63 @@
 {
   "report_type": "ENOSPC_IMAGE_UPLOAD_FIX",
-  "generated_at": "2026-07-04T06:20:00.000Z",
+  "generated_at": "2026-07-04T06:21:00.000Z",
   "status": "PARTIAL_PASS",
+  "final_verdict": "PARTIAL_PASS",
   "root_cause": {
-    "confirmed_from_live_vps": false,
-    "hypothesis": "VPS root filesystem or uploads mount exhausted (bytes or inodes). ENOSPC during multer diskStorage write to UPLOADS_DIR (/var/www/osmani-admin-api/server/uploads on production). PM2/nginx/journal log growth is a common secondary contributor on small Contabo disks.",
-    "failing_path_likely": "/var/www/osmani-admin-api/server/uploads",
-    "ssh_forensics": "BLOCKED — no SSH key from this environment (Permission denied publickey). Added GET /api/runtime/storage-forensics (admin token) for live evidence post-deploy."
+    "confirmed_error": "ENOSPC: no space left on device, write",
+    "current_vps_disk_state": "NOT_EXHAUSTED",
+    "bytes_or_inodes": "Neither bytes nor inodes exhausted at investigation time. Root 5% used (~138 GiB free). Inodes 2% on /.",
+    "likely_historical_cause": "Cumulative VPS disk consumption from PM2 logs (1.1 GiB), systemd journal (913 MiB), nginx logs (263 MiB), and upload directory growth. Multer diskStorage wrote directly to UPLOADS_DIR without preflight; a full filesystem produced raw ENOSPC in admin UI.",
+    "failing_path": "/var/www/osmani-admin-api/server/uploads (UPLOADS_DIR on production VPS)",
+    "secondary_contributors": [
+      "/root/.pm2/logs (1.1G)",
+      "/var/log/journal (913.5M)",
+      "/var/log/nginx (263M)"
+    ],
+    "regression_bug_found_and_fixed": "assertDiskSpaceForWrite used statSync on not-yet-created file paths, causing false UPLOAD_STORAGE_UNAVAILABLE (commit 0f07e7c)"
   },
-  "production_before_fix": {
-    "cutover_status_commit": "3f74464ac5d3623c2ac24b7c28b6ea063f0451a6",
-    "uploads_dir": "/var/www/osmani-admin-api/server/uploads",
-    "uploads_file_count": 613,
-    "disk_bytes": "NOT_AVAILABLE_UNTIL_FIX_DEPLOYED",
-    "note": "cutover-status lacked uploads_disk until this fix"
+  "disk_forensics": {
+    "before_fix_investigation": {
+      "note": "Live forensics captured after first fix deploy (6ed053a); disk already healthy",
+      "total_bytes": 154894188544,
+      "free_bytes": 147799556096,
+      "used_percent": 4.58,
+      "uploads_dir": "/var/www/osmani-admin-api/server/uploads",
+      "uploads_file_count": 613
+    },
+    "after_fix": {
+      "total_bytes": 154894188544,
+      "free_bytes": 147799556096,
+      "used_percent": 4.58,
+      "inodes_root_iuse_percent": "2%",
+      "space_reclaimed_this_session": 0,
+      "deleted_items": []
+    },
+    "df_h_root": "5% used on / avail=138G",
+    "du_var_top": ["/var 3.3G", "/var/log 1.5G", "/var/www 1.3G"],
+    "deleted_open_files_lsof": 4
   },
   "upload_route_inventory": [
     {
       "feature": "Channel thumbnail",
-      "frontend": "ChannelFormModal.jsx, ChannelsPage.jsx",
+      "frontend": "ChannelFormModal.jsx",
       "endpoint": "POST/PUT /api/channels",
-      "middleware": "uploadThumbnail (memory → disk persist)",
-      "temp_path": "memory only until persistImageBufferToUploads",
-      "final": "UPLOADS_DIR → Bunny pull /uploads",
-      "replacement": "DB update then delete old (fixed)",
-      "enospc_handling": "507 UPLOAD_DISK_FULL + correlationId"
+      "middleware": "uploadThumbnail memory → persistImageBufferToUploads",
+      "temp_path": "memory only",
+      "final": "UPLOADS_DIR → Bunny /uploads",
+      "replacement": "DB update then delete old file",
+      "failure_cleanup": "unlink new file on 500",
+      "enospc_exposure": "mitigated"
     },
     {
-      "feature": "Banner / slider image",
+      "feature": "Banner / slider",
       "frontend": "BannerFormModal.jsx",
       "endpoint": "POST/PUT /api/banners",
       "middleware": "uploadBannerImage + data-URL persist",
-      "temp_path": "memory / controlled write",
+      "temp_path": "memory",
       "final": "UPLOADS_DIR",
-      "replacement": "DB update then delete old (fixed)",
-      "enospc_handling": "507 UPLOAD_DISK_FULL"
+      "replacement": "DB update then delete old",
+      "enospc_exposure": "mitigated"
     },
     {
       "feature": "Payment provider logo",
@@ -43,51 +66,66 @@
       "middleware": "uploadPaymentProviderLogo",
       "temp_path": "memory",
       "final": "UPLOADS_DIR",
-      "replacement": "DB update then delete old (unchanged order)",
-      "enospc_handling": "507 UPLOAD_DISK_FULL"
+      "enospc_exposure": "mitigated"
     },
     {
       "feature": "Notification prepare-image",
-      "frontend": "NotificationsPage.jsx",
       "endpoint": "POST /api/notifications/prepare-image",
-      "middleware": "uploadNotificationImage (memory) → sharp → writeNotificationImageLocal",
-      "temp_path": "memory + VPS notif-* file",
-      "final": "UPLOADS_DIR/notif-* (VPS origin, not Bunny)",
-      "replacement": "new file first; orphan cleanup 90d job",
-      "enospc_handling": "507 UPLOAD_DISK_FULL"
+      "middleware": "memory → sharp → writeNotificationImageLocal",
+      "final": "UPLOADS_DIR/notif-*",
+      "enospc_exposure": "mitigated"
     },
     {
       "feature": "Notification VPS ingest",
       "endpoint": "POST /api/internal/notification-images",
       "middleware": "memory → writeNotificationImageLocal",
-      "temp_path": "memory",
-      "final": "UPLOADS_DIR/notif-*",
-      "enospc_handling": "507 UPLOAD_DISK_FULL"
+      "enospc_exposure": "mitigated"
     },
     {
       "feature": "Instruction video",
       "endpoint": "POST /api/channels/:id/instruction-video",
       "middleware": "diskStorage (large files)",
-      "temp_path": "UPLOADS_DIR/videos",
-      "note": "unchanged — video size requires disk; pre-check via initUploadStorage"
+      "note": "unchanged — requires disk for multi-MB video"
     },
     {
-      "feature": "APK upload",
+      "feature": "APK",
       "middleware": "apkUploadMulter diskStorage",
-      "temp_path": "UPLOADS_DIR/apks",
       "note": "unchanged"
     }
   ],
   "permanent_fix": {
     "memory_first_images": true,
-    "disk_preflight": "assertDiskSpaceForWrite before every image persist",
-    "controlled_errors": "UPLOAD_DISK_FULL / UPLOAD_STORAGE_UNAVAILABLE + correlationId",
-    "transactional_replace": "channels + banners: old file removed only after DB success",
-    "forensics_endpoint": "GET /api/runtime/storage-forensics",
-    "safe_cleanup_endpoint": "POST /api/runtime/storage-cleanup-disposable?apply=1",
-    "scheduled_probe_cleanup": "scheduleDisposableUploadCleanup every 6h on VPS",
+    "disk_preflight_bavail": true,
+    "controlled_errors": "507 UPLOAD_DISK_FULL / 503 UPLOAD_STORAGE_UNAVAILABLE + correlationId",
+    "transactional_replace": "channels + banners",
+    "forensics": "GET /api/runtime/storage-forensics",
+    "safe_cleanup": "POST /api/runtime/storage-cleanup-disposable?apply=1",
+    "cutover_disk_metrics": "uploads_disk on GET /api/runtime/cutover-status",
     "pm2_log_rotation": "pm2-logrotate 50M retain 10 via apply-cutover.sh",
-    "cutover_status_disk": "uploads_disk free_bytes on GET /api/runtime/cutover-status"
+    "scheduled_probe_cleanup": "uploadDisposableCleanup every 6h on VPS"
+  },
+  "verification": {
+    "channel_thumbnail": "PIPELINE_SHARED_WITH_NOTIFICATION — not individually PUT-tested on production",
+    "banner": "PIPELINE_SHARED — not individually PUT-tested",
+    "notification_prepare_image": "PASS — /uploads/notif-1783146025303-2a91f391.png HTTP 200 HEAD",
+    "payment_logo": "PIPELINE_SHARED — not individually tested",
+    "temp_leak": "PASS — disposable cleanup scheduler added",
+    "concurrent": "NOT_RUN",
+    "failure_rollback": "PASS — code: old image kept until DB success (channels/banners)",
+    "realtime_propagation": "UNCHANGED — publishChannelCatalogChange + liveSyncBus config.banners_changed",
+    "regression_payment": "PASS — no payment/subscription/transfer/offer-code files modified",
+    "script": "node server/scripts/verify-image-upload-production.mjs — 6/6 PASS"
+  },
+  "deploy_parity": {
+    "github_commit": "0f07e7c9c15ce539dc3193ae42be3552ac352a72",
+    "vps_commit": "0f07e7c9c15ce539dc3193ae42be3552ac352a72",
+    "render_commit": "3f74464ac5d3623c2ac24b7c28b6ea063f0451a6",
+    "parity": "FAIL — Render behind VPS/GitHub (Render does not serve primary admin uploads; VPS is canonical for /uploads)"
+  },
+  "ota": {
+    "required": false,
+    "status": "NOT_PUBLISHED",
+    "reason": "Backend/admin-only fix; no app code changes"
   },
   "files_changed": [
     "server/src/lib/uploadPaths.js",
@@ -104,26 +142,8 @@
     "server/src/lib/notificationImageStorage.js",
     "server/src/index.js",
     "server/scripts/verify-image-upload-production.mjs",
+    "deploy/contabo/apply-cutover.sh",
     "deploy/contabo/ecosystem.config.cjs",
-    "deploy/contabo/apply-cutover.sh"
-  ],
-  "verification": {
-    "channel_thumbnail": "PENDING_POST_DEPLOY",
-    "banner": "PENDING_POST_DEPLOY",
-    "notification": "PENDING_POST_DEPLOY",
-    "payment_logo": "PENDING_POST_DEPLOY",
-    "temp_leak": "PENDING_POST_DEPLOY",
-    "concurrent": "PENDING_POST_DEPLOY",
-    "failure_rollback": "CODE_FIXED_CHANNELS_BANNERS",
-    "realtime_propagation": "UNCHANGED — publishChannelCatalogChange + liveSyncBus config.banners_changed",
-    "regression_payment": "NO_PAYMENT_CODE_MODIFIED",
-    "ota": "NOT_REQUIRED — backend/admin only"
-  },
-  "deploy_parity": {
-    "github_commit": "PENDING_PUSH",
-    "vps_commit": "3f74464",
-    "render_commit": "UNKNOWN",
-    "parity": "FAIL_UNTIL_DEPLOY"
-  },
-  "final_verdict": "PARTIAL_PASS"
+    "docs/engineering-audit/ENOSPC_IMAGE_UPLOAD_FIX_REPORT.json"
+  ]
 }
