@@ -69,7 +69,7 @@ if (!String(pm2Env.DATABASE_URL || '').trim()) {
 }
 
 module.exports = {
-  apps: [
+      apps: [
     {
       name: 'osmani-admin-api',
       cwd: API_DIR,
@@ -84,6 +84,7 @@ module.exports = {
       autorestart: true,
       max_restarts: 15,
       min_uptime: '5s',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     },
   ],
 }

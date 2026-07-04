@@ -21,7 +21,7 @@ import {
   resolveNotificationImagePublicUrl,
 } from '../lib/notificationImageStorage.js'
 import { scheduleNotificationImageCleanup } from '../lib/notificationImageCleanup.js'
-import { uploadNotificationImage } from '../multerUpload.js'
+import { uploadNotificationImage, sendUploadError } from '../multerUpload.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const notificationsRouter = Router()
@@ -119,7 +119,7 @@ notificationsRouter.post(
       })
     } catch (e) {
       console.error('[notifications/prepare-image]', e)
-      res.status(400).json({ ok: false, error: String(e.message || e) })
+      return sendUploadError(res, e, req, { status: 400 })
     }
   },
 )

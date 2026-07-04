@@ -5,8 +5,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { extractUploadPath, getCdnBaseUrl } from './cdnAssets.js'
-import { ensureUploadsDir, UPLOADS_DIR } from '../multerUpload.js'
+import { ensureUploadsDir, UPLOADS_DIR } from './uploadPaths.js'
 import { isRenderRuntime } from './startupReadiness.js'
+import { assertDiskSpaceForWrite, isEnospcError, UploadDiskError } from './uploadDiskSafety.js'
 
 const NOTIFICATION_IMAGE_PREFIX = 'notif-'
 
@@ -142,7 +143,20 @@ export async function writeNotificationImageLocal(buffer, filename) {
     throw new Error('Invalid notification image filename')
   }
   const full = path.join(UPLOADS_DIR, name)
-  await fs.writeFile(full, buffer)
+  assertDiskSpaceForWrite(full, buffer.length)
+  try {
+    await fs.writeFile(full, buffer)
+  } catch (e) {
+    if (isEnospcError(e)) {
+      await fs.unlink(full).catch(() => {})
+      throw new UploadDiskError(
+        'UPLOAD_DISK_FULL',
+        'Server storage is full. Image upload is temporarily unavailable. Contact support.',
+        { path: full, cause: e },
+      )
+    }
+    throw e
+  }
   return {
     imageForDb: notificationImageRelativePath(name),
     bytes: buffer.length,

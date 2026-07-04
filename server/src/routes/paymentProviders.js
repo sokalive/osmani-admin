@@ -8,7 +8,8 @@ import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { resolvePublicAssetUrl } from '../lib/cdnAssets.js'
 import { apiResponseCacheNamespace } from '../middleware/apiResponseCache.js'
-import { UPLOADS_DIR, uploadPaymentProviderLogo } from '../multerUpload.js'
+import { UPLOADS_DIR, sendUploadError, uploadPaymentProviderLogo } from '../multerUpload.js'
+import { afterImageMulter } from '../lib/imageMulterPipeline.js'
 
 export const PAYMENT_PROVIDERS_FILE = 'payment-providers.json'
 export const paymentProvidersRouter = Router()
@@ -146,11 +147,7 @@ async function removeUploadIfAny(logoPath) {
 
 function runUpload(req, res, next) {
   upload(req, res, (err) => {
-    if (err) {
-      res.status(400).json({ error: String(err.message || err) })
-      return
-    }
-    next()
+    void afterImageMulter(req, res, next, err)
   })
 }
 
@@ -233,7 +230,7 @@ paymentProvidersRouter.post('/settings/payment-providers', maybeUpload, async (r
   } catch (e) {
     console.error('[settings/payment-providers] POST failed:', e)
     if (req.file) await removeUploadIfAny(`/uploads/${req.file.filename}`)
-    res.status(500).json({ error: String(e.message || e) })
+    return sendUploadError(res, e, req, { status: 500 })
   }
 })
 
@@ -331,7 +328,7 @@ paymentProvidersRouter.put('/settings/payment-providers/:id', maybeUpload, async
   } catch (e) {
     console.error('[settings/payment-providers] PUT failed:', e)
     if (req.file) await removeUploadIfAny(`/uploads/${req.file.filename}`)
-    res.status(500).json({ error: String(e.message || e) })
+    return sendUploadError(res, e, req, { status: 500 })
   }
 })
 

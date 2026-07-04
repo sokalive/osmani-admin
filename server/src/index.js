@@ -382,6 +382,9 @@ async function main() {
       `[notifications] image storage mode=${notifStorage.mode} renderDisk=${notifStorage.renderDiskUsed} publicOrigin=${notifStorage.publicOrigin}`,
     )
 
+    const { scheduleDisposableUploadCleanup } = await import('./lib/uploadDisposableCleanup.js')
+    scheduleDisposableUploadCleanup()
+
     const cdnHealth = getCdnHealthSnapshot()
     console.log(
       cdnHealth.cdnEnabled

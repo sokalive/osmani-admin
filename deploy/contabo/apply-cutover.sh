@@ -150,6 +150,14 @@ node -e "import('./src/loadEnv.js').then((m)=>{const ok=m.isDatabaseUrlConfigure
 echo "==> PM2 restart"
 if command -v pm2 >/dev/null 2>&1; then
   export OSMANI_ADMIN_ROOT="$ROOT"
+  if ! pm2 conf pm2-logrotate:max_size >/dev/null 2>&1; then
+    echo "==> pm2-logrotate (50M retain 10, compressed)"
+    pm2 install pm2-logrotate || true
+  fi
+  pm2 set pm2-logrotate:max_size 50M 2>/dev/null || true
+  pm2 set pm2-logrotate:retain 10 2>/dev/null || true
+  pm2 set pm2-logrotate:compress true 2>/dev/null || true
+  pm2 set pm2-logrotate:workerInterval 3600 2>/dev/null || true
   pm2 delete osmani-admin-api 2>/dev/null || true
   pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
   pm2 save

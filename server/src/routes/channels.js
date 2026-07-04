@@ -15,10 +15,12 @@ import {
   getUploadStorageLastError,
   initUploadStorage,
   isUploadStorageReady,
+  sendUploadError,
   UPLOADS_DIR,
   uploadInstructionVideo,
   uploadThumbnail,
 } from '../multerUpload.js'
+import { afterImageMulter } from '../lib/imageMulterPipeline.js'
 import {
   buildPublicInstructionVideoUrl,
   INSTRUCTION_VIDEO_UPLOAD_LOG,
@@ -68,11 +70,7 @@ const uploadVideo = uploadInstructionVideo.single('video')
 
 function runUpload(req, res, next) {
   upload(req, res, (err) => {
-    if (err) {
-      res.status(400).json({ error: String(err.message || err) })
-      return
-    }
-    next()
+    void afterImageMulter(req, res, next, err)
   })
 }
 
@@ -189,7 +187,8 @@ channelsRouter.post('/', requireAdminPanelAccess, maybeUpload, async (req, res) 
     res.status(201).json(createdBody)
   } catch (e) {
     console.error('[channels] POST / failed:', e)
-    res.status(500).json({ error: String(e.message || e) })
+    if (req.file?.filename) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
+    return sendUploadError(res, e, req, { status: 500 })
   }
 })
 
@@ -272,6 +271,9 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
       return res.status(400).json({ error: 'name and url (stream URL) are required' })
     }
 
+    const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
+    await updateChannel(updated)
+
     if (req.file && existing.thumbnail?.startsWith('/uploads/')) {
       const oldFile = uploadsFilePathFromThumbnail(existing.thumbnail)
       if (oldFile && oldFile !== req.file.filename) {
@@ -279,8 +281,6 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
       }
     }
 
-    const updated = mergeChannelRecord(existing, parsed, id, new Date().toISOString())
-    await updateChannel(updated)
     await notifyChannelCatalogChange('updated', updated.id)
     void triggerServerHealthBroadcast().catch((err) => {
       console.error('[channels] health refresh after update failed:', err)
@@ -290,7 +290,8 @@ channelsRouter.put('/:id', requireAdminPanelAccess, maybeUpload, async (req, res
     res.json(updatedBody)
   } catch (e) {
     console.error('[channels] PUT /:id failed:', e)
-    res.status(500).json({ error: String(e.message || e) })
+    if (req.file?.filename) await fs.unlink(path.join(UPLOADS_DIR, req.file.filename)).catch(() => {})
+    return sendUploadError(res, e, req, { status: 500 })
   }
 })
 

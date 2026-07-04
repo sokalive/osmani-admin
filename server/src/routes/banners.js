@@ -10,7 +10,9 @@ import {
 import { enrichBannersListForViewer } from '../lib/bannerViewerSerializer.js'
 import * as bannerStore from '../bannerStore.js'
 import { getChannelById } from '../store.js'
-import { UPLOADS_DIR, uploadBannerImage } from '../multerUpload.js'
+import { UPLOADS_DIR, sendUploadError, uploadBannerImage } from '../multerUpload.js'
+import { afterImageMulter } from '../lib/imageMulterPipeline.js'
+import { persistImageBufferToUploads } from '../lib/uploadDiskSafety.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { invalidateApiCacheNamespace } from '../lib/apiResponseCache.js'
 import { apiResponseCacheExact } from '../middleware/apiResponseCache.js'
@@ -32,11 +34,7 @@ const upload = uploadBannerImage.single('image')
 
 function runUpload(req, res, next) {
   upload(req, res, (err) => {
-    if (err) {
-      res.status(400).json({ error: String(err.message || err) })
-      return
-    }
-    next()
+    void afterImageMulter(req, res, next, err)
   })
 }
 
@@ -180,9 +178,11 @@ async function resolveImagePath({ body, file, existingImage }) {
     if (!m) throw new Error('Invalid image data URL')
     const extRaw = m[1].toLowerCase()
     const ext = extRaw === 'jpeg' ? 'jpg' : extRaw.replace(/[^a-z0-9]/g, '') || 'png'
-    const fname = `${Date.now()}-${randomBytes(8).toString('hex')}.${ext}`
-    await fs.writeFile(path.join(UPLOADS_DIR, fname), Buffer.from(m[2], 'base64'))
-    return `/uploads/${fname}`
+    const buffer = Buffer.from(m[2], 'base64')
+    const persisted = await persistImageBufferToUploads(buffer, {
+      filename: `${Date.now()}-${randomBytes(8).toString('hex')}.${ext}`,
+    })
+    return persisted.relativePath
   }
   if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/uploads')) {
     if (s.startsWith('/uploads/')) return s
@@ -350,7 +350,7 @@ bannersRouter.post('/', requireAdminPanelAccess, maybeUploadBanner, async (req, 
   } catch (e) {
     console.error('[banners] POST / failed:', e)
     if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
-    res.status(500).json({ error: String(e.message || e) })
+    return sendUploadError(res, e, req, { status: 500 })
   }
 })
 
@@ -401,14 +401,6 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
       return res.status(400).json({ error: 'image is required' })
     }
 
-    if (req.file && existing.image?.startsWith('/uploads/')) {
-      const oldBase = uploadsBasename(existing.image)
-      const newBase = uploadsBasename(imagePath)
-      if (oldBase && newBase && oldBase !== newBase) {
-        await unlinkUploadIfAny(existing.image)
-      }
-    }
-
     const updated = await bannerStore.updateBanner(id, {
       ...bannerFieldsForStore(fields),
       image: imagePath,
@@ -417,6 +409,15 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
       if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
       return res.status(404).json({ error: 'Banner not found' })
     }
+
+    if (req.file && existing.image?.startsWith('/uploads/')) {
+      const oldBase = uploadsBasename(existing.image)
+      const newBase = uploadsBasename(imagePath)
+      if (oldBase && newBase && oldBase !== newBase) {
+        await unlinkUploadIfAny(existing.image)
+      }
+    }
+
     const full = await bannerStore.getBannerById(id)
     logRuntimePositionDebug('PUT DB row', { id, runtime_position: full?.runtime_position })
     publishBannersChanged('updated', {
@@ -440,7 +441,7 @@ bannersRouter.put('/:id', requireAdminPanelAccess, maybeUploadBanner, async (req
   } catch (e) {
     console.error('[banners] PUT /:id failed:', e)
     if (req.file) await unlinkUploadIfAny(`/uploads/${req.file.filename}`)
-    res.status(500).json({ error: String(e.message || e) })
+    return sendUploadError(res, e, req, { status: 500 })
   }
 })
 

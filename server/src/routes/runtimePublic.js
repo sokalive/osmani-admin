@@ -11,6 +11,11 @@ import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta
 import { getLoadedEnvPaths } from '../loadEnv.js'
 import { getPool } from '../db/pool.js'
 import { UPLOADS_DIR } from '../multerUpload.js'
+import { statPathDiskUsage } from '../lib/uploadDiskSafety.js'
+import {
+  cleanupDisposableUploadArtifacts,
+  collectUploadStorageForensics,
+} from '../lib/uploadStorageForensics.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -147,6 +152,7 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
         uploadFileCount = null
       }
     }
+    const uploadDisk = statPathDiskUsage(UPLOADS_DIR)
     const adminTokenConfigured = Boolean(
       String(process.env.ADMIN_API_TOKEN || process.env.APP_UPDATE_ADMIN_TOKEN || '').trim(),
     )
@@ -164,6 +170,13 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
       uploads_dir: UPLOADS_DIR,
       uploads_dir_exists: uploadDirExists,
       uploads_file_count: uploadFileCount,
+      uploads_disk: uploadDisk.ok
+        ? {
+            free_bytes: uploadDisk.freeBytes,
+            total_bytes: uploadDisk.totalBytes,
+            used_percent: uploadDisk.usedPercent,
+          }
+        : { error: uploadDisk.error },
       admin_token_configured: adminTokenConfigured,
       base_url: String(process.env.BASE_URL || '').trim() || null,
       stream_api_base_url: String(process.env.STREAM_API_BASE_URL || '').trim() || null,
@@ -770,6 +783,53 @@ runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, as
     })
   } catch (e) {
     console.error('[runtime/payment-activation-stats]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** VPS disk / upload storage forensics (admin token). Read-only. */
+runtimePublicRouter.get('/storage-forensics', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const report = await collectUploadStorageForensics()
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/storage-forensics]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Remove only disposable upload probes/temp files (admin token). ?apply=1 to delete. */
+runtimePublicRouter.post('/storage-cleanup-disposable', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const apply = String(req.query.apply ?? b.apply ?? '0').trim() === '1'
+    const before = await collectUploadStorageForensics()
+    if (!apply) {
+      const preview = await cleanupDisposableUploadArtifacts({ dryRun: true })
+      return res.json({
+        ok: true,
+        dry_run: true,
+        commit: getServerGitCommit(),
+        before_disk: before.disk_bytes,
+        would_remove_count: preview.removed_count,
+        would_reclaim_bytes: preview.reclaimed_bytes,
+        sample: preview.removed,
+      })
+    }
+    const afterCleanup = await cleanupDisposableUploadArtifacts({ dryRun: false })
+    const after = await collectUploadStorageForensics()
+    res.json({
+      ok: true,
+      dry_run: false,
+      commit: getServerGitCommit(),
+      before_disk: before.disk_bytes,
+      after_disk: after.disk_bytes,
+      cleanup: afterCleanup,
+    })
+  } catch (e) {
+    console.error('[runtime/storage-cleanup-disposable]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

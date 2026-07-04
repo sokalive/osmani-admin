@@ -1,25 +1,17 @@
-import fs, { createWriteStream } from 'node:fs'
+import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import multer from 'multer'
-import { randomBytes } from 'node:crypto'
 import { createInstructionVideoMulterStorage } from './lib/instructionVideoMulterStorage.js'
+import {
+  finalizeMemoryImageUpload,
+  isEnospcError,
+  sendUploadError,
+  UploadDiskError,
+} from './lib/uploadDiskSafety.js'
+import { UPLOADS_DIR, INSTRUCTION_VIDEOS_DIR, ensureUploadsDir } from './lib/uploadPaths.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-
-/** Prefer UPLOAD_DIR for production (Render persistent disk); fallback for local dev only. */
-function resolveUploadsDir() {
-  const raw = process.env.UPLOAD_DIR?.trim()
-  if (raw) return path.resolve(raw)
-  return path.join(__dirname, '../uploads')
-}
-
-export const UPLOADS_DIR = resolveUploadsDir()
-export const INSTRUCTION_VIDEOS_DIR = path.join(UPLOADS_DIR, 'videos')
-
-export function ensureUploadsDir() {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true })
-}
+export { UPLOADS_DIR, INSTRUCTION_VIDEOS_DIR, ensureUploadsDir }
+export { finalizeMemoryImageUpload, sendUploadError, isEnospcError, UploadDiskError }
 
 function mustSkipLocalInstructionVideoDir() {
   const mode = String(process.env.INSTRUCTION_VIDEO_STORAGE || '').trim().toLowerCase()
@@ -252,18 +244,8 @@ export async function getMediaHealthSnapshot() {
   }
 }
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    ensureUploadsDir()
-    cb(null, UPLOADS_DIR)
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg'
-    const safeExt = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif'].includes(ext) ? ext : '.jpg'
-    const name = `${Date.now()}-${randomBytes(8).toString('hex')}${safeExt}`
-    cb(null, name)
-  },
-})
+/** Image uploads use memory first, then controlled disk persist (avoids multer partial ENOSPC writes). */
+const imageMemoryStorage = multer.memoryStorage()
 
 function fileFilter(_req, file, cb) {
   if (!file.mimetype.startsWith('image/')) {
@@ -274,14 +256,14 @@ function fileFilter(_req, file, cb) {
 }
 
 export const uploadThumbnail = multer({
-  storage,
+  storage: imageMemoryStorage,
   fileFilter,
   limits: { fileSize: 6 * 1024 * 1024 },
 })
 
 /** Banner hero image — multipart field name `image` */
 export const uploadBannerImage = multer({
-  storage,
+  storage: imageMemoryStorage,
   fileFilter,
   limits: { fileSize: 8 * 1024 * 1024 },
 })
@@ -298,7 +280,7 @@ function paymentProviderLogoFilter(_req, file, cb) {
 
 /** Payment provider logo — multipart field name `logo` */
 export const uploadPaymentProviderLogo = multer({
-  storage,
+  storage: imageMemoryStorage,
   fileFilter: paymentProviderLogoFilter,
   limits: { fileSize: 4 * 1024 * 1024 },
 })
