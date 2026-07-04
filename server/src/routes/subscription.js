@@ -33,7 +33,7 @@ deviceSubscriptionBus.on('update', ({ deviceId }) => {
 })
 
 /** Cross-instance fallback: modes are in Postgres; keep interval Android-friendly (was 2500ms). */
-const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(750, Number(process.env.MODE_SSE_POLL_MS) || 1200))
+const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(250, Number(process.env.MODE_SSE_POLL_MS) || 400))
 
 function countryFromRequest(req) {
   const raw =

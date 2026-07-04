@@ -245,6 +245,20 @@ runtimePublicRouter.get('/manual-gift-database-report', requireLegacyAdminToken,
   }
 })
 
+/** Production payment audit (90-day SQL evidence). */
+runtimePublicRouter.get('/payment-production-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const days = Number(req.query.days ?? 90)
+    const { runPaymentProductionAudit } = await import('../lib/paymentProductionAudit.js')
+    const report = await runPaymentProductionAudit({ days })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/payment-production-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Full read-only manual gift production investigation (exact PostgreSQL). */
 runtimePublicRouter.get('/manual-gift-production-investigation', requireLegacyAdminToken, async (_req, res) => {
   try {

@@ -7,7 +7,7 @@ const DEFAULT_TTL_MS = Math.max(
 )
 const ACTIVE_TTL_MS = Math.max(
   DEFAULT_TTL_MS,
-  Math.min(60_000, Number(process.env.SUBSCRIPTION_ACCESS_CACHE_ACTIVE_MS) || 30_000),
+  Math.min(60_000, Number(process.env.SUBSCRIPTION_ACCESS_CACHE_ACTIVE_MS) || 8000),
 )
 
 function ttlForRow(row) {

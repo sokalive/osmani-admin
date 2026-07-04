@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { CalendarClock, Gift, History, Ticket } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import SecurityPinModal from '../components/SecurityPinModal'
@@ -16,6 +16,7 @@ import {
   postManualSubscriptionGrant,
   postManualSubscriptionGrantCustom,
   postManualSubscriptionHistoryBulkDelete,
+  postManualSubscriptionHistoryDeleteAll,
   postManualSubscriptionUnblock,
   postOfferCodeBlock,
   postOfferCodesBulkBlock,
@@ -24,7 +25,8 @@ import {
   postOfferCodeGenerate,
   postOfferCodeUnblock,
 } from '../lib/api'
-import { formatAdminDateTime, adminDateAndTimeToIso, adminDateFromIso, adminTimeFromIso } from '../lib/formatAdminDateTime'
+import { formatAdminDateOnly, formatAdminDateTime, adminDateAndTimeToIso, adminDateFromIso, adminTimeFromIso } from '../lib/formatAdminDateTime'
+import { filterManualHistoryRows, groupManualHistoryByDate } from '../lib/manualSubscriptionHistoryUi.js'
 import {
   filterSelectableSubscriptionPlans,
   formatManualGrantPlanLabel,
@@ -130,6 +132,10 @@ function ManualSubscriptionPage() {
   const [offerBusyCode, setOfferBusyCode] = useState(null)
 
   const [histSelected, setHistSelected] = useState(() => new Set())
+  const [histSearch, setHistSearch] = useState('')
+  const [histFilter, setHistFilter] = useState('ALL')
+  const [expiringSoonDays, setExpiringSoonDays] = useState(3)
+  const [pendingDeleteGrantId, setPendingDeleteGrantId] = useState(null)
   const [offerSelected, setOfferSelected] = useState(() => new Set())
   const [bulkPinExec, setBulkPinExec] = useState(null)
   const [bulkPinBusy, setBulkPinBusy] = useState(false)
@@ -480,15 +486,18 @@ function ManualSubscriptionPage() {
     }
   }
 
-  async function handleDeleteGrant(grantId) {
-    if (!window.confirm('Futa rekodi hii kwenye historia? (Huduma ya kifurushi kwenye kifaa hubaki.)')) return
+  async function handleDeleteGrant(grantId, securityPin) {
     setHistoryBusyId(`d:${grantId}`)
     try {
-      await deleteManualSubscriptionGrant(grantId)
-      showToast('success', 'Rekodi imefutwa')
+      const out = await deleteManualSubscriptionGrant(grantId, { securityPin })
+      showToast(
+        'success',
+        out?.revoked ? 'Rekodi imefutwa na kifurushi kimeondolewa' : 'Rekodi imefutwa',
+      )
       await loadHistory()
     } catch (err) {
       showToast('error', err?.message || 'Imeshindikana')
+      throw err
     } finally {
       setHistoryBusyId(null)
     }
@@ -500,9 +509,26 @@ function ManualSubscriptionPage() {
     return { text: 'Siyo hai', className: 'bg-slate-600/40 text-slate-300 ring-slate-500/25' }
   }
 
+  const filteredHistoryRows = useMemo(
+    () =>
+      filterManualHistoryRows(historyRows, {
+        search: histSearch,
+        filter: histFilter,
+        expiringSoonDays,
+      }),
+    [historyRows, histSearch, histFilter, expiringSoonDays],
+  )
+
+  const groupedHistory = useMemo(
+    () => groupManualHistoryByDate(filteredHistoryRows),
+    [filteredHistoryRows],
+  )
+
   const allHistChecked = useMemo(
-    () => historyRows.length > 0 && historyRows.every((r) => histSelected.has(Number(r.id))),
-    [historyRows, histSelected],
+    () =>
+      filteredHistoryRows.length > 0 &&
+      filteredHistoryRows.every((r) => histSelected.has(Number(r.id))),
+    [filteredHistoryRows, histSelected],
   )
 
   const allOfferChecked = useMemo(
@@ -538,12 +564,33 @@ function ManualSubscriptionPage() {
   return (
     <>
       <SecurityPinModal
-        open={bulkPinExec != null}
-        title="Ingiza Security PIN"
+        open={bulkPinExec != null || pendingDeleteGrantId != null}
+        title={pendingDeleteGrantId != null ? 'Thibitisha FUTA + Revoke' : 'Ingiza Security PIN'}
         errorText={bulkPinError}
         busy={bulkPinBusy}
-        onClose={() => !bulkPinBusy && setBulkPinExec(null)}
-        onSubmit={handleBulkPinSubmit}
+        onClose={() => {
+          if (!bulkPinBusy) {
+            setBulkPinExec(null)
+            setPendingDeleteGrantId(null)
+            setBulkPinError('')
+          }
+        }}
+        onSubmit={async (pin) => {
+          if (pendingDeleteGrantId != null) {
+            setBulkPinBusy(true)
+            setBulkPinError('')
+            try {
+              await handleDeleteGrant(pendingDeleteGrantId, pin)
+              setPendingDeleteGrantId(null)
+            } catch (err) {
+              setBulkPinError(err?.message || 'Imeshindikana')
+            } finally {
+              setBulkPinBusy(false)
+            }
+            return
+          }
+          await handleBulkPinSubmit(pin)
+        }}
       />
       <Topbar />
       <main className="mt-6 flex min-h-0 flex-1 flex-col gap-6">
@@ -820,15 +867,93 @@ function ManualSubscriptionPage() {
         ) : tab === 'history' ? (
           <section className="min-w-0 space-y-4 rounded-2xl border border-slate-700/60 bg-slate-950/40 p-4 ring-1 ring-white/[0.04] sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-slate-400">Historia ya mikopo ya mikono (manual grants).</p>
-              <button
-                type="button"
-                disabled={historyLoading}
-                onClick={() => void loadHistory()}
-                className="rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
-              >
-                {historyLoading ? 'Inapakia…' : 'Onyesha upya'}
-              </button>
+              <p className="text-sm text-slate-400">
+                Historia ya mikopo ya mikono — {filteredHistoryRows.length} / {historyRows.length} rekodi
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={historyLoading || historyRows.length === 0 || bulkPinBusy}
+                  onClick={() => {
+                    if (
+                      !window.confirm(
+                        'FUTA HISTORIA YOTE na kuondoa kifurushi cha manual kwenye vifaa vilivyoathiriwa? Hii haiwezi kutenduliwa.',
+                      )
+                    ) {
+                      return
+                    }
+                    setBulkPinError('')
+                    setBulkPinExec(() => async (securityPin) => {
+                      const out = await postManualSubscriptionHistoryDeleteAll({ securityPin, confirm: true })
+                      setHistSelected(new Set())
+                      return out
+                    })
+                  }}
+                  className="rounded-lg border border-rose-500/40 bg-rose-950/40 px-3 py-1.5 text-xs font-bold text-rose-200 hover:bg-rose-900/50 disabled:opacity-50"
+                >
+                  DELETE ALL
+                </button>
+                <button
+                  type="button"
+                  disabled={historyLoading}
+                  onClick={() => void loadHistory()}
+                  className="rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {historyLoading ? 'Inapakia…' : 'Onyesha upya'}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="min-w-0 flex-1">
+                <label htmlFor="hist-search" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Tafuta
+                </label>
+                <input
+                  id="hist-search"
+                  className={inputClass()}
+                  value={histSearch}
+                  onChange={(e) => setHistSearch(e.target.value)}
+                  placeholder="Device ID, simu, Grant ID, manual_grant, custom…"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+              <div>
+                <label htmlFor="hist-filter" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Chuja
+                </label>
+                <select
+                  id="hist-filter"
+                  className={selectClass()}
+                  value={histFilter}
+                  onChange={(e) => setHistFilter(e.target.value)}
+                >
+                  <option value="ALL">ALL</option>
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="EXPIRING">EXPIRING SOON</option>
+                  <option value="EXPIRED">EXPIRED</option>
+                  <option value="BLOCKED">BLOCKED</option>
+                  <option value="CUSTOM">CUSTOM</option>
+                  <option value="STANDARD">STANDARD</option>
+                </select>
+              </div>
+              {histFilter === 'EXPIRING' ? (
+                <div>
+                  <label htmlFor="hist-expiring-days" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Siku
+                  </label>
+                  <input
+                    id="hist-expiring-days"
+                    type="number"
+                    min={1}
+                    max={30}
+                    className={`${inputClass()} w-24`}
+                    value={expiringSoonDays}
+                    onChange={(e) => setExpiringSoonDays(Math.max(1, Math.min(30, Number(e.target.value) || 3)))}
+                  />
+                </div>
+              ) : null}
             </div>
 
             {histSelected.size > 0 ? (
@@ -902,7 +1027,7 @@ function ManualSubscriptionPage() {
                     if (grantIds.length === 0) return
                     if (
                       !window.confirm(
-                        `Futa rekodi ${grantIds.length} kwenye historia? (Huduma ya kifurushi hubaki.)`,
+                        `Futa rekodi ${grantIds.length} na kuondoa kifurushi cha manual kwenye vifaa vilivyoathiriwa?`,
                       )
                     ) {
                       return
@@ -929,7 +1054,7 @@ function ManualSubscriptionPage() {
             ) : null}
 
             <div className="overflow-x-auto rounded-xl border border-slate-700/50">
-              <table className="min-w-[920px] w-full border-collapse text-left text-sm">
+              <table className="min-w-[1100px] w-full border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-700/60 bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                     <th className="w-10 px-2 py-3">
@@ -940,19 +1065,21 @@ function ManualSubscriptionPage() {
                         onChange={() =>
                           setHistSelected((prev) => {
                             if (
-                              historyRows.length > 0 &&
-                              historyRows.every((r) => prev.has(Number(r.id)))
+                              filteredHistoryRows.length > 0 &&
+                              filteredHistoryRows.every((r) => prev.has(Number(r.id)))
                             ) {
                               return new Set()
                             }
-                            return new Set(historyRows.map((r) => Number(r.id)))
+                            return new Set(filteredHistoryRows.map((r) => Number(r.id)))
                           })
                         }
                         title="Chagua zote"
                         aria-label="Chagua zote"
                       />
                     </th>
+                    <th className="px-3 py-3 font-semibold">Grant</th>
                     <th className="px-3 py-3 font-semibold">Device ID</th>
+                    <th className="px-3 py-3 font-semibold">Simu</th>
                     <th className="px-3 py-3 font-semibold">Muda</th>
                     <th className="px-3 py-3 font-semibold">Aina</th>
                     <th className="px-3 py-3 font-semibold">Alipotolewa</th>
@@ -964,110 +1091,132 @@ function ManualSubscriptionPage() {
                 <tbody className="divide-y divide-slate-800/80">
                   {historyLoading && historyRows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                      <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
                         Inapakia…
                       </td>
                     </tr>
-                  ) : historyRows.length === 0 ? (
+                  ) : filteredHistoryRows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
-                        Hakuna rekodi bado.
+                      <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
+                        Hakuna rekodi zinazolingana.
                       </td>
                     </tr>
                   ) : (
-                    historyRows.map((row) => {
-                      const st = statusLabel(row)
-                      const shortDev =
-                        row.deviceId.length > 22 ? `${row.deviceId.slice(0, 20)}…` : row.deviceId
-                      const blockBusy = historyBusyId === `b:${row.deviceId}`
-                      const unblockBusy = historyBusyId === `u:${row.deviceId}`
-                      const delBusy = historyBusyId === `d:${row.id}`
-                      return (
-                        <tr key={row.id} className="bg-slate-950/20 hover:bg-slate-900/40">
-                          <td className="px-2 py-2.5 align-middle">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500"
-                              checked={histSelected.has(Number(row.id))}
-                              onChange={() =>
-                                setHistSelected((prev) => {
-                                  const n = new Set(prev)
-                                  const id = Number(row.id)
-                                  if (n.has(id)) n.delete(id)
-                                  else n.add(id)
-                                  return n
-                                })
-                              }
-                              aria-label={`Chagua ${shortDev}`}
-                            />
-                          </td>
-                          <td className="max-w-[200px] truncate px-3 py-2.5 font-mono text-xs text-slate-200" title={row.deviceId}>
-                            {shortDev}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">
-                            {row.customExpiry
-                              ? row.planName
-                                ? `${row.planName} (custom)`
-                                : 'Custom'
-                              : `${row.durationDays} siku`}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            {row.customExpiry ? (
-                              <span className="inline-flex rounded-lg bg-violet-500/15 px-2 py-0.5 text-xs font-semibold text-violet-200 ring-1 ring-violet-500/30">
-                                Custom
-                              </span>
-                            ) : (
-                              <span className="text-xs text-slate-500">Standard</span>
-                            )}
-                            {row.createdBy ? (
-                              <span className="mt-1 block max-w-[120px] truncate text-[10px] text-slate-500" title={row.createdBy}>
-                                {row.createdBy}
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.grantedAt)}</td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.expiresAt)}</td>
-                          <td className="px-3 py-2.5">
-                            <span
-                              className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold ring-1 ${st.className}`}
-                            >
-                              {st.text}
-                            </span>
-                            {row.adminDeviceBlocked && !row.manualAdminBlocked ? (
-                              <span className="mt-1 block text-[10px] text-slate-500">Kifaa pia kwenye admin block</span>
-                            ) : null}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <div className="flex flex-wrap gap-1.5">
-                              <button
-                                type="button"
-                                disabled={row.manualAdminBlocked || blockBusy || delBusy}
-                                onClick={() => void handleBlock(row.deviceId)}
-                                className="rounded-md bg-rose-600/90 px-2 py-1 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-40"
-                              >
-                                {blockBusy ? '…' : 'BLOCK'}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={!row.manualAdminBlocked || unblockBusy || delBusy}
-                                onClick={() => void handleUnblock(row.deviceId)}
-                                className="rounded-md bg-emerald-700/90 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40"
-                              >
-                                {unblockBusy ? '…' : 'UNBLOCK'}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={delBusy || blockBusy || unblockBusy}
-                                onClick={() => void handleDeleteGrant(row.id)}
-                                className="rounded-md border border-slate-600 bg-slate-800/80 px-2 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
-                              >
-                                {delBusy ? '…' : 'DELETE'}
-                              </button>
-                            </div>
+                    groupedHistory.map(({ dateKey, rows: groupRows }) => (
+                      <Fragment key={dateKey}>
+                        <tr key={`hdr-${dateKey}`} className="bg-slate-900/50">
+                          <td colSpan={10} className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-amber-300/90">
+                            {dateKey !== 'unknown'
+                              ? formatAdminDateOnly(adminDateAndTimeToIso(dateKey, '12:00') || dateKey)
+                              : 'Tarehe haijulikani'}
                           </td>
                         </tr>
-                      )
-                    })
+                        {groupRows.map((row) => {
+                          const st = statusLabel(row)
+                          const shortDev =
+                            row.deviceId.length > 22 ? `${row.deviceId.slice(0, 20)}…` : row.deviceId
+                          const blockBusy = historyBusyId === `b:${row.deviceId}`
+                          const unblockBusy = historyBusyId === `u:${row.deviceId}`
+                          const delBusy = historyBusyId === `d:${row.id}`
+                          const txnLabel = row.transactionId || `manual_grant:${row.id}`
+                          return (
+                            <tr key={row.id} className="bg-slate-950/20 hover:bg-slate-900/40">
+                              <td className="px-2 py-2.5 align-middle">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-slate-500 bg-slate-900 text-amber-500"
+                                  checked={histSelected.has(Number(row.id))}
+                                  onChange={() =>
+                                    setHistSelected((prev) => {
+                                      const n = new Set(prev)
+                                      const id = Number(row.id)
+                                      if (n.has(id)) n.delete(id)
+                                      else n.add(id)
+                                      return n
+                                    })
+                                  }
+                                  aria-label={`Chagua ${shortDev}`}
+                                />
+                              </td>
+                              <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-slate-300">
+                                #{row.id}
+                                <span className="mt-0.5 block max-w-[140px] truncate text-[10px] text-slate-500" title={txnLabel}>
+                                  {txnLabel}
+                                </span>
+                              </td>
+                              <td className="max-w-[200px] truncate px-3 py-2.5 font-mono text-xs text-slate-200" title={row.deviceId}>
+                                {shortDev}
+                              </td>
+                              <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-300">{row.phone || '—'}</td>
+                              <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">
+                                {row.customExpiry
+                                  ? row.planName
+                                    ? `${row.planName} (custom)`
+                                    : 'Custom'
+                                  : `${row.durationDays} siku`}
+                              </td>
+                              <td className="px-3 py-2.5">
+                                {row.customExpiry ? (
+                                  <span className="inline-flex rounded-lg bg-violet-500/15 px-2 py-0.5 text-xs font-semibold text-violet-200 ring-1 ring-violet-500/30">
+                                    Custom
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-slate-500">Standard</span>
+                                )}
+                                {row.createdBy ? (
+                                  <span className="mt-1 block max-w-[120px] truncate text-[10px] text-slate-500" title={row.createdBy}>
+                                    {row.createdBy}
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.grantedAt)}</td>
+                              <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.expiresAt)}</td>
+                              <td className="px-3 py-2.5">
+                                <span
+                                  className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold ring-1 ${st.className}`}
+                                >
+                                  {st.text}
+                                </span>
+                                {row.adminDeviceBlocked && !row.manualAdminBlocked ? (
+                                  <span className="mt-1 block text-[10px] text-slate-500">Kifaa pia kwenye admin block</span>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={row.manualAdminBlocked || blockBusy || delBusy}
+                                    onClick={() => void handleBlock(row.deviceId)}
+                                    className="rounded-md bg-rose-600/90 px-2 py-1 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-40"
+                                  >
+                                    {blockBusy ? '…' : 'BLOCK'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={!row.manualAdminBlocked || unblockBusy || delBusy}
+                                    onClick={() => void handleUnblock(row.deviceId)}
+                                    className="rounded-md bg-emerald-700/90 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40"
+                                  >
+                                    {unblockBusy ? '…' : 'UNBLOCK'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={delBusy || blockBusy || unblockBusy}
+                                    onClick={() => {
+                                      setBulkPinError('')
+                                      setPendingDeleteGrantId(Number(row.id))
+                                    }}
+                                    className="rounded-md border border-slate-600 bg-slate-800/80 px-2 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                                  >
+                                    {delBusy ? '…' : 'DELETE'}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </Fragment>
+                    ))
                   )}
                 </tbody>
               </table>

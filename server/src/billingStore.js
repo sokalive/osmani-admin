@@ -1301,12 +1301,16 @@ export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
          false
        ) AS admin_device_blocked,
        ds.expires_at AS subscription_expires_at,
-       ds.status AS subscription_status
+       ds.status AS subscription_status,
+       ds.transaction_id AS subscription_transaction_id,
+       COALESCE(NULLIF(trim(t.phone::text), ''), NULLIF(trim(dpr.phone_number_raw::text), '')) AS grant_phone
      FROM manual_subscription_grants g
      LEFT JOIN device_subscriptions ds ON ds.device_id = g.device_id
      LEFT JOIN plans p ON p.id = g.plan_id
+     LEFT JOIN transactions t ON t.order_id = ('manual_grant:' || g.id::text)
+     LEFT JOIN device_phone_registry dpr ON dpr.device_id = g.device_id
      WHERE g.deleted_at IS NULL
-     ORDER BY g.created_at DESC
+     ORDER BY g.created_at DESC, g.id DESC
      LIMIT $1`,
     [lim],
   )
@@ -1362,6 +1366,9 @@ export async function listManualSubscriptionHistoryAdmin({ limit = 500 } = {}) {
           ? new Date(r.granted_at).toISOString()
           : null,
       expiresAt: expDate && !Number.isNaN(expDate.getTime()) ? expDate.toISOString() : null,
+      phone: r.grant_phone != null ? String(r.grant_phone) : '',
+      transactionId:
+        r.subscription_transaction_id != null ? String(r.subscription_transaction_id) : '',
       manualAdminBlocked: manualBlocked,
       adminDeviceBlocked: deviceBlocked,
       effectiveBlocked,
@@ -1508,6 +1515,150 @@ export async function bulkSoftDeleteManualGrants(grantIds) {
     deleted,
     notFound,
     rows: rows.map((r) => ({ id: Number(r.id), deviceId: String(r.device_id ?? '') })),
+  }
+}
+
+const MANUAL_GRANT_ORDER_ID_RE = /^manual_grant:[0-9]+$/
+
+function manualGrantOrderId(grantId) {
+  const id = Number(grantId)
+  if (!Number.isFinite(id) || id < 1) return null
+  return `manual_grant:${id}`
+}
+
+/**
+ * Soft-delete one manual grant and revoke subscription only when this grant is the active entitlement.
+ * Never modifies payment, recovery, transfer, or offer-code subscriptions.
+ * @param {number} grantId
+ * @param {import('pg').PoolClient | null} [client]
+ */
+export async function deleteManualGrantWithRevoke(grantId, client = null) {
+  const pool = requirePool()
+  const ownClient = client == null
+  const c = client ?? (await pool.connect())
+  const id = Number(grantId)
+  const orderId = manualGrantOrderId(id)
+  if (!orderId) {
+    if (ownClient) c.release()
+    return { deleted: false, revoked: false, deviceId: null, grantId: id }
+  }
+
+  try {
+    if (ownClient) await c.query('BEGIN')
+
+    const grantRes = await c.query(
+      `SELECT id, device_id FROM manual_subscription_grants
+       WHERE id = $1::bigint AND deleted_at IS NULL
+       FOR UPDATE`,
+      [id],
+    )
+    const grant = grantRes.rows[0]
+    if (!grant) {
+      if (ownClient) await c.query('ROLLBACK')
+      return { deleted: false, revoked: false, deviceId: null, grantId: id }
+    }
+    const deviceId = String(grant.device_id ?? '').trim()
+
+    const delRes = await c.query(
+      `UPDATE manual_subscription_grants SET deleted_at = now()
+       WHERE id = $1::bigint AND deleted_at IS NULL
+       RETURNING id`,
+      [id],
+    )
+    if (!delRes.rows[0]) {
+      if (ownClient) await c.query('ROLLBACK')
+      return { deleted: false, revoked: false, deviceId, grantId: id }
+    }
+
+    let revoked = false
+    if (deviceId) {
+      const subRes = await c.query(
+        `SELECT transaction_id FROM device_subscriptions WHERE device_id = $1 FOR UPDATE`,
+        [deviceId],
+      )
+      const txn = String(subRes.rows[0]?.transaction_id ?? '').trim()
+      if (txn === orderId && MANUAL_GRANT_ORDER_ID_RE.test(txn)) {
+        await c.query(
+          `UPDATE device_subscriptions
+           SET status = 'pending', updated_at = now()
+           WHERE device_id = $1 AND transaction_id = $2`,
+          [deviceId, orderId],
+        )
+        revoked = true
+      }
+    }
+
+    if (ownClient) await c.query('COMMIT')
+    return { deleted: true, revoked, deviceId, grantId: id }
+  } catch (e) {
+    if (ownClient) await c.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    if (ownClient) c.release()
+  }
+}
+
+/**
+ * Bulk delete + conditional revoke (single transaction, rollback on any failure).
+ * @param {unknown[]} grantIds
+ */
+export async function bulkDeleteManualGrantsWithRevoke(grantIds) {
+  const pool = requirePool()
+  const ids = normalizeManualGrantIdList(grantIds)
+  if (ids.length === 0) {
+    return { deleted: 0, revoked: 0, notFound: 0, rows: [], deviceIds: [] }
+  }
+  const client = await pool.connect()
+  const results = []
+  try {
+    await client.query('BEGIN')
+    for (const id of ids) {
+      results.push(await deleteManualGrantWithRevoke(id, client))
+    }
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
+  const deletedRows = results.filter((r) => r.deleted)
+  const deviceIds = [...new Set(deletedRows.map((r) => r.deviceId).filter(Boolean))]
+  return {
+    deleted: deletedRows.length,
+    revoked: deletedRows.filter((r) => r.revoked).length,
+    notFound: ids.length - deletedRows.length,
+    rows: deletedRows,
+    deviceIds,
+  }
+}
+
+/** Delete all manual grant history rows; revoke only matching active manual_grant entitlements. */
+export async function deleteAllManualGrantsWithRevoke() {
+  const pool = requirePool()
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows } = await client.query(
+      `SELECT id FROM manual_subscription_grants WHERE deleted_at IS NULL ORDER BY id ASC FOR UPDATE`,
+    )
+    const results = []
+    for (const r of rows) {
+      results.push(await deleteManualGrantWithRevoke(Number(r.id), client))
+    }
+    await client.query('COMMIT')
+    const deletedRows = results.filter((x) => x.deleted)
+    const deviceIds = [...new Set(deletedRows.map((x) => x.deviceId).filter(Boolean))]
+    return {
+      deleted: deletedRows.length,
+      revoked: deletedRows.filter((x) => x.revoked).length,
+      deviceIds,
+    }
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
   }
 }
 

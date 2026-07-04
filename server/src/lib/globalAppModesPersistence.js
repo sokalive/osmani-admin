@@ -7,8 +7,8 @@ export const GLOBAL_APP_MODES_DB_KEY = 'global_app_modes'
 let _modesCache = null
 let _modesCacheAt = 0
 const MODES_CACHE_MS = Math.max(
-  2000,
-  Math.min(60_000, Number(process.env.GLOBAL_MODES_CACHE_MS) || 10_000),
+  500,
+  Math.min(60_000, Number(process.env.GLOBAL_MODES_CACHE_MS) || 2000),
 )
 
 export function invalidateGlobalModesCache() {

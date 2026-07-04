@@ -6,6 +6,9 @@ import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { adminSecurityPinFromBody, verifyAdminSecurityPin } from '../lib/adminSecurityPin.js'
 import { verifyAdminSensitiveActionPassword } from '../lib/adminSensitiveActionPassword.js'
+import { notifySubscriptionTransferred } from '../lib/subscriptionTransferNotify.js'
+import { invalidateSubscriptionAccessCache } from '../lib/subscriptionAccessCache.js'
+import { clearVerifyAccessInflightForDevice } from '../lib/verifyAccessSingleflight.js'
 
 export const manualSubscriptionAdminRouter = Router()
 manualSubscriptionAdminRouter.use(requireAdminPanelAccess)
@@ -111,6 +114,32 @@ function logManualSubscriptionAudit(action, deviceId, extra = {}) {
       ...extra,
     }),
   )
+}
+
+/** Immediate SSE + cache bust after manual grant delete/revoke. */
+function publishManualGrantDeletionRealtime(deviceIds, { revoked = false } = {}) {
+  const reason = revoked ? 'manual_grant_revoked' : 'manual_grant_history_deleted'
+  for (const raw of deviceIds) {
+    const deviceId = String(raw ?? '').trim()
+    if (!deviceId) continue
+    invalidateSubscriptionAccessCache(deviceId)
+    clearVerifyAccessInflightForDevice(deviceId)
+    notifySubscriptionTransferred({
+      targetDeviceId: deviceId,
+      targetRow: {
+        device_id: deviceId,
+        status: 'pending',
+        active_now: false,
+      },
+      reason,
+    })
+    deviceSubscriptionBus.emit('update', { deviceId, reason })
+    liveSyncBus.publish('analytics.subscription_updated', {
+      topics: ['analytics'],
+      deviceId,
+      orderId: reason,
+    })
+  }
 }
 
 function adminCreatedByLabel(req) {
@@ -323,13 +352,14 @@ manualSubscriptionAdminRouter.post('/history/bulk-delete', async (req, res) => {
         JSON.stringify({ at: new Date().toISOString(), count: slice.length, sample: slice.slice(0, 12) }),
       )
     }
-    const { deleted, notFound, rows } = await billing.bulkSoftDeleteManualGrants(slice)
+    const { deleted, notFound, rows, deviceIds, revoked } = await billing.bulkDeleteManualGrantsWithRevoke(slice)
     for (const r of rows) {
-      logManualSubscriptionAudit('bulk_delete_grant', r.deviceId)
+      logManualSubscriptionAudit('bulk_delete_grant', r.deviceId, { grant_id: r.grantId, revoked: r.revoked })
     }
+    publishManualGrantDeletionRealtime(deviceIds, { revoked: (revoked ?? 0) > 0 })
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
     res.setHeader('Pragma', 'no-cache')
-    const payload = { ok: true, deleted, not_found: notFound }
+    const payload = { ok: true, deleted, not_found: notFound, revoked: revoked ?? 0 }
     if (dbg) {
       console.info(
         '[manual_bulk_delete_response]',
@@ -350,18 +380,55 @@ manualSubscriptionAdminRouter.post('/history/bulk-delete', async (req, res) => {
 
 manualSubscriptionAdminRouter.delete('/history/:grantId', async (req, res) => {
   try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
     const grantId = Number(req.params.grantId)
     if (!Number.isFinite(grantId) || grantId < 1) {
       return res.status(400).json({ ok: false, error: 'Invalid grant id' })
     }
-    const deleted = await billing.softDeleteManualGrant(grantId)
-    if (!deleted) {
+    const result = await billing.deleteManualGrantWithRevoke(grantId)
+    if (!result.deleted) {
       return res.status(404).json({ ok: false, error: 'Grant not found or already deleted' })
     }
-    logManualSubscriptionAudit('delete', deleted.deviceId)
-    res.json({ ok: true })
+    logManualSubscriptionAudit('delete', result.deviceId, {
+      grant_id: grantId,
+      revoked: result.revoked,
+    })
+    publishManualGrantDeletionRealtime([result.deviceId], { revoked: result.revoked })
+    res.json({ ok: true, revoked: result.revoked === true })
   } catch (e) {
     console.error('[manual_subscription delete history]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+manualSubscriptionAdminRouter.post('/history/delete-all', async (req, res) => {
+  try {
+    const pin = adminSecurityPinFromBody(req)
+    if (!pin) return res.status(400).json({ ok: false, error: 'security_pin required' })
+    if (!verifyAdminSecurityPin(pin)) {
+      return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+    if (body.confirm !== true && String(body.confirm ?? '').toLowerCase() !== 'delete all') {
+      return res.status(400).json({ ok: false, error: 'confirm: true required' })
+    }
+    const result = await billing.deleteAllManualGrantsWithRevoke()
+    for (const deviceId of result.deviceIds) {
+      logManualSubscriptionAudit('delete_all_grant', deviceId)
+    }
+    publishManualGrantDeletionRealtime(result.deviceIds, { revoked: result.revoked > 0 })
+    res.json({
+      ok: true,
+      deleted: result.deleted,
+      revoked: result.revoked,
+      devices_notified: result.deviceIds.length,
+    })
+  } catch (e) {
+    console.error('[manual_subscription delete-all]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

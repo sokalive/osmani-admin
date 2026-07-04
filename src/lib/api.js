@@ -871,14 +871,30 @@ export async function postManualSubscriptionUnblock(deviceId) {
   return body
 }
 
-export async function deleteManualSubscriptionGrant(grantId) {
+export async function deleteManualSubscriptionGrant(grantId, { securityPin } = {}) {
   const id = Number(grantId)
   const res = await fetch(joinPath(`/admin/manual-subscription/history/${encodeURIComponent(String(id))}`), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'DELETE',
     headers: adminPanelApiHeaders(),
+    body: JSON.stringify({ security_pin: String(securityPin ?? '').trim() }),
   })
   const body = res.status === 204 ? null : await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+export async function postManualSubscriptionHistoryDeleteAll({ securityPin, confirm = true }) {
+  const res = await fetch(joinPath('/admin/manual-subscription/history/delete-all'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminPanelApiHeaders(),
+    body: JSON.stringify({
+      security_pin: String(securityPin ?? '').trim(),
+      confirm: confirm === true,
+    }),
+  })
+  const body = await parseJsonSafe(res)
   if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
   return body
 }
