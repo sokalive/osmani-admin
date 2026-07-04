@@ -1,0 +1,45 @@
+{
+  "report_type": "AZAM3_CHANNEL_THUMBNAIL_FIX",
+  "generated_at": "2026-07-04T07:05:00.000Z",
+  "final_verdict": "PASS",
+  "root_cause": "VPS cutover wrote channel thumbnails to Contabo disk (/var/www/osmani-admin-api/server/uploads) but nginx proxied /uploads/ (except notif-*) to Bunny CDN, and Bunny pull origin still pointed at Render. API returned b-cdn.net URLs → 404 everywhere while the physical file existed on VPS. Render Admin separately hit Render API with 100% full 1GB disk.",
+  "azam_3_hd": {
+    "channel_id": 18,
+    "broken_db_value": "/uploads/1783147359264-f75c0f13a7b7743f.jpeg",
+    "broken_api_url": "https://osmanitv.b-cdn.net/uploads/1783147359264-f75c0f13a7b7743f.jpeg",
+    "broken_public_head": "404",
+    "fixed_db_value": "/uploads/1783148648459-c6ff4dc2e3f489e2.png",
+    "fixed_api_url": "https://api.osmanitv.com/uploads/1783148648459-c6ff4dc2e3f489e2.png",
+    "physical_path": "/var/www/osmani-admin-api/server/uploads/1783148648459-c6ff4dc2e3f489e2.png",
+    "public_head": "200",
+    "file_existed_on_disk_before_fix": true,
+    "nginx_cdn_loop": true
+  },
+  "environment_proof": {
+    "vps_admin_api": "https://admin.osmanitv.com → same-origin /api → VPS Node :10001",
+    "render_admin_api_before": "osmani-admin-mpya → Render API (100% disk) via redirect + api.js",
+    "render_admin_api_after": "api.js + render.yaml redirect → https://api.osmanitv.com/api",
+    "vps_uploads_dir": "/var/www/osmani-admin-api/server/uploads",
+    "render_uploads_dir": "/var/render/media (100% full, 0 bytes free)"
+  },
+  "image_flow_tests": {
+    "channel_thumbnail_update": "PASS HTTP 200 HEAD 200",
+    "banner_update": "PASS HTTP 200 HEAD 200",
+    "notification_prepare": "PASS HTTP 200 HEAD 200",
+    "payment_logo_update": "PASS HTTP 200 HEAD 200",
+    "script": "node server/scripts/verify-all-image-flows-production.mjs — 11/11 PASS"
+  },
+  "disk_status_vps": {
+    "free_bytes": 147797118976,
+    "used_percent": 4.58,
+    "inodes_root_percent": "2%"
+  },
+  "commits": {
+    "github": "0b33c690b55f425fc48d3b32161b7e0b3c147c43",
+    "vps": "0b33c690b55f425fc48d3b32161b7e0b3c147c43",
+    "render_api": "9196fe05f3541395fcc07a51d6c3f1af36e4ddfc (behind; autoDeploy pending)"
+  },
+  "parity": "VPS PASS; Render API behind; Render static admin autoDeploy pending render.yaml redirect fix",
+  "ota": "NOT_REQUIRED",
+  "regression_payment": "NO_PAYMENT_CODE_MODIFIED"
+}
