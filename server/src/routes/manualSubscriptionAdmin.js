@@ -470,13 +470,6 @@ manualSubscriptionAdminRouter.post('/grant-custom', rateLimitGrant, async (req, 
       createdBy: adminCreatedByLabel(req),
     })
 
-    deviceSubscriptionBus.emit('update', { deviceId })
-    liveSyncBus.publish('analytics.subscription_updated', {
-      topics: ['analytics'],
-      deviceId,
-      orderId: `manual_grant:${result.grantId}`,
-    })
-
     void recordSystemNotificationEvent('subscription_manual_grant', {
       device_id: deviceId,
       grant_id: result.grantId,
@@ -547,13 +540,6 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
     }
 
     const result = await billing.grantManualDeviceSubscription(deviceId, durationDays, null, { phone })
-
-    deviceSubscriptionBus.emit('update', { deviceId })
-    liveSyncBus.publish('analytics.subscription_updated', {
-      topics: ['analytics'],
-      deviceId,
-      orderId: `manual_grant:${result.grantId}`,
-    })
 
     void recordSystemNotificationEvent('subscription_manual_grant', {
       device_id: deviceId,

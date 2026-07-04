@@ -8,6 +8,7 @@ import { normalizeLocationPayload } from './lib/analyticsLocation.js'
 import { upsertLiveSession } from './lib/liveSessionStore.js'
 import { invalidateSubscriptionAccessCache } from './lib/subscriptionAccessCache.js'
 import { notifySubscriptionActivated } from './lib/subscriptionActivationNotify.js'
+import { publishManualGrantActivationRealtime } from './lib/manualGrantRealtime.js'
 
 export async function ensureBillingStorage() {
   const pool = getPool()
@@ -1071,7 +1072,12 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
       .catch((err) => console.warn('[sms] manual grant notify failed:', err))
   }
 
-  notifySubscriptionActivated(d, orderId)
+  publishManualGrantActivationRealtime(d, {
+    grantId,
+    nonce: String(nonce),
+    durationDays: days,
+    orderId,
+  })
 
   return {
     grantId,
@@ -1168,7 +1174,12 @@ export async function grantCustomManualDeviceSubscription(
     )
     .catch((err) => console.warn('[sms] manual custom grant notify failed:', err))
 
-  notifySubscriptionActivated(d, orderId)
+  publishManualGrantActivationRealtime(d, {
+    grantId,
+    nonce: String(nonce),
+    durationDays: days,
+    orderId,
+  })
 
   return {
     grantId,

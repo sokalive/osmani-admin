@@ -1,0 +1,163 @@
+{
+  "report_id": "manual-subscription-grant-2026-07-04",
+  "generated_at_utc": "2026-07-04T17:02:00.000Z",
+  "severity": "production-critical",
+  "status": "root_causes_proven_fixes_ready_pending_vps_deploy",
+  "git": {
+    "local_head": "929616b1f107d65fa96b61576a0352914c3af456",
+    "origin_main": "929616b1f107d65fa96b61576a0352914c3af456",
+    "vps_api_live_commit": "0b33c690b55f425fc48d3b32161b7e0b3c147c43",
+    "vps_behind_main": true,
+    "fix_commit_pending": "uncommitted — manualGrantRealtime + SSE manual_gift event"
+  },
+  "phase0_baseline": {
+    "authoritative_api": "https://api.osmanitv.com",
+    "authoritative_db": "155.138.223.205:5432/osmani_db (shared VPS + Render API)",
+    "vps_admin": {
+      "url": "https://admin.osmanitv.com",
+      "bundle": "/assets/index-Dyuet7Yt.js",
+      "api_target": "same-origin /api → VPS Node :10001"
+    },
+    "render_admin": {
+      "url": "https://osmani-admin-mpya.onrender.com",
+      "bundle": "/assets/index-B9dXvrb6.js",
+      "api_target": "https://api.osmanitv.com/api (confirmed in deployed bundle)",
+      "note": "Static site — no /api proxy; all writes go to VPS API"
+    },
+    "render_api": {
+      "url": "https://osmani-admin-mpya.onrender.com",
+      "commit": "929616b (prior audit)",
+      "disk_note": "1GB uploads volume full; manual grants unaffected (no upload)"
+    },
+    "parity": "Both admins write to same VPS API + PostgreSQL"
+  },
+  "phase1_admin_surfaces": {
+    "grant_endpoint": "POST /api/admin/manual-subscription/grant",
+    "history_endpoint": "GET /api/admin/manual-subscription/history",
+    "auth": "X-Admin-Token + PIN (verifyAdminSensitiveActionPassword)",
+    "payload": ["device_id", "duration_days", "phone", "pin"],
+    "history_stale_cache_risk": "low — history is live API fetch; HAI reflects device_subscriptions join at query time",
+    "split_brain_risk": "disproven — Render admin bundle targets api.osmanitv.com"
+  },
+  "phase2_grant_pipeline": {
+    "route": "server/src/routes/manualSubscriptionAdmin.js POST /grant",
+    "engine": "billing.grantManualDeviceSubscription",
+    "db_steps": [
+      "INSERT manual_subscription_grants",
+      "compute stacked expiry",
+      "UPSERT device_subscriptions active",
+      "UPDATE expires_at_snapshot",
+      "recordManualGrantPhoneAndTransaction (synthetic completed txn)",
+      "transaction_id = manual_grant:{grantId}"
+    ],
+    "does_not_clear": ["manual_admin_blocked", "security blocks"],
+    "realtime_before_fix": {
+      "deviceSubscriptionBus": "update (isActive/expires only — no manualGift)",
+      "liveSyncBus": "analytics.subscription_updated",
+      "missing": ["clearVerifyAccessInflightForDevice on grant", "dedicated manual_gift SSE event"]
+    },
+    "realtime_after_fix": {
+      "module": "server/src/lib/manualGrantRealtime.js",
+      "publishManualGrantActivationRealtime": [
+        "invalidateSubscriptionAccessCache",
+        "clearVerifyAccessInflightForDevice",
+        "deviceSubscriptionBus manual_gift + update",
+        "liveSyncBus analytics.subscription_updated with manualGift payload"
+      ],
+      "sse": "subscription-stream emits event: manual_gift with Hongera payload",
+      "handler_order": "subscription.js handler defined before liveSync relay handler (TDZ fix)"
+    },
+    "contract_gap_verdict": {
+      "proven": true,
+      "detail": "Backend activated DB correctly but SSE device_subscription lacked manualGift; clients must poll verify for Hongera. Missing inflight cache bust could delay verify refresh after grant.",
+      "not_sole_cause": "Device ID mismatch also proven for at least grant 80"
+    }
+  },
+  "phase3_today_grants_eat_2026_07_04": {
+    "timezone": "Africa/Dar_es_Salaam (UTC+3)",
+    "window_utc": ["2026-07-03T21:00:00.000Z", "2026-07-04T20:59:59.999Z"],
+    "grants": [
+      {
+        "grant_id": 77,
+        "device_id_masked": "77e706bfba962406",
+        "duration_days": 30,
+        "plan": "MWENZI 1",
+        "granted_at_utc": "2026-07-04T10:13:21.983Z",
+        "history_hai": true,
+        "device_subscriptions": { "status": "active", "transaction_id": "manual_grant:77" },
+        "verify_vps_api": { "active": true, "playbackAllowed": true, "manualGift": true, "grantId": 77, "latency_ms": 1370 },
+        "user_delivery_verdict": "backend_ok — verify authoritative active"
+      },
+      {
+        "grant_id": 78,
+        "device_id_masked": "6925fba8ab101e67",
+        "duration_days": 7,
+        "granted_at_utc": "2026-07-04T13:28:22",
+        "history_hai": true,
+        "device_subscriptions": { "status": "active", "transaction_id": "manual_grant:79", "note": "stacked; txn points to latest grant 79" },
+        "verify_vps_api": { "active": true, "playbackAllowed": true, "manualGift": true, "grantId": 62, "note": "FIFO oldest unacked grant 62, not 78" },
+        "user_delivery_verdict": "backend_ok — popup shows older pending gift first (by design)"
+      },
+      {
+        "grant_id": 79,
+        "device_id_masked": "6925fba8ab101e67",
+        "duration_days": 7,
+        "granted_at_utc": "2026-07-04T13:35:58",
+        "history_hai": true,
+        "verify_vps_api": { "same_device_as_78": true },
+        "user_delivery_verdict": "backend_ok — stacked on same device as 78"
+      },
+      {
+        "grant_id": 80,
+        "device_id_masked": "3199e57f07469b82",
+        "duration_days": 7,
+        "granted_at_utc": "2026-07-04T14:32:24",
+        "history_hai": true,
+        "device_subscriptions_granted_id": { "status": "active", "transaction_id": "manual_grant:80" },
+        "linked_device_ids": [
+          "3199e57f07469b82",
+          "98433fb66730a30282cd48c190096b8d5b8ec5e8f1345544abdbd6a1b9b87456"
+        ],
+        "linked_device_sub_row": {
+          "device_id": "98433fb66730a30282cd48c190096b8d5b8ec5e8f1345544abdbd6a1b9b87456",
+          "status": "pending",
+          "transaction_id": "moved:98433fb...:osm_sp_..."
+        },
+        "verify_granted_device": { "active": true, "playbackAllowed": true, "manualGift": true, "grantId": 80 },
+        "verify_linked_long_device": { "active": true, "playbackAllowed": true, "manualGift": false, "source": "payment", "note": "App likely on long hash — no manual_grant txn on that row; verify may reconcile via payment path" },
+        "user_delivery_verdict": "LIKELY_MISMATCH — admin granted short device_id; user app may use linked long device_id without manual_grant:80 on that row"
+      }
+    ]
+  },
+  "affected_user_recovery": {
+    "policy": "no_bulk_repair",
+    "recommended_action": "Re-grant on the device_id the app actually sends to verify (from admin device lookup / user support). Do not truncate or reset subscriptions.",
+    "grant_80_specific": "Confirm which device_id the user's app uses. If 98433fb..., either grant on that device_id or user must use app instance tied to 3199e57f..."
+  },
+  "slo_measurement": {
+    "status": "pending_post_deploy",
+    "reason": "Fixes not yet on VPS (0b33c690). Controlled latency harness requires deploy + test device grant.",
+    "targets": {
+      "db_commit_to_sse_event_p95_ms": 1000,
+      "db_commit_to_verify_active_p95_ms": 1000,
+      "end_to_end_grant_to_app_active_p95_ms": 2000
+    }
+  },
+  "files_changed": [
+    "server/src/lib/manualGrantRealtime.js",
+    "server/src/billingStore.js",
+    "server/src/routes/manualSubscriptionAdmin.js",
+    "server/src/routes/subscription.js",
+    "server/scripts/verify-manual-grant-production-audit.mjs"
+  ],
+  "deploy_steps": [
+    "git push origin main",
+    "VPS: pull + pm2 restart osmani-admin-api (or auto-deploy hook)",
+    "Verify health commit matches main",
+    "node server/scripts/verify-manual-grant-production-audit.mjs",
+    "Optional: controlled test grant on verify_* device + SSE trace"
+  ],
+  "regression_boundary": {
+    "untouched": ["payment webhooks", "sonicpesa/auraxpay", "transfers", "SMS", "uploads", "CDN", "channels", "banners", "force update"]
+  }
+}

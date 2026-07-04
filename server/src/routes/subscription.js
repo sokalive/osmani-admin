@@ -25,6 +25,10 @@ import {
 } from '../lib/verifyDbResilience.js'
 import { coalesceVerifyAccessLoad } from '../lib/verifyAccessSingleflight.js'
 import { isCompletedTransferSourceDevice } from '../lib/transferRevocationGuard.js'
+import {
+  writeManualGrantSseEvents,
+  writeSubscriptionWakeSseEvents,
+} from '../lib/manualSubscriptionSseContract.js'
 
 export const subscriptionRouter = Router()
 
@@ -1393,10 +1397,46 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
   liveSyncBus.on('sync', catalogSyncHandler)
   liveSyncBus.on('sync', phoneGateSyncHandler)
 
+  const writeManualGiftEvent = (manualGift) => {
+    if (!manualGift?.showPopup) return
+    writeManualGrantSseEvents(res, manualGift)
+  }
+
+  const handler = async (payload) => {
+    if (!payload || payload.deviceId !== deviceId) return
+    try {
+      invalidateSubscriptionAccessCache(deviceId)
+      const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
+      const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
+      res.write(`event: device_subscription\ndata: ${JSON.stringify(toSsePayload(row))}\n\n`)
+      writeSubscriptionWakeSseEvents(res, {
+        reason: payload?.reason ?? 'device_subscription',
+        grantId: null,
+      })
+    } catch (e) {
+      // Skip SSE push on read failure — avoids defaulting clients to revoked/inactive.
+      console.error('[subscription-stream] device_subscription skipped on error:', e)
+    }
+  }
+
+  const manualGiftHandler = (payload) => {
+    if (!payload || payload.deviceId !== deviceId) return
+    try {
+      writeManualGiftEvent(payload.manualGift)
+    } catch (e) {
+      console.error('[subscription-stream] manual_gift push failed:', e)
+    }
+  }
+
   const subscriptionUpdatedSyncHandler = (packet) => {
     if (String(packet?.event || '') !== 'analytics.subscription_updated') return
     const did = String(packet?.payload?.deviceId ?? '').trim()
     if (!did || did !== deviceId) return
+    try {
+      writeManualGiftEvent(packet?.payload?.manualGift)
+    } catch (e) {
+      console.error('[subscription-stream] relayed manual_gift push failed:', e)
+    }
     void handler({ deviceId: did })
   }
   liveSyncBus.on('sync', subscriptionUpdatedSyncHandler)
@@ -1408,20 +1448,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     void writeAppUpdateEvent('poll')
   }, MODE_SSE_POLL_MS)
 
-  const handler = async (payload) => {
-    if (!payload || payload.deviceId !== deviceId) return
-    try {
-      invalidateSubscriptionAccessCache(deviceId)
-      const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
-      const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
-      res.write(`event: device_subscription\ndata: ${JSON.stringify(toSsePayload(row))}\n\n`)
-    } catch (e) {
-      // Skip SSE push on read failure — avoids defaulting clients to revoked/inactive.
-      console.error('[subscription-stream] device_subscription skipped on error:', e)
-    }
-  }
-
   deviceSubscriptionBus.on('update', handler)
+  deviceSubscriptionBus.on('manual_gift', manualGiftHandler)
 
   const ping = setInterval(() => {
     res.write(': ping\n\n')
@@ -1443,6 +1471,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     clearInterval(ping)
     clearInterval(modePoll)
     deviceSubscriptionBus.off('update', handler)
+    deviceSubscriptionBus.off('manual_gift', manualGiftHandler)
     liveSyncBus.off('sync', modeSyncHandler)
     liveSyncBus.off('sync', trialSyncHandler)
     liveSyncBus.off('sync', appUpdateSyncHandler)

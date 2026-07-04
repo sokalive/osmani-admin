@@ -1,0 +1,56 @@
+{
+  "contract_version": "2026-07-04",
+  "app_commit_reference": "af1b1087a40b608e04d8fbac84328fbb93ccd7e6",
+  "backend_commit_reference": "pending_deploy",
+  "authoritative_api": "https://api.osmanitv.com",
+  "sse_endpoint": "/api/subscription-stream?device_id={device_id}",
+  "verify_endpoint": "POST /api/subscription/verify",
+  "ack_endpoint": "POST /api/subscription/acknowledge-manual-gift",
+  "architecture": {
+    "sse_role": "wake_and_acceleration",
+    "verify_role": "authoritative_unlock_and_manualGift",
+    "client_must_reverify_on_wake": true
+  },
+  "SUBSCRIPTION_WAKE_SSE_EVENTS": ["subscription_wake", "device_subscription_updated"],
+  "MANUAL_SUBSCRIPTION_SSE_ALIASES": ["manual_gift", "manual_subscription_granted", "subscription_manual_grant"],
+  "canonical_events": {
+    "manual_gift": {
+      "purpose": "Hongera popup hint + ack key",
+      "payload_fields": [
+        "ok",
+        "manualGift.showPopup",
+        "manualGift.grantId",
+        "manualGift.nonce",
+        "manualGift.durationDays",
+        "manualGift.title",
+        "manualGift.body",
+        "manualGift.ctaLabel",
+        "manual_gift_ack_key",
+        "manualGiftAckKey",
+        "requires_verify",
+        "server_time_ms"
+      ]
+    },
+    "device_subscription": {
+      "purpose": "Active/expiry hint after grant",
+      "payload_fields": ["isActive", "expiresAt", "remainingSeconds", "nearExpiry"]
+    },
+    "subscription_wake": {
+      "purpose": "Immediate reverifySubscription() trigger",
+      "payload_fields": ["ok", "reason", "requires_verify", "grantId", "server_time_ms"]
+    }
+  },
+  "device_targeting": {
+    "rule": "SSE connection device_id must match granted device_id",
+    "wrong_device_rejection": "Events ignored when payload.deviceId !== stream device_id"
+  },
+  "dedupe": {
+    "client": "Dedupe by grantId + manual_gift_ack_key; ack persists in manual_subscription_grants.acknowledged_at",
+    "server_fifo": "getOldestPendingManualGrant returns oldest unacked grant where g.id <= current manual_grant transaction id"
+  },
+  "reconnect": {
+    "endpoint": "/api/subscription-stream?device_id=...",
+    "initial_snapshot": "event: snapshot with isActive state",
+    "poll_fallback_ms": 3000
+  }
+}
