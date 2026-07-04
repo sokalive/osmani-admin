@@ -1,0 +1,178 @@
+{
+  "report_id": "manual-subscription-full-stack-completion-2026-07-04",
+  "generated_at_utc": "2026-07-04T18:20:00.000Z",
+  "final_verdict": "PARTIAL_PASS",
+  "verdict_rationale": "VPS backend fix deployed (cea3d5c), SSE manual_gift wake proven live, grants 77-79 verify authoritative active. Grant 80 device-ID mismatch not surgically repaired without confirmed app identity. Remote harness E2E SLO exceeds 2s p95 due to US→VPS RTT + verify latency; server-side DB→SSE p95 ≤65ms passes. Client OTA af1b108 already published.",
+  "root_cause": {
+    "backend": "Grant path lacked clearVerifyAccessInflightForDevice, dedicated manual_gift SSE wake, and nginx SSE buffering disable. Deletion path had richer realtime than activation.",
+    "client": "App af1b108 listens for subscription_wake/manual_gift on /api/subscription-stream and calls reverifySubscription(); prior backend did not emit compatible wake events reliably.",
+    "identity_device_mismatch": "Grant 80 applied to 3199e57f07469b82 while linked app device 98433fb66730a30282cd48c190096b8d5b8ec5e8f1345544abdbd6a1b9b87456 (same phone) holds pending/moved payment row — History HAI on granted ID does not deliver manual_grant txn to app device.",
+    "latency": "Server DB→SSE emit sub-100ms p95; end-to-end from remote harness dominated by HTTP RTT (~1.5–2.7s admin round-trip) and verify parallel DB fetch (~0.8–2.1s)."
+  },
+  "historical_archaeology": {
+    "commits_inspected": [
+      "6e8110d — manual subscription history + realtime poll/cache tuning",
+      "8944a46 — FIFO gift cascade ACK",
+      "e9b92ff — strict getOldestPendingManualGrant",
+      "d59dc3df — referenced in grep as instant propagation restore (not in current clone ancestry)",
+      "929616b — Render admin API redirect to VPS",
+      "0b33c69 — pre-fix VPS hotfix"
+    ],
+    "fast_old_behavior": "MFALME-era: notifySubscriptionActivated + route-level deviceSubscriptionBus/liveSyncBus emit immediately after grant; deletion path always cleared verify inflight cache.",
+    "regression_point": "Grant activation relied on notifySubscriptionActivated (update bus only) without manual_gift SSE hint or clearVerifyAccessInflightForDevice; SSE device_subscription carried isActive/expiry only.",
+    "logic_ported": [
+      "publishManualGrantActivationRealtime mirroring deletion cache bust",
+      "manual_gift + subscription_wake SSE alias contract",
+      "nginx subscription-stream proxy_buffering off"
+    ],
+    "logic_rejected": [
+      "Blind restore of entire old commit — current stacking, FIFO strict gift, PIN gate preserved",
+      "Global notifySubscriptionActivated inflight clear — scoped to manual grant path only"
+    ]
+  },
+  "code_changes": [
+    { "file": "server/src/lib/manualGrantRealtime.js", "function": "publishManualGrantActivationRealtime", "reason": "Central activation realtime: cache bust, inflight clear, manual_gift bus, liveSync relay" },
+    { "file": "server/src/lib/manualSubscriptionSseContract.js", "function": "writeManualGrantSseEvents", "reason": "Cross-AI compatible SSE event names + payloads for app af1b108" },
+    { "file": "server/src/billingStore.js", "function": "grantManualDeviceSubscription", "reason": "Replace notifySubscriptionActivated with publishManualGrantActivationRealtime on all manual grant paths" },
+    { "file": "server/src/routes/subscription.js", "function": "subscription-stream handlers", "reason": "manual_gift SSE + wake aliases; TDZ fix; device_subscription wake" },
+    { "file": "deploy/contabo/nginx/snippets/osmani-node-api.conf", "function": "location = /api/subscription-stream", "reason": "Disable proxy buffering for SSE through api.osmanitv.com" }
+  ],
+  "github_evidence": {
+    "backend_head": "cea3d5c2f3550ee7260ccad434eebdb7c3d209b5",
+    "backend_origin_main": "cea3d5c2f3550ee7260ccad434eebdb7c3d209b5",
+    "admin_head": "cea3d5c (bundled with VPS deploy)",
+    "app_commit_reference": "af1b1087a40b608e04d8fbac84328fbb93ccd7e6"
+  },
+  "deployment_evidence": {
+    "vps_backend_deployed_commit": "cea3d5c2f3550ee7260ccad434eebdb7c3d209b5",
+    "github_actions_run": "28715139385 — success",
+    "pm2_process": "osmani-admin-api",
+    "health_url": "https://api.osmanitv.com/api/health",
+    "health_commit_verified": "cea3d5c2f3550ee7260ccad434eebdb7c3d209b5",
+    "vps_admin_bundle": "/assets/index-N5v6ykWW.js → api.osmanitv.com",
+    "render_admin_bundle": "/assets/index-DznlsxIm.js → api.osmanitv.com",
+    "render_api_commit": "929616b (legacy; admins bypass via api.osmanitv.com)",
+    "db_target": "155.138.223.205:5432/osmani_db"
+  },
+  "grants_77_80_matrix": [
+    {
+      "grant_id": 77,
+      "device_id_masked": "77e706bfba962406",
+      "created_at_utc": "2026-07-04T10:13:21.983Z",
+      "duration_days": 30,
+      "history_hai": true,
+      "sub_status": "active",
+      "transaction_id": "manual_grant:77",
+      "verify_granted_device": { "active": true, "playbackAllowed": true, "manualGift": true, "grantId": 77 },
+      "linked_devices": [],
+      "recovery_action": "NONE",
+      "final_state": "DELIVERED_ON_GRANTED_DEVICE"
+    },
+    {
+      "grant_id": 78,
+      "device_id_masked": "6925fba8ab101e67",
+      "duration_days": 7,
+      "history_hai": true,
+      "sub_status": "active",
+      "transaction_id": "manual_grant:79",
+      "verify_granted_device": { "active": true, "playbackAllowed": true, "manualGift": true, "note": "FIFO showed grant 62 before ack" },
+      "recovery_action": "ACK grant 62 performed during FIFO test — queue now empty",
+      "final_state": "DELIVERED"
+    },
+    {
+      "grant_id": 79,
+      "device_id_masked": "6925fba8ab101e67",
+      "duration_days": 7,
+      "history_hai": true,
+      "stacked_with": 78,
+      "final_state": "DELIVERED_SAME_DEVICE"
+    },
+    {
+      "grant_id": 80,
+      "device_id_masked": "3199e57f07469b82",
+      "duration_days": 7,
+      "history_hai": true,
+      "sub_status_granted": "active manual_grant:80",
+      "linked_device": "98433fb66730a30282cd48…",
+      "verify_granted": { "active": true, "playbackAllowed": true, "manualGift": true, "grantId": 80 },
+      "verify_linked_app_device": { "active": true, "playbackAllowed": true, "manualGift": false, "source": "payment", "sub_row_status": "pending" },
+      "recovery_action": "NEEDS_IDENTITY_CONFIRMATION — re-grant on app device_id if user confirms 98433fb… is their app; no auto re-grant (would stack duplicate time)",
+      "final_state": "PARTIAL — granted device OK; linked app device lacks manual_grant:80 txn"
+    }
+  ],
+  "affected_users_repair_matrix": [
+    {
+      "device_id": "3C849B55163CF",
+      "status": "BLOCKED_NEEDS_IDENTITY",
+      "evidence": "Zero rows in device_subscriptions, manual_grants, transactions, phone_registry",
+      "repair": "NONE — no grant exists for this device"
+    },
+    {
+      "device_id": "58b32841ec6ae98",
+      "status": "BLOCKED_NEEDS_IDENTITY",
+      "evidence": "Zero production DB records",
+      "repair": "NONE — no grant exists for this device"
+    },
+    {
+      "device_id": "98433fb66730a30282cd48c190096b8d5b8ec5e8f1345544abdbd6a1b9b87456",
+      "status": "GRANT_80_LINKED_DEVICE",
+      "evidence": "Linked to grant 80 phone; verify active via payment path; manualGift false",
+      "repair": "Pending admin confirmation before re-grant on this device_id"
+    }
+  ],
+  "t0_t6_live_test": {
+    "harness": "server/scripts/verify-manual-grant-t0-t6-live.mjs",
+    "iterations": 14,
+    "wake_event_observed": "manual_gift",
+    "sample": {
+      "T0_admin_submit_ms": 0,
+      "T1_db_committed_ms_from_T0": 1445,
+      "T2_sse_emitted_ms_from_T1": 2,
+      "T3_client_received_wake_ms_from_T2": 0,
+      "T4_verify_active_ms_from_T3": 849,
+      "T5_hongera_eligible_ms_from_T0": 2296,
+      "T6_playback_gate_ms_from_T0": 2296
+    }
+  },
+  "vps_admin_test": {
+    "bundle": "index-N5v6ykWW.js",
+    "api_target": "https://api.osmanitv.com/api",
+    "grant_path": "POST /api/admin/manual-subscription/grant",
+    "result": "PASS — controlled grants 81-94 via harness"
+  },
+  "render_admin_test": {
+    "bundle": "index-DznlsxIm.js",
+    "api_target": "https://api.osmanitv.com/api",
+    "result": "PASS — grants route to VPS API (same as VPS admin)"
+  },
+  "slo_results": {
+    "admin_to_db_ms": { "min": 1445, "median": 1844, "p95": 2771, "max": 2771 },
+    "db_to_sse_ms_server": { "min": -74, "median": 1, "p95": 65, "max": 65, "target_1s_p95": "PASS" },
+    "sse_to_verify_ms": { "min": 849, "median": 1214, "p95": 2085, "max": 2085, "target_1s_p95": "NOT_MET_REMOTE_HARNESS" },
+    "admin_to_playback_ms_e2e": { "min": 2296, "median": 3416, "p95": 5483, "max": 5483, "target_2s_p95": "NOT_MET_REMOTE_HARNESS" },
+    "network_note": "Harness ran from US Windows client to VPS Tanzania; server-side DB→SSE processing meets SLO."
+  },
+  "gift_fifo_ack_test": {
+    "device": "6925fba8ab101e67",
+    "step1": "manualGift grantId=62, active=true",
+    "step2_after_ack": "manualGift none, active=true, playbackAllowed=true",
+    "activation_independent_of_popup": "PROVEN"
+  },
+  "regression_results": {
+    "verify-manual-grant-production-audit.mjs": "PASS 0 failures",
+    "test-admin-sensitive-action-password.mjs": "PASS",
+    "verify-manual-subscription-restoration.mjs": "PARTIAL — Render API commit lag (929616b); admins use VPS API",
+    "verify-manual-grant-t0-t6-live.mjs": "SSE wake PASS; remote E2E SLO partial"
+  },
+  "untouched_systems": [
+    "payment webhooks", "SonicPesa", "AuraxPay", "paid activation", "transfers", "offer codes engine semantics",
+    "SMS", "phone registry", "channels", "banners", "images", "notifications", "update-check", "force-update", "security policy"
+  ],
+  "remaining_limitations": [
+    "Grant 80 user may need re-grant on confirmed app device_id",
+    "Probe devices 3C849B55163CF and 58b32841ec6ae98 have no production grant records",
+    "Render API osmani-admin-api.onrender.com still on 929616b — not used by current admin bundles",
+    "E2E SLO not met from remote test harness; in-region client measurement recommended"
+  ],
+  "cross_ai_handoff_path": "docs/cross-ai/manual-subscription-realtime-contract.json"
+}

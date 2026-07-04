@@ -1,7 +1,7 @@
 {
   "contract_version": "2026-07-04",
   "app_commit_reference": "af1b1087a40b608e04d8fbac84328fbb93ccd7e6",
-  "backend_commit_reference": "pending_deploy",
+  "backend_commit_reference": "cea3d5c2f3550ee7260ccad434eebdb7c3d209b5",
   "authoritative_api": "https://api.osmanitv.com",
   "sse_endpoint": "/api/subscription-stream?device_id={device_id}",
   "verify_endpoint": "POST /api/subscription/verify",
@@ -52,5 +52,12 @@
     "endpoint": "/api/subscription-stream?device_id=...",
     "initial_snapshot": "event: snapshot with isActive state",
     "poll_fallback_ms": 3000
+  },
+  "t0_t6_results_post_deploy": {
+    "deployed_commit": "cea3d5c2f3550ee7260ccad434eebdb7c3d209b5",
+    "wake_event_observed": "manual_gift",
+    "db_to_sse_p95_ms": 65,
+    "sse_to_verify_p95_ms": 2085,
+    "note": "Remote harness RTT; server-side realtime meets sub-100ms DB→SSE"
   }
 }
