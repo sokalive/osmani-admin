@@ -4,9 +4,16 @@
  * Run: node scripts/test-sonicpesa-payment-reliability.mjs
  */
 import crypto from 'node:crypto'
-import { verifyWebhookSignature } from '../src/lib/payments/providers/sonicpesa.js'
+import { verifyWebhookSignature, signWebhookPayload, normalizeResponse } from '../src/lib/payments/providers/sonicpesa.js'
 import { hashWebhookPayload, INBOX_STATUS } from '../src/lib/sonicpesaWebhookInbox.js'
-import { webhookOrderIdCandidates, sonicPaymentSucceeded, sonicExplicitFailure } from '../src/lib/sonicpesaWebhookHelpers.js'
+import {
+  webhookOrderIdCandidates,
+  sonicPaymentSucceeded,
+  sonicExplicitFailure,
+  isProviderCompletionEvent,
+  webhookAmountMatchesTxn,
+  extractWebhookTransId,
+} from '../src/lib/sonicpesaWebhookHelpers.js'
 import { ACTIVATION_STATE, COMPLETION_SOURCE } from '../src/lib/canonicalPaymentActivation.js'
 
 const checks = []
@@ -41,6 +48,38 @@ assert('webhook order candidates', ids.includes('osm_sp_m1') && ids.includes('sp
 assert('success webhook', sonicPaymentSucceeded({ payment_status: 'SUCCESS' }) === true)
 assert('failure webhook', sonicExplicitFailure({ payment_status: 'FAILED' }) === true)
 assert('pending not success', sonicPaymentSucceeded({ payment_status: 'PENDING' }) === false)
+
+// 4b. Owner dashboard payload schema (payment.completed + status SUCCESS + transid)
+const ownerPayload = {
+  event: 'payment.completed',
+  order_id: 'sp_67890abcdef',
+  amount: 10000,
+  status: 'SUCCESS',
+  transid: 'TXN123456',
+}
+const ownerNorm = normalizeResponse(ownerPayload)
+assert('owner schema succeeded', ownerNorm.succeeded === true, ownerNorm.paymentStatus)
+assert('owner schema transid', ownerNorm.transId === 'TXN123456')
+assert('owner schema event', ownerNorm.eventType === 'payment.completed')
+assert('owner completion event', isProviderCompletionEvent(ownerPayload) === true)
+assert('non-completion event ignored', isProviderCompletionEvent({ event: 'payment.pending', status: 'PENDING' }) === false)
+assert('owner transid extract', extractWebhookTransId(ownerPayload) === 'TXN123456')
+assert(
+  'amount match txn',
+  webhookAmountMatchesTxn({ amount: 10000 }, ownerPayload) === true,
+)
+assert(
+  'amount mismatch detected',
+  webhookAmountMatchesTxn({ amount: 5000 }, ownerPayload) === false,
+)
+
+// 4c. Raw-body HMAC (provider signs exact POST bytes)
+const rawJson = JSON.stringify(ownerPayload)
+const rawSig = signWebhookPayload(secret, Buffer.from(rawJson, 'utf8'))
+assert(
+  'raw body signature',
+  verifyWebhookSignature({ headers: { 'x-sonicpesa-signature': rawSig }, rawBody: Buffer.from(rawJson, 'utf8') }, ownerPayload) === true,
+)
 
 // 5. Activation state constants
 assert('activation states defined', Boolean(ACTIVATION_STATE.PHONE_CONFLICT && ACTIVATION_STATE.ACTIVATED))

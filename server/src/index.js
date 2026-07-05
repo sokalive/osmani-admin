@@ -116,7 +116,15 @@ function applyCors(req, res, next) {
 app.use(applyCors)
 app.options('*', applyCors)
 
-app.use(express.json({ limit: '4mb' }))
+app.use(express.json({
+  limit: '4mb',
+  verify: (req, _res, buf) => {
+    const path = String(req.originalUrl || req.url || req.path || '')
+    if (path.includes('/payments/sonicpesa/webhook')) {
+      req.rawBody = buf
+    }
+  },
+}))
 app.use('/api', apiRequestTimingMiddleware)
 
 const staticUploadMaxAgeMs = getStaticUploadCacheMaxAgeSec() * 1000
@@ -331,6 +339,13 @@ async function runDeferredStartup({ background = false } = {}) {
         startSonicpesaReconciliationQueueWorker()
       } else {
         console.info('[sonicpesa-workers] skipped on Render — authoritative VPS workers only')
+      }
+      const { webhookSecretConfigured } = await import('./lib/sonicpesaWebhookHealth.js')
+      const { isVpsProduction } = await import('./db/pool.js')
+      if (isVpsProduction() && !webhookSecretConfigured()) {
+        console.warn(
+          '[sonicpesa] SONICPESA_WEBHOOK_SECRET not configured — configure secret in VPS env and SonicPesa dashboard after setting callback URL',
+        )
       }
 
       console.log('[startup] deferred init complete')

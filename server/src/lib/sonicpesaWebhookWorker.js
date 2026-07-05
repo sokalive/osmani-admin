@@ -14,7 +14,7 @@ import {
   isInboxRetryExhausted,
   updateInboxStatus,
 } from './sonicpesaWebhookInbox.js'
-import { sonicExplicitFailure, sonicPaymentSucceeded, webhookOrderIdCandidates } from './sonicpesaWebhookHelpers.js'
+import { sonicExplicitFailure, sonicPaymentSucceeded, webhookOrderIdCandidates, isProviderCompletionEvent, webhookAmountMatchesTxn } from './sonicpesaWebhookHelpers.js'
 import { notifySubscriptionActivatedFromAct } from './subscriptionActivationNotify.js'
 import { liveSyncBus } from './liveSyncBus.js'
 
@@ -77,6 +77,14 @@ export async function processSonicpesaInboxRow(row) {
     return { inboxId, ok: false, reason: 'unknown_order' }
   }
 
+  if (!isProviderCompletionEvent(body)) {
+    await updateInboxStatus(inboxId, {
+      status: INBOX_STATUS.PROCESSED,
+      lastError: 'ignored_non_completion_event',
+    })
+    return { inboxId, ok: true, reason: 'ignored_non_completion_event' }
+  }
+
   const ok = sonicPaymentSucceeded(body)
   const fail = sonicExplicitFailure(body)
   if (!ok && !fail) {
@@ -85,6 +93,14 @@ export async function processSonicpesaInboxRow(row) {
       lastError: 'unconfirmed_payment_status',
     })
     return { inboxId, ok: false, reason: 'unconfirmed_payment_status' }
+  }
+
+  if (ok && !webhookAmountMatchesTxn(txn, body)) {
+    await updateInboxStatus(inboxId, {
+      status: INBOX_STATUS.TERMINAL_REJECTED,
+      lastError: 'amount_mismatch',
+    })
+    return { inboxId, ok: false, reason: 'amount_mismatch' }
   }
 
   const data = body.data && typeof body.data === 'object' ? body.data : body

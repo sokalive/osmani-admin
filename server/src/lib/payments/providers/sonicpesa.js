@@ -158,8 +158,9 @@ export function normalizeResponse(raw, httpStatus = 0) {
     data.order_id ?? data.orderId ?? body.order_id ?? body.orderId ?? '',
   ).trim()
   const paymentStatus = String(
-    data.payment_status ?? data.status ?? body.payment_status ?? '',
+    data.payment_status ?? data.status ?? body.payment_status ?? body.status ?? '',
   ).trim()
+  const eventType = String(body.event ?? body.type ?? data.event ?? data.type ?? '').trim()
   const transId = String(
     data.transid ?? data.transaction_id ?? data.trans_id ?? body.transid ?? '',
   ).trim()
@@ -178,6 +179,7 @@ export function normalizeResponse(raw, httpStatus = 0) {
     httpStatus: Number(httpStatus) || 0,
     providerOrderId: providerOrderId || null,
     paymentStatus: paymentStatus || null,
+    eventType: eventType || null,
     transId: transId || null,
     message: message || null,
     succeeded,
@@ -289,21 +291,34 @@ export function sonicExplicitFailure(body) {
 export function verifyWebhookSignature(req, body) {
   const secret = String(process.env.SONICPESA_WEBHOOK_SECRET || '').trim()
   if (!secret) return true
-  const rawSig = String(req.headers['x-sonicpesa-signature'] ?? req.headers['x-webhook-signature'] ?? '').trim()
+  const rawSig = String(
+    req.headers['x-sonicpesa-signature'] ??
+      req.headers['x-webhook-signature'] ??
+      req.headers['x-hmac-signature'] ??
+      '',
+  ).trim()
   if (!rawSig) return false
   const sig = rawSig.replace(/^sha256=/i, '').trim()
-  const raw = JSON.stringify(body ?? {})
-  const expectedHex = crypto.createHmac('sha256', secret).update(raw, 'utf8').digest('hex')
+  const payloadBytes =
+    req?.rawBody && Buffer.isBuffer(req.rawBody)
+      ? req.rawBody
+      : Buffer.from(JSON.stringify(body ?? {}), 'utf8')
+  const expectedHex = crypto.createHmac('sha256', secret).update(payloadBytes).digest('hex')
   try {
     const a = Buffer.from(expectedHex, 'hex')
     const b = Buffer.from(sig, 'hex')
     if (a.length === b.length && a.length > 0) return crypto.timingSafeEqual(a, b)
   } catch {
-    // fall through
+    // fall through — try utf8 compare for non-hex provider formats
   }
   const a2 = Buffer.from(expectedHex, 'utf8')
   const b2 = Buffer.from(sig, 'utf8')
   return a2.length === b2.length && crypto.timingSafeEqual(a2, b2)
+}
+
+/** Build HMAC-SHA256 hex signature for tests and documentation (never log secret). */
+export function signWebhookPayload(secret, payloadBytes) {
+  return crypto.createHmac('sha256', String(secret)).update(payloadBytes).digest('hex')
 }
 
 function webhookOrderIdCandidates(body) {

@@ -1,0 +1,42 @@
+{
+  "title": "SonicPesa Webhook Dashboard Configuration — Owner Action",
+  "created_at": "2026-07-05",
+  "owner_evidence": {
+    "dashboard_state": "ACTIVE LISTENER: NO ENDPOINT CONFIGURED",
+    "source": "Owner physical inspection of SonicPesa Webhook System dashboard"
+  },
+  "osmani_callback_url": "https://api.osmanitv.com/api/payments/sonicpesa/webhook",
+  "expected_provider_payload": {
+    "event": "payment.completed",
+    "order_id": "sp_provider_order_id",
+    "amount": 10000,
+    "status": "SUCCESS",
+    "transid": "TXN123456"
+  },
+  "signing": {
+    "algorithm": "HMAC-SHA256",
+    "header": "X-SonicPesa-Signature",
+    "format": "hex digest of raw POST body bytes",
+    "env_var": "SONICPESA_WEBHOOK_SECRET",
+    "note": "Set the same secret in SonicPesa dashboard and VPS environment (PM2/env). Never commit secret to git."
+  },
+  "owner_steps": [
+    "Open SonicPesa Webhook System dashboard (Production)",
+    "Set endpoint URL to https://api.osmanitv.com/api/payments/sonicpesa/webhook",
+    "Copy the webhook signing secret from SonicPesa dashboard",
+    "Set SONICPESA_WEBHOOK_SECRET on VPS (Contabo PM2 env or deploy env file)",
+    "Restart osmani-admin-api on VPS",
+    "Trigger a test payment or use SonicPesa sandbox test webhook if available",
+    "Verify last_provider_webhook_at updates via GET /api/runtime/sonicpesa-webhook-readiness (admin token)"
+  ],
+  "backend_ready": {
+    "durable_inbox": true,
+    "hmac_verification": true,
+    "raw_body_signature": true,
+    "poll_fallback": true,
+    "durable_reconciliation_queue": true,
+    "app_waiting_state": true,
+    "engineering_probe_separation": true
+  },
+  "no_ota_required": true
+}

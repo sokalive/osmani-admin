@@ -92,6 +92,12 @@ export async function getSonicpesaWebhookHealthSnapshot() {
   if (providerAge != null && providerAge > 21600) alerts.push({ code: 'PROVIDER_WEBHOOK_STALE_6H', age_sec: providerAge })
   return {
     webhook_secret_configured: webhookSecretConfigured(),
+    callback_url: 'https://api.osmanitv.com/api/payments/sonicpesa/webhook',
+    signature_header: 'X-SonicPesa-Signature',
+    signature_algorithm: 'HMAC-SHA256 (hex digest of raw POST body bytes)',
+    expected_event: 'payment.completed',
+    expected_success_status: 'SUCCESS',
+    owner_dashboard_action_required: 'Configure webhook endpoint URL in SonicPesa dashboard (was: NO ENDPOINT CONFIGURED)',
     last_provider_webhook_at: r.last_provider_webhook_at ?? null,
     last_engineering_probe_at: r.last_engineering_probe_at ?? null,
     last_invalid_signature_at: r.last_invalid_signature_at ?? null,

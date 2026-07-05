@@ -313,6 +313,31 @@ runtimePublicRouter.post('/sonicpesa-reconcile-stale-pending', requireLegacyAdmi
   }
 })
 
+/** SonicPesa webhook readiness — callback contract for owner dashboard + engineering verification. */
+runtimePublicRouter.get('/sonicpesa-webhook-readiness', requireLegacyAdminToken, async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { getSonicpesaWebhookHealthSnapshot } = await import('../lib/sonicpesaWebhookHealth.js')
+    const { getInboxMetrics } = await import('../lib/sonicpesaWebhookInbox.js')
+    const { getPoolStats } = await import('../db/pool.js')
+    const health = await getSonicpesaWebhookHealthSnapshot()
+    const inbox = await getInboxMetrics()
+    res.json({
+      ok: true,
+      generated_at: new Date().toISOString(),
+      commit: getServerGitCommit(),
+      webhook: health,
+      inbox,
+      pool: getPoolStats(),
+      osmani_endpoint_ready: true,
+      provider_endpoint_configured: health?.last_provider_webhook_at != null,
+    })
+  } catch (e) {
+    console.error('[runtime/sonicpesa-webhook-readiness]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Repair critical unresolved completed SonicPesa rows (canonical activation only). */
 runtimePublicRouter.post('/sonicpesa-repair-critical-unresolved', requireLegacyAdminToken, async (req, res) => {
   try {
