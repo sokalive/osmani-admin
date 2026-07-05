@@ -239,10 +239,32 @@ if [[ -f "$API_DIR/scripts/verify-vps-render-independence.mjs" ]]; then
     exit 1
   }
 fi
+if [[ -f "$API_DIR/scripts/test-payment-recovery-db-integration.mjs" ]]; then
+  echo "==> test-payment-recovery-db-integration.mjs (isolated fixtures)"
+  (cd "$API_DIR" && node scripts/test-payment-recovery-db-integration.mjs) || {
+    echo "ERROR: payment recovery DB integration tests failed" >&2
+    exit 1
+  }
+fi
 for script in verify-cutover.mjs verify-final-migration-audit.mjs; do
   if [[ -f "$ROOT/deploy/contabo/$script" ]]; then
+    echo "==> Waiting for API pool to settle before $script"
+    settle_ok=0
+    for _ in $(seq 1 45); do
+      POOL_JSON="$(curl -fsS "http://127.0.0.1:10001/api/health" 2>/dev/null || true)"
+      WAITING="$(printf '%s' "$POOL_JSON" | node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.pool?.waitingCount??-1))}catch{process.stdout.write('-1')}})" 2>/dev/null || echo -1)"
+      if [[ "$WAITING" == "0" ]]; then
+        settle_ok=1
+        echo "    pool.waitingCount=0"
+        break
+      fi
+      sleep 2
+    done
+    if [[ "$settle_ok" -ne 1 ]]; then
+      echo "WARN: pool did not settle to waitingCount=0 before $script (last=$WAITING)" >&2
+    fi
     echo "==> $script"
-    node "$ROOT/deploy/contabo/$script" || {
+    EXPECT_VPS_COMMIT="$GIT_COMMIT" GITHUB_SHA="$GIT_COMMIT" node "$ROOT/deploy/contabo/$script" || {
       echo "ERROR: $script failed" >&2
       exit 1
     }

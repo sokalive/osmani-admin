@@ -1,4 +1,4 @@
-# Render legacy admin static site (osmani-admin-mpya) — does not use Contabo deploy.
+# Render legacy admin static site (osmani-admin-mpya) — optional; authoritative Admin is VPS admin.osmanitv.com.
 name: Deploy Render Admin (mpya)
 
 on:
@@ -23,8 +23,8 @@ jobs:
           RENDER_MPYA_DEPLOY_HOOK: ${{ secrets.RENDER_MPYA_DEPLOY_HOOK }}
         run: |
           if [ -z "${RENDER_MPYA_DEPLOY_HOOK}" ]; then
-            echo "::error::RENDER_MPYA_DEPLOY_HOOK not configured — add deploy hook URL from Render Dashboard → osmani-admin-mpya → Settings → Deploy Hook"
-            exit 1
+            echo "::notice::RENDER_MPYA_DEPLOY_HOOK not configured — skipping Render mpya deploy. Authoritative Admin SPA is deployed via Contabo apply-cutover.sh to https://admin.osmanitv.com"
+            exit 0
           fi
           curl -fsSL -X POST "${RENDER_MPYA_DEPLOY_HOOK}"
           echo "Triggered Render osmani-admin-mpya deploy"

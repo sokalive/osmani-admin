@@ -48,13 +48,32 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          curl -fsS "https://api.osmanitv.com/api/health" | tee /tmp/vps-health.json
+          EXPECT="${{ github.sha }}"
+          ok=0
+          for attempt in $(seq 1 20); do
+            curl -fsS "https://api.osmanitv.com/api/health" | tee /tmp/vps-health.json
+            COMMIT="$(node -e "console.log(String(require('/tmp/vps-health.json').commit||''))")"
+            echo "attempt $attempt commit=${COMMIT:0:12} expect=${EXPECT:0:12}"
+            if [[ "${COMMIT:0:12}" == "${EXPECT:0:12}" ]]; then
+              ok=1
+              break
+            fi
+            sleep 15
+          done
+          if [[ "$ok" -ne 1 ]]; then
+            echo "ERROR: VPS commit did not match ${EXPECT:0:12} within readiness window" >&2
+            exit 1
+          fi
           curl -fsSI "https://api.osmanitv.com" | head -1 | grep -q "200"
           curl -fsSI "https://admin.osmanitv.com" | head -1 | grep -q "200"
           node -e "
             const h = require('/tmp/vps-health.json');
             if (!h.ok) { console.error('health not ok', h); process.exit(1); }
-            console.log('VPS commit', String(h.commit || '').slice(0, 12));
+            if ((h.pool?.waitingCount ?? 0) > 50) {
+              console.error('pool waitingCount too high after deploy', h.pool);
+              process.exit(1);
+            }
+            console.log('VPS commit', String(h.commit || '').slice(0, 12), 'pool.waitingCount', h.pool?.waitingCount);
           "
           curl -fsS "https://api.osmanitv.com/api/runtime/cutover-status" | tee /tmp/vps-cutover.json
           node server/scripts/verify-vps-render-independence.mjs

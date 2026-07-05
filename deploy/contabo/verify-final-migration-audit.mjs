@@ -62,6 +62,18 @@ async function fetchJson(url, opts = {}) {
   return { res, body, text }
 }
 
+async function fetchJsonWithRetry(url, opts = {}, { attempts = 4, delayMs = 2000 } = {}) {
+  let last = null
+  for (let i = 0; i < attempts; i += 1) {
+    last = await fetchJson(url, opts)
+    if (last.res.ok) return last
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
+  }
+  return last
+}
+
 function plansFingerprint(plans) {
   if (!Array.isArray(plans)) return ''
   return plans.map((p) => `${p.id}:${p.activeSubscriberCount}:${p.price}`).join('|')
@@ -173,7 +185,7 @@ async function legacyApkChecks(base, label) {
   let ok = 0
   let bad = 0
   for (const [path, expect] of paths) {
-    const { res, body } = await fetchJson(`${base}${path}`)
+    const { res, body } = await fetchJsonWithRetry(`${base}${path}`)
     if (res.status === 401 || res.status === 403) {
       bad += 1
       fail(`${label}${path}`, `HTTP ${res.status}`)
@@ -194,6 +206,21 @@ async function main() {
 
   await probeService('render-api', RENDER_API, { isApi: true })
   await probeService('vps-api', VPS_API, { isApi: true })
+
+  const expectCommit = String(process.env.EXPECT_VPS_COMMIT || process.env.GITHUB_SHA || '').trim()
+  const vpsCommit = report.services['vps-api']?.commit
+  const renderCommit = report.services['render-api']?.commit
+  if (expectCommit && vpsCommit && !String(vpsCommit).startsWith(expectCommit.slice(0, 12))) {
+    fail('vps-commit', `expected ${expectCommit.slice(0, 12)} got ${String(vpsCommit).slice(0, 12)}`)
+  } else if (expectCommit && vpsCommit) {
+    pass('vps-commit', String(vpsCommit).slice(0, 12))
+  }
+  if (vpsCommit && renderCommit && vpsCommit !== renderCommit) {
+    fail('api-commit-parity', `${String(renderCommit).slice(0, 12)} vs ${String(vpsCommit).slice(0, 12)}`)
+  } else if (vpsCommit && renderCommit) {
+    pass('api-commit-parity', String(vpsCommit).slice(0, 12))
+  }
+
   await probeService('render-admin-mpya', RENDER_ADMIN, { isApi: false })
   await probeService('vps-admin', VPS_ADMIN, { isApi: false })
   await probeService('render-tv', RENDER_TV, { isApi: false })
