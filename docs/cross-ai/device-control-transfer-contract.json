@@ -1,6 +1,6 @@
 {
   "contract_version": "2026-07-05",
-  "backend_commit_target": "pending",
+  "backend_commit_target": "0ef8cc5",
   "app_commit_reference": "64c798f",
   "transfer_modes": {
     "confirmation": {
