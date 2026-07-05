@@ -322,6 +322,9 @@ async function runDeferredStartup({ background = false } = {}) {
           .catch((e) => console.error('[security] auto reconcile failed:', e))
       }
 
+      const { startSonicpesaInboxWorker } = await import('./lib/sonicpesaWebhookWorker.js')
+      startSonicpesaInboxWorker()
+
       console.log('[startup] deferred init complete')
       return
     } catch (err) {

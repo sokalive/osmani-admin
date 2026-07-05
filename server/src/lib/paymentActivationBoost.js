@@ -3,25 +3,37 @@ import * as billing from '../billingStore.js'
 import { notifySubscriptionActivatedFromAct } from './subscriptionActivationNotify.js'
 
 function parsePollDelaysMs() {
-  const raw = String(process.env.PAYMENT_ACTIVATION_POLL_MS || '0,750,2000,5000')
+  const raw = String(process.env.PAYMENT_ACTIVATION_POLL_MS || '0,750,2000,5000,10000,20000,30000')
   const parsed = raw
     .split(',')
     .map((s) => Number(s.trim()))
     .filter((n) => Number.isFinite(n) && n >= 0)
-  return parsed.length > 0 ? parsed : [0, 750, 2000, 5000]
+  return parsed.length > 0 ? parsed : [0, 750, 2000, 5000, 10000, 20000, 30000]
 }
 
+const inFlightOrders = new Map()
+
 async function runActivationBoostTick(oid, did) {
-  const rec = await reconcileOrderWithZenoPay(oid, { forcePoll: true })
-  const fin = await billing.tryFinalizeActivationForDevice(did)
-  if (rec?.activation?.activated) {
-    notifySubscriptionActivatedFromAct(rec.activation, oid)
-  } else if (fin?.activated) {
-    notifySubscriptionActivatedFromAct(
-      { skipped: false, deviceId: fin.deviceId, orderId: fin.orderId },
-      fin.orderId ?? oid,
-    )
-  }
+  if (inFlightOrders.has(oid)) return inFlightOrders.get(oid)
+  const p = (async () => {
+    try {
+      const rec = await reconcileOrderWithZenoPay(oid, { forcePoll: true })
+      const fin = await billing.tryFinalizeActivationForDevice(did)
+      if (rec?.activation?.activated) {
+        notifySubscriptionActivatedFromAct(rec.activation, oid)
+      } else if (fin?.activated) {
+        notifySubscriptionActivatedFromAct(
+          { skipped: false, deviceId: fin.deviceId, orderId: fin.orderId },
+          fin.orderId ?? oid,
+        )
+      }
+      return rec
+    } finally {
+      inFlightOrders.delete(oid)
+    }
+  })()
+  inFlightOrders.set(oid, p)
+  return p
 }
 
 /**

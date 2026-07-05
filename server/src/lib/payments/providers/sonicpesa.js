@@ -7,7 +7,6 @@ import {
   webhookExplicitFailure,
   webhookSuccess,
 } from '../../../handlers/zenoPayWebhook.js'
-import { notifySubscriptionActivatedFromAct } from '../../subscriptionActivationNotify.js'
 
 const DEFAULT_API_BASE = 'https://api.sonicpesa.com/api/v1'
 const LOG_PREFIX = '[sonicpesa]'
@@ -330,118 +329,71 @@ function webhookOrderIdCandidates(body) {
   return out
 }
 
-async function resolveTransactionForWebhook(billing, body) {
-  const ids = webhookOrderIdCandidates(body)
-  for (const id of ids) {
-    const txn = await billing.getTransactionByOrderId(id)
-    if (txn) return { txn, merchantOrderId: String(txn.order_id) }
-  }
-  for (const id of ids) {
-    const txn = await billing.getTransactionByExternalId(id)
-    if (txn) return { txn, merchantOrderId: String(txn.order_id) }
-  }
-  return { txn: null, merchantOrderId: null, candidateIds: ids }
-}
+// Re-export for tests and worker
+export { webhookOrderIdCandidates as extractWebhookOrderIdCandidates }
 
 /**
  * Process SonicPesa webhook (injected billing + bus deps to keep provider free of route wiring).
  */
 export async function handleWebhook(req, res, deps) {
   const body = req.body && typeof req.body === 'object' ? req.body : {}
-  const { billing, liveSyncBus, deviceSubscriptionBus, recordWebhookMeta } = deps
+  const { recordWebhookMeta } = deps
+  const { insertSonicpesaWebhookInbox } = await import('../../sonicpesaWebhookInbox.js')
+  const { processSonicpesaInboxRow } = await import('../../sonicpesaWebhookWorker.js')
+
+  let inboxRow = null
+  let inboxDuplicate = false
+
   try {
-    console.log(LOG_PREFIX, 'webhook received', {
-      candidateIds: webhookOrderIdCandidates(body),
-      payment_status:
-        body?.payment_status ?? body?.data?.payment_status ?? body?.status ?? null,
-    })
-    if (!verifyWebhookSignature(req, body)) {
-      console.warn(LOG_PREFIX, 'webhook invalid signature')
+    if (!body || typeof body !== 'object' || Object.keys(body).length === 0) {
+      return res.status(400).type('text/plain').send('malformed payload')
+    }
+
+    const signatureOk = verifyWebhookSignature(req, body)
+    if (!signatureOk) {
+      console.warn(LOG_PREFIX, 'webhook invalid signature', {
+        candidateIds: webhookOrderIdCandidates(body),
+      })
       return res.status(401).type('text/plain').send('invalid signature')
     }
+
+    const inserted = await insertSonicpesaWebhookInbox({
+      payload: body,
+      signatureVerified: true,
+    })
+    inboxRow = inserted.row
+    inboxDuplicate = inserted.duplicate
+
     if (typeof recordWebhookMeta === 'function') {
       await recordWebhookMeta(body)
     }
-    const resolved = await resolveTransactionForWebhook(billing, body)
-    const { txn, merchantOrderId, candidateIds } = resolved
-    if (!txn || !merchantOrderId) {
-      console.warn(LOG_PREFIX, 'webhook unknown order', { candidateIds })
+
+    if (inboxDuplicate && inboxRow?.processing_status === 'PROCESSED') {
       return res.sendStatus(200)
     }
-    const prevPayload = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
-    if (prevPayload.payment_provider !== 'sonicpesa') {
-      console.warn(LOG_PREFIX, 'webhook order not sonicpesa', merchantOrderId)
-      return res.sendStatus(200)
+
+    const processResult = await processSonicpesaInboxRow(
+      inboxRow ?? { id: inserted.id, payload: body, signature_verified: true, attempt_count: 0 },
+    )
+
+    if (processResult.reason === 'retryable_db_error') {
+      return res.status(503).type('text/plain').send('processing deferred')
     }
-    if (txn.status === 'completed') {
-      const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn({
-        ...txn,
-        status: 'completed',
-        order_id: merchantOrderId,
-      })
-      if (!act.skipped && act.deviceId) {
-        notifySubscriptionActivatedFromAct(act, merchantOrderId)
-      }
-      console.log(LOG_PREFIX, 'webhook already completed — activation repair', {
-        merchantOrderId,
-        activated: act.activated === true,
-        reason: act.reason,
-      })
-      return res.sendStatus(200)
-    }
-    const ok = sonicPaymentSucceeded(body)
-    const fail = sonicExplicitFailure(body)
-    const nextStatus = ok ? 'completed' : fail ? 'failed' : txn.status
-    const data = body.data && typeof body.data === 'object' ? body.data : body
-    const transId =
-      data.transid ?? data.transaction_id ?? body.transid ?? body.transaction_id ?? body.external_id
-    const providerOrderId = String(data.order_id ?? body.order_id ?? txn.external_id ?? '').trim()
-    console.log(LOG_PREFIX, 'webhook apply', {
-      merchantOrderId,
-      providerOrderId: providerOrderId || null,
-      ok,
-      fail,
-      nextStatus,
-    })
-    await billing.updateTransactionByOrderId(merchantOrderId, {
-      status: nextStatus,
-      external_id:
-        transId != null
-          ? String(transId)
-          : providerOrderId || txn.external_id,
-      raw_payload: {
-        ...prevPayload,
-        provider_order_id: providerOrderId || prevPayload.provider_order_id,
-        sonic_webhook: body,
-        webhookAt: new Date().toISOString(),
-      },
-    })
-    liveSyncBus.publish('analytics.transaction_updated', {
-      topics: ['analytics'],
-      orderId: merchantOrderId,
-      status: nextStatus,
-      deviceId: txn.device_id,
-    })
-    if (ok && txn.plan_id) {
-      const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn({
-        ...txn,
-        status: 'completed',
-        order_id: merchantOrderId,
-      })
-      console.log(LOG_PREFIX, 'webhook activation', {
-        merchantOrderId,
-        activated: act.activated === true,
-        reason: act.reason,
-        deviceId: act.deviceId ? `${String(act.deviceId).slice(0, 12)}…` : null,
-      })
-      if (!act.skipped && act.deviceId) {
-        notifySubscriptionActivatedFromAct(act, merchantOrderId)
-      }
-    }
+
     return res.sendStatus(200)
   } catch (e) {
     console.error(LOG_PREFIX, 'webhook error', e)
-    return res.sendStatus(200)
+    if (inboxRow?.id) {
+      const { updateInboxStatus, INBOX_STATUS } = await import('../../sonicpesaWebhookInbox.js')
+      await updateInboxStatus(inboxRow.id, {
+        status: INBOX_STATUS.RETRYABLE_ERROR,
+        lastError: String(e?.message || e).slice(0, 200),
+        incrementAttempt: true,
+        scheduleRetry: true,
+      }).catch(() => {})
+      return res.status(503).type('text/plain').send('processing deferred')
+    }
+    return res.status(500).type('text/plain').send('internal error')
   }
 }
 

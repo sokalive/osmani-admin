@@ -11,6 +11,7 @@ import { resolveSonicpesaCredentials, sonicpesaGetOrderStatus } from './sonicpes
 import { resolveZenopayCredentials, zenopayGetOrderStatus } from './zenopayClient.js'
 
 const TRACE = String(process.env.ACTIVATION_TRACE || '').trim() === '1'
+const reconcileInFlight = new Map()
 
 function log(...args) {
   if (TRACE) console.log('[activation-sync]', ...args)
@@ -45,6 +46,24 @@ async function recordReconcilePollAttempt(oid, txn, body) {
 export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
   const forcePoll = opts?.forcePoll === true
   const oid = String(orderId ?? '').trim()
+  if (!oid) {
+    return { orderId: oid, phase: 'missing_order_id' }
+  }
+  if (!forcePoll && reconcileInFlight.has(oid)) {
+    return reconcileInFlight.get(oid)
+  }
+  const run = _reconcileOrderWithZenoPayInner(oid, { forcePoll })
+  if (!forcePoll) reconcileInFlight.set(oid, run)
+  try {
+    return await run
+  } finally {
+    if (!forcePoll) reconcileInFlight.delete(oid)
+  }
+}
+
+async function _reconcileOrderWithZenoPayInner(orderId, opts = {}) {
+  const forcePoll = opts?.forcePoll === true
+  const oid = String(orderId ?? '').trim()
   const out = {
     orderId: oid,
     phase: 'start',
@@ -72,7 +91,10 @@ export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
 
   if (txn.status === 'completed') {
     out.phase = 'already_completed_activate'
-    const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn(txn)
+    const { activateFromCompletedTxn, COMPLETION_SOURCE } = await import(
+      './lib/canonicalPaymentActivation.js'
+    )
+    const act = await activateFromCompletedTxn(txn, { source: COMPLETION_SOURCE.APP_VERIFY })
     out.activation = act
     out.txnStatusAfter = 'completed'
     emitIfActivated(act, oid)
@@ -100,8 +122,8 @@ export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
   const rawPayload = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
   const polledAt = rawPayload.orderStatusPolledAt
   const minPollMs = Math.max(
-    5000,
-    Number(process.env.SUBSCRIPTION_RECONCILE_MIN_INTERVAL_MS) || 30_000,
+    3000,
+    Number(process.env.SUBSCRIPTION_RECONCILE_MIN_INTERVAL_MS) || 15_000,
   )
   if (!forcePoll && polledAt) {
     const ageMs = Date.now() - new Date(polledAt).getTime()
@@ -140,9 +162,8 @@ export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
     const body = z.body
     const ok = z.normalized?.succeeded === true || webhookSuccess(body)
     const fail = z.normalized?.failed === true || webhookExplicitFailure(body)
-    const nextStatus = ok ? 'completed' : fail ? 'failed' : txn.status
 
-    if (nextStatus === txn.status) {
+    if (!ok && !fail) {
       out.phase = 'still_pending_or_unknown'
       await recordReconcilePollAttempt(oid, txn, body)
       console.log('[activation-sync] SonicPesa still pending', {
@@ -153,39 +174,42 @@ export async function reconcileOrderWithZenoPay(orderId, opts = {}) {
       return out
     }
 
-    const prevPayload = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
-    await billing.updateTransactionByOrderId(oid, {
-      status: nextStatus,
-      external_id: body.transaction_id != null ? String(body.transaction_id) : txn.external_id,
-      raw_payload: {
-        ...prevPayload,
-        order_status_poll: body,
-        orderStatusPolledAt: new Date().toISOString(),
-      },
-    })
-    out.transitionedToCompleted = nextStatus === 'completed'
-    out.txnStatusAfter = nextStatus
-    out.phase = nextStatus === 'completed' ? 'transitioned_completed' : 'transitioned_failed'
-
-    liveSyncBus.publish('analytics.transaction_updated', {
-      topics: ['analytics'],
+    const { applySonicpesaPaymentOutcome, COMPLETION_SOURCE } = await import(
+      './lib/canonicalPaymentActivation.js'
+    )
+    const result = await applySonicpesaPaymentOutcome({
       orderId: oid,
-      status: nextStatus,
+      source: COMPLETION_SOURCE.ORDER_STATUS_POLL,
+      succeeded: ok,
+      failed: fail,
+      providerPayload: body,
+      externalId: body.transaction_id != null ? String(body.transaction_id) : txn.external_id,
     })
 
-    if (nextStatus !== 'completed') {
-      return out
+    out.transitionedToCompleted = result.txnStatusAfter === 'completed' && result.transitioned
+    out.txnStatusAfter = result.txnStatusAfter ?? txn.status
+    out.phase =
+      result.txnStatusAfter === 'completed'
+        ? 'transitioned_completed'
+        : result.txnStatusAfter === 'failed'
+          ? 'transitioned_failed'
+          : 'still_pending_or_unknown'
+    out.activation = result.activation
+
+    if (result.txnStatusAfter && result.txnStatusAfter !== out.txnStatusBefore) {
+      liveSyncBus.publish('analytics.transaction_updated', {
+        topics: ['analytics'],
+        orderId: oid,
+        status: result.txnStatusAfter,
+      })
     }
 
-    txn = await billing.getTransactionByOrderId(oid)
-    const act = await billing.tryActivateDeviceSubscriptionFromCompletedTxn(txn)
-    out.activation = act
-    emitIfActivated(act, oid)
+    emitIfActivated(result.activation, oid)
     console.log('[activation-sync] SonicPesa poll completed + activation', {
       orderId: shortId(oid),
-      reason: act.reason,
-      activated: act.activated === true,
-      deviceId: act.deviceId ? shortId(act.deviceId, 16) : null,
+      reason: result.activation?.reason ?? result.activation?.activation_state,
+      activated: result.activation?.activated === true,
+      deviceId: result.activation?.deviceId ? shortId(result.activation.deviceId, 16) : null,
     })
     return out
   }

@@ -272,6 +272,30 @@ runtimePublicRouter.get('/payment-production-audit', requireLegacyAdminToken, as
   }
 })
 
+/** SonicPesa payment reliability metrics (webhook age, inbox, stale pending, latency). */
+runtimePublicRouter.get('/sonicpesa-reliability-metrics', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const days = Number(req.query.days ?? 30)
+    const { runSonicpesaReliabilityMetrics } = await import('../lib/sonicpesaReliabilityMetrics.js')
+    const { getPool } = await import('../db/pool.js')
+    const pool = getPool()
+    const poolSnap = pool
+      ? {
+          totalCount: pool.totalCount,
+          idleCount: pool.idleCount,
+          waitingCount: pool.waitingCount,
+          max: pool.options?.max ?? null,
+        }
+      : null
+    const metrics = await runSonicpesaReliabilityMetrics({ days })
+    res.json({ ok: true, ...metrics, pool: poolSnap, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/sonicpesa-reliability-metrics]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Full read-only manual gift production investigation (exact PostgreSQL). */
 runtimePublicRouter.get('/manual-gift-production-investigation', requireLegacyAdminToken, async (_req, res) => {
   try {

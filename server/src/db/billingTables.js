@@ -1065,4 +1065,47 @@ export async function ensureBillingTables(client) {
     INSERT INTO subscription_request_settings (id, enabled) VALUES (1, true)
     ON CONFLICT (id) DO NOTHING;
   `)
+
+  /** Durable SonicPesa webhook inbox — capture before ACK, idempotent processing + retry. */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS sonicpesa_webhook_inbox (
+      id BIGSERIAL PRIMARY KEY,
+      provider_event_id TEXT,
+      provider_order_id TEXT NOT NULL DEFAULT '',
+      merchant_order_id TEXT NOT NULL DEFAULT '',
+      payload_hash TEXT NOT NULL,
+      signature_verified BOOLEAN NOT NULL DEFAULT false,
+      payload JSONB NOT NULL,
+      processing_status TEXT NOT NULL DEFAULT 'RECEIVED',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error_redacted TEXT NOT NULL DEFAULT '',
+      received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      processed_at TIMESTAMPTZ,
+      next_retry_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT sonicpesa_webhook_inbox_status_check CHECK (
+        processing_status IN (
+          'RECEIVED', 'VERIFIED', 'PROCESSING', 'PROCESSED', 'RETRYABLE_ERROR', 'TERMINAL_REJECTED'
+        )
+      )
+    );
+  `)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS sonicpesa_webhook_inbox_payload_hash_uidx
+    ON sonicpesa_webhook_inbox (payload_hash);
+  `)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS sonicpesa_webhook_inbox_provider_event_uidx
+    ON sonicpesa_webhook_inbox (provider_event_id)
+    WHERE provider_event_id IS NOT NULL AND trim(provider_event_id) <> '';
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS sonicpesa_webhook_inbox_retry_idx
+    ON sonicpesa_webhook_inbox (processing_status, next_retry_at)
+    WHERE processing_status IN ('RECEIVED', 'RETRYABLE_ERROR');
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS sonicpesa_webhook_inbox_received_idx
+    ON sonicpesa_webhook_inbox (received_at DESC);
+  `)
 }

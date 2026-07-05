@@ -1,0 +1,58 @@
+{
+  "title": "SonicPesa payment activation result — App handoff",
+  "created_at": "2026-07-05",
+  "ota_recommended": true,
+  "runtime_versions_affected": ["all App builds using /api/subscription/verify and payment-status polling"],
+  "endpoint": {
+    "payment_status": "GET /api/payments/status?order_id={orderId}",
+    "subscription_verify": "POST /api/subscription/verify",
+    "transaction_raw_field": "transactions.raw_payload.activation_result"
+  },
+  "fields": {
+    "activation_state": {
+      "type": "string",
+      "enum": [
+        "ACTIVATED",
+        "ALREADY_APPLIED",
+        "MOVED_TO_SIBLING_DEVICE",
+        "PHONE_CONFLICT",
+        "RETRYABLE_DB_ERROR",
+        "INVALID_PLAN",
+        "ORDER_NOT_FOUND",
+        "PROVIDER_NOT_CONFIRMED",
+        "TERMINAL_REJECTED",
+        "NOT_COMPLETED",
+        "NO_DEVICE_ID"
+      ]
+    },
+    "entitlement_active": { "type": "boolean", "description": "True when an active entitlement exists for this payment outcome context." },
+    "entitlement_device_id_redacted": { "type": "string|null", "description": "Redacted device id holding entitlement when not on paying device." },
+    "moved_to_sibling_device": { "type": "boolean" },
+    "phone_conflict": { "type": "boolean" },
+    "retryable": { "type": "boolean", "description": "App may retry verify/poll when true." },
+    "user_action_required": { "type": "boolean", "description": "Show Swahili guidance; do not label payment as failed when txn completed." },
+    "completion_source": {
+      "type": "string",
+      "enum": ["sonic_webhook", "order_status_poll", "app_verify", "admin_recovery"]
+    },
+    "owner_device_id_redacted": { "type": "string|null", "description": "Present for PHONE_CONFLICT only." }
+  },
+  "semantics": {
+    "ACTIVATED": "Payment completed and subscription active on paying device.",
+    "ALREADY_APPLIED": "Idempotent duplicate; subscription already applied for this order_id.",
+    "MOVED_TO_SIBLING_DEVICE": "Payment succeeded; entitlement lives on a linked sibling device (e.g. after Hamisha/migration). Paying device may show inactive — not a payment failure.",
+    "PHONE_CONFLICT": "Payment succeeded but phone already has active subscription on another device. Show existing_package / message_sw; do not show payment failed.",
+    "RETRYABLE_DB_ERROR": "Temporary server issue; App should retry verify with backoff.",
+    "PROVIDER_NOT_CONFIRMED": "Still pending at provider; continue poll schedule."
+  },
+  "app_behavior_required": [
+    "After payment UI success, poll verify until activation_state is terminal (ACTIVATED, ALREADY_APPLIED, MOVED_TO_SIBLING_DEVICE, PHONE_CONFLICT) or user timeout.",
+    "Never map MOVED_TO_SIBLING_DEVICE or PHONE_CONFLICT to payment failure when transaction status is completed.",
+    "Display message_sw from phone conflict payload when phone_conflict is true.",
+    "For moved_to_sibling_device, offer navigation to subscription status / support copy explaining entitlement on linked device."
+  ],
+  "backward_compatibility": {
+    "legacy_apps": "Apps ignoring activation_result continue to use subscription-status endpoint; backend still activates via poll/webhook.",
+    "breaking_changes": "None — fields are additive in raw_payload.activation_result."
+  }
+}
