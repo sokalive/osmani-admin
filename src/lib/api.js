@@ -393,6 +393,11 @@ export const customerInvestigationForceActivate = (body) =>
 export const customerInvestigationForceTransfer = (body) =>
   adminApiPost('/admin/customer-investigation/actions/force-transfer', body)
 
+export const postUserRevoke = (deviceId, body = {}) =>
+  adminApiPost(`/users/${encodeURIComponent(deviceId)}/revoke`, body)
+
+export const postUsersBulkRevoke = (body) => adminApiPost('/users/bulk-revoke', body)
+
 export const postUser = (body) => adminApiPost('/users', body)
 export const putUser = (id, body) => adminApiPut(`/users/${encodeURIComponent(id)}`, body)
 export const deleteUser = (id, { force = false } = {}) => {

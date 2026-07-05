@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Component } from 'react'
-import { Eye, Loader2, Pencil, Trash2 } from 'lucide-react'
+import { Eye, Loader2, Pencil, Search, Trash2 } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import SubscriptionEditModal from '../components/SubscriptionEditModal'
 import Topbar from '../components/Topbar'
 import UserProfileDrawer from '../components/UserProfileDrawer'
 import { useToast } from '../context/ToastContext.jsx'
 import {
-  deleteUser,
-  deleteUsersBulk,
+  postUserRevoke,
+  postUsersBulkRevoke,
   getPlans,
   getUsers,
   getUsersActive,
@@ -78,6 +78,7 @@ function labelClass() {
 
 function statusBadgeClass(status) {
   if (status === 'active') return 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/40'
+  if (status === 'revoked') return 'bg-orange-500/20 text-orange-200 ring-orange-400/40'
   if (status === 'failed') return 'bg-red-500/20 text-red-200 ring-red-400/40'
   if (status === 'pending') return 'bg-amber-500/20 text-amber-200 ring-amber-400/40'
   return 'bg-red-500/20 text-red-200 ring-red-400/40'
@@ -231,8 +232,8 @@ function UsersPageContent() {
   const [expiringWithin, setExpiringWithin] = useState('7d')
   const initialHydrate = useMemo(() => hydrateUsersTab('active_paid', '7d'), [])
   const [page, setPage] = useState(1)
-  const [search, setSearch] = useState('')
-  const [searchDebounced, setSearchDebounced] = useState('')
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [planFilter, setPlanFilter] = useState('all')
   const [providerFilter, setProviderFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -266,14 +267,23 @@ function UsersPageContent() {
   tabRef.current = tab
 
   useEffect(() => {
-    const t = window.setTimeout(() => setSearchDebounced(search.trim()), 300)
+    const t = window.setTimeout(() => setSearchQuery((prev) => {
+      const next = searchInput.trim()
+      return prev === next ? prev : next
+    }), 400)
     return () => window.clearTimeout(t)
-  }, [search])
+  }, [searchInput])
+
+  const runSearchNow = useCallback(() => {
+    setSearchQuery(searchInput.trim())
+    setPage(1)
+    setSelected(new Set())
+  }, [searchInput])
 
   useEffect(() => {
     setPage(1)
     setSelected(new Set())
-  }, [tab, expiringWithin, searchDebounced, planFilter, providerFilter, statusFilter])
+  }, [tab, expiringWithin, searchQuery, planFilter, providerFilter, statusFilter])
 
   const planMap = useMemo(() => {
     const m = new Map()
@@ -286,7 +296,7 @@ function UsersPageContent() {
       const params = {
         page: opts.page ?? page,
         limit: PAGE_SIZE,
-        search: searchDebounced || undefined,
+        search: searchQuery || undefined,
         sort:
           tab === 'expiring'
             ? 'expiry_soonest'
@@ -306,7 +316,7 @@ function UsersPageContent() {
       else res = await getUsers(params, reqOpts)
       return res
     },
-    [tab, page, searchDebounced, expiringWithin, planFilter, providerFilter, statusFilter],
+    [tab, page, searchQuery, expiringWithin, planFilter, providerFilter, statusFilter],
   )
 
   const loadSummary = useCallback(async (signal, { silent = false } = {}) => {
@@ -490,68 +500,62 @@ function UsersPageContent() {
     }
   }
 
-  async function handleDelete(row) {
-    if (!window.confirm(`Delete user + transactions for device ${row.device_id}?`)) return
+  async function handleRevoke(row) {
+    if (
+      !window.confirm(
+        `Revoke subscription for device ${row.device_id}?\n\nPayment history will be preserved for audit.`,
+      )
+    ) {
+      return
+    }
     try {
-      await deleteUser(row.device_id)
+      await postUserRevoke(row.device_id, { reason: 'admin_users_page' })
       setSelected((prev) => {
         const next = new Set(prev)
         next.delete(String(row.device_id))
         return next
       })
       await Promise.all([loadTab({ page }), loadSummary()])
-      showFlash('success', 'User removed.')
+      showFlash('success', 'Subscription revoked — App access should drop immediately.')
     } catch (e) {
-      if (e?.status === 400) {
-        const force = window.confirm(
-          'This user has an active subscription.\n\nDelete anyway with force=true?',
-        )
-        if (!force) return
-        try {
-          await deleteUser(row.device_id, { force: true })
-          setSelected((prev) => {
-            const next = new Set(prev)
-            next.delete(String(row.device_id))
-            return next
-          })
-          await Promise.all([loadTab({ page }), loadSummary()])
-          showFlash('success', 'User removed with force delete.')
-          return
-        } catch (e2) {
-          showToast('error', e2?.message || 'Force delete failed')
-          return
-        }
-      }
-      showToast('error', e?.message || 'Delete failed')
+      showToast('error', e?.message || 'Revoke failed')
     }
   }
 
-  async function runBulkDelete(deviceIds, { label }) {
+  async function runBulkRevoke(deviceIds, { label }) {
     if (!deviceIds.length) return
     setBulkDeleting(true)
     try {
-      const out = await deleteUsersBulk({ device_ids: deviceIds, force: true })
-      const deleted = Number(out?.deleted) || 0
+      const out = await postUsersBulkRevoke({ device_ids: deviceIds, reason: 'admin_users_bulk' })
+      const revoked = Number(out?.revoked) || 0
       const skipped = Number(out?.skipped) || 0
       setSelected(new Set())
       await Promise.all([loadTab({ page }), loadSummary()])
-      if (deleted === 0 && deviceIds.length > 0) {
-        showToast('error', 'No users were deleted. Refresh and retry.')
+      if (revoked === 0 && deviceIds.length > 0) {
+        showToast('error', 'No subscriptions were revoked. Refresh and retry.')
         return
       }
       showToast(
         'success',
         skipped > 0
-          ? `${label}: removed ${deleted}, skipped ${skipped}.`
-          : `${label}: removed ${deleted} user(s).`,
+          ? `${label}: revoked ${revoked}, skipped ${skipped}. Payment history preserved.`
+          : `${label}: revoked ${revoked} subscription(s). Payment history preserved.`,
       )
       showFlash('success', `${label} complete.`)
     } catch (e) {
-      showToast('error', e?.message || 'Bulk delete failed')
+      showToast('error', e?.message || 'Bulk revoke failed')
     } finally {
       setBulkDeleting(false)
       setConfirm(null)
     }
+  }
+
+  async function handleDelete(row) {
+    return handleRevoke(row)
+  }
+
+  async function runBulkDelete(deviceIds, opts) {
+    return runBulkRevoke(deviceIds, opts)
   }
 
   function planLabel(r) {
@@ -612,7 +616,7 @@ function UsersPageContent() {
                   className="inline-flex items-center gap-1.5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-200 hover:bg-red-500/20 disabled:opacity-50"
                 >
                   {bulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                  Delete selected ({selectedCount})
+                  Revoke selected ({selectedCount})
                 </button>
               ) : null}
               {tab === 'all' ? (
@@ -628,7 +632,7 @@ function UsersPageContent() {
                   }
                   className="inline-flex items-center gap-1.5 rounded-xl border border-red-500/35 bg-red-950/40 px-4 py-2.5 text-sm font-semibold text-red-200 hover:bg-red-500/15 disabled:opacity-40"
                 >
-                  Delete page
+                  Revoke page
                 </button>
               ) : null}
             </div>
@@ -685,13 +689,31 @@ function UsersPageContent() {
             <label className={labelClass()} htmlFor="user-search">
               Search
             </label>
-            <input
-              id="user-search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Phone, device ID, order ID, transaction ID, reference…"
-              className={inputClass()}
-            />
+            <div className="flex gap-2">
+              <input
+                id="user-search"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    runSearchNow()
+                  }
+                }}
+                placeholder="Phone, device ID, order ID, transaction ID, reference…"
+                className={inputClass()}
+              />
+              <button
+                type="button"
+                onClick={runSearchNow}
+                disabled={tableLoading}
+                className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-[#f5b301]/40 bg-[#f5b301]/15 px-4 py-3 text-sm font-semibold text-amber-100 hover:bg-[#f5b301]/25 disabled:opacity-50"
+              >
+                {tableLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                Search
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">Press Enter or Search for immediate lookup. Auto-search also runs after typing pauses.</p>
           </div>
           {subscriptionRows ? (
             <>
@@ -930,10 +952,11 @@ function UsersPageContent() {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleDelete(r)}
-                                disabled={bulkDeleting}
+                                onClick={() => handleRevoke(r)}
+                                disabled={bulkDeleting || r.status === 'revoked'}
                                 className="inline-flex rounded-lg p-2 text-slate-400 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-40"
-                                aria-label="Delete"
+                                aria-label="Revoke subscription"
+                                title="Revoke subscription (preserves payment history)"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </button>
@@ -989,22 +1012,22 @@ function UsersPageContent() {
 
         <ConfirmModal
           open={confirm?.kind === 'selected'}
-          title="Delete selected users?"
-          message={`Remove ${confirm?.count ?? 0} selected subscription(s) and their transactions?`}
-          confirmLabel="Delete selected"
+          title="Revoke selected subscriptions?"
+          message={`Revoke ${confirm?.count ?? 0} selected subscription(s)? Payment transaction history will be preserved.`}
+          confirmLabel="Revoke selected"
           loading={bulkDeleting}
           onCancel={() => setConfirm(null)}
-          onConfirm={() => runBulkDelete(confirm?.ids ?? [], { label: 'Delete selected' })}
+          onConfirm={() => runBulkRevoke(confirm?.ids ?? [], { label: 'Revoke selected' })}
         />
 
         <ConfirmModal
           open={confirm?.kind === 'all'}
-          title="Delete users on this page?"
-          message="Remove all subscriptions shown on this page? This cannot be undone."
-          confirmLabel="Delete page"
+          title="Revoke subscriptions on this page?"
+          message="Revoke all subscriptions shown on this page? App access ends immediately. Payment history remains for audit."
+          confirmLabel="Revoke page"
           loading={bulkDeleting}
           onCancel={() => setConfirm(null)}
-          onConfirm={() => runBulkDelete(confirm?.ids ?? [], { label: 'Delete page' })}
+          onConfirm={() => runBulkRevoke(confirm?.ids ?? [], { label: 'Revoke page' })}
         />
       </main>
     </>

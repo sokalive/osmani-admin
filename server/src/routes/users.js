@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
+import { getPool } from '../db/pool.js'
 import {
   getAdminUsersSummary,
   listAdminActivePaidUsers,
@@ -7,20 +8,32 @@ import {
   listAdminExpiringSoonUsers,
   listAdminFailedPayments,
 } from '../lib/adminUsersList.js'
+import {
+  insertAdminRevocationAudit,
+  revokeAdminDeviceSubscription,
+} from '../lib/adminSubscriptionRevocation.js'
+import { invalidateSubscriptionAccessCache } from '../lib/subscriptionAccessCache.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const usersRouter = Router()
 
-function notifyDeviceSubscription(deviceId, orderId) {
+function notifySubscriptionRevoked(deviceId, orderId = 'admin_revoke') {
   const d = String(deviceId ?? '').trim()
   if (!d) return
+  invalidateSubscriptionAccessCache(d)
   deviceSubscriptionBus.emit('update', { deviceId: d })
   liveSyncBus.publish('analytics.subscription_updated', {
     topics: ['analytics'],
     deviceId: d,
-    orderId: String(orderId ?? 'admin_users_sync'),
+    orderId: String(orderId),
+  })
+  liveSyncBus.publish('subscription_revoked', {
+    topics: ['config'],
+    device_id: d,
+    reason: 'admin_revoke',
+    synced_at: new Date().toISOString(),
   })
 }
 
@@ -66,6 +79,37 @@ function mapLegacyDeviceUsers(rows) {
       remaining: remainingMs,
     }
   })
+}
+
+async function runRevokeForDevice(deviceId, { adminIdentity = 'admin', reason = '' } = {}) {
+  const pool = getPool()
+  if (!pool) throw new Error('DATABASE_URL is required')
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await revokeAdminDeviceSubscription({
+      deviceId,
+      adminIdentity,
+      reason,
+      client,
+    })
+    if (result.ok && result.revoked) {
+      await insertAdminRevocationAudit(client, {
+        deviceId,
+        adminIdentity,
+        reason,
+        transactionId: result.transaction_id,
+      })
+    }
+    await client.query('COMMIT')
+    if (result.ok) notifySubscriptionRevoked(deviceId, result.transaction_id)
+    return result
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally {
+    client.release()
+  }
 }
 
 usersRouter.get('/summary', requireAdminPanelAccess, async (_req, res) => {
@@ -142,10 +186,11 @@ usersRouter.put('/:device_id', requireAdminPanelAccess, async (req, res) => {
       status: statusRaw,
     })
     if (!row) return res.status(404).json({ error: 'Device subscription not found' })
+    invalidateSubscriptionAccessCache(deviceId)
     const exp = row.expires_at instanceof Date ? row.expires_at : new Date(String(row.expires_at))
     const outExp = exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toISOString() : null
     const st = row.status === 'active' && outExp && new Date(outExp).getTime() > Date.now() ? 'active' : 'expired'
-    notifyDeviceSubscription(deviceId, 'admin_users_put')
+    notifySubscriptionRevoked(deviceId, 'admin_users_put')
     res.json({
       device_id: String(row.device_id ?? ''),
       status: st,
@@ -159,6 +204,66 @@ usersRouter.put('/:device_id', requireAdminPanelAccess, async (req, res) => {
   }
 })
 
+usersRouter.post('/:device_id/revoke', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const deviceId = String(req.params.device_id ?? '').trim()
+    if (!deviceId) return res.status(400).json({ error: 'device_id is required' })
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const result = await runRevokeForDevice(deviceId, {
+      adminIdentity: String(b.admin_identity ?? 'admin'),
+      reason: String(b.reason ?? 'admin_users_revoke'),
+    })
+    if (result.notFound) return res.status(404).json({ error: 'Subscription not found' })
+    res.json({
+      ok: true,
+      revoked: result.revoked === true,
+      idempotent: result.idempotent === true,
+      alreadyRevoked: result.alreadyRevoked === true,
+      device_id: deviceId,
+      transaction_preserved: true,
+    })
+  } catch (e) {
+    console.error('[users] POST /:device_id/revoke failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+usersRouter.post('/bulk-revoke', requireAdminPanelAccess, async (req, res) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceIds = Array.isArray(b.device_ids)
+      ? b.device_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
+      : []
+    if (deviceIds.length === 0) {
+      return res.status(400).json({ error: 'device_ids array is required', revoked: 0, skipped: 0 })
+    }
+    let revoked = 0
+    let skipped = 0
+    const errors = []
+    for (const deviceId of deviceIds) {
+      try {
+        const result = await runRevokeForDevice(deviceId, {
+          reason: String(b.reason ?? 'admin_users_bulk_revoke'),
+        })
+        if (result.notFound) {
+          skipped += 1
+          continue
+        }
+        if (result.revoked || result.alreadyRevoked) revoked += 1
+        else skipped += 1
+      } catch (e) {
+        errors.push({ device_id: deviceId, error: String(e.message || e) })
+        skipped += 1
+      }
+    }
+    res.json({ ok: true, revoked, skipped, errors })
+  } catch (e) {
+    console.error('[users] POST /bulk-revoke failed:', e)
+    res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
+/** Legacy DELETE — now revokes subscription only; payment transactions are preserved. */
 usersRouter.delete('/bulk', requireAdminPanelAccess, async (req, res) => {
   try {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -166,34 +271,20 @@ usersRouter.delete('/bulk', requireAdminPanelAccess, async (req, res) => {
       ? b.device_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
       : []
     if (deviceIds.length === 0) {
-      return res.status(400).json({ error: 'device_ids array is required', deleted: 0, skipped: 0 })
+      return res.status(400).json({ error: 'device_ids array is required', revoked: 0, skipped: 0 })
     }
-    const force = b.force === true
-    let deleted = 0
+    let revoked = 0
     let skipped = 0
-    const errors = []
     for (const deviceId of deviceIds) {
-      const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
-      if (!row) {
+      const result = await runRevokeForDevice(deviceId, { reason: 'admin_users_bulk_delete_legacy' })
+      if (result.notFound) {
         skipped += 1
         continue
       }
-      const exp = row.expires_at instanceof Date ? row.expires_at : new Date(String(row.expires_at))
-      const activeNow =
-        row.status === 'active' &&
-        exp instanceof Date &&
-        !Number.isNaN(exp.getTime()) &&
-        exp > new Date()
-      if (activeNow && !force) {
-        skipped += 1
-        errors.push({ device_id: deviceId, error: 'active_without_force' })
-        continue
-      }
-      await billing.deleteDeviceUserCascade(deviceId)
-      notifyDeviceSubscription(deviceId, 'admin_users_bulk_delete')
-      deleted += 1
+      if (result.revoked || result.alreadyRevoked) revoked += 1
+      else skipped += 1
     }
-    res.json({ ok: true, deleted, skipped, errors })
+    res.json({ ok: true, revoked, skipped, deleted: revoked, transactions_preserved: true })
   } catch (e) {
     console.error('[users] DELETE /bulk failed:', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -204,34 +295,20 @@ usersRouter.delete('/:device_id', requireAdminPanelAccess, async (req, res) => {
   try {
     const deviceId = String(req.params.device_id ?? '').trim()
     if (!deviceId) {
-      return res.status(404).json({
-        error: 'Device subscription not found',
-        deletedSubscription: 0,
-        deletedTransactions: 0,
-      })
+      return res.status(404).json({ error: 'Device subscription not found', revoked: false })
     }
-    const force = String(req.query.force ?? '').toLowerCase() === 'true'
-    const row = await billing.getDeviceSubscriptionByDeviceId(deviceId)
-    if (!row) {
-      return res.status(404).json({
-        error: 'Device subscription not found',
-        deletedSubscription: 0,
-        deletedTransactions: 0,
-      })
+    const result = await runRevokeForDevice(deviceId, { reason: 'admin_users_delete_legacy' })
+    if (result.notFound) {
+      return res.status(404).json({ error: 'Device subscription not found', revoked: false })
     }
-    const exp = row.expires_at instanceof Date ? row.expires_at : new Date(String(row.expires_at))
-    const activeNow =
-      row.status === 'active' && exp instanceof Date && !Number.isNaN(exp.getTime()) && exp > new Date()
-    if (activeNow && !force) {
-      return res.status(400).json({
-        error: 'Cannot delete active user without force=true',
-        deletedSubscription: 0,
-        deletedTransactions: 0,
-      })
-    }
-    const out = await billing.deleteDeviceUserCascade(deviceId)
-    notifyDeviceSubscription(deviceId, 'admin_users_delete')
-    res.json({ ok: true, ...out })
+    res.json({
+      ok: true,
+      revoked: result.revoked === true || result.alreadyRevoked === true,
+      idempotent: result.idempotent === true,
+      transactions_preserved: true,
+      deletedSubscription: 0,
+      deletedTransactions: 0,
+    })
   } catch (e) {
     console.error('[users] DELETE /:device_id failed:', e)
     res.status(500).json({ error: String(e.message || e) })

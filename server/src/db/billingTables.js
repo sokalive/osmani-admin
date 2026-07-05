@@ -788,6 +788,37 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS manual_admin_blocked BOOLEAN NOT NULL DEFAULT false;
   `)
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS admin_revoked_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS admin_revoked_by TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS admin_revocation_reason TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions ADD COLUMN IF NOT EXISTS admin_revoked_transaction_id TEXT;
+  `)
+  await ensureStatusConstraint(client, {
+    tableName: 'device_subscriptions',
+    constraintName: 'device_subscriptions_status_check',
+    statuses: ['active', 'pending', 'revoked'],
+  })
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_subscription_revocation_actions (
+      id SERIAL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      admin_identity TEXT NOT NULL DEFAULT 'admin',
+      reason TEXT,
+      revoked_transaction_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_subscription_revocation_device_idx
+    ON admin_subscription_revocation_actions (device_id, created_at DESC);
+  `)
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS offer_codes (

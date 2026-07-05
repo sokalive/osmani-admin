@@ -2006,33 +2006,62 @@ deviceSecurityRouter.post('/subscription/revoke', async (req, res) => {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const deviceId = text(b.device_id, 128)
     if (!deviceId) return res.status(400).json({ error: 'device_id is required' })
-    const out = await pool.query(
-      `UPDATE device_subscriptions
-       SET status = 'pending', updated_at = now()
-       WHERE device_id = $1
-       RETURNING device_id`,
-      [deviceId],
+    const { revokeAdminDeviceSubscription, insertAdminRevocationAudit } = await import(
+      '../lib/adminSubscriptionRevocation.js'
     )
-    if (!out.rows[0]) return res.status(404).json({ error: 'Subscription not found' })
+    const { invalidateSubscriptionAccessCache } = await import('../lib/subscriptionAccessCache.js')
+    const client = await pool.connect()
+    let result
+    try {
+      await client.query('BEGIN')
+      result = await revokeAdminDeviceSubscription({
+        deviceId,
+        adminIdentity: 'security_console',
+        reason: String(b.reason ?? 'security_revoke'),
+        client,
+      })
+      if (result.ok && result.revoked) {
+        await insertAdminRevocationAudit(client, {
+          deviceId,
+          adminIdentity: 'security_console',
+          reason: String(b.reason ?? 'security_revoke'),
+          transactionId: result.transaction_id,
+        })
+      }
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw e
+    } finally {
+      client.release()
+    }
+    if (result.notFound) return res.status(404).json({ error: 'Subscription not found' })
+    invalidateSubscriptionAccessCache(deviceId)
     await logSecurityEvent(pool, {
       actor: 'Admin',
       eventType: 'Subscription revoked',
       status: 'completed',
       detail: `Revoked subscription for ${deviceId}`,
-      metadata: { device_id: deviceId },
+      metadata: { device_id: deviceId, transaction_preserved: true },
     })
     notifySubscriptionTransferred({
       targetDeviceId: deviceId,
       targetRow: {
         device_id: deviceId,
-        status: 'pending',
+        status: 'revoked',
         active_now: false,
       },
       reason: 'revoke',
     })
     emitSync('subscription_revoked', { device_id: deviceId })
     emitSync('security_logs_changed', { action: 'revoke', device_id: deviceId })
-    return res.json({ ok: true, device_id: deviceId })
+    return res.json({
+      ok: true,
+      device_id: deviceId,
+      revoked: result.revoked === true || result.alreadyRevoked === true,
+      idempotent: result.idempotent === true,
+      transactions_preserved: true,
+    })
   } catch (e) {
     console.error('[subscription/revoke]', e)
     return res.status(500).json({ error: String(e.message || e) })

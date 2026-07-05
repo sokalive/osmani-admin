@@ -93,6 +93,11 @@ function appendSearch(search, deviceCol, phoneCol, cond, params, i) {
 function appendSubscriptionSearch(search, cond, params, i) {
   const q = String(search ?? '').trim()
   if (!q) return i
+  if (/^[a-f0-9]{64}$/i.test(q)) {
+    cond.push(`ds.device_id = $${i}`)
+    params.push(q.toLowerCase())
+    return i + 1
+  }
   const esc = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
   const parts = [`ds.device_id ILIKE $${i}`]
   params.push(`%${esc}%`)
@@ -207,7 +212,9 @@ function mapSubscriptionRow(r, nowMs = Date.now()) {
       : null
   const remainingMs = expiresAt != null ? Math.max(0, new Date(expiresAt).getTime() - nowMs) : 0
   const futureExpiry = expiresAt != null && new Date(expiresAt).getTime() > nowMs
-  const active = r.status === 'active' && futureExpiry
+  const revoked =
+    String(r.status ?? '').toLowerCase() === 'revoked' || Boolean(r.admin_revoked_at)
+  const active = r.status === 'active' && futureExpiry && !revoked
   const txnId = String(r.transaction_id ?? '')
   let source = String(r.provider ?? 'zenopay')
   if (txnId.startsWith('manual_grant:')) source = 'manual_grant'
@@ -218,7 +225,7 @@ function mapSubscriptionRow(r, nowMs = Date.now()) {
     plan_id: r.plan_id != null ? Number(r.plan_id) : null,
     plan_name: r.plan_name != null ? String(r.plan_name) : null,
     amount: r.amount != null ? Number(r.amount) : null,
-    status: active ? 'active' : futureExpiry && r.status === 'pending' ? 'revoked' : 'expired',
+    status: active ? 'active' : revoked ? 'revoked' : futureExpiry && r.status === 'pending' ? 'revoked' : 'expired',
     started_at: startedAt,
     expires_at: expiresAt,
     remaining: remainingMs,
@@ -331,6 +338,7 @@ async function listSubscriptions({
          ds.started_at,
          ds.expires_at,
          ds.transaction_id,
+         ds.admin_revoked_at,
          COALESCE(lt.phone, pay.phone, '') AS phone_number,
          COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
@@ -402,6 +410,7 @@ export async function listAdminExpiringSoonUsers(filters = {}) {
          ds.started_at,
          ds.expires_at,
          ds.transaction_id,
+         ds.admin_revoked_at,
          COALESCE(lt.phone, pay.phone, '') AS phone_number,
          COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,

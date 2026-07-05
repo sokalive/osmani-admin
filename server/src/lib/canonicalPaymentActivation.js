@@ -155,6 +155,25 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
     }
   }
 
+  const { getAdminRevocationState, isAdminRevokedOrderBlocked } = await import(
+    './adminSubscriptionRevocation.js'
+  )
+  const revocation = await getAdminRevocationState(deviceId, client)
+  if (isAdminRevokedOrderBlocked(revocation, orderId)) {
+    return {
+      ...buildActivationMeta({
+        activation_state: ACTIVATION_STATE.TERMINAL_REJECTED,
+        completion_source: source,
+      }),
+      activated: false,
+      skipped: true,
+      reason: 'admin_revoked_order_blocked',
+      code: 'ADMIN_REVOKED_ORDER_BLOCKED',
+      deviceId,
+      orderId,
+    }
+  }
+
   if (await isIntentionalMigrationRevokedDevice(deviceId)) {
     const phone = String(txn.phone ?? '').trim() || billing.phoneFromTransactionRow(txn)
     const sibling = phone ? await findSiblingEntitlementDevice(phone, deviceId) : null

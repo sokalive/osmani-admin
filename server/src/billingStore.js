@@ -672,26 +672,28 @@ export async function getDeviceSubscriptionAccessStateFast(deviceId) {
        ds.started_at,
        ds.updated_at,
        ds.transaction_id,
+       ds.admin_revoked_at,
        (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
        COALESCE(ds.manual_admin_blocked, false) AS blocked_now,
        CASE WHEN COALESCE(ds.manual_admin_blocked, false) THEN 'admin_blocked' ELSE NULL END AS block_reason,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
          ELSE 0::bigint
        END AS remaining_seconds,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 3600.0)::int)
          ELSE 0
        END AS remaining_hours,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
          ELSE 0
        END AS remaining_days,
        (
-         ds.expires_at IS NOT NULL
+         ds.status = 'active'
+         AND ds.expires_at IS NOT NULL
          AND ds.expires_at > now()
          AND ds.expires_at <= now() + interval '48 hours'
        ) AS near_expiry
@@ -720,26 +722,28 @@ export async function getVerifyAccessSnapshot(deviceId) {
        ds.started_at,
        ds.updated_at,
        ds.transaction_id,
+       ds.admin_revoked_at,
        (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
        COALESCE(ds.manual_admin_blocked, false) AS blocked_now,
        CASE WHEN COALESCE(ds.manual_admin_blocked, false) THEN 'admin_blocked' ELSE NULL END AS block_reason,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
          ELSE 0::bigint
        END AS remaining_seconds,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 3600.0)::int)
          ELSE 0
        END AS remaining_hours,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
          ELSE 0
        END AS remaining_days,
        (
-         ds.expires_at IS NOT NULL
+         ds.status = 'active'
+         AND ds.expires_at IS NOT NULL
          AND ds.expires_at > now()
          AND ds.expires_at <= now() + interval '48 hours'
        ) AS near_expiry,
@@ -772,6 +776,7 @@ export async function getVerifyAccessSnapshot(deviceId) {
         started_at: snap.started_at,
         updated_at: snap.updated_at,
         transaction_id: snap.transaction_id,
+        admin_revoked_at: snap.admin_revoked_at,
         active_now: snap.active_now === true,
         blocked_now: snap.blocked_now === true,
         block_reason: snap.block_reason,
@@ -845,6 +850,7 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
        ds.started_at,
        ds.updated_at,
        ds.transaction_id,
+       ds.admin_revoked_at,
        (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
        (
          COALESCE(ds.manual_admin_blocked, false)
@@ -853,22 +859,23 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
        ) AS blocked_now,
        COALESCE(NULLIF(ir.block_reason, ''), ad.block_reason) AS block_reason,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
          ELSE 0::bigint
        END AS remaining_seconds,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 3600.0)::int)
          ELSE 0
        END AS remaining_hours,
        CASE
-         WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+         WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
          THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
          ELSE 0
        END AS remaining_days,
        (
-         ds.expires_at IS NOT NULL
+         ds.status = 'active'
+         AND ds.expires_at IS NOT NULL
          AND ds.expires_at > now()
          AND ds.expires_at <= now() + interval '48 hours'
        ) AS near_expiry
@@ -897,6 +904,7 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
          ds.started_at,
          ds.updated_at,
          ds.transaction_id,
+         ds.admin_revoked_at,
          (ds.status = 'active' AND ds.expires_at > now()) AS active_now,
          (
            COALESCE(ds.manual_admin_blocked, false)
@@ -905,22 +913,23 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
          ) AS blocked_now,
          COALESCE(NULLIF(ir.block_reason, ''), ad.block_reason) AS block_reason,
          CASE
-           WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+           WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
            THEN GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (ds.expires_at - now())))::bigint)
            ELSE 0::bigint
          END AS remaining_seconds,
          CASE
-           WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+           WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
            THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 3600.0)::int)
            ELSE 0
          END AS remaining_hours,
          CASE
-           WHEN ds.expires_at IS NOT NULL AND ds.expires_at > now()
+           WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
            THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
            ELSE 0
          END AS remaining_days,
          (
-           ds.expires_at IS NOT NULL
+           ds.status = 'active'
+           AND ds.expires_at IS NOT NULL
            AND ds.expires_at > now()
            AND ds.expires_at <= now() + interval '48 hours'
          ) AS near_expiry
@@ -1724,6 +1733,10 @@ export async function upsertDeviceSubscriptionActive(
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          manual_admin_blocked = false,
+         admin_revoked_at = NULL,
+         admin_revoked_by = NULL,
+         admin_revocation_reason = NULL,
+         admin_revoked_transaction_id = NULL,
          fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
       [d, expiresAt, oid, fp],
     )
@@ -2767,8 +2780,15 @@ export async function tryFinalizeActivationForDevice(deviceId) {
     }
   }
 
+  const { getAdminRevocationState, isAdminRevokedOrderBlocked } = await import(
+    './lib/adminSubscriptionRevocation.js'
+  )
+  const revocation = await getAdminRevocationState(d)
   const txn = await getLatestCompletedTransactionForDevice(d)
   if (!txn) return { ran: false, reason: 'no_completed_txn' }
+  if (isAdminRevokedOrderBlocked(revocation, txn.order_id)) {
+    return { ran: false, reason: 'admin_revoked_order_blocked', orderId: txn.order_id }
+  }
   const act = await tryActivateDeviceSubscriptionFromCompletedTxn(txn)
   return { ran: true, ...act }
 }
