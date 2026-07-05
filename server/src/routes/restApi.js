@@ -41,6 +41,8 @@ import { beemSettingsRouter } from './beemSettings.js'
 import { smsAdminRouter } from './smsAdmin.js'
 import './smsScheduler.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
+import { deriveAppWaitingState } from '../lib/paymentAppWaitingState.js'
+import { invalidateSubscriptionAccessCache } from '../lib/subscriptionAccessCache.js'
 import { customerInvestigationRouter } from './customerInvestigation.js'
 import { runtimePublicRouter } from './runtimePublic.js'
 import { usersIntelligencePublicRouter } from './usersIntelligencePublic.js'
@@ -328,6 +330,21 @@ restApi.get('/payment-status/:order_id', async (req, res) => {
     if (!txn) {
       return res.status(404).json({ error: 'Unknown order' })
     }
+    const deviceId = String(txn.device_id ?? '').trim()
+    let subscriptionActive = false
+    if (deviceId && txn.status === 'completed') {
+      const sub = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
+      subscriptionActive =
+        sub?.active === true && String(sub.transaction_id ?? '') === String(txn.order_id)
+      if (rec.activation?.activated) {
+        invalidateSubscriptionAccessCache(deviceId)
+      }
+    }
+    const waiting = deriveAppWaitingState({
+      txn,
+      activation: rec.activation,
+      subscriptionActive,
+    })
     console.log('[payment-status]', {
       orderId: orderId.length > 22 ? `${orderId.slice(0, 20)}…` : orderId,
       phase: rec.phase,
@@ -335,11 +352,19 @@ restApi.get('/payment-status/:order_id', async (req, res) => {
       txnStatusAfter: txn.status,
       providerOk: rec.providerHttpOk,
       activated: rec.activation?.activated,
-      activationReason: rec.activation?.reason,
+      activationReason: rec.activation?.reason ?? rec.activation?.activation_state,
+      app_waiting_state: waiting.app_waiting_state,
     })
     const status =
       txn.status === 'completed' ? 'SUCCESS' : txn.status === 'failed' ? 'FAILED' : 'PENDING'
-    res.json({ order_id: txn.order_id, status })
+    res.setHeader('Cache-Control', 'no-store, private')
+    res.json({
+      order_id: txn.order_id,
+      status,
+      transaction_status: txn.status,
+      ...waiting,
+      activation: rec.activation ?? null,
+    })
   } catch (e) {
     console.error('[payment-status]', e)
     res.status(500).json({ error: String(e.message || e) })

@@ -5,6 +5,7 @@
 import * as billing from '../billingStore.js'
 import { liveSyncBus } from './liveSyncBus.js'
 import { schedulePostPaymentActivationPolls } from './paymentActivationBoost.js'
+import { enqueueSonicpesaPaymentReconciliation } from './sonicpesaPaymentReconciliationQueue.js'
 
 const LOG = '[create-order-pipeline]'
 
@@ -18,6 +19,9 @@ export function respondCreateOrderAccepted(res, body, watch = {}) {
   const deviceId = String(watch.deviceId ?? body.deviceId ?? '').trim()
   if (orderId && deviceId) {
     schedulePostPaymentActivationPolls(orderId, deviceId)
+    void enqueueSonicpesaPaymentReconciliation(orderId, deviceId, { priority: 2 }).catch((e) => {
+      console.warn('[create-order-pipeline] reconcile enqueue failed:', orderId, e?.message || e)
+    })
   }
   res.status(201).json({
     provider_initiation: 'pending',

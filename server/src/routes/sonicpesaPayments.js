@@ -14,6 +14,9 @@ import {
   respondCreateOrderAccepted,
   runProviderCreateOrderInBackground,
 } from '../lib/paymentCreateOrderPipeline.js'
+import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
+import { deriveAppWaitingState } from '../lib/paymentAppWaitingState.js'
+import { invalidateSubscriptionAccessCache } from '../lib/subscriptionAccessCache.js'
 
 export const sonicpesaPaymentsRouter = Router()
 
@@ -139,13 +142,14 @@ sonicpesaPaymentsRouter.post('/webhook', (req, res) => {
   void handleSonicPesaWebhook(req, res)
 })
 
-/** GET /payments/sonicpesa/status/:orderId — lightweight status for clients */
+/** GET /payments/sonicpesa/status/:orderId — reconcile + App waiting state */
 sonicpesaPaymentsRouter.get('/status/:orderId', async (req, res) => {
   try {
     const orderId = String(req.params.orderId ?? '').trim()
     if (!orderId) {
       return res.status(400).json({ error: 'orderId is required' })
     }
+    const rec = await reconcileOrderWithZenoPay(orderId, { forcePoll: true })
     const txn = await billing.getTransactionByOrderId(orderId)
     if (!txn) {
       return res.status(404).json({ error: 'Unknown order' })
@@ -154,6 +158,19 @@ sonicpesaPaymentsRouter.get('/status/:orderId', async (req, res) => {
     if (raw.payment_provider !== 'sonicpesa') {
       return res.status(404).json({ error: 'Not a SonicPesa order' })
     }
+    const deviceId = String(txn.device_id ?? '').trim()
+    let subscriptionActive = false
+    if (deviceId && txn.status === 'completed') {
+      const sub = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
+      subscriptionActive =
+        sub?.active === true && String(sub.transaction_id ?? '') === String(txn.order_id)
+      if (rec.activation?.activated) invalidateSubscriptionAccessCache(deviceId)
+    }
+    const waiting = deriveAppWaitingState({
+      txn,
+      activation: rec.activation,
+      subscriptionActive,
+    })
     const st =
       txn.status === 'completed' ? 'SUCCESS' : txn.status === 'failed' ? 'FAILED' : 'PENDING'
     res.setHeader('Cache-Control', 'no-store, private')
@@ -163,6 +180,9 @@ sonicpesaPaymentsRouter.get('/status/:orderId', async (req, res) => {
       provider_order_id: raw.provider_order_id ?? txn.external_id ?? null,
       status: st,
       transaction_status: txn.status,
+      reconcile_phase: rec.phase,
+      ...waiting,
+      activation: rec.activation ?? null,
     })
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) })
@@ -173,6 +193,7 @@ sonicpesaPaymentsRouter.get('/status/:orderId', async (req, res) => {
 sonicpesaPaymentsRouter.get('/verify/:orderId', async (req, res) => {
   try {
     const orderId = String(req.params.orderId ?? '').trim()
+    const rec = await reconcileOrderWithZenoPay(orderId, { forcePoll: true })
     const txn = await billing.getTransactionByOrderId(orderId)
     if (!txn) return res.status(404).json({ error: 'Unknown order' })
     const row = await billing.getSonicpesaRow()
@@ -181,6 +202,19 @@ sonicpesaPaymentsRouter.get('/verify/:orderId', async (req, res) => {
       txn.raw_payload?.provider_order_id ?? txn.external_id ?? orderId,
     ).trim()
     const sp = await verifyPayment(cred, verifyId)
+    const deviceId = String(txn.device_id ?? '').trim()
+    let subscriptionActive = false
+    if (deviceId && txn.status === 'completed') {
+      const sub = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
+      subscriptionActive =
+        sub?.active === true && String(sub.transaction_id ?? '') === String(txn.order_id)
+      if (rec.activation?.activated) invalidateSubscriptionAccessCache(deviceId)
+    }
+    const waiting = deriveAppWaitingState({
+      txn,
+      activation: rec.activation,
+      subscriptionActive,
+    })
     res.setHeader('Cache-Control', 'no-store, private')
     res.json({
       ok: true,
@@ -189,6 +223,9 @@ sonicpesaPaymentsRouter.get('/verify/:orderId', async (req, res) => {
       http_ok: sp.ok,
       normalized: sp.normalized,
       transaction_status: txn.status,
+      reconcile_phase: rec.phase,
+      ...waiting,
+      activation: rec.activation ?? null,
     })
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) })

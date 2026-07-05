@@ -7,6 +7,11 @@ import {
   webhookExplicitFailure,
   webhookSuccess,
 } from '../../../handlers/zenoPayWebhook.js'
+import {
+  isEngineeringWebhookProbe,
+  recordSonicpesaWebhookHealthEvent,
+  webhookSecretConfigured,
+} from '../../sonicpesaWebhookHealth.js'
 
 const DEFAULT_API_BASE = 'https://api.sonicpesa.com/api/v1'
 const LOG_PREFIX = '[sonicpesa]'
@@ -349,23 +354,34 @@ export async function handleWebhook(req, res, deps) {
       return res.status(400).type('text/plain').send('malformed payload')
     }
 
+    const engineeringProbe = isEngineeringWebhookProbe(req, body)
+    const secretConfigured = webhookSecretConfigured()
     const signatureOk = verifyWebhookSignature(req, body)
-    if (!signatureOk) {
+    if (secretConfigured && !signatureOk) {
       console.warn(LOG_PREFIX, 'webhook invalid signature', {
         candidateIds: webhookOrderIdCandidates(body),
       })
+      await recordSonicpesaWebhookHealthEvent({ kind: 'invalid_signature' }).catch(() => {})
       return res.status(401).type('text/plain').send('invalid signature')
     }
 
     const inserted = await insertSonicpesaWebhookInbox({
       payload: body,
-      signatureVerified: true,
+      signatureVerified: signatureOk,
+      inboxSource: engineeringProbe ? 'engineering_probe' : 'provider',
     })
     inboxRow = inserted.row
     inboxDuplicate = inserted.duplicate
 
     if (typeof recordWebhookMeta === 'function') {
-      await recordWebhookMeta(body)
+      await recordWebhookMeta(req, body)
+    } else {
+      await recordSonicpesaWebhookHealthEvent({
+        kind: engineeringProbe ? 'engineering_probe' : 'provider_webhook',
+        orderId: String(body.order_id ?? body.merchant_order_id ?? ''),
+        event: String(body.event ?? body.type ?? ''),
+        signatureValid: signatureOk,
+      }).catch(() => {})
     }
 
     if (inboxDuplicate && inboxRow?.processing_status === 'PROCESSED') {

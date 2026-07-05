@@ -3,6 +3,8 @@
  */
 import { getPool } from '../db/pool.js'
 import { getInboxMetrics } from './sonicpesaWebhookInbox.js'
+import { getSonicpesaWebhookHealthSnapshot } from './sonicpesaWebhookHealth.js'
+import { getReconciliationQueueMetrics } from './sonicpesaPaymentReconciliationQueue.js'
 
 function requirePool() {
   const pool = getPool()
@@ -14,9 +16,9 @@ export async function runSonicpesaReliabilityMetrics({ days = 30 } = {}) {
   const pool = requirePool()
   const windowDays = Math.min(365, Math.max(7, Number(days) || 30))
 
-  const [{ rows: settingsRows }, { rows: staleRows }, { rows: sourceRows }, { rows: conflictRows }, inbox] =
+  const [{ rows: settingsRows }, { rows: staleRows }, { rows: sourceRows }, { rows: conflictRows }, inbox, webhookHealth, reconcileQueue] =
     await Promise.all([
-      pool.query(`SELECT last_webhook_at, webhook_url, environment, enabled FROM sonicpesa_settings WHERE id = 1`),
+      pool.query(`SELECT last_webhook_at, last_provider_webhook_at, webhook_url, environment, enabled FROM sonicpesa_settings WHERE id = 1`),
       pool.query(
         `SELECT
            COUNT(*) FILTER (WHERE status = 'pending' AND created_at < now() - interval '5 minutes')::int AS stale_5m,
@@ -58,16 +60,13 @@ export async function runSonicpesaReliabilityMetrics({ days = 30 } = {}) {
         [windowDays],
       ),
       getInboxMetrics(),
+      getSonicpesaWebhookHealthSnapshot(),
+      getReconciliationQueueMetrics(),
     ])
 
   const settings = settingsRows[0] ?? {}
-  const lastWebhookAt = settings.last_webhook_at
-  const webhookAgeSec =
-    lastWebhookAt instanceof Date
-      ? Math.max(0, Math.floor((Date.now() - lastWebhookAt.getTime()) / 1000))
-      : lastWebhookAt
-        ? Math.max(0, Math.floor((Date.now() - new Date(String(lastWebhookAt)).getTime()) / 1000))
-        : null
+  const lastProviderWebhookAt = settings.last_provider_webhook_at ?? webhookHealth?.last_provider_webhook_at
+  const webhookAgeSec = webhookHealth?.provider_webhook_age_sec ?? null
 
   const { rows: latencyRows } = await pool.query(
     `SELECT
@@ -90,27 +89,43 @@ export async function runSonicpesaReliabilityMetrics({ days = 30 } = {}) {
   const sources = sourceRows[0] ?? {}
   const conflicts = conflictRows[0] ?? {}
 
-  const alerts = []
-  if (webhookAgeSec != null && webhookAgeSec > 3600) {
-    alerts.push({ code: 'WEBHOOK_STALE_OVER_1H', webhook_age_sec: webhookAgeSec })
-  }
+  const alerts = [...(webhookHealth?.alerts ?? [])]
   if (Number(inbox.retryable_errors ?? 0) > 10) {
     alerts.push({ code: 'INBOX_RETRY_BACKLOG', retryable_errors: inbox.retryable_errors })
   }
   if (Number(stale.stale_30m ?? 0) > 500) {
-    alerts.push({ code: 'STALE_PENDING_SPIKE', stale_30m: stale.stale_30m })
+    alerts.push({ code: 'PENDING_OVER_30M_HIGH', stale_30m: stale.stale_30m })
+  }
+  const { rows: criticalRows } = await pool.query(
+    `SELECT COUNT(*)::int AS critical_unresolved
+     FROM transactions c
+     LEFT JOIN device_subscriptions ds ON ds.device_id = c.device_id
+     WHERE c.status = 'completed'
+       AND c.created_at >= now() - ($1::int || ' days')::interval
+       AND COALESCE(c.order_id, '') ~ '^osm(_sp)?_'
+       AND COALESCE(c.raw_payload->>'payment_provider', '') = 'sonicpesa'
+       AND trim(coalesce(c.device_id, '')) <> ''
+       AND ds.transaction_id = c.order_id
+       AND ds.status <> 'active'
+       AND COALESCE(ds.transaction_id::text, '') NOT LIKE 'moved:%'
+       AND COALESCE(ds.transaction_id::text, '') NOT LIKE 'recovery:%'`,
+    [windowDays],
+  )
+  const criticalUnresolved = Number(criticalRows[0]?.critical_unresolved ?? 0)
+  if (criticalUnresolved > 0) {
+    alerts.push({ code: 'CRITICAL_UNRESOLVED_GT_0', count: criticalUnresolved })
   }
 
   return {
     generated_at: new Date().toISOString(),
     window_days: windowDays,
     webhook: {
-      last_webhook_at:
-        lastWebhookAt instanceof Date ? lastWebhookAt.toISOString() : lastWebhookAt || null,
-      webhook_age_sec: webhookAgeSec,
-      webhook_url_configured: Boolean(String(settings.webhook_url ?? '').trim()),
-      environment: settings.environment ?? null,
-      enabled: settings.enabled === true,
+      ...webhookHealth,
+      last_provider_webhook_at:
+        lastProviderWebhookAt instanceof Date
+          ? lastProviderWebhookAt.toISOString()
+          : lastProviderWebhookAt || null,
+      provider_webhook_age_sec: webhookAgeSec,
     },
     stale_pending: stale,
     completion_sources: sources,
@@ -122,6 +137,8 @@ export async function runSonicpesaReliabilityMetrics({ days = 30 } = {}) {
       p99: latency.p99_sec != null ? Number(latency.p99_sec) : null,
     },
     inbox,
+    reconciliation_queue: reconcileQueue,
+    critical_unresolved_completed: criticalUnresolved,
     alerts,
   }
 }

@@ -621,6 +621,15 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_webhook_order_id TEXT NOT NULL DEFAULT '';
   `)
+  await client.query(`
+    ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_provider_webhook_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_engineering_probe_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_invalid_signature_at TIMESTAMPTZ;
+  `)
 
   /** Aurax Pay (additive third gateway — ZenoPay + SonicPesa unchanged). */
   await client.query(`
@@ -1107,5 +1116,33 @@ export async function ensureBillingTables(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS sonicpesa_webhook_inbox_received_idx
     ON sonicpesa_webhook_inbox (received_at DESC);
+  `)
+  await client.query(`
+    ALTER TABLE sonicpesa_webhook_inbox ADD COLUMN IF NOT EXISTS inbox_source TEXT NOT NULL DEFAULT 'provider';
+  `)
+
+  /** Durable poll-fallback queue — survives PM2 restart when webhooks are absent. */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS sonicpesa_payment_reconciliation_queue (
+      id BIGSERIAL PRIMARY KEY,
+      order_id TEXT NOT NULL UNIQUE,
+      device_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error_redacted TEXT NOT NULL DEFAULT '',
+      priority INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      CONSTRAINT sonicpesa_payment_reconciliation_queue_status_check CHECK (
+        status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'TERMINAL_FAILED', 'TERMINAL_ABANDONED')
+      )
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS sonicpesa_payment_reconciliation_queue_pending_idx
+    ON sonicpesa_payment_reconciliation_queue (status, next_attempt_at, priority DESC)
+    WHERE status = 'PENDING';
   `)
 }

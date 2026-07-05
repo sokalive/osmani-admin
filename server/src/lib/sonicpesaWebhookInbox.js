@@ -68,6 +68,7 @@ function nextRetryAt(attemptCount) {
 export async function insertSonicpesaWebhookInbox({
   payload,
   signatureVerified = false,
+  inboxSource = 'provider',
 }) {
   const pool = requirePool()
   const body = payload && typeof payload === 'object' ? payload : {}
@@ -79,8 +80,8 @@ export async function insertSonicpesaWebhookInbox({
     const { rows } = await pool.query(
       `INSERT INTO sonicpesa_webhook_inbox (
          provider_event_id, provider_order_id, merchant_order_id,
-         payload_hash, signature_verified, payload, processing_status
-       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+         payload_hash, signature_verified, payload, processing_status, inbox_source
+       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
        RETURNING *`,
       [
         providerEventId,
@@ -90,6 +91,7 @@ export async function insertSonicpesaWebhookInbox({
         signatureVerified,
         JSON.stringify(body),
         signatureVerified ? INBOX_STATUS.VERIFIED : INBOX_STATUS.RECEIVED,
+        String(inboxSource || 'provider').slice(0, 32),
       ],
     )
     return { id: Number(rows[0].id), duplicate: false, row: rows[0] }

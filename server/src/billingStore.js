@@ -2905,14 +2905,26 @@ export async function updateSonicpesaRowFull(d) {
 }
 
 /** Record SonicPesa webhook receipt for admin diagnostics. */
-export async function recordSonicpesaWebhookReceived(body) {
+export async function recordSonicpesaWebhookReceived(body, { engineeringProbe = false } = {}) {
   const pool = requirePool()
   const o = body && typeof body === 'object' ? body : {}
   const event = String(o.event ?? o.type ?? '').trim().slice(0, 128)
   const orderId = String(o.order_id ?? o.orderId ?? o.merchant_order_id ?? '').trim().slice(0, 128)
+  if (engineeringProbe) {
+    await pool.query(
+      `UPDATE sonicpesa_settings SET
+         last_engineering_probe_at = now(),
+         last_webhook_order_id = $2,
+         updated_at = now()
+       WHERE id = 1`,
+      [event, orderId],
+    )
+    return
+  }
   await pool.query(
     `UPDATE sonicpesa_settings SET
        last_webhook_at = now(),
+       last_provider_webhook_at = now(),
        last_webhook_event = $1,
        last_webhook_order_id = $2,
        updated_at = now()

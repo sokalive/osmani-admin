@@ -296,6 +296,38 @@ runtimePublicRouter.get('/sonicpesa-reliability-metrics', requireLegacyAdminToke
   }
 })
 
+/** Dry-run classify stale SonicPesa pending orders (no mutation unless dry_run=0). */
+runtimePublicRouter.post('/sonicpesa-reconcile-stale-pending', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const limit = Number(req.query.limit ?? b.limit ?? 50)
+    const staleMinutes = Number(req.query.stale_min ?? b.stale_min ?? 30)
+    const { runStaleSonicpesaPendingReconcile } = await import('../lib/sonicpesaStalePendingReconcile.js')
+    const out = await runStaleSonicpesaPendingReconcile({ dryRun, limit, staleMinutes })
+    res.json({ ok: true, ...out, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/sonicpesa-reconcile-stale-pending]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Repair critical unresolved completed SonicPesa rows (canonical activation only). */
+runtimePublicRouter.post('/sonicpesa-repair-critical-unresolved', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '0').trim() === '1'
+    const { repairCriticalUnresolvedCompleted } = await import('../lib/sonicpesaStalePendingReconcile.js')
+    const out = await repairCriticalUnresolvedCompleted({ dryRun })
+    res.json({ ok: true, ...out, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/sonicpesa-repair-critical-unresolved]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Full read-only manual gift production investigation (exact PostgreSQL). */
 runtimePublicRouter.get('/manual-gift-production-investigation', requireLegacyAdminToken, async (_req, res) => {
   try {

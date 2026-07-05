@@ -323,7 +323,15 @@ async function runDeferredStartup({ background = false } = {}) {
       }
 
       const { startSonicpesaInboxWorker } = await import('./lib/sonicpesaWebhookWorker.js')
-      startSonicpesaInboxWorker()
+      const { startSonicpesaReconciliationQueueWorker } = await import(
+        './lib/sonicpesaPaymentReconciliationQueue.js'
+      )
+      if (!isRenderRuntime()) {
+        startSonicpesaInboxWorker()
+        startSonicpesaReconciliationQueueWorker()
+      } else {
+        console.info('[sonicpesa-workers] skipped on Render — authoritative VPS workers only')
+      }
 
       console.log('[startup] deferred init complete')
       return
