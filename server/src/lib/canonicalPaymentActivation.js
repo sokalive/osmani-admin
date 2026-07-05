@@ -68,25 +68,22 @@ async function persistActivationMeta(orderId, meta, client = null) {
   )
 }
 
-async function findSiblingEntitlementDevice(phone, payingDeviceId) {
+/** Resolve explicit transfer target for a revoked source device (moved:*), not by phone. */
+async function findSiblingEntitlementDevice(_phone, payingDeviceId) {
   const pool = requirePool()
-  const { assessPhoneSubscriptionActivation } = await import('./phoneSubscriptionGuard.js')
-  const gate = await assessPhoneSubscriptionActivation(payingDeviceId, phone)
-  if (!gate.allowed && gate.ownerDeviceId && gate.ownerDeviceId !== payingDeviceId) {
-    return gate.ownerDeviceId
-  }
-  const digits = billing.normalizePhoneDigits(phone)
-  if (!digits) return null
+  const paying = String(payingDeviceId ?? '').trim()
+  if (!paying) return null
   const { rows } = await pool.query(
-    `SELECT ds.device_id
-     FROM device_subscriptions ds
-     INNER JOIN transactions t ON t.order_id = ds.transaction_id
-     WHERE ds.status = 'active'
+    `SELECT dt.target_device_id::text AS device_id
+     FROM device_transfers dt
+     INNER JOIN device_subscriptions ds ON ds.device_id = dt.target_device_id
+     WHERE dt.status = 'completed'
+       AND dt.source_device_id = $1
+       AND LOWER(COALESCE(NULLIF(trim(ds.status::text), ''), 'active')) = 'active'
        AND ds.expires_at > now()
-       AND trim(coalesce(t.phone, '')) <> ''
-       AND ds.device_id <> $2
+     ORDER BY COALESCE(dt.completed_at, dt.created_at) DESC
      LIMIT 1`,
-    [digits, payingDeviceId],
+    [paying],
   )
   return rows[0]?.device_id ? String(rows[0].device_id) : null
 }
@@ -202,44 +199,6 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
   const phone = String(txn.phone ?? '').trim() || billing.phoneFromTransactionRow(txn)
   if (phone && !String(txn.phone ?? '').trim()) {
     await billing.backfillTransactionPhoneIfMissing(orderId, phone)
-  }
-
-  if (phone) {
-    const { assessPhoneSubscriptionActivation, markTransactionPhoneActivationConflict } =
-      await import('./phoneSubscriptionGuard.js')
-    const gate = await assessPhoneSubscriptionActivation(deviceId, phone)
-    if (!gate.allowed) {
-      await markTransactionPhoneActivationConflict(orderId, {
-        ownerDeviceId: gate.ownerDeviceId,
-        payingDeviceId: deviceId,
-      })
-      const meta = buildActivationMeta({
-        activation_state: ACTIVATION_STATE.PHONE_CONFLICT,
-        phone_conflict: true,
-        entitlement_active: Boolean(gate.ownerDeviceId),
-        entitlement_device_id_redacted: gate.ownerDeviceId ? redactId(gate.ownerDeviceId) : null,
-        owner_device_id_redacted: gate.ownerDeviceId ? redactId(gate.ownerDeviceId) : null,
-        user_action_required: true,
-        completion_source: source,
-      })
-      await persistActivationMeta(orderId, meta, client)
-      return {
-        ...meta,
-        activated: false,
-        skipped: true,
-        reason: 'PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION',
-        code: 'PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION',
-        ownerDeviceId: gate.ownerDeviceId,
-        existing_device_id: gate.existing_device_id ?? gate.ownerDeviceId,
-        existing_expiry: gate.existing_expiry ?? null,
-        remaining_days: gate.remaining_days ?? null,
-        existing_package: gate.existing_package ?? null,
-        message: gate.message,
-        message_sw: gate.message_sw ?? gate.message,
-        deviceId,
-        orderId,
-      }
-    }
   }
 
   const fpRaw = String(raw.device_fingerprint ?? raw.fingerprint ?? raw.deviceFingerprint ?? '').trim()

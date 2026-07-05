@@ -1,6 +1,7 @@
 /**
- * One phone number → one active paid subscription on one device at a time.
- * Same phone + same device may renew/stack. Cross-device activation is blocked.
+ * Payment-bound entitlement: each device activates from its own trusted order record.
+ * Same phone on different devices may each hold independent active subscriptions.
+ * Explicit transfer flows (moved:* / device_transfers) remain separate.
  */
 import {
   getTransactionByOrderId,
@@ -223,7 +224,14 @@ export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInp
 
   const otherActive = activeDevices.filter((d) => d.device_id !== paying)
   if (otherActive.length > 0) {
-    return buildConflictAssessment(otherActive[0], activeDevices)
+    return {
+      allowed: true,
+      reason: 'independent_device_payment',
+      ownerDeviceId: paying,
+      activeDevices,
+      message: null,
+      other_active_device_count: otherActive.length,
+    }
   }
 
   return {
@@ -333,7 +341,7 @@ export async function auditPhoneSubscriptionOwnership(phoneInput, opts = {}) {
 
   return {
     phone_normalized: digits || null,
-    policy: 'one_active_subscription_per_phone_per_device',
+    policy: 'payment_bound_to_originating_device',
     active_devices: activeDevices,
     multiple_active: activeDevices.length > 1,
     conflict_transactions: conflictTransactions,
