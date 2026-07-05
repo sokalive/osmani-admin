@@ -637,11 +637,16 @@ export async function upsertSubscriptionAfterPayment(phone, planId, expiresAt) {
 /** Idempotent: duplicate webhooks reuse same order_id → skip writes. */
 export async function deviceSubscriptionOrderAlreadyApplied(orderId, client = null) {
   const q = dbQuery(client)
+  const oid = String(orderId).trim()
   const { rows } = await q(
-    `SELECT 1 FROM device_subscriptions WHERE transaction_id = $1 LIMIT 1`,
-    [String(orderId).trim()],
+    `SELECT status, expires_at FROM device_subscriptions WHERE transaction_id = $1 LIMIT 1`,
+    [oid],
   )
-  return rows.length > 0
+  const r = rows[0]
+  if (!r) return false
+  if (String(r.status ?? '') !== 'active') return false
+  const exp = r.expires_at instanceof Date ? r.expires_at : new Date(String(r.expires_at ?? ''))
+  return Number.isFinite(exp.getTime()) && exp.getTime() > Date.now()
 }
 
 export async function getDeviceSubscriptionByDeviceId(deviceId) {

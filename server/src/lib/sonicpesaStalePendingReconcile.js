@@ -204,6 +204,14 @@ export async function repairCriticalUnresolvedCompleted({ dryRun = false } = {})
       expires_at: r.expires_at,
     }
     if (!dryRun && txn) {
+      const pool = getPool()
+      if (pool && r.order_id) {
+        await pool.query(
+          `UPDATE device_subscriptions SET status = 'active', updated_at = now()
+           WHERE transaction_id = $1 AND status <> 'active' AND expires_at > now()`,
+          [String(r.order_id)],
+        )
+      }
       const act = await activateFromCompletedTxn(txn, { source: COMPLETION_SOURCE.ADMIN_RECOVERY })
       investigation.repair = {
         activation_state: act.activation_state ?? act.reason,
