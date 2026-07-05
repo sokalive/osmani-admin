@@ -1,0 +1,64 @@
+{
+  "contract_version": "2026-07-05",
+  "backend_commit_target": "pending",
+  "app_commit_reference": "64c798f",
+  "transfer_modes": {
+    "confirmation": {
+      "semantics": "Target redeems code via POST /api/transfer/confirm → entitlement NOT moved until source approves via POST /api/transfer/respond with decision=approve",
+      "source_popup": "transfer_confirmation_required on source device SSE",
+      "target_state": "pending until source approves"
+    },
+    "manual": {
+      "semantics": "Target redeems code via POST /api/transfer/confirm → immediate atomic transfer (no source KUBALI/KATAA)",
+      "source_popup": "transfer_confirm_revoked after completion",
+      "target_state": "active immediately after confirm"
+    }
+  },
+  "endpoints": {
+    "POST /api/transfer/request": {
+      "auth": "public",
+      "body": { "source_device_id": "string", "payment_phone": "string", "target_fingerprint": "optional" },
+      "success": { "ok": true, "code": "TR-XXXXXX", "expires_at": "iso", "transfer_mode": "confirmation|manual" },
+      "errors": { "429": "cooldown_active + retryAfterSec", "403": "TRANSFER_DAILY_LIMIT|TRANSFER_WEEKLY_LIMIT" }
+    },
+    "POST /api/transfer/confirm": {
+      "auth": "public",
+      "body": { "code": "string", "target_device_id": "string", "target_fingerprint": "optional" },
+      "success_confirmation_mode": { "ok": true, "pending_confirmation": true, "requires_source_approval": true },
+      "success_manual_mode": { "ok": true, "transferred": true, "target_active_after": true }
+    },
+    "POST /api/transfer/respond": {
+      "auth": "public",
+      "body": { "code": "string", "source_device_id": "string", "decision": "approve|reject" },
+      "success_approve": { "ok": true, "transferred": true },
+      "success_reject": { "ok": true, "rejected": true }
+    },
+    "GET /api/transfer/status": {
+      "auth": "public",
+      "query": { "code": "optional", "device_id": "optional" },
+      "success": { "ok": true, "status": "active|pending_confirmation|used|...", "requires_source_approval": "boolean" }
+    },
+    "POST /api/transfer/admin-force-phone": {
+      "auth": "admin",
+      "body": { "payment_phone": "string", "target_device_id": "string", "security_pin": "string", "idempotency_key": "optional" },
+      "bypasses": ["transfer_mode", "daily_limit", "weekly_limit", "cooldown", "source_confirmation"],
+      "phone_lookup": ["completed transactions", "device_phone_registry", "manual grant phones", "install siblings"]
+    }
+  },
+  "sse_events": {
+    "transfer_confirmation_required": { "target_device": "source only", "payload": ["code", "transfer_id", "target_device_id"] },
+    "transfer_completed": { "target_device": "both", "payload": ["source_device_id", "target_device_id"] },
+    "subscription_revoked": { "target_device": "source", "after": "transfer commit" },
+    "device_subscription update reason": ["transfer_confirmation_required", "transfer_confirm_revoked", "transfer_confirm_active", "admin_force_transfer_revoked"]
+  },
+  "verify_after_transfer": {
+    "old_device": "POST /api/subscription/verify → active:false (unless free_mode)",
+    "new_device": "POST /api/subscription/verify → active:true, playbackAllowed:true when entitled"
+  },
+  "expiry_rule": "target_expires_at = max(source_expires_at, target_existing_active_expires_at) — never shrink longer target entitlement",
+  "unique_devices_dashboard": {
+    "source": "canonicalUniqueDevices.js",
+    "sql": "DISTINCT device_id from app_installs UNION client_api_telemetry minus synthetic prefixes",
+    "excludes": ["cap_*", "verify_recovery_*", "benchmark_*", "probe_*"]
+  }
+}

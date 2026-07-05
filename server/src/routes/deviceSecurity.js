@@ -13,6 +13,16 @@ import {
   writePhoneGateEnabled,
 } from '../lib/phoneGateSettings.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+import {
+  verifyAdminSensitiveActionPassword,
+  sensitiveActionPasswordFromBody,
+} from '../lib/adminSensitiveActionPassword.js'
+import {
+  commitSubscriptionTransfer,
+  computeTransferTargetExpiry,
+  publishTransferConfirmationRequired,
+  publishTransferRealtime,
+} from '../lib/transferSubscriptionMove.js'
 
 export const deviceSecurityRouter = Router()
 
@@ -83,6 +93,12 @@ async function ensureSecurityTables(pool) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       completed_at TIMESTAMPTZ
     );
+  `)
+  await pool.query(`ALTER TABLE device_transfers ADD COLUMN IF NOT EXISTS idempotency_key TEXT`)
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS device_transfers_idempotency_key_unique
+    ON device_transfers (idempotency_key)
+    WHERE idempotency_key IS NOT NULL AND trim(idempotency_key) <> ''
   `)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS security_events (
@@ -302,7 +318,7 @@ async function cleanupSecurity(pool) {
      END
      FROM transfer_codes tc
      WHERE dt.code_id = tc.id
-       AND dt.status IN ('requested', 'awaiting_target_submission')
+       AND dt.status IN ('requested', 'awaiting_target_submission', 'pending_confirmation')
        AND tc.status IN ('expired', 'revoked')`,
   )
 }
@@ -357,60 +373,67 @@ async function checkTransferLimits(pool, sourceDeviceId, cooldownMinutes, dailyL
 }
 
 /** Shared admin force transfer by device IDs. Emits SSE + subscription bus after commit. */
-export async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDeviceId, targetFpHash, actor, auditExtra }) {
+export async function executeAdminForceTransfer(pool, {
+  sourceDeviceId,
+  targetDeviceId,
+  targetFpHash,
+  actor,
+  auditExtra,
+  idempotencyKey = null,
+}) {
   const src = text(sourceDeviceId, 128)
   const tgt = text(targetDeviceId, 128)
   if (!src || !tgt) return { ok: false, status: 400, error: 'source_device_id and target_device_id are required' }
   if (src === tgt) return { ok: false, status: 400, error: 'Source and target device must differ' }
 
+  const idem = text(idempotencyKey, 128)
+  if (idem) {
+    const prior = await pool.query(
+      `SELECT source_device_id, target_device_id, status
+       FROM device_transfers
+       WHERE idempotency_key = $1 AND status = 'completed'
+       LIMIT 1`,
+      [idem],
+    )
+    if (prior.rows[0]) {
+      return {
+        ok: true,
+        idempotent: true,
+        source_device_id: String(prior.rows[0].source_device_id),
+        target_device_id: String(prior.rows[0].target_device_id),
+      }
+    }
+  }
+
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    const sourceSub = await client.query(
-      `SELECT * FROM device_subscriptions WHERE device_id = $1 FOR UPDATE`,
-      [src],
-    )
-    const sub = sourceSub.rows[0]
-    if (!sub) {
-      await client.query('ROLLBACK')
-      return { ok: false, status: 404, error: 'Source subscription not found' }
-    }
-    const validSubRes = await client.query(
-      `SELECT (status = 'active' AND expires_at > now()) AS active FROM device_subscriptions WHERE device_id = $1`,
-      [src],
-    )
-    if (!validSubRes.rows[0]?.active) {
-      await client.query('ROLLBACK')
-      return { ok: false, status: 400, error: 'Source subscription expired' }
-    }
     const code = randomTransferCode()
+    const move = await commitSubscriptionTransfer(client, {
+      sourceDeviceId: src,
+      targetDeviceId: tgt,
+      targetFpHash,
+      code,
+      transactionPrefix: 'force',
+      transferReason: 'admin_force',
+      notifyReason: 'admin_force_transfer',
+      userInitiatedTransfer: true,
+    })
+    if (!move.ok) {
+      await client.query('ROLLBACK')
+      return move
+    }
     await client.query(
       `INSERT INTO transfer_codes
-       (code, source_device_id, target_device_id, target_fingerprint_hash, status, expires_at, created_by, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'used', now() + interval '10 minutes', 'admin_force', now(), now())`,
+       (code, source_device_id, target_device_id, target_fingerprint_hash, status, expires_at, created_by, created_at, updated_at, used_at)
+       VALUES ($1, $2, $3, $4, 'used', now() + interval '10 minutes', 'admin_force', now(), now(), now())`,
       [code, src, tgt, targetFpHash],
     )
     await client.query(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2, $3, $4, now(), $5)
-       ON CONFLICT (device_id) DO UPDATE SET
-         status = 'active',
-         expires_at = EXCLUDED.expires_at,
-         started_at = COALESCE(device_subscriptions.started_at, EXCLUDED.started_at),
-         transaction_id = EXCLUDED.transaction_id,
-         updated_at = now(),
-         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
-      [tgt, sub.expires_at, sub.started_at ?? new Date(), `force:${code}`, targetFpHash],
-    )
-    await client.query(
-      `UPDATE device_subscriptions SET status = 'pending', updated_at = now() WHERE device_id = $1`,
-      [src],
-    )
-    await client.query(
       `INSERT INTO device_transfers
-       (code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at, completed_at)
-       VALUES ($1, $2, $3, $4, $5, 'completed', 'admin_force', 'admin', now(), now())`,
-      [code, src, tgt, sub.fingerprint_hash || null, targetFpHash],
+       (code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at, completed_at, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, 'completed', 'admin_force', 'admin', now(), now(), $6)`,
+      [code, src, tgt, move.sourceAfter?.fingerprint_hash || null, targetFpHash, idem || null],
     )
     const extra = auditExtra ? String(auditExtra).slice(0, 500) : ''
     await logSecurityEvent(client, {
@@ -418,38 +441,21 @@ export async function executeAdminForceTransfer(pool, { sourceDeviceId, targetDe
       eventType: 'Force transfer',
       status: 'completed',
       detail: `Force transferred ${src} -> ${tgt}${extra ? ` · ${extra}` : ''}`,
-      metadata: { source_device_id: src, target_device_id: tgt },
+      metadata: { source_device_id: src, target_device_id: tgt, idempotency_key: idem || null },
     })
     await client.query('COMMIT')
-    notifySubscriptionTransferred({
+    publishTransferRealtime({
       sourceDeviceId: src,
       targetDeviceId: tgt,
-      sourceRow: toAccessCacheRow(
-        { device_id: src, status: 'pending', expires_at: sub.expires_at, active_now: false },
-        src,
-      ),
-      targetRow: toAccessCacheRow(
-        {
-          device_id: tgt,
-          status: 'active',
-          expires_at: sub.expires_at,
-          active_now: true,
-          transaction_id: `force:${code}`,
-        },
-        tgt,
-      ),
+      sourceAfter: move.sourceAfter,
+      targetAfter: move.targetAfter,
       reason: 'admin_force_transfer',
       userInitiatedTransfer: true,
+      syncReason: 'admin_force',
     })
-    emitSync('transfer_completed', {
-      source_device_id: src,
-      target_device_id: tgt,
-      reason: 'admin_force',
-    })
-    emitSync('subscription_revoked', { device_id: src, reason: 'admin_force' })
     emitSync('transfer_codes_changed', { action: 'admin_force', source_device_id: src, target_device_id: tgt })
     emitSync('security_logs_changed', { action: 'admin_force', source_device_id: src, target_device_id: tgt })
-    return { ok: true, source_device_id: src, target_device_id: tgt }
+    return { ok: true, source_device_id: src, target_device_id: tgt, expires_at: move.expiresAt }
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
@@ -486,7 +492,7 @@ deviceSecurityRouter.get('/settings/device-control', async (_req, res) => {
       phone_gate_enabled: live.phoneGateEnabled,
       pending: pendingRows.rows
         .filter((r) =>
-          ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked', 'expired'].includes(
+          ['requested', 'awaiting_target_submission', 'pending_confirmation', 'completed', 'rejected', 'revoked', 'expired'].includes(
             String(r.status),
           ),
         )
@@ -593,7 +599,7 @@ deviceSecurityRouter.put('/settings/device-control', async (req, res) => {
       phone_gate_enabled: live.phoneGateEnabled,
       pending: pendingRows.rows
         .filter((r) =>
-          ['requested', 'awaiting_target_submission', 'completed', 'rejected', 'revoked', 'expired'].includes(
+          ['requested', 'awaiting_target_submission', 'pending_confirmation', 'completed', 'rejected', 'revoked', 'expired'].includes(
             String(r.status),
           ),
         )
@@ -1114,7 +1120,7 @@ deviceSecurityRouter.put('/transfer-codes/:id', async (req, res) => {
                ELSE 'code_expired'
              END
          WHERE code_id = $1::uuid
-           AND status IN ('requested', 'awaiting_target_submission')`,
+           AND status IN ('requested', 'awaiting_target_submission', 'pending_confirmation')`,
         [id, status],
       )
     }
@@ -1439,33 +1445,88 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
       await client.query('ROLLBACK')
       return res.status(400).json({ error: 'Source subscription expired' })
     }
-    const upsertTarget = await client.query(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2, $3, $4, now(), $5)
-       ON CONFLICT (device_id) DO UPDATE SET
-         status = 'active',
-         expires_at = EXCLUDED.expires_at,
-         started_at = COALESCE(device_subscriptions.started_at, EXCLUDED.started_at),
-         transaction_id = EXCLUDED.transaction_id,
-         updated_at = now(),
-         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)
-       RETURNING device_id, status, expires_at, started_at, transaction_id`,
-      [targetDeviceId, sub.expires_at, sub.started_at ?? new Date(), `transfer:${code}`, targetFpHash],
-    )
-    if (!upsertTarget.rows[0]) {
-      await client.query('ROLLBACK')
-      return res.status(500).json({ error: 'Target subscription activation failed' })
+
+    const livePolicy = await readTransferSettingsLive(client)
+
+    if (livePolicy.transferMode === 'confirmation') {
+      const pendingCode = await client.query(
+        `UPDATE transfer_codes
+         SET status = 'pending_confirmation',
+             target_device_id = $2,
+             target_fingerprint_hash = COALESCE($3, target_fingerprint_hash),
+             updated_at = now()
+         WHERE id = $1
+         RETURNING id, code, expires_at`,
+        [codeRow.id, targetDeviceId, targetFpHash],
+      )
+      if (!pendingCode.rows[0]) {
+        await client.query('ROLLBACK')
+        return res.status(500).json({ error: 'Transfer code update failed' })
+      }
+      const transferRow = await client.query(
+        `UPDATE device_transfers
+         SET status = 'pending_confirmation',
+             target_device_id = $2,
+             target_fingerprint_hash = COALESCE($3, target_fingerprint_hash),
+             reason = 'awaiting_source_approval'
+         WHERE code_id = $1
+         RETURNING id`,
+        [codeRow.id, targetDeviceId, targetFpHash],
+      )
+      if ((transferRow.rowCount || 0) === 0) {
+        await client.query(
+          `INSERT INTO device_transfers
+           (code_id, code, source_device_id, target_device_id, source_fingerprint_hash, target_fingerprint_hash, status, reason, requested_by, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'pending_confirmation', 'awaiting_source_approval', 'device', now())`,
+          [codeRow.id, code, sourceDeviceId, targetDeviceId, sub.fingerprint_hash || null, targetFpHash],
+        )
+      }
+      await logSecurityEvent(client, {
+        actor: targetDeviceId,
+        eventType: 'Transfer confirmation pending',
+        status: 'pending',
+        detail: `Awaiting source approval for ${sourceDeviceId}`,
+        metadata: { code, source_device_id: sourceDeviceId, target_device_id: targetDeviceId },
+      })
+      await client.query('COMMIT')
+      const transferId = transferRow.rows[0]?.id ? String(transferRow.rows[0].id) : String(codeRow.id)
+      publishTransferConfirmationRequired({
+        sourceDeviceId,
+        targetDeviceId,
+        code,
+        transferId,
+        expiresAt: codeRow.expires_at,
+      })
+      emitSync('security_logs_changed', {
+        action: 'transfer_pending_confirmation',
+        source_device_id: sourceDeviceId,
+        target_device_id: targetDeviceId,
+      })
+      return res.json({
+        ok: true,
+        pending_confirmation: true,
+        requires_source_approval: true,
+        transfer_mode: 'confirmation',
+        code,
+        source_device_id: sourceDeviceId,
+        target_device_id: targetDeviceId,
+        transfer_id: transferId,
+      })
     }
-    const revokeSource = await client.query(
-      `UPDATE device_subscriptions
-       SET status = 'pending', updated_at = now()
-       WHERE device_id = $1
-       RETURNING device_id, status, expires_at`,
-      [sourceDeviceId],
-    )
-    if (!revokeSource.rows[0]) {
+
+    const move = await commitSubscriptionTransfer(client, {
+      sourceDeviceId,
+      targetDeviceId,
+      targetFpHash,
+      code,
+      transactionPrefix: 'transfer',
+      transferReason: 'confirmed_by_code',
+      notifyReason: 'transfer_confirm',
+      userInitiatedTransfer: true,
+    })
+    if (!move.ok) {
       await client.query('ROLLBACK')
-      return res.status(500).json({ error: 'Source subscription revoke failed' })
+      return res.status(move.status || 500).json({ error: move.error })
     }
     const markCodeUsed = await client.query(
       `UPDATE transfer_codes
@@ -1500,24 +1561,6 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
         [codeRow.id, code, sourceDeviceId, targetDeviceId, sub.fingerprint_hash || null, targetFpHash],
       )
     }
-    const postState = await client.query(
-      `SELECT device_id, status, expires_at, (status = 'active' AND expires_at > now()) AS active_now
-       FROM device_subscriptions
-       WHERE device_id = ANY($1::text[])`,
-      [[sourceDeviceId, targetDeviceId]],
-    )
-    const sourceAfter = postState.rows.find((r) => String(r.device_id) === sourceDeviceId)
-    const targetAfter = postState.rows.find((r) => String(r.device_id) === targetDeviceId)
-    const sourceActiveNow = sourceAfter?.active_now === true
-    const targetActiveNow = targetAfter?.active_now === true
-    if (!targetAfter || !targetActiveNow) {
-      await client.query('ROLLBACK')
-      return res.status(500).json({ error: 'Transfer verification failed: target is not active after move' })
-    }
-    if (!sourceAfter || sourceActiveNow) {
-      await client.query('ROLLBACK')
-      return res.status(500).json({ error: 'Transfer verification failed: source still active after revoke' })
-    }
     await logSecurityEvent(client, {
       actor: sourceDeviceId,
       eventType: 'Transfer confirmation',
@@ -1527,42 +1570,28 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
         code,
         source_device_id: sourceDeviceId,
         target_device_id: targetDeviceId,
-        source_active_after: sourceActiveNow,
-        target_active_after: targetActiveNow,
+        transfer_mode: 'manual',
       },
     })
     await client.query('COMMIT')
-    notifySubscriptionTransferred({
+    publishTransferRealtime({
       sourceDeviceId,
       targetDeviceId,
-      sourceRow: sourceAfter,
-      targetRow: targetAfter,
+      sourceAfter: move.sourceAfter,
+      targetAfter: move.targetAfter,
       reason: 'transfer_confirm',
       userInitiatedTransfer: true,
-    })
-    emitSync('transfer_completed', {
-      source_device_id: sourceDeviceId,
-      target_device_id: targetDeviceId,
-      reason: 'confirmed_by_code',
-    })
-    emitSync('subscription_revoked', {
-      device_id: sourceDeviceId,
-      reason: 'transfer_confirmed',
-    })
-    emitSync('transfer_codes_changed', { action: 'confirm', code, source_device_id: sourceDeviceId, target_device_id: targetDeviceId })
-    emitSync('security_logs_changed', {
-      action: 'transfer_confirm',
-      source_device_id: sourceDeviceId,
-      target_device_id: targetDeviceId,
+      syncReason: 'confirmed_by_code',
     })
     return res.json({
       ok: true,
       source_device_id: sourceDeviceId,
       target_device_id: targetDeviceId,
       transferred: true,
+      transfer_mode: 'manual',
       source_active_after: false,
       target_active_after: true,
-      expires_at: targetAfter.expires_at instanceof Date ? targetAfter.expires_at.toISOString() : String(targetAfter.expires_at),
+      expires_at: move.expiresAt instanceof Date ? move.expiresAt.toISOString() : String(move.expiresAt),
     })
   } catch (e) {
     await client.query('ROLLBACK')
@@ -1573,12 +1602,194 @@ deviceSecurityRouter.post('/transfer/confirm', async (req, res) => {
   }
 })
 
+deviceSecurityRouter.post('/transfer/respond', async (req, res) => {
+  const pool = getPool()
+  if (!pool) return res.status(503).json({ error: 'Database not configured' })
+  await ensureSecurityTables(pool)
+  const b = req.body && typeof req.body === 'object' ? req.body : {}
+  const code = text(b.code, 32).toUpperCase()
+  const sourceDeviceId = text(b.source_device_id ?? b.device_id, 128)
+  const decision = String(b.decision ?? b.action ?? '').trim().toLowerCase()
+  if (!code || !sourceDeviceId) {
+    return res.status(400).json({ error: 'code and source_device_id are required' })
+  }
+  if (!['approve', 'reject', 'accepted', 'declined'].includes(decision)) {
+    return res.status(400).json({ error: 'decision must be approve or reject' })
+  }
+  const approved = decision === 'approve' || decision === 'accepted'
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const codeRowRes = await client.query(
+      `SELECT * FROM transfer_codes WHERE code = $1 FOR UPDATE`,
+      [code],
+    )
+    const codeRow = codeRowRes.rows[0]
+    if (!codeRow) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Invalid transfer code' })
+    }
+    if (String(codeRow.source_device_id) !== sourceDeviceId) {
+      await client.query('ROLLBACK')
+      return res.status(403).json({ error: 'Source device does not match transfer code' })
+    }
+    if (codeRow.status === 'used') {
+      await client.query('ROLLBACK')
+      return res.json({ ok: true, already_completed: true, transferred: true })
+    }
+    if (codeRow.status === 'revoked' || codeRow.status === 'expired') {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Transfer code is no longer valid' })
+    }
+    if (codeRow.status !== 'pending_confirmation') {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Transfer is not awaiting source approval' })
+    }
+    const targetDeviceId = String(codeRow.target_device_id || '').trim()
+    if (!targetDeviceId) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Transfer missing target device' })
+    }
+    if (!approved) {
+      await client.query(
+        `UPDATE transfer_codes SET status = 'revoked', revoked_at = now(), updated_at = now() WHERE id = $1`,
+        [codeRow.id],
+      )
+      await client.query(
+        `UPDATE device_transfers SET status = 'rejected', reason = 'source_rejected', completed_at = now()
+         WHERE code_id = $1`,
+        [codeRow.id],
+      )
+      await logSecurityEvent(client, {
+        actor: sourceDeviceId,
+        eventType: 'Transfer rejected',
+        status: 'completed',
+        detail: `Source rejected transfer to ${targetDeviceId}`,
+        metadata: { code, source_device_id: sourceDeviceId, target_device_id: targetDeviceId },
+      })
+      await client.query('COMMIT')
+      emitSync('transfer_rejected', { source_device_id: sourceDeviceId, target_device_id: targetDeviceId, code })
+      emitSync('security_logs_changed', { action: 'transfer_rejected', source_device_id: sourceDeviceId })
+      return res.json({ ok: true, rejected: true, transferred: false })
+    }
+    const move = await commitSubscriptionTransfer(client, {
+      sourceDeviceId,
+      targetDeviceId,
+      targetFpHash: codeRow.target_fingerprint_hash,
+      code,
+      transactionPrefix: 'transfer',
+      transferReason: 'source_approved',
+      notifyReason: 'transfer_confirm',
+      userInitiatedTransfer: true,
+    })
+    if (!move.ok) {
+      await client.query('ROLLBACK')
+      return res.status(move.status || 500).json({ error: move.error })
+    }
+    await client.query(
+      `UPDATE transfer_codes SET status = 'used', used_at = now(), updated_at = now() WHERE id = $1`,
+      [codeRow.id],
+    )
+    await client.query(
+      `UPDATE device_transfers SET status = 'completed', completed_at = now(), reason = 'source_approved'
+       WHERE code_id = $1`,
+      [codeRow.id],
+    )
+    await logSecurityEvent(client, {
+      actor: sourceDeviceId,
+      eventType: 'Transfer approved',
+      status: 'completed',
+      detail: `Source approved transfer to ${targetDeviceId}`,
+      metadata: { code, source_device_id: sourceDeviceId, target_device_id: targetDeviceId },
+    })
+    await client.query('COMMIT')
+    publishTransferRealtime({
+      sourceDeviceId,
+      targetDeviceId,
+      sourceAfter: move.sourceAfter,
+      targetAfter: move.targetAfter,
+      reason: 'transfer_confirm',
+      userInitiatedTransfer: true,
+      syncReason: 'source_approved',
+    })
+    return res.json({
+      ok: true,
+      transferred: true,
+      source_device_id: sourceDeviceId,
+      target_device_id: targetDeviceId,
+      expires_at: move.expiresAt instanceof Date ? move.expiresAt.toISOString() : String(move.expiresAt),
+    })
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    console.error('[transfer/respond]', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  } finally {
+    client.release()
+  }
+})
+
+deviceSecurityRouter.get('/transfer/status', async (req, res) => {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ error: 'Database not configured' })
+    await ensureSecurityTables(pool)
+    const code = text(req.query.code, 32).toUpperCase()
+    const deviceId = text(req.query.device_id, 128)
+    if (!code && !deviceId) return res.status(400).json({ error: 'code or device_id required' })
+    let row
+    if (code) {
+      const { rows } = await pool.query(
+        `SELECT tc.*, dt.status AS transfer_status, dt.completed_at
+         FROM transfer_codes tc
+         LEFT JOIN device_transfers dt ON dt.code_id = tc.id
+         WHERE tc.code = $1
+         ORDER BY dt.created_at DESC NULLS LAST
+         LIMIT 1`,
+        [code],
+      )
+      row = rows[0]
+    } else {
+      const { rows } = await pool.query(
+        `SELECT tc.*, dt.status AS transfer_status, dt.completed_at
+         FROM transfer_codes tc
+         LEFT JOIN device_transfers dt ON dt.code_id = tc.id
+         WHERE tc.source_device_id = $1 OR tc.target_device_id = $1
+         ORDER BY tc.created_at DESC
+         LIMIT 1`,
+        [deviceId],
+      )
+      row = rows[0]
+    }
+    if (!row) return res.status(404).json({ error: 'Transfer not found' })
+    const livePolicy = await readTransferSettingsLive(pool)
+    return res.json({
+      ok: true,
+      code: String(row.code),
+      status: String(row.status),
+      transfer_status: String(row.transfer_status || row.status),
+      source_device_id: String(row.source_device_id || ''),
+      target_device_id: String(row.target_device_id || ''),
+      expires_at: row.expires_at,
+      transfer_mode: livePolicy.transferMode,
+      requires_source_approval: row.status === 'pending_confirmation',
+      completed_at: row.completed_at ?? row.used_at ?? null,
+    })
+  } catch (e) {
+    console.error('[transfer/status]', e)
+    return res.status(500).json({ error: String(e.message || e) })
+  }
+})
+
 deviceSecurityRouter.post('/transfer/admin-force', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
     await ensureSecurityTables(pool)
     const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const pin = sensitiveActionPasswordFromBody(req)
+    if (!verifyAdminSensitiveActionPassword(pin)) {
+      return res.status(403).json({ error: 'Invalid security PIN' })
+    }
     const sourceDeviceId = text(b.source_device_id, 128)
     const targetDeviceId = text(b.target_device_id, 128)
     const targetFpHash = fingerprintHash(b.target_fingerprint || b.fingerprint)
@@ -1588,6 +1799,7 @@ deviceSecurityRouter.post('/transfer/admin-force', requireAdminPanelAccess, asyn
       targetFpHash,
       actor: adminActor(req),
       auditExtra: '',
+      idempotencyKey: text(b.idempotency_key ?? b.idempotencyKey, 128),
     })
     if (!result.ok) return res.status(result.status).json({ error: result.error })
     return res.json({ ok: true, source_device_id: result.source_device_id, target_device_id: result.target_device_id })
@@ -1603,6 +1815,10 @@ deviceSecurityRouter.post('/transfer/admin-force-phone', requireAdminPanelAccess
     if (!pool) return res.status(503).json({ error: 'Database not configured' })
     await ensureSecurityTables(pool)
     const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const pin = sensitiveActionPasswordFromBody(req)
+    if (!verifyAdminSensitiveActionPassword(pin)) {
+      return res.status(403).json({ error: 'Invalid security PIN' })
+    }
     const paymentPhone = text(b.payment_phone ?? b.phone, 40)
     const targetDeviceId = text(b.target_device_id ?? b.new_device_id, 128)
     if (!paymentPhone || !targetDeviceId) {
@@ -1621,6 +1837,7 @@ deviceSecurityRouter.post('/transfer/admin-force-phone', requireAdminPanelAccess
       targetFpHash,
       actor: adminActor(req),
       auditExtra,
+      idempotencyKey: text(b.idempotency_key ?? b.idempotencyKey, 128),
     })
     if (!result.ok) return res.status(result.status).json({ error: result.error })
     return res.json({

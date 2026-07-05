@@ -20,6 +20,7 @@ import {
   sumChannelViewers,
 } from '../lib/livePresenceStats.js'
 import { queryMigrationDevicePopulationSummary } from '../lib/appVersionMigration.js'
+import { queryCanonicalUniqueDeviceCount } from '../lib/canonicalUniqueDevices.js'
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
 import { readChannelIdNameMap } from '../store.js'
 
@@ -101,6 +102,7 @@ async function queryOverviewStats(pool) {
     revenueTodayRaw,
     totalInstallsRaw,
     migrationSummary,
+    canonicalUnique,
   ] = await Promise.all([
       queryLivePresenceTotals(pool).catch((e) => {
         console.error('[analytics] overview.presenceTotals:', e)
@@ -141,11 +143,17 @@ async function queryOverviewStats(pool) {
         console.error('[analytics] overview.totalUniqueDevices:', e)
         return { ok: false }
       }),
+      queryCanonicalUniqueDeviceCount().catch((e) => {
+        console.error('[analytics] overview.canonicalUniqueDevices:', e)
+        return { ok: false, totalUniqueDevices: 0 }
+      }),
     ])
   const totalUniqueDevices =
-    migrationSummary?.ok && migrationSummary.summary
-      ? numOrZero(migrationSummary.summary.totalUniqueDevices)
-      : 0
+    canonicalUnique?.ok && canonicalUnique.totalUniqueDevices != null
+      ? numOrZero(canonicalUnique.totalUniqueDevices)
+      : migrationSummary?.ok && migrationSummary.summary
+        ? numOrZero(migrationSummary.summary.totalUniqueDevices)
+        : 0
   const onlineNow = presenceTotals?.onlineNow ?? 0
   const watchingNow = presenceTotals?.watchingNow ?? 0
   const idleNow = presenceTotals?.idleNow ?? 0

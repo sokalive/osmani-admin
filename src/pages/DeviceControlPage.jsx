@@ -87,7 +87,8 @@ function DeviceControlPage() {
   const [phoneGateBusy, setPhoneGateBusy] = useState(false)
   const [forcePaymentPhone, setForcePaymentPhone] = useState('')
   const [forceNewDeviceId, setForceNewDeviceId] = useState('')
-  const [forceSubmitting, setForceSubmitting] = useState(false)
+  const [forcePinOpen, setForcePinOpen] = useState(false)
+  const [forcePinErr, setForcePinErr] = useState('')
 
   const [pendingSel, setPendingSel] = useState(() => new Set())
   const [pendingBulkPin, setPendingBulkPin] = useState(null)
@@ -268,30 +269,37 @@ function DeviceControlPage() {
         showToast('error', 'Enter payment phone and new device ID.')
         return
       }
-      setForceSubmitting(true)
-      try {
-        await postAdminForceTransferPhone({
-          payment_phone: phone,
-          target_device_id: deviceId,
-        })
-        await trackRuntimeDevice(deviceId)
-        setCfg((c) =>
-          appendLog(
-            `Force transfer completed - ${phone.replace(/\s+/g, '')} -> ${deviceId.slice(0, 32)}${deviceId.length > 32 ? '...' : ''}`,
-          )(c),
-        )
-        setForcePaymentPhone('')
-        setForceNewDeviceId('')
-        await loadCfg()
-        showFlash('success', 'Force transfer completed.')
-      } catch (err) {
-        showToast('error', err?.message || 'Force transfer failed')
-      } finally {
-        setForceSubmitting(false)
-      }
+      setForcePinErr('')
+      setForcePinOpen(true)
     },
-    [appendLog, forceNewDeviceId, forcePaymentPhone, loadCfg, showToast, trackRuntimeDevice],
+    [forceNewDeviceId, forcePaymentPhone, showToast],
   )
+
+  async function submitForceTransferPin(securityPin) {
+    const phone = forcePaymentPhone.trim()
+    const deviceId = forceNewDeviceId.trim()
+    setForceSubmitting(true)
+    try {
+      await postAdminForceTransferPhone({
+        payment_phone: phone,
+        target_device_id: deviceId,
+        security_pin: securityPin,
+        idempotency_key: `force_${Date.now()}_${deviceId.slice(0, 24)}`,
+      })
+      await trackRuntimeDevice(deviceId)
+      setForcePaymentPhone('')
+      setForceNewDeviceId('')
+      setForcePinOpen(false)
+      await loadCfg()
+      showFlash('success', 'Force transfer completed.')
+    } catch (err) {
+      const msg = err?.message || 'Force transfer failed'
+      setForcePinErr(msg)
+      showToast('error', msg)
+    } finally {
+      setForceSubmitting(false)
+    }
+  }
 
   function labelClass() {
     return 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400'
@@ -409,13 +417,10 @@ function DeviceControlPage() {
                 >
                   Manual
                 </button>
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
-                Daily limit
-              </label>
+                <p className="mt-2 text-xs text-slate-500">
+                  Confirmation = target enters code, then source must KUBALI/KATAA before entitlement moves.
+                  Manual = target enters code and transfer completes immediately.
+                </p>
               <input
                 type="number"
                 min={1}
@@ -460,8 +465,9 @@ function DeviceControlPage() {
           </form>
         ) : null}
 
-        {tab === 'pending' ? (
-          <section className="space-y-4">
+            <p className="rounded-xl border border-slate-700/50 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+              Recent Activity shows real transfer records. Bulk BLOCK/UNBLOCK affects subscription access only — not transfer approval.
+            </p>
             {pendingSel.size > 0 ? (
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2">
                 <span className="text-xs font-semibold text-amber-100">
@@ -667,6 +673,17 @@ function DeviceControlPage() {
           </div>
         ) : null}
       </main>
+      <SecurityPinModal
+        open={forcePinOpen}
+        title="Thibitisha Force Transfer"
+        description="Weka Security PIN ili kuhamisha kifurushi kwa kifaa kipya."
+        busy={forceSubmitting}
+        error={forcePinErr}
+        onClose={() => {
+          if (!forceSubmitting) setForcePinOpen(false)
+        }}
+        onSubmit={submitForceTransferPin}
+      />
     </>
   )
 }

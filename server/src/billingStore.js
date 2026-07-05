@@ -435,6 +435,12 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
           ${tzPhoneCanonicalSql('ir.phone_number')} = $1
           OR ${tzPhoneCanonicalSql('ir.account_id')} = $1
         )
+      UNION
+      SELECT DISTINCT trim(dpr.device_id::text) AS device_id
+      FROM device_phone_registry dpr
+      WHERE trim(coalesce(dpr.device_id::text, '')) <> ''
+        AND trim(coalesce(dpr.phone_number_normalized, '')) <> ''
+        AND dpr.phone_number_normalized = $1
     ),
     linked_devices AS (
       SELECT device_id FROM phone_txn_devices
@@ -529,6 +535,12 @@ export async function isDeviceLinkedToPaymentPhone(deviceId, phoneInput) {
           ${tzPhoneCanonicalSql('ir.phone_number')} = $1
           OR ${tzPhoneCanonicalSql('ir.account_id')} = $1
         )
+      UNION
+      SELECT DISTINCT trim(dpr.device_id::text) AS device_id
+      FROM device_phone_registry dpr
+      WHERE trim(coalesce(dpr.device_id::text, '')) <> ''
+        AND trim(coalesce(dpr.phone_number_normalized, '')) <> ''
+        AND dpr.phone_number_normalized = $1
     ),
     linked_devices AS (
       SELECT device_id FROM phone_txn_devices
