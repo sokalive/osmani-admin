@@ -36,6 +36,25 @@ async function ensureStatusConstraint(client, { tableName, constraintName, statu
   return true
 }
 
+async function ensureActionConstraint(client, { tableName, constraintName, actions }) {
+  const def = (await currentConstraintDefinition(client, tableName, constraintName)).toLowerCase()
+  const wants = Array.from(new Set(actions.map((s) => String(s).toLowerCase())))
+  const hasAll = def && wants.every((s) => def.includes(`'${s}'`))
+  if (hasAll) {
+    console.log(`[startup-migration] ${constraintName} already up-to-date`)
+    return false
+  }
+  const actionSql = wants.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ')
+  await client.query(`ALTER TABLE ${tableName} DROP CONSTRAINT IF EXISTS ${constraintName};`)
+  await client.query(
+    `ALTER TABLE ${tableName}
+     ADD CONSTRAINT ${constraintName}
+     CHECK (action IN (${actionSql}));`,
+  )
+  console.log(`[startup-migration] ${constraintName} updated`)
+  return true
+}
+
 export async function ensureBillingTables(client) {
   await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`)
 
@@ -1014,7 +1033,7 @@ export async function ensureBillingTables(client) {
     CREATE TABLE IF NOT EXISTS admin_payment_recovery_actions (
       id SERIAL PRIMARY KEY,
       order_id TEXT NOT NULL,
-      action TEXT NOT NULL CHECK (action IN ('approve', 'reject', 'block', 'reconcile')),
+      action TEXT NOT NULL CHECK (action IN ('approve', 'reject', 'block', 'reconcile', 'recover_canonical', 'recover_manual')),
       idempotency_key TEXT NOT NULL UNIQUE,
       admin_identity TEXT NOT NULL DEFAULT 'admin',
       reason TEXT,
@@ -1033,6 +1052,11 @@ export async function ensureBillingTables(client) {
     CREATE INDEX IF NOT EXISTS admin_payment_recovery_order_idx
     ON admin_payment_recovery_actions (order_id, created_at DESC);
   `)
+  await ensureActionConstraint(client, {
+    tableName: 'admin_payment_recovery_actions',
+    constraintName: 'admin_payment_recovery_actions_action_check',
+    actions: ['approve', 'reject', 'block', 'reconcile', 'recover_canonical', 'recover_manual'],
+  })
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS subscription_requests (
