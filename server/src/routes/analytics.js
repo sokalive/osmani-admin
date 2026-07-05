@@ -21,6 +21,7 @@ import {
 } from '../lib/livePresenceStats.js'
 import { queryMigrationDevicePopulationSummary } from '../lib/appVersionMigration.js'
 import { queryCanonicalUniqueDeviceCount } from '../lib/canonicalUniqueDevices.js'
+import { queryPhysicalDeviceCensusSnapshot } from '../lib/canonicalPhysicalDeviceCensus.js'
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
 import { readChannelIdNameMap } from '../store.js'
 
@@ -101,6 +102,7 @@ async function queryOverviewStats(pool) {
     newUsersTodayRaw,
     revenueTodayRaw,
     totalInstallsRaw,
+    physicalCensus,
     canonicalUnique,
   ] = await Promise.all([
       queryLivePresenceTotals(pool).catch((e) => {
@@ -138,14 +140,23 @@ async function queryOverviewStats(pool) {
         'overview.totalInstalls',
         (r) => numOrZero(r?.c),
       ),
+      queryPhysicalDeviceCensusSnapshot().catch((e) => {
+        console.error('[analytics] overview.physicalDeviceCensus:', e)
+        return { ok: false }
+      }),
       queryCanonicalUniqueDeviceCount().catch((e) => {
         console.error('[analytics] overview.canonicalUniqueDevices:', e)
         return { ok: false, totalUniqueDevices: 0 }
       }),
     ])
   let totalUniqueDevices = 0
-  if (canonicalUnique?.ok && canonicalUnique.totalUniqueDevices != null) {
+  let totalUniqueDevicesMethod = 'unknown'
+  if (physicalCensus?.ok && physicalCensus.counts?.physical_device_components_total != null) {
+    totalUniqueDevices = numOrZero(physicalCensus.counts.physical_device_components_total)
+    totalUniqueDevicesMethod = 'physical_device_graph_v1'
+  } else if (canonicalUnique?.ok && canonicalUnique.totalUniqueDevices != null) {
     totalUniqueDevices = numOrZero(canonicalUnique.totalUniqueDevices)
+    totalUniqueDevicesMethod = 'canonical_observed_identities_fallback'
   } else {
     const migrationSummary = await queryMigrationDevicePopulationSummary().catch((e) => {
       console.error('[analytics] overview.totalUniqueDevices fallback:', e)
@@ -155,6 +166,7 @@ async function queryOverviewStats(pool) {
       migrationSummary?.ok && migrationSummary.summary
         ? numOrZero(migrationSummary.summary.totalUniqueDevices)
         : 0
+    totalUniqueDevicesMethod = 'legacy_migration_fallback'
   }
   const onlineNow = presenceTotals?.onlineNow ?? 0
   const watchingNow = presenceTotals?.watchingNow ?? 0
@@ -174,6 +186,13 @@ async function queryOverviewStats(pool) {
     revenueToday: revenueTodayRaw ?? 0,
     totalInstalls: totalInstallsRaw ?? 0,
     totalUniqueDevices,
+    totalUniqueDevicesMethod,
+    totalUniqueDevicesHighConfidence: physicalCensus?.ok
+      ? numOrZero(physicalCensus.counts?.high_confidence_physical_devices)
+      : null,
+    totalUniqueDevicesAmbiguous: physicalCensus?.ok
+      ? numOrZero(physicalCensus.counts?.ambiguous_low_confidence_components)
+      : null,
     livePresenceWindowSeconds: LIVE_PRESENCE_WINDOW_SECONDS,
     sessionPruneSeconds: SESSION_PRUNE_SECONDS,
     sessionTtlSeconds: LIVE_PRESENCE_WINDOW_SECONDS,

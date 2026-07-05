@@ -31,11 +31,15 @@ function isSyntheticDeviceId(deviceId) {
   return false
 }
 
+export { isSyntheticDeviceId, SYNTHETIC_PREFIXES, SYNTHETIC_EXACT }
+
 function syntheticSqlExclude(column = 'device_id') {
   const col = column
   const likes = SYNTHETIC_PREFIXES.map((_, i) => `lower(${col}) NOT LIKE $${i + 1}`).join(' AND ')
   return `(${col} <> '' AND length(trim(${col})) >= 8 AND ${likes})`
 }
+
+export { syntheticSqlExclude }
 
 let _canonicalCache = null
 let _canonicalCacheAt = 0

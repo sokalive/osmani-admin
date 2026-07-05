@@ -12,6 +12,10 @@ import {
 import { sendAnalyticsResetOtpEmail } from '../lib/resendOtpMail.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { queryUniqueDeviceAuditBreakdown } from '../lib/canonicalUniqueDevices.js'
+import {
+  computePhysicalDeviceCensus,
+  queryPhysicalDeviceCensusSnapshot,
+} from '../lib/canonicalPhysicalDeviceCensus.js'
 
 export const analyticsAdminRouter = Router()
 
@@ -253,6 +257,25 @@ analyticsAdminRouter.post('/reset-installs/execute', async (req, res) => {
     }
     const status = msg.includes('cooldown') ? 429 : msg.includes('OTP') ? 403 : 500
     res.status(status).json({ ok: false, error: msg })
+  }
+})
+
+/** Read-only physical-device census dry-run / audit (graph reconstruction). */
+analyticsAdminRouter.get('/physical-device-census', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    const dryRun = String(req.query.dryRun ?? req.query.dry_run ?? '0') === '1'
+    const force = String(req.query.force ?? '0') === '1'
+    const census = dryRun
+      ? await computePhysicalDeviceCensus({ dryRun: true })
+      : await queryPhysicalDeviceCensusSnapshot({ force })
+    if (!census.ok && census.aborted) {
+      return res.status(409).json(census)
+    }
+    res.json(census)
+  } catch (e) {
+    console.error('[analytics-admin] physical-device-census', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
 

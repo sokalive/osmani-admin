@@ -141,7 +141,7 @@ function DashboardPage() {
     {
       gradientClass: emerald,
       className: 'dashboard-card',
-      title: 'Canonical Observed Devices',
+      title: 'Total Unique Devices',
       value: uniqueDevicesFormatted,
       icon: Activity,
     },

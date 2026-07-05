@@ -1,0 +1,123 @@
+{
+  "contract_version": "1.0.0-backend-validated",
+  "contract_status": "BACKEND_SCHEMA_VALIDATED",
+  "note": "App AI machine-readable contract was not present at commit time. This file records backend-verified production schema availability and allowed deterministic merge rules implementable without App code changes.",
+  "census_feasibility_class": "B",
+  "census_feasibility_description": "Reconstructable with deterministic historical aliases where stored in PostgreSQL. Perfect physical-phone truth is impossible when reinstall generates new device_id without durable linkage evidence.",
+  "identity_types": {
+    "device_id": {
+      "available_in_db": true,
+      "source_tables": ["app_installs", "client_api_telemetry", "device_intelligence_registry"],
+      "columns": ["device_id"],
+      "trust_level": "primary_observed_identity",
+      "use_for_census_seed": true
+    },
+    "package_android_id": {
+      "available_in_db": true,
+      "source_tables": ["device_intelligence_registry", "device_intelligence_device_history"],
+      "columns": ["android_id"],
+      "trust_level": "hardware_scoped_when_valid",
+      "notes": "Stored as android_id column; maps to App package-scoped Android ID when App registers intelligence."
+    },
+    "legacy_package_android_id": {
+      "available_in_db": false,
+      "columns": [],
+      "notes": "Not persisted as dedicated column. Not available for census edges."
+    },
+    "stable_hardware_id": {
+      "available_in_db": false,
+      "columns": [],
+      "notes": "Widevine/stable hardware ID not stored in Admin PostgreSQL schema."
+    },
+    "device_fingerprint": {
+      "available_in_db": true,
+      "source_tables": ["device_intelligence_registry"],
+      "columns": ["device_fingerprint"],
+      "trust_level": "derivative",
+      "use_as_independent_phone_count": false,
+      "allowed_edge": "PROVEN_FINGERPRINT_PAIR_ONLY",
+      "max_devices_per_value": 2
+    },
+    "install_instance_id": {
+      "available_in_db": true,
+      "source_tables": ["app_installs", "device_phone_registry"],
+      "columns": ["install_instance_id"],
+      "trust_level": "install_session_alias",
+      "allowed_edge": "PROVEN_INSTALL_SESSION_ALIAS",
+      "max_devices_per_value": 4
+    },
+    "legacy_device_id": {
+      "available_in_db": false,
+      "columns": [],
+      "notes": "Accepted on verify/register requests but not persisted as historical alias pairs for census reconstruction."
+    },
+    "identity_candidates": {
+      "available_in_db": "partial",
+      "source_tables": ["device_intelligence_registry"],
+      "columns": ["metadata"],
+      "notes": "May appear inside metadata JSONB when App sends them; not indexed. Not used for census until App persists structured alias table."
+    },
+    "migration_bridge_aliases": {
+      "available_in_db": false,
+      "notes": "No dedicated migration alias table. install_instance_id + android_id are only durable bridges."
+    }
+  },
+  "allowed_edge_types": [
+    {
+      "id": "PROVEN_INSTALL_SESSION_ALIAS",
+      "description": "Two or more device_id values share the same non-empty install_instance_id in app_installs.",
+      "max_devices_per_anchor": 4
+    },
+    {
+      "id": "PROVEN_ANDROID_ID_ALIAS",
+      "description": "Two or three device_id values share the same valid android_id in device_intelligence_registry.",
+      "max_devices_per_anchor": 3,
+      "exclude_android_ids": ["9774d56d682e549c", "unknown", "0000000000000000"]
+    },
+    {
+      "id": "PROVEN_FINGERPRINT_PAIR",
+      "description": "Exactly two device_id values share the same 64-char hex fingerprint in registry.",
+      "max_devices_per_anchor": 2
+    }
+  ],
+  "forbidden_merge_rules": [
+    "same_phone_number",
+    "same_ip_address",
+    "same_device_model",
+    "same_device_brand",
+    "same_payment_amount",
+    "same_plan",
+    "same_transaction",
+    "same_subscription_row",
+    "timestamp_proximity_only"
+  ],
+  "canonical_component_key_precedence": [
+    "package_android_id",
+    "install_instance_id",
+    "device_id"
+  ],
+  "synthetic_exclusion": {
+    "prefixes": [
+      "cap_",
+      "cap67_",
+      "verify_recovery_",
+      "verify_",
+      "pool_audit_",
+      "benchmark_",
+      "probe_",
+      "__probe_",
+      "test_",
+      "aurax-live-probe"
+    ],
+    "exact": ["unknown", "unassigned-device", "admin", "web"],
+    "min_length": 8
+  },
+  "confidence_buckets": {
+    "HIGH_CONFIDENCE_PHYSICAL_DEVICES": "Component anchored by valid android_id OR merged by approved alias edge.",
+    "DETERMINISTIC_ALIAS_MERGED": "Component size > 1 after alias edges.",
+    "AMBIGUOUS_LOW_CONFIDENCE": "Singleton device_id without android_id anchor in registry.",
+    "SYNTHETIC_EXCLUDED": "Filtered before graph construction."
+  },
+  "dashboard_primary_metric": "physical_device_components_total",
+  "dashboard_label": "Total Unique Devices"
+}
