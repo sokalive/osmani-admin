@@ -387,40 +387,46 @@ function DeviceControlPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-slate-200">Transfer mode</p>
-                <p className="text-xs text-slate-500">
-                  Retained for compatibility with clients; transfer access is gated by persisted limits below.
-                </p>
+            <div className="rounded-xl border border-slate-600/50 bg-slate-900/40 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-200">Transfer mode</p>
+                  <p className="mt-1 max-w-xl text-xs text-slate-500">
+                    Confirmation = target enters code, then source must KUBALI/KATAA before entitlement moves.
+                    Manual = target enters code and transfer completes immediately.
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDraft((d) => ({ ...d, transferMode: 'confirmation' }))}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-bold uppercase ${
+                      draft.transferMode === 'confirmation'
+                        ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/40'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    Confirmation
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDraft((d) => ({ ...d, transferMode: 'manual' }))}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-bold uppercase ${
+                      draft.transferMode === 'manual'
+                        ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/40'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    Manual
+                  </button>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDraft((d) => ({ ...d, transferMode: 'confirmation' }))}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-bold uppercase ${
-                    draft.transferMode === 'confirmation'
-                      ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/40'
-                      : 'text-slate-500'
-                  }`}
-                >
-                  Confirmation
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDraft((d) => ({ ...d, transferMode: 'manual' }))}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-bold uppercase ${
-                    draft.transferMode === 'manual'
-                      ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/40'
-                      : 'text-slate-500'
-                  }`}
-                >
-                  Manual
-                </button>
-                <p className="mt-2 text-xs text-slate-500">
-                  Confirmation = target enters code, then source must KUBALI/KATAA before entitlement moves.
-                  Manual = target enters code and transfer completes immediately.
-                </p>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
+                Daily limit
+              </label>
               <input
                 type="number"
                 min={1}
@@ -465,6 +471,8 @@ function DeviceControlPage() {
           </form>
         ) : null}
 
+        {tab === 'pending' ? (
+          <section className="space-y-4">
             <p className="rounded-xl border border-slate-700/50 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
               Recent Activity shows real transfer records. Bulk BLOCK/UNBLOCK affects subscription access only — not transfer approval.
             </p>
