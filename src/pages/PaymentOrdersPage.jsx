@@ -12,6 +12,7 @@ import {
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 import { formatTsh } from '../lib/formatMoney'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
 import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const SSE_DEBOUNCE_MS = 1200
@@ -49,6 +50,8 @@ export default function PaymentOrdersPage() {
   const { showToast } = useToast()
   const cached = readAdminSnapshot('payment-orders')
   const [rows, setRows] = useState(Array.isArray(cached?.rows) ? cached.rows : [])
+  const rowsRef = useRef(Array.isArray(cached?.rows) ? cached.rows : [])
+  rowsRef.current = rows
   const [initialLoading, setInitialLoading] = useState(!Array.isArray(cached?.rows))
   const [refreshing, setRefreshing] = useState(false)
   const hasRowsRef = useRef(Array.isArray(cached?.rows))
@@ -69,7 +72,9 @@ export default function PaymentOrdersPage() {
       const data = await getPaymentOrders({ status: tab, search: search.trim() })
       if (gen !== genRef.current) return
       const list = Array.isArray(data?.rows) ? data.rows : []
+      if (!shouldReplaceRows(rowsRef.current, list)) return
       setRows(list)
+      rowsRef.current = list
       hasRowsRef.current = true
       writeAdminSnapshot('payment-orders', { rows: list, tab, search: search.trim() })
     } catch (e) {

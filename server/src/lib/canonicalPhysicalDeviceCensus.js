@@ -55,10 +55,37 @@ function edgeLimitsFromContract(contract) {
 
 let _cache = null
 let _cacheAt = 0
+let _refreshInFlight = null
 const CACHE_MS = Math.max(
   60_000,
   Math.min(600_000, Number(process.env.PHYSICAL_DEVICE_CENSUS_CACHE_MS) || 300_000),
 )
+
+/** Last-known-good census for dashboard hot path — never triggers cold build. */
+export function peekPhysicalDeviceCensusCache() {
+  if (!_cache) return null
+  const cacheAgeMs = Date.now() - _cacheAt
+  return {
+    ..._cache,
+    cached: true,
+    cacheAgeMs,
+    stale: cacheAgeMs >= CACHE_MS,
+  }
+}
+
+/** Background census refresh — does not block snapshot/overview requests. */
+export function schedulePhysicalDeviceCensusRefresh() {
+  if (_refreshInFlight) return _refreshInFlight
+  _refreshInFlight = computePhysicalDeviceCensus({ dryRun: false })
+    .catch((e) => {
+      console.error('[physical-device-census] background refresh failed:', e)
+      return { ok: false, error: String(e.message || e) }
+    })
+    .finally(() => {
+      _refreshInFlight = null
+    })
+  return _refreshInFlight
+}
 
 class UnionFind {
   constructor() {
@@ -503,6 +530,13 @@ export async function queryPhysicalDeviceCensusSnapshot(opts = {}) {
   const now = Date.now()
   if (!force && _cache && now - _cacheAt < CACHE_MS) {
     return { ..._cache, cached: true, cacheAgeMs: now - _cacheAt }
+  }
+  if (!force) {
+    const peek = peekPhysicalDeviceCensusCache()
+    if (peek) {
+      schedulePhysicalDeviceCensusRefresh()
+      return peek
+    }
   }
   return computePhysicalDeviceCensus({ dryRun: false })
 }

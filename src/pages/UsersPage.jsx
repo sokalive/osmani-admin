@@ -25,6 +25,8 @@ import {
   fingerprintUserRowsContent,
   mergeUserRows,
 } from '../lib/usersPageRefresh'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
 
 const PAGE_SIZE = 25
 
@@ -209,23 +211,40 @@ function PaginationBar({ page, totalPages, total, onPageChange, disabled }) {
   )
 }
 
+function usersCacheKey(tab, expiringWithin) {
+  return `users:${tab}:${expiringWithin}`
+}
+
+function hydrateUsersTab(tab, expiringWithin) {
+  const snap = readAdminSnapshot(usersCacheKey(tab, expiringWithin))
+  if (!snap || typeof snap !== 'object') return null
+  return {
+    items: Array.isArray(snap.items) ? snap.items : [],
+    pagination: snap.pagination ?? { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 },
+    summary: snap.summary ?? null,
+  }
+}
+
 function UsersPageContent() {
   const { showToast } = useToast()
   const [tab, setTab] = useState('active_paid')
   const [expiringWithin, setExpiringWithin] = useState('7d')
+  const initialHydrate = useMemo(() => hydrateUsersTab('active_paid', '7d'), [])
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
   const [planFilter, setPlanFilter] = useState('all')
   const [providerFilter, setProviderFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [items, setItems] = useState([])
-  const [pagination, setPagination] = useState({ page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 })
-  const [summary, setSummary] = useState(null)
+  const [items, setItems] = useState(() => initialHydrate?.items ?? [])
+  const [pagination, setPagination] = useState(
+    () => initialHydrate?.pagination ?? { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1 },
+  )
+  const [summary, setSummary] = useState(() => initialHydrate?.summary ?? null)
   const [plans, setPlans] = useState([])
   const [editing, setEditing] = useState(null)
   const [flash, setFlash] = useState(null)
-  const [tableLoading, setTableLoading] = useState(true)
+  const [tableLoading, setTableLoading] = useState(() => !(initialHydrate?.items?.length > 0))
   const [profileRow, setProfileRow] = useState(null)
   const [selected, setSelected] = useState(() => new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
@@ -237,7 +256,7 @@ function UsersPageContent() {
   const sseRefreshTimerRef = useRef(null)
   const fetchAbortRef = useRef(null)
   const silentFetchAbortRef = useRef(null)
-  const hasEverLoadedTableRef = useRef(false)
+  const hasEverLoadedTableRef = useRef(initialHydrate?.items?.length > 0)
   const itemsFingerprintRef = useRef('')
   const paginationFingerprintRef = useRef('')
   const summaryFingerprintRef = useRef('')
@@ -317,6 +336,7 @@ function UsersPageContent() {
 
       setItems((prev) => {
         const nextRows = silent ? mergeUserRows(prev, rows, currentTab, { silent: true }) : rows
+        if (!silent && !shouldReplaceRows(prev, nextRows)) return prev
         const nextFp = fingerprintUserRowsContent(nextRows, currentTab)
         if (nextFp === itemsFingerprintRef.current && !pagChanged) return prev
         itemsFingerprintRef.current = nextFp
@@ -330,9 +350,25 @@ function UsersPageContent() {
 
       if (rows.length > 0) hasEverLoadedTableRef.current = true
       loadedTabsRef.current.add(`${currentTab}:${expiringWithin}`)
+      writeAdminSnapshot(usersCacheKey(currentTab, expiringWithin), {
+        items: rows,
+        pagination: nextPagination,
+      })
     },
     [tab, expiringWithin],
   )
+
+  useEffect(() => {
+    const h = hydrateUsersTab(tab, expiringWithin)
+    if (h?.items?.length) {
+      itemsFingerprintRef.current = fingerprintUserRowsContent(h.items, tab)
+      paginationFingerprintRef.current = fingerprintPagination(h.pagination)
+      setItems(h.items)
+      setPagination(h.pagination)
+      hasEverLoadedTableRef.current = true
+      setTableLoading(false)
+    }
+  }, [tab, expiringWithin])
 
   const loadTabSilent = useCallback(async () => {
     const gen = ++silentTabGenRef.current

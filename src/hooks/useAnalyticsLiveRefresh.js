@@ -1,31 +1,40 @@
 import { useEffect, useRef } from 'react'
 import { syncStreamUrl } from '../lib/api'
+import { createRefreshCoordinator } from '../lib/adminRefreshCoordinator'
 
 const ANALYTICS_SSE_DEBOUNCE_MS = 350
 
 /**
  * Poll analytics + debounced SSE refresh (avoids thundering herd on presence_expired).
+ * Dedupes overlapping poll/SSE-triggered loads.
  * @param {() => void | Promise<void>} load
  * @param {{ pollMs?: number, sse?: boolean }} [opts]
  */
 export function useAnalyticsLiveRefresh(load, opts = {}) {
   const pollMs = Math.max(5000, Number(opts.pollMs) || 15_000)
   const sseEnabled = opts.sse !== false
-  const debounceRef = useRef(null)
+  const loadRef = useRef(load)
+  loadRef.current = load
+  const coordinatorRef = useRef(null)
+  if (!coordinatorRef.current) {
+    coordinatorRef.current = createRefreshCoordinator(() => loadRef.current(), {
+      debounceMs: ANALYTICS_SSE_DEBOUNCE_MS,
+      minIntervalMs: 900,
+    })
+  }
 
   useEffect(() => {
-    void load()
-    const pollId = window.setInterval(() => void load(), pollMs)
+    const coord = coordinatorRef.current
+    void coord.runNow()
+    const pollId = window.setInterval(() => void coord.runNow(), pollMs)
     return () => window.clearInterval(pollId)
-  }, [load, pollMs])
+  }, [pollMs])
 
   useEffect(() => {
     if (!sseEnabled) return undefined
+    const coord = coordinatorRef.current
     const es = new EventSource(syncStreamUrl(['analytics']))
-    const onSync = () => {
-      window.clearTimeout(debounceRef.current)
-      debounceRef.current = window.setTimeout(() => void load(), ANALYTICS_SSE_DEBOUNCE_MS)
-    }
+    const onSync = () => coord.schedule()
     const events = [
       'snapshot',
       'analytics.install',
@@ -40,8 +49,8 @@ export function useAnalyticsLiveRefresh(load, opts = {}) {
     ]
     for (const ev of events) es.addEventListener(ev, onSync)
     return () => {
-      window.clearTimeout(debounceRef.current)
+      coord.cancel()
       es.close()
     }
-  }, [load, sseEnabled])
+  }, [sseEnabled])
 }

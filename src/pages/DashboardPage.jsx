@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { Activity } from 'lucide-react'
 import LiveUserLocationsCard from '../components/LiveUserLocationsCard'
 import LiveUsersTrendSection from '../components/LiveUsersTrendSection'
@@ -9,6 +9,7 @@ import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
 import { getAnalyticsSnapshot, getAnalyticsTrend } from '../lib/api'
+import { isDegradedAnalyticsSnapshot } from '../lib/adminDataGuards'
 import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const emerald =
@@ -55,10 +56,21 @@ function DashboardPage() {
   const [locations, setLocations] = useState(initial.locations)
   const [trend, setTrend] = useState(initial.trend)
   const [loaded, setLoaded] = useState(initial.fromCache)
+  const [refreshing, setRefreshing] = useState(false)
+  const loadGenRef = useRef(0)
 
   const load = useCallback(async () => {
+    const gen = ++loadGenRef.current
+    const hadData = loaded || initial.fromCache
+    if (hadData) setRefreshing(true)
     try {
       const [snap, t] = await Promise.all([getAnalyticsSnapshot(), getAnalyticsTrend()])
+      if (gen !== loadGenRef.current) return
+      if (isDegradedAnalyticsSnapshot(snap)) {
+        showToast('error', snap?.error || 'Dashboard refresh degraded — keeping last data')
+        setLoaded(true)
+        return
+      }
       const nextOverview = {
         onlineNow: snap?.onlineNow,
         watchingNow: snap?.watchingNow,
@@ -84,27 +96,34 @@ function DashboardPage() {
             }),
             users: Number(x.users) || 0,
           }))
-        : []
-      setOverview(nextOverview)
-      setChannels(nextChannels)
-      setTopFiveChannels(nextTopFive)
-      setChannelLabels(nextLabels)
-      setLocations(nextLocations)
-      setTrend(nextTrend)
+        : null
+
+      setOverview((prev) => ({ ...prev, ...nextOverview }))
+      if (nextChannels.length > 0 || nextTopFive.length > 0) {
+        setChannels(nextChannels)
+        setTopFiveChannels(nextTopFive)
+        setChannelLabels(nextLabels)
+      }
+      if (nextLocations.length > 0) setLocations(nextLocations)
+      if (Array.isArray(nextTrend)) setTrend(nextTrend)
+
       writeAdminSnapshot('dashboard', {
         overview: nextOverview,
         channels: nextChannels,
         topFiveChannels: nextTopFive,
         channelLabels: nextLabels,
         locations: nextLocations,
-        trend: nextTrend,
+        trend: Array.isArray(nextTrend) ? nextTrend : trend,
       })
       setLoaded(true)
     } catch (e) {
+      if (gen !== loadGenRef.current) return
       showToast('error', e?.message || 'Could not load dashboard')
       setLoaded(true)
+    } finally {
+      if (gen === loadGenRef.current) setRefreshing(false)
     }
-  }, [showToast])
+  }, [showToast, loaded, initial.fromCache])
 
   useAnalyticsLiveRefresh(load, { pollMs: 15_000 })
 
@@ -167,6 +186,8 @@ function DashboardPage() {
         </div>
         <LiveUsersTrendSection points={trend} />
         {!loaded ? (
+          <p className="mt-3 text-xs text-slate-500">Loading dashboard…</p>
+        ) : refreshing ? (
           <p className="mt-3 text-xs text-slate-500">Refreshing dashboard…</p>
         ) : null}
       </main>

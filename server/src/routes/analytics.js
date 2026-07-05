@@ -21,13 +21,17 @@ import {
 } from '../lib/livePresenceStats.js'
 import { queryMigrationDevicePopulationSummary } from '../lib/appVersionMigration.js'
 import { queryCanonicalUniqueDeviceCount } from '../lib/canonicalUniqueDevices.js'
-import { queryPhysicalDeviceCensusSnapshot } from '../lib/canonicalPhysicalDeviceCensus.js'
+import {
+  peekPhysicalDeviceCensusCache,
+  schedulePhysicalDeviceCensusRefresh,
+} from '../lib/canonicalPhysicalDeviceCensus.js'
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
 import { readChannelIdNameMap } from '../store.js'
 
 export const analyticsRouter = Router()
 
 startLivePresenceJanitor()
+schedulePhysicalDeviceCensusRefresh()
 
 const OVERVIEW_ZERO = {
   onlineNow: 0,
@@ -96,13 +100,17 @@ function parseInstallInstanceIdFromBody(body) {
 }
 
 async function queryOverviewStats(pool) {
+  const physicalCensusPeek = peekPhysicalDeviceCensusCache()
+  if (!physicalCensusPeek || physicalCensusPeek.stale) {
+    schedulePhysicalDeviceCensusRefresh()
+  }
+
   const [
     presenceTotals,
     dauTodayRaw,
     newUsersTodayRaw,
     revenueTodayRaw,
     totalInstallsRaw,
-    physicalCensus,
     canonicalUnique,
   ] = await Promise.all([
       queryLivePresenceTotals(pool).catch((e) => {
@@ -140,20 +148,19 @@ async function queryOverviewStats(pool) {
         'overview.totalInstalls',
         (r) => numOrZero(r?.c),
       ),
-      queryPhysicalDeviceCensusSnapshot().catch((e) => {
-        console.error('[analytics] overview.physicalDeviceCensus:', e)
-        return { ok: false }
-      }),
       queryCanonicalUniqueDeviceCount().catch((e) => {
         console.error('[analytics] overview.canonicalUniqueDevices:', e)
         return { ok: false, totalUniqueDevices: 0 }
       }),
     ])
+  const physicalCensus = physicalCensusPeek
   let totalUniqueDevices = 0
   let totalUniqueDevicesMethod = 'unknown'
   if (physicalCensus?.ok && physicalCensus.counts?.physical_device_components_total != null) {
     totalUniqueDevices = numOrZero(physicalCensus.counts.physical_device_components_total)
-    totalUniqueDevicesMethod = 'physical_device_graph_v1'
+    totalUniqueDevicesMethod = physicalCensus.stale
+      ? 'physical_device_graph_v1_stale_cache'
+      : 'physical_device_graph_v1'
   } else if (canonicalUnique?.ok && canonicalUnique.totalUniqueDevices != null) {
     totalUniqueDevices = numOrZero(canonicalUnique.totalUniqueDevices)
     totalUniqueDevicesMethod = 'canonical_observed_identities_fallback'

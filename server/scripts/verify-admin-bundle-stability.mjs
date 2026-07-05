@@ -8,12 +8,14 @@ const SURFACES = [
 ]
 
 const MARKERS = [
+  'osmani_admin_snap_v2',
   'osmani_admin_snap_v1',
-  'Canonical Observed Devices',
+  'Total Unique Devices',
   'payment-orders',
   'subscription-requests',
   'Refreshing dashboard',
-  'f828c7a',
+  'adminDataGuards',
+  'adminRefreshCoordinator',
 ]
 
 const API_ENDPOINTS = [
@@ -78,7 +80,7 @@ async function main() {
       ok(`${surface.label} ${ep.name} HTTP ${r.status} ${r.ms}ms`)
     }
     if (bundle) {
-      ok(`${surface.label} stability-fix-present=${bundle.hits.length >= 5}`)
+      ok(`${surface.label} stability-fix-present=${bundle.hits.length >= 6}`)
     }
     console.log('')
   }

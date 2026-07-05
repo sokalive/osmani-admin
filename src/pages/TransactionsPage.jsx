@@ -4,9 +4,11 @@ import { useToast } from '../context/ToastContext.jsx'
 import { deleteTransactionsBulk, getTransactions, syncStreamUrl } from '../lib/api'
 import { endOfDay, isSameLocalDay, startOfDay } from '../lib/dates'
 import { formatTsh } from '../lib/formatMoney'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
 import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const PAGE_SIZE = 10
+const SSE_DEBOUNCE_MS = 1200
 
 const tabs = [
   { id: 'all', label: 'All' },
@@ -82,6 +84,8 @@ function TransactionsPage() {
     Array.isArray(cached?.rows) ? cached.rows : [],
   )
   const hasDataRef = useRef(Array.isArray(cached?.rows))
+  const rowsRef = useRef(Array.isArray(cached?.rows) ? cached.rows : [])
+  rowsRef.current = transactions
   const genRef = useRef(0)
   const [tab, setTab] = useState('all')
   const [fromDate, setFromDate] = useState('')
@@ -95,7 +99,9 @@ function TransactionsPage() {
       const rows = await getTransactions()
       if (gen !== genRef.current) return
       const list = Array.isArray(rows) ? rows : []
+      if (!shouldReplaceRows(rowsRef.current, list)) return
       setTransactions(list)
+      rowsRef.current = list
       hasDataRef.current = true
       writeAdminSnapshot('transactions', { rows: list })
       setSelectedOrderIds(new Set())
@@ -112,12 +118,17 @@ function TransactionsPage() {
 
   useEffect(() => {
     const es = new EventSource(syncStreamUrl(['analytics']))
+    let debounceId = null
     const onRefresh = () => {
-      void loadTx()
+      window.clearTimeout(debounceId)
+      debounceId = window.setTimeout(() => void loadTx(), SSE_DEBOUNCE_MS)
     }
     es.addEventListener('analytics.transaction_updated', onRefresh)
     es.addEventListener('analytics.subscription_updated', onRefresh)
-    return () => es.close()
+    return () => {
+      window.clearTimeout(debounceId)
+      es.close()
+    }
   }, [loadTx])
 
   const todayStats = useMemo(() => computeTodayStats(transactions), [transactions])

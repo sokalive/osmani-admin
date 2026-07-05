@@ -14,6 +14,7 @@ import {
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 import { formatTsh } from '../lib/formatMoney'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
 import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const STATUS_TABS = [
@@ -43,6 +44,8 @@ export default function SubscriptionRequestsPage() {
   const { showToast } = useToast()
   const cached = readAdminSnapshot('subscription-requests')
   const [rows, setRows] = useState(Array.isArray(cached?.rows) ? cached.rows : [])
+  const rowsRef = useRef(Array.isArray(cached?.rows) ? cached.rows : [])
+  rowsRef.current = rows
   const [plans, setPlans] = useState(Array.isArray(cached?.plans) ? cached.plans : [])
   const [enabled, setEnabled] = useState(cached?.enabled !== false)
   const [initialLoading, setInitialLoading] = useState(!Array.isArray(cached?.rows))
@@ -70,7 +73,9 @@ export default function SubscriptionRequestsPage() {
       if (gen !== genRef.current) return
       const list = Array.isArray(data?.rows) ? data.rows : []
       const planList = Array.isArray(plansRes) ? plansRes.filter((p) => p?.isActive !== false) : []
+      if (!shouldReplaceRows(rowsRef.current, list)) return
       setRows(list)
+      rowsRef.current = list
       setEnabled(settings?.enabled !== false)
       setPlans(planList)
       hasRowsRef.current = true
