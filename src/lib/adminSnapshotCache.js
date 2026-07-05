@@ -10,11 +10,6 @@ function key(page) {
 /** @deprecated v1 keys — read once for migration */
 const NS_V1 = 'osmani_admin_snap_v1'
 
-function key(page) {
-  const host = typeof window !== 'undefined' ? window.location.host : 'server'
-  return `${NS}:${host}:${page}`
-}
-
 export function readAdminSnapshot(page) {
   if (typeof sessionStorage === 'undefined') return null
   try {

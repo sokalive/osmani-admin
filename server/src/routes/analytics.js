@@ -31,7 +31,7 @@ import { readChannelIdNameMap } from '../store.js'
 export const analyticsRouter = Router()
 
 startLivePresenceJanitor()
-schedulePhysicalDeviceCensusRefresh()
+setTimeout(() => schedulePhysicalDeviceCensusRefresh(), 45_000)
 
 const OVERVIEW_ZERO = {
   onlineNow: 0,
