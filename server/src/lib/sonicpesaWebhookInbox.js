@@ -145,7 +145,7 @@ export async function claimInboxRowsForRetry(limit = 10) {
     await client.query('BEGIN')
     const { rows } = await client.query(
       `SELECT * FROM sonicpesa_webhook_inbox
-       WHERE processing_status IN ('RECEIVED', 'RETRYABLE_ERROR')
+       WHERE processing_status IN ('RECEIVED', 'VERIFIED', 'RETRYABLE_ERROR')
          AND attempt_count < $2
          AND (next_retry_at IS NULL OR next_retry_at <= now())
        ORDER BY received_at ASC

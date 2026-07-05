@@ -344,7 +344,7 @@ export async function handleWebhook(req, res, deps) {
   const body = req.body && typeof req.body === 'object' ? req.body : {}
   const { recordWebhookMeta } = deps
   const { insertSonicpesaWebhookInbox } = await import('../../sonicpesaWebhookInbox.js')
-  const { processSonicpesaInboxRow } = await import('../../sonicpesaWebhookWorker.js')
+  const { processSonicpesaInboxRow, kickSonicpesaInboxWorker } = await import('../../sonicpesaWebhookWorker.js')
 
   let inboxRow = null
   let inboxDuplicate = false
@@ -374,9 +374,9 @@ export async function handleWebhook(req, res, deps) {
     inboxDuplicate = inserted.duplicate
 
     if (typeof recordWebhookMeta === 'function') {
-      await recordWebhookMeta(req, body)
+      void Promise.resolve(recordWebhookMeta(req, body)).catch(() => {})
     } else {
-      await recordSonicpesaWebhookHealthEvent({
+      void recordSonicpesaWebhookHealthEvent({
         kind: engineeringProbe ? 'engineering_probe' : 'provider_webhook',
         orderId: String(body.order_id ?? body.merchant_order_id ?? ''),
         event: String(body.event ?? body.type ?? ''),
@@ -388,12 +388,15 @@ export async function handleWebhook(req, res, deps) {
       return res.sendStatus(200)
     }
 
-    const processResult = await processSonicpesaInboxRow(
-      inboxRow ?? { id: inserted.id, payload: body, signature_verified: true, attempt_count: 0 },
-    )
+    kickSonicpesaInboxWorker()
 
-    if (processResult.reason === 'retryable_db_error') {
-      return res.status(503).type('text/plain').send('processing deferred')
+    if (process.env.SONICPESA_WEBHOOK_SYNC_PROCESS === '1') {
+      const processResult = await processSonicpesaInboxRow(
+        inboxRow ?? { id: inserted.id, payload: body, signature_verified: signatureOk, attempt_count: 0 },
+      )
+      if (processResult.reason === 'retryable_db_error') {
+        return res.status(503).type('text/plain').send('processing deferred')
+      }
     }
 
     return res.sendStatus(200)
@@ -407,6 +410,7 @@ export async function handleWebhook(req, res, deps) {
         incrementAttempt: true,
         scheduleRetry: true,
       }).catch(() => {})
+      kickSonicpesaInboxWorker()
       return res.status(503).type('text/plain').send('processing deferred')
     }
     return res.status(500).type('text/plain').send('internal error')

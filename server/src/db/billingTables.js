@@ -1111,7 +1111,7 @@ export async function ensureBillingTables(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS sonicpesa_webhook_inbox_retry_idx
     ON sonicpesa_webhook_inbox (processing_status, next_retry_at)
-    WHERE processing_status IN ('RECEIVED', 'RETRYABLE_ERROR');
+    WHERE processing_status IN ('RECEIVED', 'VERIFIED', 'RETRYABLE_ERROR');
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS sonicpesa_webhook_inbox_received_idx

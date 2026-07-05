@@ -44,6 +44,7 @@ services:
   - type: web
     name: osmani-admin-api
     runtime: node
+    autoDeploy: true
     region: oregon
     plan: starter
     rootDir: server
@@ -100,6 +101,10 @@ services:
       # Render pool max 8 — keep verify slots below pool headroom (LISTEN relay holds 1 client).
       - key: VERIFY_DB_MAX_CONCURRENT
         value: "6"
+      - key: SONICPESA_INBOX_WORKER
+        value: "0"
+      - key: SONICPESA_RECONCILE_QUEUE_WORKER
+        value: "0"
       - key: STREAM_DELIVERY_MODE
         value: hybrid
       - key: DIRECT_STREAM_SIGNING_ENABLED

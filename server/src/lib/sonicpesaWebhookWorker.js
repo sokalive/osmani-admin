@@ -18,9 +18,23 @@ import { sonicExplicitFailure, sonicPaymentSucceeded, webhookOrderIdCandidates }
 import { notifySubscriptionActivatedFromAct } from './subscriptionActivationNotify.js'
 import { liveSyncBus } from './liveSyncBus.js'
 
-const WORKER_INTERVAL_MS = Math.max(10_000, Number(process.env.SONICPESA_INBOX_WORKER_MS) || 30_000)
+const WORKER_INTERVAL_MS = Math.max(5_000, Number(process.env.SONICPESA_INBOX_WORKER_MS) || 15_000)
+const WORKER_BATCH = Math.min(40, Math.max(5, Number(process.env.SONICPESA_INBOX_WORKER_BATCH) || 20))
 let workerTimer = null
 let workerRunning = false
+let workerKickScheduled = false
+
+/** Non-blocking worker kick after durable inbox capture (match-day burst safe). */
+export function kickSonicpesaInboxWorker() {
+  if (workerKickScheduled || process.env.SONICPESA_INBOX_WORKER === '0') return
+  workerKickScheduled = true
+  setImmediate(() => {
+    workerKickScheduled = false
+    void runSonicpesaInboxWorkerOnce().catch((e) => {
+      console.warn('[sonicpesa-inbox-worker] kick failed:', e?.message || e)
+    })
+  })
+}
 
 async function resolveTransactionForWebhook(body) {
   const ids = webhookOrderIdCandidates(body)
@@ -121,7 +135,7 @@ export async function runSonicpesaInboxWorkerOnce() {
   workerRunning = true
   let processed = 0
   try {
-    const rows = await claimInboxRowsForRetry(15)
+    const rows = await claimInboxRowsForRetry(WORKER_BATCH)
     for (const row of rows) {
       try {
         await processSonicpesaInboxRow(row)
