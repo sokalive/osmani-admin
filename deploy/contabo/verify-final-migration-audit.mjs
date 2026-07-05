@@ -201,6 +201,28 @@ async function legacyApkChecks(base, label) {
   return bad === 0
 }
 
+async function waitForRenderCommitParity(vpsCommit, { maxMs = 600_000, intervalMs = 15_000 } = {}) {
+  const target = String(vpsCommit || '').slice(0, 12)
+  if (!target) return null
+  const t0 = Date.now()
+  while (Date.now() - t0 < maxMs) {
+    const { res, body } = await fetchJson(`${RENDER_API}/api/health`)
+    const renderCommit = String(body?.commit || '')
+    if (res.ok && renderCommit.startsWith(target)) {
+      report.services['render-api'] = {
+        base: RENDER_API,
+        ok: true,
+        commit: renderCommit,
+        detail: `commit=${renderCommit}`,
+      }
+      return renderCommit
+    }
+    console.log(`… waiting for Render API commit ${target} (now ${renderCommit.slice(0, 12) || 'unknown'})`)
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
+  return report.services['render-api']?.commit ?? null
+}
+
 async function main() {
   console.log('=== Osmani TV final migration audit ===\n')
 
@@ -209,11 +231,15 @@ async function main() {
 
   const expectCommit = String(process.env.EXPECT_VPS_COMMIT || process.env.GITHUB_SHA || '').trim()
   const vpsCommit = report.services['vps-api']?.commit
-  const renderCommit = report.services['render-api']?.commit
+  let renderCommit = report.services['render-api']?.commit
   if (expectCommit && vpsCommit && !String(vpsCommit).startsWith(expectCommit.slice(0, 12))) {
     fail('vps-commit', `expected ${expectCommit.slice(0, 12)} got ${String(vpsCommit).slice(0, 12)}`)
   } else if (expectCommit && vpsCommit) {
     pass('vps-commit', String(vpsCommit).slice(0, 12))
+  }
+  if (vpsCommit && renderCommit && vpsCommit !== renderCommit) {
+    console.log('Render API behind VPS — waiting for auto-deploy parity window')
+    renderCommit = await waitForRenderCommitParity(vpsCommit)
   }
   if (vpsCommit && renderCommit && vpsCommit !== renderCommit) {
     fail('api-commit-parity', `${String(renderCommit).slice(0, 12)} vs ${String(vpsCommit).slice(0, 12)}`)
