@@ -46,12 +46,23 @@ async function burst(n) {
   }
 }
 
+async function waitPoolIdle(maxWaitMs = 60_000) {
+  const t0 = Date.now()
+  while (Date.now() - t0 < maxWaitMs) {
+    const h = await fetch(`${API}/api/health`).then((r) => r.json())
+    if ((h.pool?.waitingCount ?? 0) === 0 && (h.pool?.idleCount ?? 0) > 0) return h.pool
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+  return null
+}
+
 async function main() {
   const healthBefore = await fetch(`${API}/api/health`).then((r) => r.json())
   const results = []
   for (const n of levels) {
     results.push(await burst(n))
-    await new Promise((r) => setTimeout(r, 3000))
+    await waitPoolIdle()
+    await new Promise((r) => setTimeout(r, 5000))
   }
   const healthAfter = await fetch(`${API}/api/health`).then((r) => r.json())
   const metrics = await fetch(`${API}/api/runtime/sonicpesa-reliability-metrics?days=30`, {

@@ -20,6 +20,7 @@ import { liveSyncBus } from './liveSyncBus.js'
 
 const WORKER_INTERVAL_MS = Math.max(5_000, Number(process.env.SONICPESA_INBOX_WORKER_MS) || 15_000)
 const WORKER_BATCH = Math.min(40, Math.max(5, Number(process.env.SONICPESA_INBOX_WORKER_BATCH) || 20))
+const ROW_CONCURRENCY = Math.min(8, Math.max(1, Number(process.env.SONICPESA_INBOX_ROW_CONCURRENCY) || 4))
 let workerTimer = null
 let workerRunning = false
 let workerKickScheduled = false
@@ -136,19 +137,27 @@ export async function runSonicpesaInboxWorkerOnce() {
   let processed = 0
   try {
     const rows = await claimInboxRowsForRetry(WORKER_BATCH)
-    for (const row of rows) {
-      try {
-        await processSonicpesaInboxRow(row)
-        processed += 1
-      } catch (e) {
-        const exhausted = isInboxRetryExhausted(Number(row.attempt_count ?? 0) + 1)
-        await updateInboxStatus(row.id, {
-          status: exhausted ? INBOX_STATUS.TERMINAL_REJECTED : INBOX_STATUS.RETRYABLE_ERROR,
-          lastError: String(e?.message || e).slice(0, 200),
-          incrementAttempt: true,
-          scheduleRetry: !exhausted,
-        })
+    let idx = 0
+    async function rowWorker() {
+      while (idx < rows.length) {
+        const row = rows[idx++]
+        try {
+          await processSonicpesaInboxRow(row)
+          processed += 1
+        } catch (e) {
+          const exhausted = isInboxRetryExhausted(Number(row.attempt_count ?? 0) + 1)
+          await updateInboxStatus(row.id, {
+            status: exhausted ? INBOX_STATUS.TERMINAL_REJECTED : INBOX_STATUS.RETRYABLE_ERROR,
+            lastError: String(e?.message || e).slice(0, 200),
+            incrementAttempt: true,
+            scheduleRetry: !exhausted,
+          })
+        }
       }
+    }
+    const workers = Math.min(ROW_CONCURRENCY, rows.length)
+    if (workers > 0) {
+      await Promise.all(Array.from({ length: workers }, () => rowWorker()))
     }
     return { skipped: false, processed, metrics: await getInboxMetrics() }
   } finally {

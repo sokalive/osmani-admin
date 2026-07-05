@@ -345,6 +345,7 @@ export async function handleWebhook(req, res, deps) {
   const { recordWebhookMeta } = deps
   const { insertSonicpesaWebhookInbox } = await import('../../sonicpesaWebhookInbox.js')
   const { processSonicpesaInboxRow, kickSonicpesaInboxWorker } = await import('../../sonicpesaWebhookWorker.js')
+  const { withWebhookDbSlot, isPoolPressureError } = await import('../../webhookDbGate.js')
 
   let inboxRow = null
   let inboxDuplicate = false
@@ -365,11 +366,13 @@ export async function handleWebhook(req, res, deps) {
       return res.status(401).type('text/plain').send('invalid signature')
     }
 
-    const inserted = await insertSonicpesaWebhookInbox({
-      payload: body,
-      signatureVerified: signatureOk,
-      inboxSource: engineeringProbe ? 'engineering_probe' : 'provider',
-    })
+    const inserted = await withWebhookDbSlot(() =>
+      insertSonicpesaWebhookInbox({
+        payload: body,
+        signatureVerified: signatureOk,
+        inboxSource: engineeringProbe ? 'engineering_probe' : 'provider',
+      }),
+    )
     inboxRow = inserted.row
     inboxDuplicate = inserted.duplicate
 
@@ -410,6 +413,10 @@ export async function handleWebhook(req, res, deps) {
         incrementAttempt: true,
         scheduleRetry: true,
       }).catch(() => {})
+      kickSonicpesaInboxWorker()
+      return res.status(503).type('text/plain').send('processing deferred')
+    }
+    if (isPoolPressureError(e)) {
       kickSonicpesaInboxWorker()
       return res.status(503).type('text/plain').send('processing deferred')
     }

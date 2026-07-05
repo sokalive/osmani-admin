@@ -184,7 +184,7 @@ export async function getInboxMetrics() {
        COUNT(*) FILTER (WHERE processing_status = 'RETRYABLE_ERROR')::int AS retryable_errors,
        COUNT(*) FILTER (WHERE processing_status = 'TERMINAL_REJECTED')::int AS terminal_rejected,
        MIN(received_at) FILTER (
-         WHERE processing_status IN ('RECEIVED', 'RETRYABLE_ERROR', 'PROCESSING')
+         WHERE processing_status IN ('RECEIVED', 'VERIFIED', 'RETRYABLE_ERROR', 'PROCESSING')
        ) AS oldest_unprocessed_at
      FROM sonicpesa_webhook_inbox`,
   )
