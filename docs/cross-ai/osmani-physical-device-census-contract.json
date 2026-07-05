@@ -1,7 +1,9 @@
 {
-  "contract_version": "1.0.0-backend-validated",
-  "contract_status": "BACKEND_SCHEMA_VALIDATED",
-  "note": "App AI machine-readable contract was not present at commit time. This file records backend-verified production schema availability and allowed deterministic merge rules implementable without App code changes.",
+  "contract_version": "1.0.0-final-frozen",
+  "contract_status": "FINAL_FROZEN",
+  "implementation_commit": "df63a762a11292c415af82d8f040b7717642fd40",
+  "finalized_at_utc": "2026-07-05T09:15:00Z",
+  "note": "Frozen at df63a76 reconciliation. Backend schema validated against production PostgreSQL. App AI may supersede only by committing new persisted identity fields; no separate App-derived contract revision was present on origin/main at finalization.",
   "census_feasibility_class": "B",
   "census_feasibility_description": "Reconstructable with deterministic historical aliases where stored in PostgreSQL. Perfect physical-phone truth is impossible when reinstall generates new device_id without durable linkage evidence.",
   "identity_types": {

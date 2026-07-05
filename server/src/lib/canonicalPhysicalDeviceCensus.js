@@ -13,23 +13,38 @@ import { queryMigrationDevicePopulationSummary } from './appVersionMigration.js'
 const __dir = dirname(fileURLToPath(import.meta.url))
 const CONTRACT_PATH = join(__dir, '../../../docs/cross-ai/osmani-physical-device-census-contract.json')
 
-const MAX_INSTALL_INSTANCE_DEGREE = Math.max(
-  2,
-  Math.min(8, Number(process.env.CENSUS_MAX_INSTALL_INSTANCE_DEGREE) || 4),
-)
-const MAX_ANDROID_ID_DEGREE = Math.max(2, Math.min(5, Number(process.env.CENSUS_MAX_ANDROID_ID_DEGREE) || 3))
-const MAX_FINGERPRINT_DEGREE = 2
 const MAX_COMPONENT_SIZE_ABORT = Math.max(
   10,
   Math.min(100, Number(process.env.CENSUS_MAX_COMPONENT_SIZE) || 25),
 )
 
-const EMULATOR_ANDROID_IDS = new Set([
+const DEFAULT_EMULATOR_ANDROID_IDS = [
   '9774d56d682e549c',
   '0000000000000000',
   'unknown',
   'android_id',
-])
+]
+
+function edgeLimitsFromContract(contract) {
+  const edges = Array.isArray(contract?.allowed_edge_types) ? contract.allowed_edge_types : []
+  const byId = Object.fromEntries(edges.map((e) => [e.id, e]))
+  return {
+    install: Math.max(
+      2,
+      Math.min(8, Number(byId.PROVEN_INSTALL_SESSION_ALIAS?.max_devices_per_anchor) || 4),
+    ),
+    android: Math.max(
+      2,
+      Math.min(5, Number(byId.PROVEN_ANDROID_ID_ALIAS?.max_devices_per_anchor) || 3),
+    ),
+    fingerprint: Number(byId.PROVEN_FINGERPRINT_PAIR?.max_devices_per_anchor) || 2,
+    excludeAndroidIds: new Set(
+      (byId.PROVEN_ANDROID_ID_ALIAS?.exclude_android_ids || DEFAULT_EMULATOR_ANDROID_IDS).map((x) =>
+        String(x).toLowerCase(),
+      ),
+    ),
+  }
+}
 
 let _cache = null
 let _cacheAt = 0
@@ -96,10 +111,10 @@ export function loadPhysicalDeviceCensusContract() {
   }
 }
 
-function isValidAndroidIdForEdge(androidId) {
+function isValidAndroidIdForEdge(androidId, excludeSet) {
   const d = String(androidId ?? '').trim().toLowerCase()
   if (!d || d.length < 8) return false
-  if (EMULATOR_ANDROID_IDS.has(d)) return false
+  if (excludeSet.has(d)) return false
   if (isSyntheticDeviceId(d)) return false
   return true
 }
@@ -151,6 +166,7 @@ export async function computePhysicalDeviceCensus(opts = {}) {
   if (!pool) return { ok: false, error: 'Database not configured' }
 
   const contract = loadPhysicalDeviceCensusContract()
+  const limits = edgeLimitsFromContract(contract)
   const t0 = Date.now()
   const likeParams = [
     'cap_%',
@@ -201,11 +217,11 @@ export async function computePhysicalDeviceCensus(opts = {}) {
      WHERE trim(install_instance_id) <> '' AND length(trim(install_instance_id)) >= 8
      GROUP BY 1
      HAVING count(DISTINCT trim(device_id)) BETWEEN 2 AND $1`,
-    [MAX_INSTALL_INSTANCE_DEGREE],
+    [limits.install],
   )
   for (const row of installGroups.rows) {
     const ids = filterObservedGroup(row.device_ids || [], observedSet)
-    if (ids.length >= 2 && ids.length <= MAX_INSTALL_INSTANCE_DEGREE) {
+    if (ids.length >= 2 && ids.length <= limits.install) {
       unionGroup(uf, ids, edgeStats, 'PROVEN_INSTALL_SESSION_ALIAS')
       edgeDetails.install_instance += 1
     }
@@ -217,12 +233,12 @@ export async function computePhysicalDeviceCensus(opts = {}) {
      WHERE trim(android_id) <> '' AND length(trim(android_id)) >= 8
      GROUP BY 1
      HAVING count(DISTINCT trim(device_id)) BETWEEN 2 AND $1`,
-    [MAX_ANDROID_ID_DEGREE],
+    [limits.android],
   )
   for (const row of androidGroups.rows) {
-    if (!isValidAndroidIdForEdge(row.anchor)) continue
+    if (!isValidAndroidIdForEdge(row.anchor, limits.excludeAndroidIds)) continue
     const ids = filterObservedGroup(row.device_ids || [], observedSet)
-    if (ids.length >= 2 && ids.length <= MAX_ANDROID_ID_DEGREE) {
+    if (ids.length >= 2 && ids.length <= limits.android) {
       unionGroup(uf, ids, edgeStats, 'PROVEN_ANDROID_ID_ALIAS')
       edgeDetails.android_id += 1
     }
@@ -234,12 +250,12 @@ export async function computePhysicalDeviceCensus(opts = {}) {
      WHERE length(trim(device_fingerprint)) = 64 AND trim(device_fingerprint) ~ '^[0-9a-fA-F]{64}$'
      GROUP BY 1
      HAVING count(DISTINCT trim(device_id)) = $1`,
-    [MAX_FINGERPRINT_DEGREE],
+    [limits.fingerprint],
   )
   for (const row of fpGroups.rows) {
     if (!isValidFingerprintForEdge(row.anchor)) continue
     const ids = filterObservedGroup(row.device_ids || [], observedSet)
-    if (ids.length === MAX_FINGERPRINT_DEGREE) {
+    if (ids.length === limits.fingerprint) {
       unionGroup(uf, ids, edgeStats, 'PROVEN_FINGERPRINT_PAIR')
       edgeDetails.fingerprint += 1
     }
@@ -263,7 +279,7 @@ export async function computePhysicalDeviceCensus(opts = {}) {
   for (const row of registryAnchors.rows) {
     const did = String(row.device_id)
     const aid = String(row.android_id)
-    if (isValidAndroidIdForEdge(aid)) androidByDevice.set(did, aid.toLowerCase())
+    if (isValidAndroidIdForEdge(aid, limits.excludeAndroidIds)) androidByDevice.set(did, aid.toLowerCase())
   }
 
   let highConfidence = 0
@@ -330,7 +346,15 @@ export async function computePhysicalDeviceCensus(opts = {}) {
     reconciliation,
     buildMs: Date.now() - t0,
     label: contract.dashboard_label || 'Total Unique Devices',
-    methodology: 'identity_graph_union_find_v1',
+    methodology: 'identity_graph_union_find_v1_final_frozen',
+    rule_audit: {
+      PROVEN_INSTALL_SESSION_ALIAS: 'SUPPORTED_EXACTLY',
+      PROVEN_ANDROID_ID_ALIAS: 'SUPPORTED_EXACTLY',
+      PROVEN_FINGERPRINT_PAIR: 'SUPPORTED_EXACTLY',
+      unsupported_edges_removed: 0,
+      new_edges_added: 0,
+      ambiguous_resolved_by_new_rules: 0,
+    },
     limitations: [
       'legacy_device_id pairs are not persisted for historical alias reconstruction',
       'stable_hardware_id / Widevine ID not stored in Admin DB',

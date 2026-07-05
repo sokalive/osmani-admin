@@ -1,0 +1,116 @@
+{
+  "frozen_at_utc": "2026-07-05T09:20:00Z",
+  "frozen_at_eat": "2026-07-05T12:20:00EAT",
+  "final_verdict": "FINAL_FROZEN_PARTIAL_PASS",
+  "final_total_unique_devices": 7953,
+  "implementation_commit": "df63a762a11292c415af82d8f040b7717642fd40",
+  "finalization_commit": null,
+  "app_contract_commit": "df63a762a11292c415af82d8f040b7717642fd40",
+  "app_contract_path": "docs/cross-ai/osmani-physical-device-census-contract.json",
+  "app_contract_status": "FINAL_FROZEN",
+  "app_contract_note": "No separate App AI contract revision was on origin/main at finalization. Contract frozen as backend-schema-validated with App-aligned edge semantics.",
+  "graph_rules": [
+    {
+      "id": "PROVEN_INSTALL_SESSION_ALIAS",
+      "audit": "SUPPORTED_EXACTLY",
+      "max_devices_per_anchor": 4,
+      "groups_applied_production": 232,
+      "db_fields": ["app_installs.install_instance_id", "app_installs.device_id"]
+    },
+    {
+      "id": "PROVEN_ANDROID_ID_ALIAS",
+      "audit": "SUPPORTED_EXACTLY",
+      "max_devices_per_anchor": 3,
+      "groups_applied_production": 442,
+      "db_fields": ["device_intelligence_registry.android_id", "device_intelligence_registry.device_id"]
+    },
+    {
+      "id": "PROVEN_FINGERPRINT_PAIR",
+      "audit": "SUPPORTED_EXACTLY",
+      "max_devices_per_anchor": 2,
+      "groups_applied_production": 66,
+      "db_fields": ["device_intelligence_registry.device_fingerprint", "device_intelligence_registry.device_id"]
+    }
+  ],
+  "excluded_rules": [
+    "same_phone_number",
+    "same_ip_address",
+    "same_device_model",
+    "same_device_brand",
+    "same_payment_amount",
+    "same_plan",
+    "same_transaction",
+    "same_subscription_row",
+    "timestamp_proximity_only",
+    "legacy_device_id (not persisted)",
+    "stable_hardware_id / Widevine (not in DB)",
+    "identity_candidates metadata (not indexed)"
+  ],
+  "confidence_buckets": {
+    "physical_device_components_total": 7953,
+    "high_confidence_physical_devices": 3722,
+    "deterministic_alias_merged_components": 514,
+    "ambiguous_low_confidence_components": 4231,
+    "observed_raw_identities_seed": 8471,
+    "identities_merged_by_alias": 518
+  },
+  "component_statistics": {
+    "max": 3,
+    "median": 1,
+    "p95": 2,
+    "merged_components": 514
+  },
+  "reconciliation_arithmetic": {
+    "naive_canonical_identities": 8471,
+    "df63a76_alias_merges": -518,
+    "unsupported_merges_restored": 0,
+    "new_app_proven_merges": 0,
+    "new_legitimate_seeds": 0,
+    "synthetic_adjustment": 0,
+    "final_physical_census": 7953
+  },
+  "ambiguous_reaudit": {
+    "starting_ambiguous": 4231,
+    "merged_by_ssaid_widevine": 0,
+    "merged_by_legacy_package": 0,
+    "merged_by_install_migration": 0,
+    "merged_by_hash_derivation": 0,
+    "remain_ambiguous": 4231
+  },
+  "merge_reaudit_518": {
+    "supported_collapses": 518,
+    "conditional_collapses": 0,
+    "unsupported_collapses": 0,
+    "reversals_required": 0
+  },
+  "three_run_determinism": {
+    "run_1": 7953,
+    "run_2": 7953,
+    "run_3": 7953,
+    "pass": true
+  },
+  "cache_ttl_ms": 300000,
+  "dashboard_endpoint": "/api/analytics/snapshot",
+  "audit_endpoint": "/api/admin/analytics/physical-device-census",
+  "dashboard_label": "Total Unique Devices",
+  "rollback_commit": "f828c7a7cb5619082dc11537c54a62263166dc89",
+  "known_limitations": [
+    "Cannot claim 100% exact physical phones — 4231 ambiguous singleton components remain",
+    "legacy_device_id and stable_hardware_id not persisted for historical alias reconstruction",
+    "SSAID↔Widevine merges only where android_id or install_instance_id evidence exists in DB",
+    "Perfect dedupe impossible when reinstall emits new device_id without stored linkage"
+  ],
+  "v16_v24_runtime_summary": {
+    "v16_v23": "device_id from App requests; stored in telemetry + intelligence when registered",
+    "v24_plus": "device_id + install_instance_id in app_installs; android_id in intelligence registry",
+    "widevine_stable_hardware": "NOT stored in Admin DB — cannot merge without future App persistence",
+    "legacy_device_id": "verify-time hint only — not census edge source"
+  },
+  "deployment": {
+    "vps_api_live_commit": "df63a76",
+    "pool_waiting_count_at_freeze": 0,
+    "vps_admin_bundle_at_prior_verify": "/assets/index-wtbntsYo.js",
+    "render_admin_bundle_at_prior_verify": "/assets/index-sL_hpgRi.js",
+    "github_render_hooks": "MISSING (RENDER_MPYA_DEPLOY_HOOK, RENDER_API_DEPLOY_HOOK)"
+  }
+}
