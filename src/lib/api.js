@@ -1317,6 +1317,10 @@ export const getPaymentOrderDetail = (orderId) =>
   adminApiGet(`/admin/payment-orders/${encodeURIComponent(orderId)}`)
 export const postPaymentOrderApproveRecovery = (orderId, body) =>
   adminApiPost(`/admin/payment-orders/${encodeURIComponent(orderId)}/approve-recovery`, body)
+export const postPaymentOrderRecover = (orderId, body) =>
+  adminApiPost(`/admin/payment-orders/${encodeURIComponent(orderId)}/recover`, body)
+export const getPaymentOrderRecoveryEligibility = (orderId) =>
+  adminApiGet(`/admin/payment-orders/${encodeURIComponent(orderId)}/recovery-eligibility`)
 export const postPaymentOrderRejectRecovery = (orderId, body) =>
   adminApiPost(`/admin/payment-orders/${encodeURIComponent(orderId)}/reject-recovery`, body)
 export const postPaymentOrderReconcile = (orderId, body) =>

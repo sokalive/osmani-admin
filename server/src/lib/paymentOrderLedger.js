@@ -21,6 +21,23 @@ function providerLabel(row) {
   return p || 'Unknown'
 }
 
+function recoveryHintFromRow(r) {
+  const recovery = String(r.recovery_state ?? '').trim().toUpperCase()
+  if (recovery === 'MANUALLY_APPROVED') return 'Manually Recovered'
+  if (recovery === 'RECOVERY_REJECTED') return 'Recovery Rejected'
+  const st = String(r.status ?? 'pending').toLowerCase()
+  const subActive =
+    String(r.sub_status ?? '').toLowerCase() === 'active' &&
+    r.sub_expires_at &&
+    new Date(r.sub_expires_at) > new Date() &&
+    String(r.sub_transaction_id ?? '') === String(r.order_id ?? '')
+  if (subActive) return 'Already Active'
+  if (st === 'completed') return 'Activation Gap'
+  if (st === 'pending') return 'Pending at Provider'
+  if (st === 'failed') return 'Failed at Provider'
+  return 'Review Required'
+}
+
 function activationState(row) {
   if (row.sub_status === 'active' && row.sub_expires_at && new Date(row.sub_expires_at) > new Date()) {
     return 'active'
@@ -150,6 +167,7 @@ export async function listPaymentOrdersLedger({
       manualRecoveryUsed: String(r.recovery_state ?? '').toUpperCase() === 'MANUALLY_APPROVED',
       recoverySmsSent: r.recovery_sms_sent === true,
       lastRecoveryAction: r.last_recovery_action ?? null,
+      recoveryHint: recoveryHintFromRow(r),
     }
   })
 }
