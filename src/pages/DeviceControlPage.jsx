@@ -14,6 +14,7 @@ import {
   syncStreamUrl,
 } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 function newId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID
@@ -74,13 +75,23 @@ const TABS = [
 function DeviceControlPage() {
   const { showToast } = useToast()
   const { trackSubscriptionDevice, refreshSubscriptionState } = useDeviceSubscription()
-  const [cfg, setCfg] = useState(() => defaultDevice())
+  const cachedDc = readAdminSnapshot('device-control')
+  const initialCfg =
+    cachedDc?.cfg && typeof cachedDc.cfg === 'object'
+      ? {
+          ...defaultDevice(),
+          ...cachedDc.cfg,
+          pending: Array.isArray(cachedDc.cfg.pending) ? cachedDc.cfg.pending : [],
+          logs: Array.isArray(cachedDc.cfg.logs) ? cachedDc.cfg.logs : [],
+        }
+      : defaultDevice()
+  const [cfg, setCfg] = useState(initialCfg)
   const [draft, setDraft] = useState(() => ({
-    transferMode: defaultDevice().transferMode,
-    dailyLimit: defaultDevice().dailyLimit,
-    weeklyLimit: defaultDevice().weeklyLimit,
-    cooldownMinutes: defaultDevice().cooldownMinutes,
-    phoneGateEnabled: defaultDevice().phoneGateEnabled,
+    transferMode: initialCfg.transferMode,
+    dailyLimit: initialCfg.dailyLimit,
+    weeklyLimit: initialCfg.weeklyLimit,
+    cooldownMinutes: initialCfg.cooldownMinutes,
+    phoneGateEnabled: initialCfg.phoneGateEnabled,
   }))
   const [tab, setTab] = useState('settings')
   const [flash, setFlash] = useState(null)
@@ -135,6 +146,7 @@ function DeviceControlPage() {
         cooldownMinutes: hydrated.cooldownMinutes,
         phoneGateEnabled: hydrated.phoneGateEnabled,
       })
+      writeAdminSnapshot('device-control', { cfg: hydrated })
     } catch (e) {
       showToast('error', e?.message || 'Could not load device control')
     }

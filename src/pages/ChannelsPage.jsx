@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ChannelFormModal from '../components/ChannelFormModal'
 import ChannelRow from '../components/ChannelRow'
 import ChannelsToolbar from '../components/ChannelsToolbar'
@@ -21,6 +21,8 @@ import {
 } from '../lib/api'
 import { apiBodyFromUiChannel, channelFormDataFromSubmit, uiFromApiRow } from '../lib/channelApiModel'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
 
 function reorderById(list, fromId, toId) {
   const next = [...list]
@@ -49,7 +51,13 @@ function ChannelsPage() {
   } = useDeviceSubscription()
   const [searchQuery, setSearchQuery] = useState('')
 
-  const [channels, setChannels] = useState([])
+  const cachedChannels = readAdminSnapshot('channels')
+  const [channels, setChannels] = useState(
+    Array.isArray(cachedChannels?.rows) ? cachedChannels.rows : [],
+  )
+  const channelsRef = useRef(Array.isArray(cachedChannels?.rows) ? cachedChannels.rows : [])
+  const hasChannelsRef = useRef(channelsRef.current.length > 0)
+  const channelsGenRef = useRef(0)
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [editingChannel, setEditingChannel] = useState(null)
   const [addModalOpen, setAddModalOpen] = useState(false)
@@ -68,16 +76,20 @@ function ChannelsPage() {
   const isPhoneGateEnabled = phoneGateEnabled !== false
 
   const loadChannels = useCallback(async () => {
+    const gen = ++channelsGenRef.current
     try {
       const data = await getChannels()
-      console.log('getChannels() raw response:', data)
-      const list = Array.isArray(data) ? data : []
-      console.log('getChannels() parsed list length:', list.length)
-      setChannels(list.map(uiFromApiRow))
+      if (gen !== channelsGenRef.current) return
+      const list = (Array.isArray(data) ? data : []).map(uiFromApiRow)
+      if (!shouldReplaceRows(channelsRef.current, list)) return
+      setChannels(list)
+      channelsRef.current = list
+      if (list.length > 0) hasChannelsRef.current = true
+      writeAdminSnapshot('channels', { rows: list })
     } catch (e) {
+      if (gen !== channelsGenRef.current) return
       console.error('loadChannels failed:', e)
       showToast('error', e?.message || 'Could not load channels')
-      setChannels([])
     }
   }, [showToast])
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Pencil, Trash2 } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
@@ -7,6 +7,8 @@ import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deletePlan, getPlans, getUsersLegacy, postPlan, putPlan } from '../lib/api'
 import { formatTsh } from '../lib/formatMoney'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
 
 const EXPIRY_TYPES = [
   { value: 'duration', label: 'Duration-based (payment + days)' },
@@ -81,18 +83,28 @@ const editBtnClass =
 
 function PlansPage() {
   const { showToast } = useToast()
-  const [plans, setPlans] = useState([])
-  const [users, setUsers] = useState([])
+  const cached = readAdminSnapshot('plans')
+  const [plans, setPlans] = useState(Array.isArray(cached?.plans) ? cached.plans : [])
+  const [users, setUsers] = useState(Array.isArray(cached?.users) ? cached.users : [])
+  const plansRef = useRef(Array.isArray(cached?.plans) ? cached.plans : [])
+  const usersRef = useRef(Array.isArray(cached?.users) ? cached.users : [])
+  plansRef.current = plans
+  usersRef.current = users
+  const plansGenRef = useRef(0)
 
   const loadAll = useCallback(async () => {
+    const gen = ++plansGenRef.current
     try {
       const [p, u] = await Promise.all([getPlans(), getUsersLegacy()])
-      setPlans(Array.isArray(p) ? p : [])
-      setUsers(Array.isArray(u) ? u : [])
+      if (gen !== plansGenRef.current) return
+      const nextPlans = Array.isArray(p) ? p : []
+      const nextUsers = Array.isArray(u) ? u : []
+      if (shouldReplaceRows(plansRef.current, nextPlans)) setPlans(nextPlans)
+      if (shouldReplaceRows(usersRef.current, nextUsers)) setUsers(nextUsers)
+      writeAdminSnapshot('plans', { plans: nextPlans, users: nextUsers })
     } catch (e) {
+      if (gen !== plansGenRef.current) return
       showToast('error', e?.message || 'Could not load plans')
-      setPlans([])
-      setUsers([])
     }
   }, [showToast])
 

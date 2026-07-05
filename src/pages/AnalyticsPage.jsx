@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -21,6 +21,23 @@ import {
 } from '../lib/api'
 import { formatTsh } from '../lib/formatMoney'
 import { useCountUp } from '../hooks/useCountUp'
+import { isDegradedAnalyticsSnapshot } from '../lib/adminDataGuards'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
+
+function hydrateAnalytics() {
+  const snap = readAdminSnapshot('analytics')
+  if (!snap || typeof snap !== 'object') {
+    return { overview: {}, channels: [], channelLabels: {}, locations: [], trend: [], fromCache: false }
+  }
+  return {
+    overview: snap.overview && typeof snap.overview === 'object' ? snap.overview : {},
+    channels: Array.isArray(snap.channels) ? snap.channels : [],
+    channelLabels: snap.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {},
+    locations: Array.isArray(snap.locations) ? snap.locations : [],
+    trend: Array.isArray(snap.trend) ? snap.trend : [],
+    fromCache: true,
+  }
+}
 
 function MetricCard({ title, display, icon: Icon, gradientClass, sub }) {
   return (
@@ -44,44 +61,65 @@ function MetricCard({ title, display, icon: Icon, gradientClass, sub }) {
   )
 }
 
-
 function AnalyticsPage() {
   const { showToast } = useToast()
-  const [overview, setOverview] = useState({})
-  const [channels, setChannels] = useState([])
-  const [channelLabels, setChannelLabels] = useState({})
-  const [locations, setLocations] = useState([])
-  const [trend, setTrend] = useState([])
-  const [isLoading, setIsLoading] = useState(true)
+  const initial = useMemo(() => hydrateAnalytics(), [])
+  const loadGenRef = useRef(0)
+  const [overview, setOverview] = useState(initial.overview)
+  const [channels, setChannels] = useState(initial.channels)
+  const [channelLabels, setChannelLabels] = useState(initial.channelLabels)
+  const [locations, setLocations] = useState(initial.locations)
+  const [trend, setTrend] = useState(initial.trend)
+  const [isLoading, setIsLoading] = useState(!initial.fromCache)
   const [error, setError] = useState('')
   const [isDegraded, setIsDegraded] = useState(false)
   const [lastUpdated, setLastUpdated] = useState(null)
-  const [loaded, setLoaded] = useState(false)
+  const [loaded, setLoaded] = useState(initial.fromCache)
 
   const load = useCallback(async () => {
+    const gen = ++loadGenRef.current
     try {
       setError('')
       const [snap, t] = await Promise.all([
         getAnalyticsSnapshot(),
         getAnalyticsTrend(),
       ])
-      setOverview(snap && typeof snap === 'object' ? snap : {})
-      setChannels(Array.isArray(snap?.mostWatched) ? snap.mostWatched : [])
-      setChannelLabels(
-        snap?.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {},
-      )
-      setLocations(Array.isArray(snap?.locations) ? snap.locations : [])
-      setTrend(Array.isArray(t) ? t : [])
+      if (gen !== loadGenRef.current) return
+      if (isDegradedAnalyticsSnapshot(snap)) {
+        setIsDegraded(true)
+        setLoaded(true)
+        setIsLoading(false)
+        return
+      }
+      const nextOverview = snap && typeof snap === 'object' ? snap : {}
+      const nextChannels = Array.isArray(snap?.mostWatched) ? snap.mostWatched : []
+      const nextLabels =
+        snap?.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {}
+      const nextLocations = Array.isArray(snap?.locations) ? snap.locations : []
+      const nextTrend = Array.isArray(t) ? t : []
+      setOverview((prev) => ({ ...prev, ...nextOverview }))
+      if (nextChannels.length > 0) setChannels(nextChannels)
+      if (Object.keys(nextLabels).length > 0) setChannelLabels(nextLabels)
+      if (nextLocations.length > 0) setLocations(nextLocations)
+      if (nextTrend.length > 0) setTrend(nextTrend)
+      writeAdminSnapshot('analytics', {
+        overview: nextOverview,
+        channels: nextChannels,
+        channelLabels: nextLabels,
+        locations: nextLocations,
+        trend: nextTrend,
+      })
       setIsDegraded(Boolean(snap?.degraded))
       setLastUpdated(new Date())
       setLoaded(true)
     } catch (e) {
+      if (gen !== loadGenRef.current) return
       showToast('error', e?.message || 'Could not load analytics')
       setError(e?.message || 'Could not load analytics')
       setLoaded(true)
       setIsDegraded(false)
     } finally {
-      setIsLoading(false)
+      if (gen === loadGenRef.current) setIsLoading(false)
     }
   }, [showToast])
 

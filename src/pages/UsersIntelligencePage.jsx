@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BrainCircuit, Loader2, Search } from 'lucide-react'
 import Topbar from '../components/Topbar'
@@ -9,6 +9,8 @@ import {
   postUsersIntelligenceSyncBlocks,
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 function statusBadge(status) {
   const s = String(status || '').toLowerCase()
@@ -35,22 +37,33 @@ function CounterCard({ label, value, tone }) {
 export default function UsersIntelligencePage() {
   const navigate = useNavigate()
   const { showToast } = useToast()
-  const [loading, setLoading] = useState(true)
-  const [items, setItems] = useState([])
-  const [summary, setSummary] = useState(null)
+  const cached = readAdminSnapshot('users-intelligence')
+  const initialItems = Array.isArray(cached?.items) ? cached.items : []
+  const [loading, setLoading] = useState(initialItems.length === 0)
+  const [items, setItems] = useState(initialItems)
+  const itemsRef = useRef(initialItems)
+  itemsRef.current = items
+  const loadGenRef = useRef(0)
+  const [summary, setSummary] = useState(cached?.summary ?? null)
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
 
   const load = useCallback(async (q) => {
-    setLoading(true)
+    const gen = ++loadGenRef.current
+    const isFirst = itemsRef.current.length === 0 && !q
+    if (isFirst) setLoading(true)
     try {
       const data = await getUsersIntelligenceList(q)
-      setItems(data.items || [])
-      setSummary(data.summary || null)
+      if (gen !== loadGenRef.current) return
+      const nextItems = data.items || []
+      if (shouldReplaceRows(itemsRef.current, nextItems)) setItems(nextItems)
+      if (data.summary) setSummary(data.summary)
+      if (!q) writeAdminSnapshot('users-intelligence', { items: nextItems, summary: data.summary ?? null })
     } catch (e) {
+      if (gen !== loadGenRef.current) return
       showToast(String(e.message || e), 'error')
     } finally {
-      setLoading(false)
+      if (gen === loadGenRef.current) setLoading(false)
     }
   }, [showToast])
 

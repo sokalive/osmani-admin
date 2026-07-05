@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Edit3, Plus, Trash2, Upload } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
@@ -9,6 +9,8 @@ import {
   syncStreamUrl,
   putPaymentProviderFormData,
 } from '../lib/api'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const initialForm = {
   name: '',
@@ -24,8 +26,13 @@ function toggleClass(active) {
 
 function PaymentProvidersPage() {
   const { showToast } = useToast()
-  const [items, setItems] = useState([])
-  const [loading, setLoading] = useState(true)
+  const cached = readAdminSnapshot('payment-providers')
+  const initialItems = Array.isArray(cached?.rows) ? cached.rows : []
+  const [items, setItems] = useState(initialItems)
+  const itemsRef = useRef(initialItems)
+  itemsRef.current = items
+  const loadGenRef = useRef(0)
+  const [loading, setLoading] = useState(initialItems.length === 0)
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState(initialForm)
   const [logoFile, setLogoFile] = useState(null)
@@ -33,14 +40,18 @@ function PaymentProvidersPage() {
   const [editingId, setEditingId] = useState('')
 
   const load = useCallback(async () => {
+    const gen = ++loadGenRef.current
     try {
       const list = await getPaymentProvidersSettings()
-      setItems(Array.isArray(list) ? list : [])
+      if (gen !== loadGenRef.current) return
+      const next = Array.isArray(list) ? list : []
+      if (shouldReplaceRows(itemsRef.current, next)) setItems(next)
+      writeAdminSnapshot('payment-providers', { rows: next })
     } catch (e) {
+      if (gen !== loadGenRef.current) return
       showToast('error', e?.message || 'Could not load payment providers')
-      setItems([])
     } finally {
-      setLoading(false)
+      if (gen === loadGenRef.current) setLoading(false)
     }
   }, [showToast])
 

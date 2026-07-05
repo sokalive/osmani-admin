@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Ban,
   Copy,
@@ -19,6 +19,8 @@ import {
   putTransferCode,
 } from '../lib/api'
 import { formatReadableDateTime } from '../lib/formatTxDisplay'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 function effectiveStatus(row, nowMs) {
   if (row.status === 'revoked' || row.status === 'used') return row.status
@@ -56,19 +58,28 @@ function badgeClass(st) {
 
 function TransferCodesPage() {
   const { showToast } = useToast()
-  const [codes, setCodes] = useState([])
+  const cached = readAdminSnapshot('transfer-codes')
+  const initialCodes = Array.isArray(cached?.rows) ? cached.rows : []
+  const [codes, setCodes] = useState(initialCodes)
+  const codesRef = useRef(initialCodes)
+  codesRef.current = codes
+  const loadGenRef = useRef(0)
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [search, setSearch] = useState('')
   const [flash, setFlash] = useState(null)
   const [selected, setSelected] = useState(() => new Set())
 
   const loadCodes = useCallback(async () => {
+    const gen = ++loadGenRef.current
     try {
       const list = await getTransferCodes()
-      setCodes(Array.isArray(list) ? list : [])
+      if (gen !== loadGenRef.current) return
+      const next = Array.isArray(list) ? list : []
+      if (shouldReplaceRows(codesRef.current, next)) setCodes(next)
+      writeAdminSnapshot('transfer-codes', { rows: next })
     } catch (e) {
+      if (gen !== loadGenRef.current) return
       showToast('error', e?.message || 'Could not load transfer codes')
-      setCodes([])
     }
   }, [showToast])
 

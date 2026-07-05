@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { GripVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 import BannerFormModal from '../components/BannerFormModal'
@@ -12,6 +12,8 @@ import {
   putBanner,
   syncStreamUrl,
 } from '../lib/api'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 import {
   canBannerReceiveInteractions,
   isBannerShownInCarousel,
@@ -37,23 +39,34 @@ function reorderById(list, fromId, toId) {
 
 function BannersPage() {
   const { showToast } = useToast()
-  const [banners, setBanners] = useState([])
+  const cached = readAdminSnapshot('banners')
+  const initialBanners = Array.isArray(cached?.rows)
+    ? cached.rows.map(normalizeBanner).filter(Boolean)
+    : []
+  const [banners, setBanners] = useState(initialBanners)
+  const bannersRef = useRef(initialBanners)
+  bannersRef.current = banners
+  const loadGenRef = useRef(0)
   const [tick, setTick] = useState(0)
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(initialBanners.length === 0)
   const [addOpen, setAddOpen] = useState(false)
   const [editingBanner, setEditingBanner] = useState(null)
   const [dragBannerId, setDragBannerId] = useState(null)
 
   const loadBanners = useCallback(async () => {
+    const gen = ++loadGenRef.current
     try {
       const raw = await getBannersManage()
+      if (gen !== loadGenRef.current) return
       const list = Array.isArray(raw) ? raw : []
-      setBanners(list.map(normalizeBanner).filter(Boolean))
+      const next = list.map(normalizeBanner).filter(Boolean)
+      if (shouldReplaceRows(bannersRef.current, next)) setBanners(next)
+      writeAdminSnapshot('banners', { rows: next })
     } catch (e) {
+      if (gen !== loadGenRef.current) return
       showToast('error', e?.message || 'Could not load banners')
-      setBanners([])
     } finally {
-      setIsLoading(false)
+      if (gen === loadGenRef.current) setIsLoading(false)
     }
   }, [showToast])
 

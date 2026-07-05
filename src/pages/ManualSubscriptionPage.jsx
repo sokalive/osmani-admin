@@ -27,11 +27,9 @@ import {
 } from '../lib/api'
 import { formatAdminDateOnly, formatAdminDateTime, adminDateAndTimeToIso, adminDateFromIso, adminTimeFromIso } from '../lib/formatAdminDateTime'
 import { filterManualHistoryRows, groupManualHistoryByDate } from '../lib/manualSubscriptionHistoryUi.js'
-import {
-  filterSelectableSubscriptionPlans,
-  formatManualGrantPlanLabel,
-  planDurationDays,
-} from '../lib/subscriptionPlanOptions'
+import { filterSelectableSubscriptionPlans, formatManualGrantPlanLabel, planDurationDays } from '../lib/subscriptionPlanOptions'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 function inputClass() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
@@ -100,12 +98,15 @@ function expiryFieldsFromPlan(plan, startDate, startTime) {
 
 function ManualSubscriptionPage() {
   const { showToast } = useToast()
+  const cachedMs = readAdminSnapshot('manual-subscription')
   const [tab, setTab] = useState('grant')
   const [deviceId, setDeviceId] = useState('')
   const [grantPhone, setGrantPhone] = useState('')
   const [pin, setPin] = useState('')
-  const [plans, setPlans] = useState([])
-  const [plansLoading, setPlansLoading] = useState(true)
+  const [plans, setPlans] = useState(Array.isArray(cachedMs?.plans) ? cachedMs.plans : [])
+  const plansRef = useRef(Array.isArray(cachedMs?.plans) ? cachedMs.plans : [])
+  plansRef.current = plans
+  const [plansLoading, setPlansLoading] = useState(!Array.isArray(cachedMs?.plans) || cachedMs.plans.length === 0)
   const [selectedPlanId, setSelectedPlanId] = useState('')
   const [busy, setBusy] = useState(false)
   const [flash, setFlash] = useState(null)
@@ -119,7 +120,11 @@ function ManualSubscriptionPage() {
   const [customExpireDate, setCustomExpireDate] = useState('')
   const [customExpireTime, setCustomExpireTime] = useState('')
 
-  const [historyRows, setHistoryRows] = useState([])
+  const [historyRows, setHistoryRows] = useState(
+    Array.isArray(cachedMs?.historyRows) ? cachedMs.historyRows : [],
+  )
+  const historyRef = useRef(Array.isArray(cachedMs?.historyRows) ? cachedMs.historyRows : [])
+  historyRef.current = historyRows
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyBusyId, setHistoryBusyId] = useState(null)
 
@@ -127,7 +132,11 @@ function ManualSubscriptionPage() {
   const [offerPin, setOfferPin] = useState('')
   const [generatedOfferCode, setGeneratedOfferCode] = useState('')
   const [offerBusy, setOfferBusy] = useState(false)
-  const [offerRows, setOfferRows] = useState([])
+  const [offerRows, setOfferRows] = useState(
+    Array.isArray(cachedMs?.offerRows) ? cachedMs.offerRows : [],
+  )
+  const offerRef = useRef(Array.isArray(cachedMs?.offerRows) ? cachedMs.offerRows : [])
+  offerRef.current = offerRows
   const [offerLoading, setOfferLoading] = useState(false)
   const [offerBusyCode, setOfferBusyCode] = useState(null)
 
@@ -159,11 +168,17 @@ function ManualSubscriptionPage() {
   )
 
   const loadPlans = useCallback(async () => {
-    setPlansLoading(true)
+    const isFirst = plansRef.current.length === 0
+    if (isFirst) setPlansLoading(true)
     try {
       const rows = await getPlans()
       const list = filterSelectableSubscriptionPlans(Array.isArray(rows) ? rows : [])
-      setPlans(list)
+      if (shouldReplaceRows(plansRef.current, list)) setPlans(list)
+      writeAdminSnapshot('manual-subscription', {
+        plans: list,
+        historyRows: historyRef.current,
+        offerRows: offerRef.current,
+      })
       setSelectedPlanId((prev) => {
         if (prev && list.some((p) => String(p.id) === String(prev))) return prev
         return list[0] ? String(list[0].id) : ''
@@ -178,10 +193,6 @@ function ManualSubscriptionPage() {
       })
     } catch (err) {
       showToast('error', err?.message || 'Mipango haikuweza kupakiwa')
-      setPlans([])
-      setSelectedPlanId('')
-      setOfferSelectedPlanId('')
-      setCustomPlanId('')
     } finally {
       setPlansLoading(false)
     }
@@ -219,11 +230,17 @@ function ManualSubscriptionPage() {
   }, [tab])
 
   const loadHistory = useCallback(async () => {
-    setHistoryLoading(true)
+    const isFirst = historyRef.current.length === 0
+    if (isFirst) setHistoryLoading(true)
     try {
       const out = await getManualSubscriptionHistory()
       const rows = Array.isArray(out?.rows) ? out.rows : []
-      setHistoryRows(rows)
+      if (shouldReplaceRows(historyRef.current, rows)) setHistoryRows(rows)
+      writeAdminSnapshot('manual-subscription', {
+        plans: plansRef.current,
+        historyRows: rows,
+        offerRows: offerRef.current,
+      })
     } catch (err) {
       showToast('error', err?.message || 'Historia haikuweza kupakiwa')
     } finally {
@@ -232,11 +249,17 @@ function ManualSubscriptionPage() {
   }, [showToast])
 
   const loadOfferHistory = useCallback(async () => {
-    setOfferLoading(true)
+    const isFirst = offerRef.current.length === 0
+    if (isFirst) setOfferLoading(true)
     try {
       const out = await getOfferCodesHistory()
       const rows = Array.isArray(out?.rows) ? out.rows : []
-      setOfferRows(rows)
+      if (shouldReplaceRows(offerRef.current, rows)) setOfferRows(rows)
+      writeAdminSnapshot('manual-subscription', {
+        plans: plansRef.current,
+        historyRows: historyRef.current,
+        offerRows: rows,
+      })
     } catch (err) {
       showToast('error', err?.message || 'Historie ya codes haikuweza kupakiwa')
     } finally {

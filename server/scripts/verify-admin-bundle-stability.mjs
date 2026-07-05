@@ -11,11 +11,10 @@ const MARKERS = [
   'osmani_admin_snap_v2',
   'osmani_admin_snap_v1',
   'Total Unique Devices',
+  'Loading dashboard',
   'payment-orders',
   'subscription-requests',
-  'Refreshing dashboard',
-  'adminDataGuards',
-  'adminRefreshCoordinator',
+  'readAdminSnapshot',
 ]
 
 const API_ENDPOINTS = [
@@ -80,7 +79,7 @@ async function main() {
       ok(`${surface.label} ${ep.name} HTTP ${r.status} ${r.ms}ms`)
     }
     if (bundle) {
-      ok(`${surface.label} stability-fix-present=${bundle.hits.length >= 6}`)
+      ok(`${surface.label} stability-fix-present=${bundle.hits.length >= 5}`)
     }
     console.log('')
   }

@@ -1,27 +1,39 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { getApiHealth, getServerHealth, syncStreamUrl } from '../lib/api'
+import { shouldReplaceRows } from '../lib/adminDataGuards'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 function ServerHealthPage() {
   const { showToast } = useToast()
-  const [rows, setRows] = useState([])
-  const [apiOk, setApiOk] = useState(null)
+  const cached = readAdminSnapshot('server-health')
+  const initialRows = Array.isArray(cached?.rows) ? cached.rows : []
+  const [rows, setRows] = useState(initialRows)
+  const rowsRef = useRef(initialRows)
+  rowsRef.current = rows
+  const loadGenRef = useRef(0)
+  const [apiOk, setApiOk] = useState(cached?.apiOk ?? null)
   const [refreshing, setRefreshing] = useState(false)
 
   const load = useCallback(async () => {
+    const gen = ++loadGenRef.current
     try {
       const [health, probe] = await Promise.all([
         getApiHealth().catch(() => null),
         getServerHealth().catch(() => null),
       ])
-      setApiOk(Boolean(health?.ok))
+      if (gen !== loadGenRef.current) return
+      const nextOk = Boolean(health?.ok)
+      setApiOk(nextOk)
       const ch = probe?.channels
-      setRows(Array.isArray(ch) ? ch : [])
+      const next = Array.isArray(ch) ? ch : []
+      if (shouldReplaceRows(rowsRef.current, next)) setRows(next)
+      writeAdminSnapshot('server-health', { rows: next, apiOk: nextOk })
     } catch (e) {
+      if (gen !== loadGenRef.current) return
       showToast('error', e?.message || 'Health check failed')
-      setRows([])
     }
   }, [showToast])
 
