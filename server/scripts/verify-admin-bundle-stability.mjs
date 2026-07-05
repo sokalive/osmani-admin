@@ -14,7 +14,7 @@ const MARKERS = [
   'Loading dashboard',
   'payment-orders',
   'subscription-requests',
-  'readAdminSnapshot',
+  'device-control',
 ]
 
 const API_ENDPOINTS = [
