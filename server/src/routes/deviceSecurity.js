@@ -19,7 +19,6 @@ import {
 } from '../lib/adminSensitiveActionPassword.js'
 import {
   commitSubscriptionTransfer,
-  computeTransferTargetExpiry,
   publishTransferConfirmationRequired,
   publishTransferRealtime,
 } from '../lib/transferSubscriptionMove.js'
