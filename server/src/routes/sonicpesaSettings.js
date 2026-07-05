@@ -9,18 +9,19 @@ import {
 } from '../lib/payments/providers/sonicpesa.js'
 
 import { defaultPublicApiOrigin } from '../lib/deployMeta.js'
+import {
+  canonicalSonicpesaProductionWebhookUrl,
+  isLegacyRenderWebhookUrl,
+  normalizeStoredSonicpesaWebhookUrl,
+} from '../lib/sonicpesaWebhookConfig.js'
+import { getSonicpesaWebhookHealthSnapshot, webhookSecretConfigured } from '../lib/sonicpesaWebhookHealth.js'
 
 export const sonicpesaSettingsRouter = Router()
 
 sonicpesaSettingsRouter.use(requireAdminPanelAccess)
 
-function defaultWebhookUrl(req) {
-  const base = (
-    process.env.BASE_URL ||
-    defaultPublicApiOrigin() ||
-    `${req.protocol}://${req.get('host') || ''}`
-  ).replace(/\/$/, '')
-  return `${base}/api/payments/sonicpesa/webhook`
+function defaultWebhookUrl(_req) {
+  return canonicalSonicpesaProductionWebhookUrl()
 }
 
 function normalizeEnvironment(v) {
@@ -37,7 +38,9 @@ async function rowToApiResponse(row, req) {
   const isActiveCheckoutProvider = checkout.payment_provider === 'sonicpesa'
   const apiEndpoint = String(r.api_endpoint ?? '').trim() || 'https://api.sonicpesa.com/api/v1'
   const accountId = String(r.account_id ?? '').trim()
-  const webhookUrl = String(r.webhook_url ?? '').trim() || defaultWebhookUrl(req)
+  const webhookUrl = normalizeStoredSonicpesaWebhookUrl(r.webhook_url ?? defaultWebhookUrl(req))
+  const productionWebhookUrl = canonicalSonicpesaProductionWebhookUrl()
+  const webhookUrlIsLegacyRender = isLegacyRenderWebhookUrl(String(r.webhook_url ?? ''))
   const hasKey = Boolean(String(process.env.SONICPESA_API_KEY || r.api_key || '').trim())
   const apiKeyMasked = hasKey ? maskSecret(String(process.env.SONICPESA_API_KEY || r.api_key || '').trim()) : ''
   const la = r.last_test_at
@@ -50,6 +53,7 @@ async function rowToApiResponse(row, req) {
   }
   const envOverrideAny = Object.values(envOverrideActive).some(Boolean)
   const lastWebhookAt = r.last_webhook_at
+  const webhookHealth = await getSonicpesaWebhookHealthSnapshot().catch(() => null)
   return {
     enabled: r.enabled === true,
     isActiveCheckoutProvider,
@@ -67,6 +71,14 @@ async function rowToApiResponse(row, req) {
     account_id: accountId,
     webhookUrl,
     webhook_url: webhookUrl,
+    productionWebhookUrl,
+    production_webhook_url: productionWebhookUrl,
+    webhookUrlIsLegacyRender,
+    webhookSecretConfigured: webhookSecretConfigured(),
+    lastProviderWebhookAt: webhookHealth?.last_provider_webhook_at ?? r.last_provider_webhook_at ?? null,
+    last_provider_webhook_at: webhookHealth?.last_provider_webhook_at ?? r.last_provider_webhook_at ?? null,
+    lastEngineeringProbeAt: webhookHealth?.last_engineering_probe_at ?? r.last_engineering_probe_at ?? null,
+    last_engineering_probe_at: webhookHealth?.last_engineering_probe_at ?? r.last_engineering_probe_at ?? null,
     lastTestAt: la instanceof Date ? la.toISOString() : la || null,
     last_test_at: la instanceof Date ? la.toISOString() : la || null,
     lastTestOk: r.last_test_ok,
@@ -113,7 +125,7 @@ sonicpesaSettingsRouter.put('/', async (req, res) => {
       environment: normalizeEnvironment(b.environment ?? current.environment ?? 'sandbox'),
       api_endpoint: apiEndpointIn || 'https://api.sonicpesa.com/api/v1',
       account_id: String(b.accountId ?? b.account_id ?? current.account_id ?? ''),
-      webhook_url: String(
+      webhook_url: normalizeStoredSonicpesaWebhookUrl(
         b.webhookUrl ?? b.webhook_url ?? current.webhook_url ?? defaultWebhookUrl(req),
       ),
       keep_api_key: keepKey,
@@ -156,7 +168,7 @@ sonicpesaSettingsRouter.post('/test', async (req, res) => {
       environment: normalizeEnvironment(row.environment ?? 'sandbox'),
       api_endpoint: String(row.api_endpoint ?? ''),
       account_id: String(row.account_id ?? ''),
-      webhook_url: String(row.webhook_url ?? defaultWebhookUrl(req)),
+      webhook_url: normalizeStoredSonicpesaWebhookUrl(row.webhook_url ?? defaultWebhookUrl(req)),
       keep_api_key: true,
       api_key: '',
       last_test_at: now,

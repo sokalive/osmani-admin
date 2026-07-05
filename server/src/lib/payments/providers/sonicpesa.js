@@ -12,6 +12,10 @@ import {
   recordSonicpesaWebhookHealthEvent,
   webhookSecretConfigured,
 } from '../../sonicpesaWebhookHealth.js'
+import {
+  canonicalSonicpesaProductionWebhookUrl,
+  normalizeStoredSonicpesaWebhookUrl,
+} from '../../sonicpesaWebhookConfig.js'
 
 const DEFAULT_API_BASE = 'https://api.sonicpesa.com/api/v1'
 const LOG_PREFIX = '[sonicpesa]'
@@ -23,7 +27,9 @@ export function resolveSonicpesaCredentials(row) {
     apiKey: String(process.env.SONICPESA_API_KEY || r.api_key || '').trim(),
     accountId: String(process.env.SONICPESA_ACCOUNT_ID || r.account_id || '').trim(),
     apiEndpoint: apiEndpoint.replace(/\/+$/, ''),
-    webhookUrl: String(process.env.SONICPESA_WEBHOOK_URL || r.webhook_url || '').trim(),
+    webhookUrl: normalizeStoredSonicpesaWebhookUrl(
+      String(process.env.SONICPESA_WEBHOOK_URL || r.webhook_url || '').trim(),
+    ) || canonicalSonicpesaProductionWebhookUrl(),
     environment: String(r.environment || 'sandbox').trim(),
   }
 }

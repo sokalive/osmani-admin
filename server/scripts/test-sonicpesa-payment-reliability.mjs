@@ -81,11 +81,33 @@ assert(
   verifyWebhookSignature({ headers: { 'x-sonicpesa-signature': rawSig }, rawBody: Buffer.from(rawJson, 'utf8') }, ownerPayload) === true,
 )
 
-// 5. Activation state constants
+// 6. Canonical VPS webhook URL (never Render)
+import {
+  canonicalSonicpesaProductionWebhookUrl,
+  isLegacyRenderWebhookUrl,
+  normalizeStoredSonicpesaWebhookUrl,
+} from '../src/lib/sonicpesaWebhookConfig.js'
+
+assert(
+  'canonical webhook is VPS',
+  canonicalSonicpesaProductionWebhookUrl().includes('api.osmanitv.com'),
+)
+assert(
+  'render webhook normalized',
+  normalizeStoredSonicpesaWebhookUrl('https://osmani-admin-api.onrender.com/api/payments/sonicpesa/webhook').includes(
+    'api.osmanitv.com',
+  ),
+)
+assert(
+  'legacy render detected',
+  isLegacyRenderWebhookUrl('https://osmani-admin-api.onrender.com/api/payments/sonicpesa/webhook') === true,
+)
+
+// 7. Activation state constants
 assert('activation states defined', Boolean(ACTIVATION_STATE.PHONE_CONFLICT && ACTIVATION_STATE.ACTIVATED))
 assert('completion sources defined', COMPLETION_SOURCE.SONIC_WEBHOOK === 'sonic_webhook')
 
-// 6. Inbox status enum
+// 8. Inbox status enum
 assert('inbox statuses', INBOX_STATUS.RECEIVED === 'RECEIVED' && INBOX_STATUS.PROCESSED === 'PROCESSED')
 
 // Optional DB integration tests

@@ -3,7 +3,8 @@
   "created_at": "2026-07-05",
   "owner_evidence": {
     "dashboard_state": "ACTIVE LISTENER: NO ENDPOINT CONFIGURED",
-    "source": "Owner physical inspection of SonicPesa Webhook System dashboard"
+    "legacy_admin_url_observed": "https://osmani-admin-api.onrender.com/api/payments/sonicpesa/webhook",
+    "source": "Owner physical inspection of SonicPesa Webhook System dashboard and Admin settings"
   },
   "osmani_callback_url": "https://api.osmanitv.com/api/payments/sonicpesa/webhook",
   "expected_provider_payload": {

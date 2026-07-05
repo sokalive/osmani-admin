@@ -5,7 +5,6 @@ import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import {
-  API_ORIGIN,
   getSonicpesaSettings,
   postSonicpesaTest,
   putSonicpesaSettings,
@@ -22,6 +21,9 @@ function defaultSettings() {
     hasApiKey: false,
     apiKeyMasked: '',
     webhookUrl: '',
+    productionWebhookUrl: 'https://api.osmanitv.com/api/payments/sonicpesa/webhook',
+    webhookUrlIsLegacyRender: false,
+    webhookSecretConfigured: false,
     lastTestAt: null,
     lastTestOk: null,
     lastTestMessage: '',
@@ -30,6 +32,8 @@ function defaultSettings() {
     isActiveCheckoutProvider: false,
     payment_provider: 'zenopay',
     lastWebhookAt: null,
+    lastProviderWebhookAt: null,
+    lastEngineeringProbeAt: null,
     lastWebhookEvent: '',
     lastWebhookOrderId: '',
     setAsActiveCheckoutProvider: false,
@@ -57,11 +61,18 @@ function SonicPesaSettingsPage() {
   const [testing, setTesting] = useState(false)
   const [flash, setFlash] = useState(null)
 
-  const defaultWebhook = `${String(API_ORIGIN).replace(/\/$/, '')}/api/payments/sonicpesa/webhook`
+  const productionWebhook =
+    cfg.productionWebhookUrl ||
+    cfg.production_webhook_url ||
+    'https://api.osmanitv.com/api/payments/sonicpesa/webhook'
 
   const loadSettings = useCallback(async () => {
     try {
       const s = await getSonicpesaSettings()
+      const prodWh =
+        s?.productionWebhookUrl ??
+        s?.production_webhook_url ??
+        'https://api.osmanitv.com/api/payments/sonicpesa/webhook'
       const merged = {
         ...defaultSettings(),
         ...s,
@@ -69,7 +80,10 @@ function SonicPesaSettingsPage() {
         environment: String(s?.environment || 'sandbox').toLowerCase(),
         apiEndpoint: s?.apiEndpoint ?? s?.api_endpoint ?? '',
         accountId: s?.accountId ?? s?.account_id ?? '',
-        webhookUrl: s?.webhookUrl ?? s?.webhook_url ?? defaultWebhook,
+        webhookUrl: prodWh,
+        productionWebhookUrl: prodWh,
+        webhookUrlIsLegacyRender: Boolean(s?.webhookUrlIsLegacyRender),
+        webhookSecretConfigured: Boolean(s?.webhookSecretConfigured),
         hasApiKey: Boolean(s?.hasApiKey),
         apiKeyMasked: String(s?.apiKeyMasked || '******'),
         envOverrideAny: Boolean(s?.envOverrideAny),
@@ -77,16 +91,18 @@ function SonicPesaSettingsPage() {
         isActiveCheckoutProvider: Boolean(s?.isActiveCheckoutProvider),
         payment_provider: String(s?.payment_provider || 'zenopay'),
         lastWebhookAt: s?.lastWebhookAt ?? s?.last_webhook_at ?? null,
+        lastProviderWebhookAt: s?.lastProviderWebhookAt ?? s?.last_provider_webhook_at ?? null,
+        lastEngineeringProbeAt: s?.lastEngineeringProbeAt ?? s?.last_engineering_probe_at ?? null,
         lastWebhookEvent: String(s?.lastWebhookEvent ?? s?.last_webhook_event ?? ''),
         lastWebhookOrderId: String(s?.lastWebhookOrderId ?? s?.last_webhook_order_id ?? ''),
         setAsActiveCheckoutProvider: Boolean(s?.isActiveCheckoutProvider),
       }
       setCfg(merged)
-      setDraft({ ...merged, apiKey: '' })
+      setDraft({ ...merged, apiKey: '', webhookUrl: prodWh })
     } catch (e) {
       showToast('error', e?.message || 'Could not load SonicPesa settings')
     }
-  }, [defaultWebhook, showToast])
+  }, [showToast])
 
   useEffect(() => {
     let cancelled = false
@@ -139,7 +155,7 @@ function SonicPesaSettingsPage() {
         environment: draft.environment,
         apiEndpoint: draft.apiEndpoint.trim() || 'https://api.sonicpesa.com/api/v1',
         accountId: draft.accountId.trim(),
-        webhookUrl: draft.webhookUrl.trim() || defaultWebhook,
+        webhookUrl: productionWebhook,
         setAsActiveCheckoutProvider: draft.setAsActiveCheckoutProvider,
         payment_provider: draft.setAsActiveCheckoutProvider ? 'sonicpesa' : undefined,
       }
@@ -373,43 +389,68 @@ function SonicPesaSettingsPage() {
 
             <div>
               <label className={labelClass()} htmlFor="sp-wh">
-                Webhook URL (configure in SonicPesa dashboard)
+                Production webhook URL (authoritative VPS — configure in SonicPesa dashboard)
               </label>
               <input
                 id="sp-wh"
-                value={draft.webhookUrl || defaultWebhook}
-                onChange={(e) => setDraft((d) => ({ ...d, webhookUrl: e.target.value }))}
-                className={inputClass()}
+                readOnly
+                value={productionWebhook}
+                className={`${inputClass()} cursor-default opacity-90`}
               />
+              {cfg.webhookUrlIsLegacyRender ? (
+                <p className="mt-2 text-xs text-amber-300">
+                  Legacy Render callback was detected and normalized to the authoritative VPS endpoint on save/deploy.
+                </p>
+              ) : null}
               <p className="mt-2 text-xs text-slate-500">
-                POST target for payment events. Optional HMAC: set <code className="text-slate-400">SONICPESA_WEBHOOK_SECRET</code>{' '}
-                on the server and send <code className="text-slate-400">x-sonicpesa-signature</code> (hex SHA-256 of raw JSON body).
+                POST target for SonicPesa <strong className="text-slate-400">payment.completed</strong> events.
+                HMAC: set <code className="text-slate-400">SONICPESA_WEBHOOK_SECRET</code> on VPS and send{' '}
+                <code className="text-slate-400">X-SonicPesa-Signature</code> (hex SHA-256 of raw JSON body).
+                {cfg.webhookSecretConfigured ? (
+                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">
+                    HMAC configured
+                  </span>
+                ) : (
+                  <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-300">
+                    HMAC not configured
+                  </span>
+                )}
               </p>
             </div>
 
-            <div className="rounded-xl border border-slate-600/50 bg-slate-900/50 px-4 py-3">
-              <p className="text-xs font-semibold uppercase text-slate-500">Webhook status</p>
-              {cfg.lastWebhookAt ? (
-                <>
-                  <p className="mt-1 text-sm text-slate-200">
-                    Last event:{' '}
-                    <span className="font-medium text-emerald-300">
-                      {cfg.lastWebhookEvent || 'received'}
-                    </span>
+            <div className="rounded-xl border border-slate-600/50 bg-slate-900/50 px-4 py-3 space-y-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">Webhook delivery status</p>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Real provider webhook</p>
+                {cfg.lastProviderWebhookAt ? (
+                  <p className="mt-1 text-sm text-emerald-300">
+                    {new Date(cfg.lastProviderWebhookAt).toLocaleString()}
                   </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {new Date(cfg.lastWebhookAt).toLocaleString()}
-                    {cfg.lastWebhookOrderId ? (
-                      <>
-                        {' '}
-                        · order <span className="font-mono text-slate-400">{cfg.lastWebhookOrderId}</span>
-                      </>
-                    ) : null}
+                ) : (
+                  <p className="mt-1 text-sm text-amber-300">No provider-originated webhook received yet</p>
+                )}
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last engineering probe</p>
+                {cfg.lastEngineeringProbeAt ? (
+                  <p className="mt-1 text-sm text-slate-400">
+                    {new Date(cfg.lastEngineeringProbeAt).toLocaleString()}
                   </p>
-                </>
-              ) : (
-                <p className="mt-1 text-sm text-slate-400">No webhook received yet</p>
-              )}
+                ) : (
+                  <p className="mt-1 text-sm text-slate-500">None recorded</p>
+                )}
+              </div>
+              {cfg.lastWebhookEvent || cfg.lastWebhookOrderId ? (
+                <p className="text-xs text-slate-500">
+                  Last event: <span className="text-slate-300">{cfg.lastWebhookEvent || '—'}</span>
+                  {cfg.lastWebhookOrderId ? (
+                    <>
+                      {' '}
+                      · order <span className="font-mono text-slate-400">{cfg.lastWebhookOrderId}</span>
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
             </div>
           </div>
 

@@ -2,6 +2,7 @@
  * Distinguish provider webhooks from engineering probes; track health clocks separately.
  */
 import { getPool } from '../db/pool.js'
+import { canonicalSonicpesaProductionWebhookUrl } from './sonicpesaWebhookConfig.js'
 
 export function isEngineeringWebhookProbe(req, body) {
   const hdr = String(req?.headers?.['x-osmani-engineering-probe'] ?? '').trim().toLowerCase()
@@ -92,7 +93,7 @@ export async function getSonicpesaWebhookHealthSnapshot() {
   if (providerAge != null && providerAge > 21600) alerts.push({ code: 'PROVIDER_WEBHOOK_STALE_6H', age_sec: providerAge })
   return {
     webhook_secret_configured: webhookSecretConfigured(),
-    callback_url: 'https://api.osmanitv.com/api/payments/sonicpesa/webhook',
+    callback_url: canonicalSonicpesaProductionWebhookUrl(),
     signature_header: 'X-SonicPesa-Signature',
     signature_algorithm: 'HMAC-SHA256 (hex digest of raw POST body bytes)',
     expected_event: 'payment.completed',

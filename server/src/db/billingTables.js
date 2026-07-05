@@ -630,6 +630,17 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE sonicpesa_settings ADD COLUMN IF NOT EXISTS last_invalid_signature_at TIMESTAMPTZ;
   `)
+  await client.query(`
+    UPDATE sonicpesa_settings SET
+      webhook_url = 'https://api.osmanitv.com/api/payments/sonicpesa/webhook',
+      updated_at = now()
+    WHERE id = 1
+      AND (
+        webhook_url ILIKE '%onrender.com%'
+        OR webhook_url ILIKE '%osmani-admin-api%'
+        OR trim(webhook_url) = ''
+      );
+  `)
 
   /** Aurax Pay (additive third gateway — ZenoPay + SonicPesa unchanged). */
   await client.query(`
