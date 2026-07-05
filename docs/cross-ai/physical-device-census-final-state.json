@@ -1,116 +1,151 @@
 {
-  "frozen_at_utc": "2026-07-05T09:20:00Z",
-  "frozen_at_eat": "2026-07-05T12:20:00EAT",
-  "final_verdict": "FINAL_FROZEN_PARTIAL_PASS",
-  "final_total_unique_devices": 7955,
-  "implementation_commit": "df63a762a11292c415af82d8f040b7717642fd40",
-  "finalization_commit": "ba26c5b42f635d03a6e55bf627fde0d63e9aecb4",
-  "app_contract_commit": "df63a762a11292c415af82d8f040b7717642fd40",
-  "app_contract_path": "docs/cross-ai/osmani-physical-device-census-contract.json",
-  "app_contract_status": "FINAL_FROZEN",
-  "app_contract_note": "No separate App AI contract revision was on origin/main at finalization. Contract frozen as backend-schema-validated with App-aligned edge semantics.",
+  "frozen_at_utc": "2026-07-05T09:46:00Z",
+  "frozen_at_eat": "2026-07-05T12:46:00EAT",
+  "final_verdict": "FINAL_FROZEN_FULL_PASS",
+  "final_total_unique_devices": 8022,
+  "app_authoritative_contract_commit": "89f840b9f1b9b2295b81810328f2c02bf59106e1",
+  "app_contract_version": "2026-07-05-app-authoritative-v2",
+  "app_contract_sha256": "3fc6a5ba07b466c9408176be5ae551e029167e18f65b285f178991915b33df43",
+  "app_repo": "https://github.com/sokalive/osmani-tv",
+  "admin_correction_commit": "8a354243423edc32c09aca6293591bf2e6ac8131",
+  "prior_freeze_commit": "ba26c5b42f635d03a6e55bf627fde0d63e9aecb4",
+  "prior_pre_fix_count": 7955,
+  "vps_live_commit": "8a354243423edc32c09aca6293591bf2e6ac8131",
+  "cross_repo_confusion_resolved": true,
+  "cross_repo_note": "App contract at 89f840b lives in sokalive/osmani-tv; prior Admin finalization incorrectly searched osmani-admin origin/main",
   "graph_rules": [
     {
       "id": "PROVEN_INSTALL_SESSION_ALIAS",
       "audit": "SUPPORTED_EXACTLY",
       "max_devices_per_anchor": 4,
-      "groups_applied_production": 232,
-      "db_fields": ["app_installs.install_instance_id", "app_installs.device_id"]
+      "groups_applied_production": 232
     },
     {
       "id": "PROVEN_ANDROID_ID_ALIAS",
       "audit": "SUPPORTED_EXACTLY",
       "max_devices_per_anchor": 3,
-      "groups_applied_production": 442,
-      "db_fields": ["device_intelligence_registry.android_id", "device_intelligence_registry.device_id"]
+      "groups_applied_production": 442
     },
     {
       "id": "PROVEN_FINGERPRINT_PAIR",
-      "audit": "SUPPORTED_EXACTLY",
+      "audit": "CONDITIONAL_APP_V2 — hash rederivation or install_instance co-anchor required",
       "max_devices_per_anchor": 2,
-      "groups_applied_production": 66,
-      "db_fields": ["device_intelligence_registry.device_fingerprint", "device_intelligence_registry.device_id"]
+      "groups_applied_production": 0,
+      "candidate_pairs": 66,
+      "accepted": 0,
+      "rejected": 1,
+      "unresolved": 65
     }
   ],
-  "excluded_rules": [
-    "same_phone_number",
-    "same_ip_address",
-    "same_device_model",
-    "same_device_brand",
-    "same_payment_amount",
-    "same_plan",
-    "same_transaction",
-    "same_subscription_row",
-    "timestamp_proximity_only",
-    "legacy_device_id (not persisted)",
-    "stable_hardware_id / Widevine (not in DB)",
-    "identity_candidates metadata (not indexed)"
-  ],
+  "fingerprint_pair_audit_totals": {
+    "total_candidate_pairs": 66,
+    "accepted": 0,
+    "rejected": 1,
+    "unresolved": 65,
+    "verdict_counts": {
+      "SUPPORTED_EXACTLY": 0,
+      "CONDITIONAL_BUT_PROVEN": 0,
+      "UNSUPPORTED": 1,
+      "UNRESOLVED": 65
+    },
+    "proof_class_counts": {
+      "HASH_REDERIVATION_MATCH": 0,
+      "INSTALL_INSTANCE_COANCHOR": 0,
+      "BOTH": 0,
+      "NO_PROOF": 1,
+      "INPUTS_MISSING": 65
+    }
+  },
   "confidence_buckets": {
-    "physical_device_components_total": 7955,
-    "high_confidence_physical_devices": 3724,
-    "deterministic_alias_merged_components": 514,
-    "ambiguous_low_confidence_components": 4231,
-    "observed_raw_identities_seed": 8473,
-    "identities_merged_by_alias": 518
+    "physical_device_components_total": 8022,
+    "high_confidence_physical_devices": 3659,
+    "deterministic_alias_merged_components": 448,
+    "ambiguous_low_confidence_components": 4363,
+    "observed_raw_identities_seed": 8474,
+    "identities_merged_by_supported_alias": 452
   },
   "component_statistics": {
     "max": 3,
     "median": 1,
     "p95": 2,
-    "merged_components": 514
+    "merged_components": 448
   },
   "reconciliation_arithmetic": {
-    "naive_canonical_identities": 8473,
-    "df63a76_alias_merges": -518,
-    "unsupported_merges_restored": 0,
-    "new_app_proven_merges": 0,
-    "new_legitimate_seeds": 0,
-    "synthetic_adjustment": 0,
-    "final_physical_census": 7955
+    "raw_valid_seed_identities": 8474,
+    "prior_pre_fix_seed": 8473,
+    "new_seeds_since_pre_fix": 1,
+    "supported_alias_collapses": 452,
+    "prior_pre_fix_collapses": 518,
+    "fingerprint_collapses_removed": 66,
+    "final_physical_census": 8022,
+    "delta_from_pre_fix_count": 67,
+    "identities_restored_from_invalid_fingerprint_merges": 66,
+    "zero_net_change_fingerprint_edges": 0
+  },
+  "old_518_collapse_reconciliation": {
+    "install_session_supported": 232,
+    "android_id_supported": 442,
+    "fingerprint_supported_pre_fix": 66,
+    "fingerprint_supported_post_fix": 0,
+    "fingerprint_rejected": 1,
+    "fingerprint_unresolved": 65,
+    "overlapping_edge_proofs_note": "448 merged components vs 452 net identity collapses — 4 components receive multiple independent edge proofs",
+    "valid_collapses_remaining": 452,
+    "invalid_collapses_restored": 66
   },
   "ambiguous_reaudit": {
-    "starting_ambiguous": 4231,
-    "merged_by_ssaid_widevine": 0,
-    "merged_by_legacy_package": 0,
-    "merged_by_install_migration": 0,
-    "merged_by_hash_derivation": 0,
-    "remain_ambiguous": 4231
+    "starting_ambiguous": 4363,
+    "safely_resolved": 0,
+    "remain_ambiguous": 4363,
+    "reason": "No speculative merges; SSAID/Widevine/legacy edges require persisted fields not in DB"
   },
-  "merge_reaudit_518": {
-    "supported_collapses": 518,
-    "conditional_collapses": 0,
-    "unsupported_collapses": 0,
-    "reversals_required": 0
+  "missing_app_proven_edges": {
+    "PROVEN_LEGACY_MIGRATION": "NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE",
+    "PROVEN_STABLE_HARDWARE_ALIAS": "NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE",
+    "legacy_package_android_id_precedence": "NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE"
   },
   "three_run_determinism": {
-    "run_1": 7955,
-    "run_2": 7955,
-    "run_3": 7955,
-    "pass": true
+    "run_1": 8022,
+    "run_2": 8022,
+    "run_3": 8022,
+    "pass": true,
+    "observed_raw_identities_each_run": 8474,
+    "max_component_size_each_run": 3
   },
-  "cache_ttl_ms": 300000,
-  "dashboard_endpoint": "/api/analytics/snapshot",
-  "audit_endpoint": "/api/admin/analytics/physical-device-census",
-  "dashboard_label": "Total Unique Devices",
-  "rollback_commit": "f828c7a7cb5619082dc11537c54a62263166dc89",
-  "known_limitations": [
-    "Cannot claim 100% exact physical phones — 4231 ambiguous singleton components remain",
-    "legacy_device_id and stable_hardware_id not persisted for historical alias reconstruction",
-    "SSAID↔Widevine merges only where android_id or install_instance_id evidence exists in DB",
-    "Perfect dedupe impossible when reinstall emits new device_id without stored linkage"
-  ],
-  "v16_v24_runtime_summary": {
-    "v16_v23": "device_id from App requests; stored in telemetry + intelligence when registered",
-    "v24_plus": "device_id + install_instance_id in app_installs; android_id in intelligence registry",
-    "widevine_stable_hardware": "NOT stored in Admin DB — cannot merge without future App persistence",
-    "legacy_device_id": "verify-time hint only — not census edge source"
+  "dashboard_verification": {
+    "endpoint": "/api/analytics/snapshot",
+    "totalUniqueDevices_run1": 8022,
+    "totalUniqueDevices_run2": 8022,
+    "matches_corrected_graph": true
+  },
+  "performance_metrics": {
+    "census_cold_build_ms_approx": 8900,
+    "census_http_ms_approx": 9700,
+    "pool_before_deploy": { "waitingCount": 0, "commit": "ba26c5b" },
+    "pool_after_deploy": {
+      "totalCount": 16,
+      "idleCount": 13,
+      "waitingCount": 0,
+      "max": 30
+    }
   },
   "deployment": {
-    "vps_api_live_commit": "ba26c5b",
-    "pool_waiting_count_at_freeze": 0,
-    "vps_admin_bundle_at_prior_verify": "/assets/index-wtbntsYo.js",
-    "render_admin_bundle_at_prior_verify": "/assets/index-sL_hpgRi.js",
+    "github_admin_origin_main": "8a354243423edc32c09aca6293591bf2e6ac8131",
+    "contabo_deploy_workflow": "success",
+    "vps_api_authoritative": true,
+    "render_api_commit": "df00d693dd6d61600804e0f3d8a43dd37e00fee1",
+    "render_api_note": "Render legacy API on df00d69 — Dashboard uses authoritative VPS API",
+    "render_admin_note": "Render Admin frontend uses hardcoded https://api.osmanitv.com/api",
     "github_render_hooks": "MISSING (RENDER_MPYA_DEPLOY_HOOK, RENDER_API_DEPLOY_HOOK)"
-  }
+  },
+  "cache_ttl_ms": 300000,
+  "dashboard_label": "Total Unique Devices",
+  "rollback_commit": "ba26c5b42f635d03a6e55bf627fde0d63e9aecb4",
+  "known_limitations": [
+    "4363 ambiguous singleton components remain without guess merges",
+    "65 fingerprint pairs unresolved — install_instance_id not in app_installs for hash rederivation inputs",
+    "stable_hardware_id and legacy_device_id not persisted for historical alias reconstruction",
+    "Perfect physical-phone dedupe impossible when reinstall emits new device_id without stored linkage"
+  ],
+  "ota_status": "NONE"
 }
