@@ -37,10 +37,22 @@ function syntheticSqlExclude(column = 'device_id') {
   return `(${col} <> '' AND length(trim(${col})) >= 8 AND ${likes})`
 }
 
+let _canonicalCache = null
+let _canonicalCacheAt = 0
+const CANONICAL_CACHE_MS = Math.max(
+  30_000,
+  Math.min(300_000, Number(process.env.CANONICAL_DEVICES_CACHE_MS) || 120_000),
+)
+
 /**
  * @returns {Promise<{ ok: boolean, totalUniqueDevices: number, sources: object, sql: string }>}
  */
 export async function queryCanonicalUniqueDeviceCount() {
+  const now = Date.now()
+  if (_canonicalCache && now - _canonicalCacheAt < CANONICAL_CACHE_MS) {
+    return { ..._canonicalCache, cached: true, cacheAgeMs: now - _canonicalCacheAt }
+  }
+
   const pool = getPool()
   if (!pool) return { ok: false, totalUniqueDevices: 0, sources: {}, sql: '' }
 
@@ -91,7 +103,7 @@ export async function queryCanonicalUniqueDeviceCount() {
     ),
   ])
 
-  return {
+  const result = {
     ok: true,
     totalUniqueDevices,
     sources: {
@@ -102,19 +114,49 @@ export async function queryCanonicalUniqueDeviceCount() {
     },
     sql: sql.replace(/\s+/g, ' ').trim(),
     isSyntheticDeviceId,
+    cached: false,
+    cacheAgeMs: 0,
   }
+  _canonicalCache = result
+  _canonicalCacheAt = Date.now()
+  return result
 }
 
 export async function queryUniqueDeviceAuditBreakdown() {
   const pool = getPool()
   if (!pool) return { ok: false }
   const summary = await queryCanonicalUniqueDeviceCount()
-  const migration = await pool.query(
-    `SELECT COUNT(DISTINCT device_id)::int AS c FROM client_api_telemetry WHERE device_id <> ''`,
-  )
+  const [
+    migration,
+    registry,
+    subscriptions,
+    telemetryAll,
+    installsAll,
+    intelligence,
+  ] = await Promise.all([
+    pool.query(`SELECT COUNT(DISTINCT device_id)::int AS c FROM client_api_telemetry WHERE device_id <> ''`),
+    pool.query(`SELECT COUNT(DISTINCT trim(device_id))::int AS c FROM device_intelligence_registry WHERE trim(device_id) <> ''`),
+    pool.query(`SELECT COUNT(DISTINCT device_id)::int AS c FROM device_subscriptions WHERE trim(device_id) <> ''`),
+    pool.query(`SELECT COUNT(*)::int AS rows, COUNT(DISTINCT device_id)::int AS distinct_ids FROM client_api_telemetry WHERE device_id <> ''`),
+    pool.query(`SELECT COUNT(*)::int AS rows, COUNT(DISTINCT trim(device_id))::int AS distinct_ids FROM app_installs WHERE trim(device_id) <> ''`),
+    pool.query(`SELECT COUNT(*)::int AS rows FROM device_intelligence_registry WHERE trim(device_id) <> ''`),
+  ])
+  const { queryMigrationDevicePopulationSummary } = await import('./appVersionMigration.js')
+  const mig = await queryMigrationDevicePopulationSummary().catch(() => ({ ok: false }))
   return {
     ok: true,
+    timestampUtc: new Date().toISOString(),
     canonical: summary,
-    legacy_migration_telemetry_all: Number(migration.rows[0]?.c) || 0,
+    legacy_migration_metric: mig?.ok ? mig.summary?.totalUniqueDevices : null,
+    raw_sources: {
+      client_api_telemetry: telemetryAll.rows[0] ?? {},
+      app_installs: installsAll.rows[0] ?? {},
+      device_intelligence_registry_rows: intelligence.rows[0]?.rows ?? 0,
+      device_intelligence_registry_distinct: Number(registry.rows[0]?.c) || 0,
+      device_subscriptions_distinct: Number(subscriptions.rows[0]?.c) || 0,
+      telemetry_distinct_all_versions: Number(migration.rows[0]?.c) || 0,
+    },
+    dedupe_key: 'device_id (app_installs UNION client_api_telemetry v16+, minus synthetic prefixes)',
+    label: 'Canonical Observed Install Identities',
   }
 }

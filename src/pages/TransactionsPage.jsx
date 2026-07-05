@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { deleteTransactionsBulk, getTransactions, syncStreamUrl } from '../lib/api'
 import { endOfDay, isSameLocalDay, startOfDay } from '../lib/dates'
 import { formatTsh } from '../lib/formatMoney'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const PAGE_SIZE = 10
 
@@ -76,7 +77,12 @@ function computeTodayStats(transactions, todayRef = new Date()) {
 
 function TransactionsPage() {
   const { showToast } = useToast()
-  const [transactions, setTransactions] = useState([])
+  const cached = readAdminSnapshot('transactions')
+  const [transactions, setTransactions] = useState(
+    Array.isArray(cached?.rows) ? cached.rows : [],
+  )
+  const hasDataRef = useRef(Array.isArray(cached?.rows))
+  const genRef = useRef(0)
   const [tab, setTab] = useState('all')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
@@ -84,13 +90,19 @@ function TransactionsPage() {
   const [selectedOrderIds, setSelectedOrderIds] = useState(() => new Set())
 
   const loadTx = useCallback(async () => {
+    const gen = ++genRef.current
     try {
       const rows = await getTransactions()
-      setTransactions(Array.isArray(rows) ? rows : [])
+      if (gen !== genRef.current) return
+      const list = Array.isArray(rows) ? rows : []
+      setTransactions(list)
+      hasDataRef.current = true
+      writeAdminSnapshot('transactions', { rows: list })
       setSelectedOrderIds(new Set())
     } catch (e) {
+      if (gen !== genRef.current) return
       showToast('error', e?.message || 'Could not load transactions')
-      setTransactions([])
+      /* keep last-known-good rows on transient failure */
     }
   }, [showToast])
 

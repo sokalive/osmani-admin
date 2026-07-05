@@ -9,6 +9,7 @@ import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
 import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
 import { getAnalyticsSnapshot, getAnalyticsTrend } from '../lib/api'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const emerald =
   'bg-gradient-to-br from-emerald-400/92 via-emerald-500/88 to-emerald-700/90'
@@ -20,20 +21,45 @@ const OVERVIEW_FALLBACK = {
   newUsersToday: 0,
 }
 
+function hydrateDashboard() {
+  const snap = readAdminSnapshot('dashboard')
+  if (!snap || typeof snap !== 'object') {
+    return {
+      overview: OVERVIEW_FALLBACK,
+      channels: [],
+      topFiveChannels: [],
+      channelLabels: {},
+      locations: [],
+      trend: [],
+      fromCache: false,
+    }
+  }
+  return {
+    overview: { ...OVERVIEW_FALLBACK, ...(snap.overview || {}) },
+    channels: Array.isArray(snap.channels) ? snap.channels : [],
+    topFiveChannels: Array.isArray(snap.topFiveChannels) ? snap.topFiveChannels : [],
+    channelLabels: snap.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {},
+    locations: Array.isArray(snap.locations) ? snap.locations : [],
+    trend: Array.isArray(snap.trend) ? snap.trend : [],
+    fromCache: true,
+  }
+}
+
 function DashboardPage() {
   const { showToast } = useToast()
-  const [overview, setOverview] = useState(OVERVIEW_FALLBACK)
-  const [channels, setChannels] = useState([])
-  const [topFiveChannels, setTopFiveChannels] = useState([])
-  const [channelLabels, setChannelLabels] = useState({})
-  const [locations, setLocations] = useState([])
-  const [trend, setTrend] = useState([])
-  const [loaded, setLoaded] = useState(false)
+  const initial = useMemo(() => hydrateDashboard(), [])
+  const [overview, setOverview] = useState(initial.overview)
+  const [channels, setChannels] = useState(initial.channels)
+  const [topFiveChannels, setTopFiveChannels] = useState(initial.topFiveChannels)
+  const [channelLabels, setChannelLabels] = useState(initial.channelLabels)
+  const [locations, setLocations] = useState(initial.locations)
+  const [trend, setTrend] = useState(initial.trend)
+  const [loaded, setLoaded] = useState(initial.fromCache)
 
   const load = useCallback(async () => {
     try {
       const [snap, t] = await Promise.all([getAnalyticsSnapshot(), getAnalyticsTrend()])
-      setOverview({
+      const nextOverview = {
         onlineNow: snap?.onlineNow,
         watchingNow: snap?.watchingNow,
         idleNow: snap?.idleNow,
@@ -42,26 +68,37 @@ function DashboardPage() {
         newUsersToday: snap?.newUsersToday,
         dauToday: snap?.dauToday,
         livePresenceWindowSeconds: snap?.livePresenceWindowSeconds,
+      }
+      const nextChannels = Array.isArray(snap?.mostWatched) ? snap.mostWatched : []
+      const nextTopFive = Array.isArray(snap?.top5) ? snap.top5 : []
+      const nextLabels =
+        snap?.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {}
+      const nextLocations = Array.isArray(snap?.locations) ? snap.locations : []
+      const nextTrend = Array.isArray(t)
+        ? t.map((x) => ({
+            time: new Date(x.time).toLocaleTimeString('en-GB', {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+              timeZone: 'Africa/Dar_es_Salaam',
+            }),
+            users: Number(x.users) || 0,
+          }))
+        : []
+      setOverview(nextOverview)
+      setChannels(nextChannels)
+      setTopFiveChannels(nextTopFive)
+      setChannelLabels(nextLabels)
+      setLocations(nextLocations)
+      setTrend(nextTrend)
+      writeAdminSnapshot('dashboard', {
+        overview: nextOverview,
+        channels: nextChannels,
+        topFiveChannels: nextTopFive,
+        channelLabels: nextLabels,
+        locations: nextLocations,
+        trend: nextTrend,
       })
-      setChannels(Array.isArray(snap?.mostWatched) ? snap.mostWatched : [])
-      setTopFiveChannels(Array.isArray(snap?.top5) ? snap.top5 : [])
-      setChannelLabels(
-        snap?.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {},
-      )
-      setLocations(Array.isArray(snap?.locations) ? snap.locations : [])
-      setTrend(
-        Array.isArray(t)
-          ? t.map((x) => ({
-              time: new Date(x.time).toLocaleTimeString('en-GB', {
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false,
-                timeZone: 'Africa/Dar_es_Salaam',
-              }),
-              users: Number(x.users) || 0,
-            }))
-          : [],
-      )
       setLoaded(true)
     } catch (e) {
       showToast('error', e?.message || 'Could not load dashboard')
@@ -104,7 +141,7 @@ function DashboardPage() {
     {
       gradientClass: emerald,
       className: 'dashboard-card',
-      title: 'Total Unique Devices',
+      title: 'Canonical Observed Devices',
       value: uniqueDevicesFormatted,
       icon: Activity,
     },
@@ -129,7 +166,9 @@ function DashboardPage() {
           </section>
         </div>
         <LiveUsersTrendSection points={trend} />
-        {!loaded ? <p className="mt-3 text-xs text-slate-500">Loading dashboard…</p> : null}
+        {!loaded ? (
+          <p className="mt-3 text-xs text-slate-500">Refreshing dashboard…</p>
+        ) : null}
       </main>
     </>
   )

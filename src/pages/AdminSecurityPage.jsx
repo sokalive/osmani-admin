@@ -62,7 +62,8 @@ export default function AdminSecurityPage() {
   )
 
   const load = useCallback(async () => {
-    setLoading(true)
+    const isFirst = rows.length === 0
+    if (isFirst) setLoading(true)
     try {
       const out = await getAdminAuthDevices()
       setRows(Array.isArray(out?.devices) ? out.devices : [])
@@ -72,13 +73,14 @@ export default function AdminSecurityPage() {
         setPageUnlocked(false)
         setOtpModalOpen(false)
         setChallengeToken('')
+        setRows([])
+      } else {
+        showToast('error', e?.message || 'Haikuwezekana kupakia vifaa')
       }
-      showToast('error', e?.message || 'Haikuwezekana kupakia vifaa')
-      setRows([])
     } finally {
       setLoading(false)
     }
-  }, [showToast])
+  }, [showToast, rows.length])
 
   useEffect(() => {
     if (pageUnlocked) void load()

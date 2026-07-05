@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { HandHelping, RefreshCw, ToggleLeft, ToggleRight } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import SecurityPinModal from '../components/SecurityPinModal'
@@ -14,6 +14,7 @@ import {
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 import { formatTsh } from '../lib/formatMoney'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const STATUS_TABS = [
   { id: 'all', label: 'All' },
@@ -40,10 +41,14 @@ function inputClass() {
 
 export default function SubscriptionRequestsPage() {
   const { showToast } = useToast()
-  const [rows, setRows] = useState([])
-  const [plans, setPlans] = useState([])
-  const [enabled, setEnabled] = useState(true)
-  const [loading, setLoading] = useState(true)
+  const cached = readAdminSnapshot('subscription-requests')
+  const [rows, setRows] = useState(Array.isArray(cached?.rows) ? cached.rows : [])
+  const [plans, setPlans] = useState(Array.isArray(cached?.plans) ? cached.plans : [])
+  const [enabled, setEnabled] = useState(cached?.enabled !== false)
+  const [initialLoading, setInitialLoading] = useState(!Array.isArray(cached?.rows))
+  const [refreshing, setRefreshing] = useState(false)
+  const hasRowsRef = useRef(Array.isArray(cached?.rows))
+  const genRef = useRef(0)
   const [tab, setTab] = useState('PENDING')
   const [search, setSearch] = useState('')
   const [editPlan, setEditPlan] = useState({})
@@ -52,20 +57,36 @@ export default function SubscriptionRequestsPage() {
   const [pinError, setPinError] = useState('')
 
   const load = useCallback(async () => {
-    setLoading(true)
+    const gen = ++genRef.current
+    const isFirst = !hasRowsRef.current
+    if (isFirst) setInitialLoading(true)
+    else setRefreshing(true)
     try {
       const [data, settings, plansRes] = await Promise.all([
         getSubscriptionRequests({ status: tab, search: search.trim() }),
         getSubscriptionRequestSettings(),
         getPlans(),
       ])
-      setRows(Array.isArray(data?.rows) ? data.rows : [])
+      if (gen !== genRef.current) return
+      const list = Array.isArray(data?.rows) ? data.rows : []
+      const planList = Array.isArray(plansRes) ? plansRes.filter((p) => p?.isActive !== false) : []
+      setRows(list)
       setEnabled(settings?.enabled !== false)
-      setPlans(Array.isArray(plansRes) ? plansRes.filter((p) => p?.isActive !== false) : [])
+      setPlans(planList)
+      hasRowsRef.current = true
+      writeAdminSnapshot('subscription-requests', {
+        rows: list,
+        plans: planList,
+        enabled: settings?.enabled !== false,
+      })
     } catch (e) {
+      if (gen !== genRef.current) return
       showToast(e.message || 'Failed to load requests', 'error')
     } finally {
-      setLoading(false)
+      if (gen === genRef.current) {
+        setInitialLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [tab, search, showToast])
 
@@ -118,7 +139,7 @@ export default function SubscriptionRequestsPage() {
               onClick={load}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-600/70 bg-slate-900/80 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
-              <RefreshCw className="h-4 w-4" /> Refresh
+              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
             </button>
           </div>
         </div>
@@ -163,7 +184,7 @@ export default function SubscriptionRequestsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/80">
-              {loading ? (
+              {initialLoading ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
                     Loading…

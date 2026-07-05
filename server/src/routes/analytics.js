@@ -101,7 +101,6 @@ async function queryOverviewStats(pool) {
     newUsersTodayRaw,
     revenueTodayRaw,
     totalInstallsRaw,
-    migrationSummary,
     canonicalUnique,
   ] = await Promise.all([
       queryLivePresenceTotals(pool).catch((e) => {
@@ -139,21 +138,24 @@ async function queryOverviewStats(pool) {
         'overview.totalInstalls',
         (r) => numOrZero(r?.c),
       ),
-      queryMigrationDevicePopulationSummary().catch((e) => {
-        console.error('[analytics] overview.totalUniqueDevices:', e)
-        return { ok: false }
-      }),
       queryCanonicalUniqueDeviceCount().catch((e) => {
         console.error('[analytics] overview.canonicalUniqueDevices:', e)
         return { ok: false, totalUniqueDevices: 0 }
       }),
     ])
-  const totalUniqueDevices =
-    canonicalUnique?.ok && canonicalUnique.totalUniqueDevices != null
-      ? numOrZero(canonicalUnique.totalUniqueDevices)
-      : migrationSummary?.ok && migrationSummary.summary
+  let totalUniqueDevices = 0
+  if (canonicalUnique?.ok && canonicalUnique.totalUniqueDevices != null) {
+    totalUniqueDevices = numOrZero(canonicalUnique.totalUniqueDevices)
+  } else {
+    const migrationSummary = await queryMigrationDevicePopulationSummary().catch((e) => {
+      console.error('[analytics] overview.totalUniqueDevices fallback:', e)
+      return { ok: false }
+    })
+    totalUniqueDevices =
+      migrationSummary?.ok && migrationSummary.summary
         ? numOrZero(migrationSummary.summary.totalUniqueDevices)
         : 0
+  }
   const onlineNow = presenceTotals?.onlineNow ?? 0
   const watchingNow = presenceTotals?.watchingNow ?? 0
   const idleNow = presenceTotals?.idleNow ?? 0

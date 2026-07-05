@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ClipboardList, RefreshCw, ShieldCheck } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import SecurityPinModal from '../components/SecurityPinModal'
@@ -12,6 +12,9 @@ import {
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 import { formatTsh } from '../lib/formatMoney'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
+
+const SSE_DEBOUNCE_MS = 1200
 
 const STATUS_TABS = [
   { id: 'all', label: 'All' },
@@ -44,8 +47,12 @@ function inputClass() {
 
 export default function PaymentOrdersPage() {
   const { showToast } = useToast()
-  const [rows, setRows] = useState([])
-  const [loading, setLoading] = useState(true)
+  const cached = readAdminSnapshot('payment-orders')
+  const [rows, setRows] = useState(Array.isArray(cached?.rows) ? cached.rows : [])
+  const [initialLoading, setInitialLoading] = useState(!Array.isArray(cached?.rows))
+  const [refreshing, setRefreshing] = useState(false)
+  const hasRowsRef = useRef(Array.isArray(cached?.rows))
+  const genRef = useRef(0)
   const [tab, setTab] = useState('all')
   const [search, setSearch] = useState('')
   const [pinExec, setPinExec] = useState(null)
@@ -54,14 +61,25 @@ export default function PaymentOrdersPage() {
   const [confirmRow, setConfirmRow] = useState(null)
 
   const load = useCallback(async () => {
-    setLoading(true)
+    const gen = ++genRef.current
+    const isFirst = !hasRowsRef.current
+    if (isFirst) setInitialLoading(true)
+    else setRefreshing(true)
     try {
       const data = await getPaymentOrders({ status: tab, search: search.trim() })
-      setRows(Array.isArray(data?.rows) ? data.rows : [])
+      if (gen !== genRef.current) return
+      const list = Array.isArray(data?.rows) ? data.rows : []
+      setRows(list)
+      hasRowsRef.current = true
+      writeAdminSnapshot('payment-orders', { rows: list, tab, search: search.trim() })
     } catch (e) {
+      if (gen !== genRef.current) return
       showToast(e.message || 'Failed to load payment orders', 'error')
     } finally {
-      setLoading(false)
+      if (gen === genRef.current) {
+        setInitialLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [tab, search, showToast])
 
@@ -72,8 +90,15 @@ export default function PaymentOrdersPage() {
   useEffect(() => {
     const url = syncStreamUrl(['analytics'])
     const es = new EventSource(url)
-    es.onmessage = () => load()
-    return () => es.close()
+    let debounceId = null
+    es.onmessage = () => {
+      window.clearTimeout(debounceId)
+      debounceId = window.setTimeout(() => load(), SSE_DEBOUNCE_MS)
+    }
+    return () => {
+      window.clearTimeout(debounceId)
+      es.close()
+    }
   }, [load])
 
   const filtered = useMemo(() => rows, [rows])
@@ -120,7 +145,7 @@ export default function PaymentOrdersPage() {
             onClick={load}
             className="inline-flex items-center gap-2 rounded-xl border border-slate-600/70 bg-slate-900/80 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800"
           >
-            <RefreshCw className="h-4 w-4" /> Refresh
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
           </button>
         </div>
 
@@ -166,7 +191,7 @@ export default function PaymentOrdersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/80">
-              {loading ? (
+              {initialLoading ? (
                 <tr>
                   <td colSpan={10} className="px-4 py-8 text-center text-slate-400">
                     Loading…

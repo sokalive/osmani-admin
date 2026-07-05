@@ -11,6 +11,7 @@ import {
 } from '../lib/analyticsResetStore.js'
 import { sendAnalyticsResetOtpEmail } from '../lib/resendOtpMail.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+import { queryUniqueDeviceAuditBreakdown } from '../lib/canonicalUniqueDevices.js'
 
 export const analyticsAdminRouter = Router()
 
@@ -252,5 +253,18 @@ analyticsAdminRouter.post('/reset-installs/execute', async (req, res) => {
     }
     const status = msg.includes('cooldown') ? 429 : msg.includes('OTP') ? 403 : 500
     res.status(status).json({ ok: false, error: msg })
+  }
+})
+
+/** Read-only forensic breakdown for dashboard unique-device metric. */
+analyticsAdminRouter.get('/unique-devices-audit', async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    const audit = await queryUniqueDeviceAuditBreakdown()
+    if (!audit.ok) return res.status(503).json({ ok: false, error: 'Database not configured' })
+    res.json(audit)
+  } catch (e) {
+    console.error('[analytics-admin] unique-devices-audit', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })
