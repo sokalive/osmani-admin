@@ -3,9 +3,12 @@ import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { verifyAdminSensitiveActionPassword } from '../lib/adminSensitiveActionPassword.js'
 import {
   listSubscriptionRequestsAdmin,
+  countSubscriptionRequestsByStatus,
   approveSubscriptionRequest,
   rejectSubscriptionRequest,
   blockSubscriptionRequest,
+  deleteSubscriptionRequest,
+  bulkDeleteSubscriptionRequests,
 } from '../lib/subscriptionRequestStore.js'
 import {
   readOmbaKifurushiEnabled,
@@ -62,15 +65,19 @@ subscriptionRequestsAdminRouter.get('/', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const q = req.query || {}
-    const rows = await listSubscriptionRequestsAdmin({
-      status: q.status ?? 'all',
-      search: q.search ?? q.q ?? '',
-      limit: q.limit ?? 200,
-    })
+    const [rows, statusCounts] = await Promise.all([
+      listSubscriptionRequestsAdmin({
+        status: q.status ?? 'all',
+        search: q.search ?? q.q ?? '',
+        limit: q.limit ?? 200,
+      }),
+      countSubscriptionRequestsByStatus(),
+    ])
     res.json({
       ok: true,
       rows: rows.map(mapRequestRow),
       count: rows.length,
+      statusCounts,
     })
   } catch (e) {
     console.error('[subscription-requests-admin] list', e)
@@ -105,6 +112,31 @@ function mapRequestRow(r) {
     subExpiresAt: r.sub_expires_at instanceof Date ? r.sub_expires_at.toISOString() : r.sub_expires_at,
   }
 }
+
+subscriptionRequestsAdminRouter.post('/bulk-delete', async (req, res) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const pin = String(b.pin ?? b.security_pin ?? '').trim()
+    if (!pin) return res.status(400).json({ ok: false, error: 'PIN is required' })
+    if (!verifyAdminSensitiveActionPassword(pin)) {
+      return res.status(403).json({ ok: false, error: 'Invalid PIN' })
+    }
+    const raw = b.request_ids ?? b.requestIds ?? b.ids
+    const result = await bulkDeleteSubscriptionRequests({
+      requestIds: raw,
+      adminIdentity: adminLabel(req),
+    })
+    liveSyncBus.publish('subscription_request_updated', {
+      topics: ['config'],
+      action: 'bulk_delete',
+      deleted: result.deleted,
+    })
+    res.json(result)
+  } catch (e) {
+    console.error('[subscription-requests-admin] bulk-delete', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
 
 subscriptionRequestsAdminRouter.post('/:requestId/approve', async (req, res) => {
   try {
@@ -171,8 +203,37 @@ subscriptionRequestsAdminRouter.post('/:requestId/block', async (req, res) => {
       adminIdentity: adminLabel(req),
       reason: b.reason ?? '',
     })
+    liveSyncBus.publish('subscription_request_updated', {
+      topics: ['config'],
+      requestId: Number(req.params.requestId),
+      status: 'BLOCKED',
+    })
     res.json({ ok: true, ...result, request: mapRequestRow(result.request) })
   } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+subscriptionRequestsAdminRouter.post('/:requestId/delete', async (req, res) => {
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const pin = String(b.pin ?? b.security_pin ?? '').trim()
+    if (!pin) return res.status(400).json({ ok: false, error: 'PIN is required' })
+    if (!verifyAdminSensitiveActionPassword(pin)) {
+      return res.status(403).json({ ok: false, error: 'Invalid PIN' })
+    }
+    const result = await deleteSubscriptionRequest({
+      requestId: req.params.requestId,
+      adminIdentity: adminLabel(req),
+    })
+    liveSyncBus.publish('subscription_request_updated', {
+      topics: ['config'],
+      requestId: Number(req.params.requestId),
+      status: 'DELETED',
+    })
+    res.json({ ok: true, ...result, request: mapRequestRow(result.request) })
+  } catch (e) {
+    console.error('[subscription-requests-admin] delete', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

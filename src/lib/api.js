@@ -1339,3 +1339,7 @@ export const postSubscriptionRequestReject = (id, body) =>
   adminApiPost(`/admin/subscription-requests/${encodeURIComponent(id)}/reject`, body)
 export const postSubscriptionRequestBlock = (id, body) =>
   adminApiPost(`/admin/subscription-requests/${encodeURIComponent(id)}/block`, body)
+export const postSubscriptionRequestDelete = (id, body) =>
+  adminApiPost(`/admin/subscription-requests/${encodeURIComponent(id)}/delete`, body)
+export const postSubscriptionRequestsBulkDelete = (body) =>
+  adminApiPost('/admin/subscription-requests/bulk-delete', body)

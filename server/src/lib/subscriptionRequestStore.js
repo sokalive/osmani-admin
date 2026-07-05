@@ -78,18 +78,18 @@ export async function createSubscriptionRequest({
 export async function listSubscriptionRequestsAdmin({ status = 'all', limit = 200, search = '' } = {}) {
   const pool = requirePool()
   const lim = Math.min(500, Math.max(1, Number(limit) || 200))
-  const cond = ['deleted_at IS NULL']
+  const cond = ['sr.deleted_at IS NULL']
   const params = []
   let i = 1
   if (status && status !== 'all') {
-    cond.push(`status = $${i}`)
+    cond.push(`sr.status = $${i}`)
     params.push(String(status).toUpperCase())
     i += 1
   }
   const q = String(search ?? '').trim()
   if (q) {
     cond.push(
-      `(device_id ILIKE $${i} OR phone ILIKE $${i} OR normalized_phone ILIKE $${i} OR CAST(id AS TEXT) = $${i + 1})`,
+      `(sr.device_id ILIKE $${i} OR sr.phone ILIKE $${i} OR sr.normalized_phone ILIKE $${i} OR CAST(sr.id AS TEXT) = $${i + 1})`,
     )
     params.push(`%${q}%`, q)
     i += 2
@@ -103,11 +103,70 @@ export async function listSubscriptionRequestsAdmin({ status = 'all', limit = 20
      FROM subscription_requests sr
      LEFT JOIN device_subscriptions ds ON ds.device_id = sr.device_id
      WHERE ${cond.join(' AND ')}
-     ORDER BY sr.created_at DESC
+     ORDER BY sr.created_at DESC, sr.id DESC
      LIMIT $${i}`,
     params,
   )
   return rows
+}
+
+/** Authoritative per-status counts (not limited by list pagination/search). */
+export async function countSubscriptionRequestsByStatus() {
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT status, COUNT(*)::int AS n
+     FROM subscription_requests
+     WHERE deleted_at IS NULL
+     GROUP BY status`,
+  )
+  const counts = { all: 0, PENDING: 0, APPROVED: 0, REJECTED: 0, BLOCKED: 0, CANCELLED: 0 }
+  for (const r of rows) {
+    const st = String(r.status ?? '').toUpperCase()
+    const n = Number(r.n) || 0
+    counts.all += n
+    if (st in counts) counts[st] = n
+  }
+  return counts
+}
+
+export async function deleteSubscriptionRequest({ requestId, adminIdentity = 'admin' }) {
+  const pool = requirePool()
+  const rid = Number(requestId)
+  if (!Number.isFinite(rid) || rid < 1) throw new Error('Invalid request id')
+  const { rows } = await pool.query(
+    `UPDATE subscription_requests SET
+       deleted_at = now(),
+       updated_at = now(),
+       admin_decision_by = COALESCE(admin_decision_by, $2)
+     WHERE id = $1 AND deleted_at IS NULL
+     RETURNING *`,
+    [rid, String(adminIdentity).slice(0, 256)],
+  )
+  if (!rows[0]) throw new Error('Request not found')
+  return { ok: true, request: rows[0] }
+}
+
+export async function bulkDeleteSubscriptionRequests({ requestIds, adminIdentity = 'admin' }) {
+  const pool = requirePool()
+  const ids = [
+    ...new Set(
+      (Array.isArray(requestIds) ? requestIds : [])
+        .map((x) => Number(x))
+        .filter((n) => Number.isFinite(n) && n >= 1),
+    ),
+  ].slice(0, 500)
+  if (ids.length === 0) throw new Error('request_ids required')
+  const { rows } = await pool.query(
+    `UPDATE subscription_requests SET
+       deleted_at = now(),
+       updated_at = now(),
+       admin_decision_by = COALESCE(admin_decision_by, $2)
+     WHERE id = ANY($1::int[]) AND deleted_at IS NULL
+     RETURNING id`,
+    [ids, String(adminIdentity).slice(0, 256)],
+  )
+  const deletedIds = rows.map((r) => Number(r.id))
+  return { ok: true, deleted: deletedIds.length, deletedIds, notFound: ids.length - deletedIds.length }
 }
 
 export async function approveSubscriptionRequest({
