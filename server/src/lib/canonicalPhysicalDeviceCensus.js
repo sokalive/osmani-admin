@@ -9,6 +9,7 @@ import { getPool } from '../db/pool.js'
 import { isSyntheticDeviceId, syntheticSqlExclude } from './canonicalUniqueDevices.js'
 import { queryCanonicalUniqueDeviceCount } from './canonicalUniqueDevices.js'
 import { queryMigrationDevicePopulationSummary } from './appVersionMigration.js'
+import { evaluateFingerprintPairProof, redactDeviceId } from './fingerprintMergeProof.js'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 const CONTRACT_PATH = join(__dir, '../../../docs/cross-ai/osmani-physical-device-census-contract.json')
@@ -26,8 +27,14 @@ const DEFAULT_EMULATOR_ANDROID_IDS = [
 ]
 
 function edgeLimitsFromContract(contract) {
-  const edges = Array.isArray(contract?.allowed_edge_types) ? contract.allowed_edge_types : []
-  const byId = Object.fromEntries(edges.map((e) => [e.id, e]))
+  const edges = Array.isArray(contract?.allowed_edge_types)
+    ? contract.allowed_edge_types
+    : Array.isArray(contract?.backend_executable_edge_limits)
+      ? contract.backend_executable_edge_limits
+      : []
+  const byId = Object.fromEntries(
+    edges.map((e) => [e.id || e.edge_type, e]),
+  )
   return {
     install: Math.max(
       2,
@@ -209,7 +216,35 @@ export async function computePhysicalDeviceCensus(opts = {}) {
   for (const id of observedSet) uf.add(id)
 
   const edgeStats = {}
-  const edgeDetails = { install_instance: 0, android_id: 0, fingerprint: 0 }
+  const edgeDetails = {
+    install_instance: 0,
+    android_id: 0,
+    fingerprint: 0,
+    fingerprint_rejected: 0,
+    fingerprint_unresolved: 0,
+  }
+  const fingerprintPairAudit = {
+    total_candidate_pairs: 0,
+    accepted: 0,
+    rejected: 0,
+    unresolved: 0,
+    verdict_counts: {},
+    proof_class_counts: {},
+    pairs: [],
+  }
+
+  const installByDevice = new Map()
+  const installInstanceRows = await pool.query(
+    `SELECT trim(device_id) AS device_id, trim(install_instance_id) AS install_instance_id
+     FROM app_installs
+     WHERE trim(install_instance_id) <> '' AND length(trim(install_instance_id)) >= 8`,
+  )
+  for (const row of installInstanceRows.rows) {
+    const did = String(row.device_id)
+    const iid = String(row.install_instance_id)
+    if (!installByDevice.has(did)) installByDevice.set(did, new Set())
+    installByDevice.get(did).add(iid)
+  }
 
   const installGroups = await pool.query(
     `SELECT trim(install_instance_id) AS anchor, array_agg(DISTINCT trim(device_id)) AS device_ids
@@ -244,6 +279,14 @@ export async function computePhysicalDeviceCensus(opts = {}) {
     }
   }
 
+  const registryMetaRows = await pool.query(
+    `SELECT trim(device_id) AS device_id, metadata
+     FROM device_intelligence_registry WHERE trim(device_id) <> ''`,
+  )
+  const registryByDevice = new Map(
+    registryMetaRows.rows.map((r) => [String(r.device_id), { metadata: r.metadata }]),
+  )
+
   const fpGroups = await pool.query(
     `SELECT trim(device_fingerprint) AS anchor, array_agg(DISTINCT trim(device_id)) AS device_ids
      FROM device_intelligence_registry
@@ -255,9 +298,36 @@ export async function computePhysicalDeviceCensus(opts = {}) {
   for (const row of fpGroups.rows) {
     if (!isValidFingerprintForEdge(row.anchor)) continue
     const ids = filterObservedGroup(row.device_ids || [], observedSet)
-    if (ids.length === limits.fingerprint) {
+    if (ids.length !== limits.fingerprint) continue
+
+    fingerprintPairAudit.total_candidate_pairs += 1
+    const fp = String(row.anchor).toLowerCase()
+    const proof = evaluateFingerprintPairProof(fp, ids, installByDevice, registryByDevice)
+
+    fingerprintPairAudit.verdict_counts[proof.verdict] =
+      (fingerprintPairAudit.verdict_counts[proof.verdict] || 0) + 1
+    fingerprintPairAudit.proof_class_counts[proof.proof_class] =
+      (fingerprintPairAudit.proof_class_counts[proof.proof_class] || 0) + 1
+
+    if (opts.auditFingerprints) {
+      fingerprintPairAudit.pairs.push({
+        left_id: redactDeviceId(ids[0]),
+        right_id: redactDeviceId(ids[1]),
+        fingerprint_prefix: fp.slice(0, 12),
+        ...proof,
+      })
+    }
+
+    if (proof.allowed) {
       unionGroup(uf, ids, edgeStats, 'PROVEN_FINGERPRINT_PAIR')
       edgeDetails.fingerprint += 1
+      fingerprintPairAudit.accepted += 1
+    } else if (proof.proof_class === 'INPUTS_MISSING') {
+      edgeDetails.fingerprint_unresolved += 1
+      fingerprintPairAudit.unresolved += 1
+    } else {
+      edgeDetails.fingerprint_rejected += 1
+      fingerprintPairAudit.rejected += 1
     }
   }
 
@@ -306,14 +376,29 @@ export async function computePhysicalDeviceCensus(opts = {}) {
   const legacyMigration = migration?.ok ? Number(migration.summary?.totalUniqueDevices) || 0 : 0
   const canonicalCount = canonical?.ok ? Number(canonical.totalUniqueDevices) || 0 : observedRawCount
 
+  const installSessionCollapses = edgeStats.PROVEN_INSTALL_SESSION_ALIAS || 0
+  const androidCollapses = edgeStats.PROVEN_ANDROID_ID_ALIAS || 0
+  const fingerprintCollapses = edgeStats.PROVEN_FINGERPRINT_PAIR || 0
+
   const reconciliation = {
     current_observed_identities: canonicalCount,
     merged_by_install_instance_alias: edgeDetails.install_instance,
     merged_by_android_id_alias: edgeDetails.android_id,
     merged_by_fingerprint_pair: edgeDetails.fingerprint,
+    fingerprint_pairs_rejected_app_v2: edgeDetails.fingerprint_rejected,
+    fingerprint_pairs_unresolved: edgeDetails.fingerprint_unresolved,
     estimated_identities_merged: mergedDeviceIds,
     physical_device_components: physicalDeviceCount,
     delta_from_observed: physicalDeviceCount - canonicalCount,
+    collapse_reconciliation: {
+      install_session_edge_groups: edgeDetails.install_instance,
+      android_id_edge_groups: edgeDetails.android_id,
+      fingerprint_edge_groups_accepted: edgeDetails.fingerprint,
+      fingerprint_edge_groups_rejected: edgeDetails.fingerprint_rejected,
+      identity_collapses_net: mergedDeviceIds,
+      merged_components: stats.mergedComponents,
+      note: '518 net collapses vs 514 merged components — overlap when multiple edge types connect same devices',
+    },
   }
 
   const result = {
@@ -345,15 +430,57 @@ export async function computePhysicalDeviceCensus(opts = {}) {
     giant_component_audit: giants,
     reconciliation,
     buildMs: Date.now() - t0,
-    label: contract.dashboard_label || 'Total Unique Devices',
-    methodology: 'identity_graph_union_find_v1_final_frozen',
+    label: contract.dashboard_label || contract.metric_label || 'Total Unique Devices',
+    methodology: 'identity_graph_union_find_v2_app_authoritative',
     rule_audit: {
       PROVEN_INSTALL_SESSION_ALIAS: 'SUPPORTED_EXACTLY',
       PROVEN_ANDROID_ID_ALIAS: 'SUPPORTED_EXACTLY',
-      PROVEN_FINGERPRINT_PAIR: 'SUPPORTED_EXACTLY',
-      unsupported_edges_removed: 0,
+      PROVEN_FINGERPRINT_PAIR:
+        fingerprintPairAudit.rejected + fingerprintPairAudit.unresolved > 0
+          ? 'CONDITIONAL — hash rederivation or install_instance co-anchor required (App v2)'
+          : 'SUPPORTED_EXACTLY under App v2 guards',
+      PROVEN_LEGACY_MIGRATION: 'NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE',
+      PROVEN_STABLE_HARDWARE_ALIAS: 'NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE',
+      unsupported_edges_removed: edgeDetails.fingerprint_rejected,
       new_edges_added: 0,
       ambiguous_resolved_by_new_rules: 0,
+      fingerprint_pair_audit: {
+        total_candidate_pairs: fingerprintPairAudit.total_candidate_pairs,
+        accepted: fingerprintPairAudit.accepted,
+        rejected: fingerprintPairAudit.rejected,
+        unresolved: fingerprintPairAudit.unresolved,
+        verdict_counts: fingerprintPairAudit.verdict_counts,
+        proof_class_counts: fingerprintPairAudit.proof_class_counts,
+      },
+      collapse_buckets: {
+        install_session_supported: installSessionCollapses,
+        android_id_supported: androidCollapses,
+        fingerprint_hash_or_coanchor: fingerprintCollapses,
+        fingerprint_rejected_unsupported: edgeDetails.fingerprint_rejected,
+        fingerprint_unresolved: edgeDetails.fingerprint_unresolved,
+      },
+    },
+    fingerprint_pair_audit: opts.auditFingerprints
+      ? fingerprintPairAudit
+      : {
+          total_candidate_pairs: fingerprintPairAudit.total_candidate_pairs,
+          accepted: fingerprintPairAudit.accepted,
+          rejected: fingerprintPairAudit.rejected,
+          unresolved: fingerprintPairAudit.unresolved,
+          verdict_counts: fingerprintPairAudit.verdict_counts,
+          proof_class_counts: fingerprintPairAudit.proof_class_counts,
+        },
+    missing_app_proven_edges: {
+      PROVEN_LEGACY_MIGRATION: 'NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE',
+      PROVEN_STABLE_HARDWARE_ALIAS: 'NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE',
+      legacy_package_android_id_precedence: 'NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE',
+      migration_bridge_identity_candidates: 'NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE',
+    },
+    ambiguous_reaudit: {
+      starting_ambiguous: ambiguousLow,
+      safely_resolved: 0,
+      remain_ambiguous: ambiguousLow,
+      reason: 'No phone/IP/model/payment merges; SSAID/Widevine/legacy edges require persisted fields not in DB',
     },
     limitations: [
       'legacy_device_id pairs are not persisted for historical alias reconstruction',

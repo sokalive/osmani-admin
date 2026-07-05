@@ -266,8 +266,9 @@ analyticsAdminRouter.get('/physical-device-census', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
     const dryRun = String(req.query.dryRun ?? req.query.dry_run ?? '0') === '1'
     const force = String(req.query.force ?? '0') === '1'
+    const auditFingerprints = String(req.query.audit ?? req.query.auditFingerprints ?? '0') === '1'
     const census = dryRun
-      ? await computePhysicalDeviceCensus({ dryRun: true })
+      ? await computePhysicalDeviceCensus({ dryRun: true, auditFingerprints })
       : await queryPhysicalDeviceCensusSnapshot({ force })
     if (!census.ok && census.aborted) {
       return res.status(409).json(census)

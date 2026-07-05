@@ -1,0 +1,82 @@
+{
+  "generated_at_utc": "2026-07-05T09:40:00Z",
+  "app_source": {
+    "repo": "https://github.com/sokalive/osmani-tv",
+    "commit": "89f840b9f1b9b2295b81810328f2c02bf59106e1",
+    "contract_version": "2026-07-05-app-authoritative-v2",
+    "contract_sha256": "3fc6a5ba07b466c9408176be5ae551e029167e18f65b285f178991915b33df43"
+  },
+  "admin_prior": {
+    "commit": "df00d693dd6d61600804e0f3d8a43dd37e00fee1",
+    "contract_version": "1.0.0-final-frozen",
+    "contract_status": "FINAL_FROZEN",
+    "misread_note": "Prior finalization searched osmani-admin origin/main for App commit 89f840b — wrong repository"
+  },
+  "cross_repo_confusion": {
+    "verdict": "CONFIRMED",
+    "explanation": "App contract lives in sokalive/osmani-tv (OsmaniTvExpo). Admin repo is sokalive/osmani-admin. Commit 89f840b exists on osmani-tv origin/main, not on osmani-admin."
+  },
+  "rule_diff": [
+    {
+      "rule": "PROVEN_INSTALL_SESSION_ALIAS",
+      "classification": "MATCH",
+      "app": "2-4 device_id per install_instance_id in app_installs",
+      "admin_df63a76": "IMPLEMENTED max=4"
+    },
+    {
+      "rule": "PROVEN_ANDROID_ID_ALIAS",
+      "classification": "MATCH",
+      "app": "2-3 device_id per android_id, exclude emulator SSAIDs",
+      "admin_df63a76": "IMPLEMENTED max=3"
+    },
+    {
+      "rule": "PROVEN_FINGERPRINT_PAIR",
+      "classification": "ADMIN_TOO_BROAD",
+      "app": "CONDITIONAL — requires hash rederivation OR install_instance co-anchor before merging two device_ids",
+      "admin_df63a76": "SUPPORTED_EXACTLY on shared fingerprint alone",
+      "correction": "Tightened in canonicalPhysicalDeviceCensus.js per App v2"
+    },
+    {
+      "rule": "PROVEN_HASH_DERIVATION_COLOCATED",
+      "classification": "APP_ADDS_RULE",
+      "app": "Links device_id to fingerprint on same row — does NOT merge two device_ids",
+      "admin_df63a76": "Not a separate edge type"
+    },
+    {
+      "rule": "PROVEN_LEGACY_MIGRATION",
+      "classification": "NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE",
+      "app": "migration_bridge payload legacy_device_id + device_id",
+      "admin_df63a76": "NOT_IMPLEMENTED — verify payloads not archived in DB"
+    },
+    {
+      "rule": "PROVEN_STABLE_HARDWARE_ALIAS",
+      "classification": "NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE",
+      "app": "Widevine device_id + SSAID in same register body",
+      "admin_df63a76": "NOT_IMPLEMENTED — stable_hardware_id not persisted"
+    },
+    {
+      "rule": "legacy_package_android_id precedence",
+      "classification": "NON_EXECUTABLE_DUE_TO_MISSING_DB_EVIDENCE",
+      "app": "Canonical component key precedence rank 1",
+      "admin_df63a76": "Column not in PostgreSQL"
+    },
+    {
+      "rule": "forbidden merges (phone/IP/model/payment)",
+      "classification": "MATCH"
+    },
+    {
+      "rule": "synthetic filters",
+      "classification": "MATCH"
+    },
+    {
+      "rule": "census_feasibility_class B",
+      "classification": "MATCH"
+    }
+  ],
+  "fingerprint_contradiction": {
+    "prior_admin_claim": "PROVEN_FINGERPRINT_PAIR SUPPORTED_EXACTLY; conditional 0; unsupported 0",
+    "app_v2_claim": "BACKEND_RULE_TOO_BROAD without rederivation guard",
+    "resolution": "App v2 is authoritative. Admin code updated to require hash rederivation (Era A/C/legacy formulas) OR shared install_instance_id before fingerprint pair merge.",
+    "audit_endpoint": "GET /api/admin/analytics/physical-device-census?dryRun=1&force=1&audit=1"
+  }
+}

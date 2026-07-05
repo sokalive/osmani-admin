@@ -1,125 +1,701 @@
 {
-  "contract_version": "1.0.0-final-frozen",
-  "contract_status": "FINAL_FROZEN",
-  "implementation_commit": "df63a762a11292c415af82d8f040b7717642fd40",
-  "finalized_at_utc": "2026-07-05T09:15:00Z",
-  "note": "Frozen at df63a76 reconciliation. Backend schema validated against production PostgreSQL. App AI may supersede only by committing new persisted identity fields; no separate App-derived contract revision was present on origin/main at finalization.",
+  "contract_version": "2026-07-05-app-authoritative-v2",
+  "contract_status": "APP_AUTHORITATIVE",
+  "generated_from_app_commit": "afe9428f156607cf44399f9c3dd63441cfd2365b",
+  "backend_implementation_reference": "df63a76",
+  "metric_label": "TOTAL UNIQUE PHYSICAL OSMANI TV DEVICES",
   "census_feasibility_class": "B",
-  "census_feasibility_description": "Reconstructable with deterministic historical aliases where stored in PostgreSQL. Perfect physical-phone truth is impossible when reinstall generates new device_id without durable linkage evidence.",
+  "census_feasibility_description": "Reconstructable with deterministic historical aliases where co-occurrence is stored in PostgreSQL. Perfect physical-phone truth is impossible when reinstall emits a new install_instance_id without durable hardware-id linkage rows.",
+  "supported_versions": ["16", "17", "18", "19", "20", "21", "22", "23", "24"],
   "identity_types": {
     "device_id": {
-      "available_in_db": true,
-      "source_tables": ["app_installs", "client_api_telemetry", "device_intelligence_registry"],
-      "columns": ["device_id"],
-      "trust_level": "primary_observed_identity",
+      "description": "API field device_id — equals subscriptionDeviceId in Era C",
+      "durable": "hardware_scoped_when_not_uuid_fallback",
+      "count_as_physical_device_alone": false,
       "use_for_census_seed": true
     },
     "package_android_id": {
-      "available_in_db": true,
-      "source_tables": ["device_intelligence_registry", "device_intelligence_device_history"],
-      "columns": ["android_id"],
-      "trust_level": "hardware_scoped_when_valid",
-      "notes": "Stored as android_id column; maps to App package-scoped Android ID when App registers intelligence."
+      "description": "Android SSAID for com.burudanitv.app (~16 hex)",
+      "app_source": "lib/deviceIdentity.js packageAndroidId; persisted as android_id in registry",
+      "durable": true,
+      "count_as_physical_device_alone": false
     },
     "legacy_package_android_id": {
-      "available_in_db": false,
-      "columns": [],
-      "notes": "Not persisted as dedicated column. Not available for census edges."
+      "description": "SSAID for com.osmantv.app when legacy APK installed",
+      "app_source": "lib/deviceIdentity.js legacyPackageAndroidId",
+      "durable": true,
+      "db_persisted": false,
+      "notes": "Sent in verify/transfer payloads as legacy_device_id; not a dedicated DB column"
     },
     "stable_hardware_id": {
-      "available_in_db": false,
-      "columns": [],
-      "notes": "Widevine/stable hardware ID not stored in Admin PostgreSQL schema."
+      "description": "Widevine MediaDrm PROPERTY_DEVICE_UNIQUE_ID hex",
+      "app_source": "modules/osmani-security SecurityAuditor.getStableHardwareId",
+      "durable": true,
+      "db_persisted": false,
+      "may_be_used_as_device_id": true,
+      "era": "c12958b+ precedence rank 2"
     },
     "device_fingerprint": {
-      "available_in_db": true,
-      "source_tables": ["device_intelligence_registry"],
-      "columns": ["device_fingerprint"],
-      "trust_level": "derivative",
-      "use_as_independent_phone_count": false,
-      "allowed_edge": "PROVEN_FINGERPRINT_PAIR_ONLY",
-      "max_devices_per_value": 2
+      "description": "SHA256 hex 64 — derivative, never independent physical device",
+      "durable": false,
+      "count_as_physical_device_alone": false,
+      "derivation_verifiable": true
     },
     "install_instance_id": {
-      "available_in_db": true,
-      "source_tables": ["app_installs", "device_phone_registry"],
-      "columns": ["install_instance_id"],
-      "trust_level": "install_session_alias",
-      "allowed_edge": "PROVEN_INSTALL_SESSION_ALIAS",
-      "max_devices_per_value": 4
+      "description": "AsyncStorage osmani:install_uuid",
+      "durable": false,
+      "install_session_only": true,
+      "count_as_physical_device_alone": false
     },
-    "legacy_device_id": {
-      "available_in_db": false,
-      "columns": [],
-      "notes": "Accepted on verify/register requests but not persisted as historical alias pairs for census reconstruction."
+    "displayed_account_id": {
+      "description": "UI/copy field; packageAndroidId || subscriptionDeviceId",
+      "account_copy_canonical_since": "64c798f",
+      "historical_mismatch_before": "64c798f",
+      "count_as_physical_device_alone": false
     },
     "identity_candidates": {
-      "available_in_db": "partial",
-      "source_tables": ["device_intelligence_registry"],
-      "columns": ["metadata"],
-      "notes": "May appear inside metadata JSONB when App sends them; not indexed. Not used for census until App persists structured alias table."
-    },
-    "migration_bridge_aliases": {
-      "available_in_db": false,
-      "notes": "No dedicated migration alias table. install_instance_id + android_id are only durable bridges."
+      "description": "In-memory roles in verify multi-candidate flow; not a standalone API array field",
+      "roles": ["legacy_package_android_id", "package_android_id", "stable_hardware_id", "install_instance_id"],
+      "db_persisted": false
     }
   },
-  "allowed_edge_types": [
+  "version_identity_matrix": [
+    {
+      "version": "16",
+      "runtime": "1.6.0",
+      "native_commit": "a7abd7d",
+      "era": "era_a",
+      "device_id_source": "getAndroidId() OR install_instance_id",
+      "fingerprint_source": "SHA256(deviceId|applicationId|installInstanceId)",
+      "install_id_source": "AsyncStorage osmani:install_uuid",
+      "native_bridge": false,
+      "survives_app_update": "PROVEN",
+      "survives_uninstall": "SSAID PROVEN; install UUID DISPROVEN",
+      "survives_clear_data": "SSAID PROVEN; install UUID DISPROVEN",
+      "can_change_same_phone": "PROVEN after c12958b OTA"
+    },
+    {
+      "version": "17",
+      "runtime": "1.7.0",
+      "native_commit": "b20bfc5",
+      "era": "era_a",
+      "notes": "OTA enabled; identity same as v16 until c12958b OTA"
+    },
+    {
+      "version": "18",
+      "runtime": "1.7.1",
+      "native_commit": "3a5584e",
+      "era": "era_a"
+    },
+    {
+      "version": "19",
+      "runtime": "1.7.2",
+      "native_commit": "5ba9002",
+      "era": "era_a"
+    },
+    {
+      "version": "20",
+      "runtime": "1.7.2",
+      "native_commit": "c6d0c51",
+      "era": "era_a_or_c_via_ota"
+    },
+    {
+      "version": "21",
+      "runtime": "1.7.2",
+      "native_commit": "3c2d910",
+      "era": "era_a_or_c_via_ota"
+    },
+    {
+      "version": "22",
+      "runtime": "1.8.0",
+      "native_commit": "3391bb9",
+      "era": "era_a_or_c_via_ota"
+    },
+    {
+      "version": "23",
+      "runtime": "1.8.1",
+      "native_commit": "26b7c65",
+      "era": "era_a_or_c_via_ota"
+    },
+    {
+      "version": "24",
+      "runtime": "1.8.2",
+      "native_commit": "4d2e530",
+      "era": "era_c",
+      "device_id_source": "legacyPackageAndroidId || stableHardwareId || packageAndroidId || installInstanceId",
+      "fingerprint_source": "SHA256(subscriptionDeviceId|packageName|installInstanceId)",
+      "displayed_account_id": "identity.deviceId (64c798f+)"
+    }
+  ],
+  "transformations": [
+    {
+      "old_id_type": "package_android_id",
+      "new_id_type": "stable_hardware_id",
+      "can_same_phone_emit_both": "PROVEN",
+      "coexist_in_same_request": "PROVEN",
+      "deterministic_link_available": "PROVEN",
+      "hash_derivation_available": "PROVEN",
+      "db_persistence_expected": "android_id column only; stable_hardware_id not persisted",
+      "merge_allowed": true,
+      "confidence": "HIGH",
+      "evidence": "buildMigrationIdentityPayload + buildDeviceIntelligenceRegistrationBody send device_id (may be Widevine) with android_id (SSAID) in one body",
+      "app_commit": "c12958b"
+    },
+    {
+      "old_id_type": "package_android_id",
+      "new_id_type": "install_instance_id",
+      "can_same_phone_emit_both": "PROVEN",
+      "coexist_in_same_request": "PROVEN",
+      "deterministic_link_available": "PROVEN",
+      "hash_derivation_available": "PROVEN",
+      "db_persistence_expected": "app_installs stores both when install tracked",
+      "merge_allowed": true,
+      "confidence": "HIGH",
+      "conditions": "Same non-empty install_instance_id in app_installs OR same verify/register payload",
+      "app_commit": "970660b"
+    },
+    {
+      "old_id_type": "install_instance_id",
+      "new_id_type": "package_android_id",
+      "can_same_phone_emit_both": "PROVEN",
+      "coexist_in_same_request": "PROVEN",
+      "deterministic_link_available": "PROVEN",
+      "hash_derivation_available": "DISPROVEN across separate sessions without shared anchor",
+      "db_persistence_expected": "PROVEN via app_installs sibling rows",
+      "merge_allowed": true,
+      "confidence": "MEDIUM",
+      "conditions": "PROVEN_INSTALL_SESSION_ALIAS only — same install_instance_id, degree <= 4",
+      "app_commit": "c12958b"
+    },
+    {
+      "old_id_type": "legacy_package_android_id",
+      "new_id_type": "package_android_id",
+      "can_same_phone_emit_both": "PROVEN",
+      "coexist_in_same_request": "PROVEN",
+      "deterministic_link_available": "PROVEN",
+      "hash_derivation_available": "PROVEN",
+      "db_persistence_expected": "DISPROVEN dedicated column",
+      "merge_allowed": true,
+      "confidence": "HIGH",
+      "conditions": "migration_bridge:true in same verify/transfer request",
+      "app_commit": "c12958b"
+    },
+    {
+      "old_id_type": "device_id",
+      "new_id_type": "device_fingerprint",
+      "can_same_phone_emit_both": "PROVEN",
+      "coexist_in_same_request": "PROVEN",
+      "deterministic_link_available": "PROVEN",
+      "hash_derivation_available": "PROVEN",
+      "db_persistence_expected": "device_intelligence_registry",
+      "merge_allowed": false,
+      "confidence": "N/A",
+      "notes": "Fingerprint is derivative node — link device_id to fingerprint, never count fingerprint as second phone",
+      "app_commit": "d134927"
+    },
+    {
+      "old_id_type": "displayed_account_id",
+      "new_id_type": "device_id",
+      "can_same_phone_emit_both": "PROVEN",
+      "coexist_in_same_request": "PROVEN",
+      "deterministic_link_available": "PROVEN",
+      "hash_derivation_available": "DISPROVEN",
+      "db_persistence_expected": "displayed_account_id in verify payload only",
+      "merge_allowed": true,
+      "confidence": "MEDIUM",
+      "conditions": "Same verify payload with migration_bridge; post-64c798f Account COPY equals device_id",
+      "app_commit": "64c798f"
+    },
+    {
+      "old_id_type": "subscription_device_id_precedence_change",
+      "new_id_type": "subscription_device_id",
+      "can_same_phone_emit_both": "PROVEN",
+      "coexist_in_same_request": "PROVEN",
+      "deterministic_link_available": "PROVEN",
+      "hash_derivation_available": "PROVEN",
+      "db_persistence_expected": "UNPROVEN historical pairs",
+      "merge_allowed": true,
+      "confidence": "MEDIUM",
+      "conditions": "OTA c12958b era change; requires install_instance or migration payload",
+      "app_commit": "c12958b"
+    }
+  ],
+  "hash_derivations": [
+    {
+      "id": "fingerprint_era_a",
+      "eras": ["era_a"],
+      "commits": ["d134927", "970660b", "a7abd7d", "b20bfc5", "3a5584e", "5ba9002"],
+      "formula": "SHA256(`${deviceId}|${applicationId}|${installInstanceId}`)",
+      "algorithm": "expo-crypto SHA256",
+      "output": "lowercase hex 64",
+      "inputs": {
+        "deviceId": "getAndroidId() or install_instance_id fallback",
+        "applicationId": "expo-application applicationId",
+        "installInstanceId": "osmani:install_uuid"
+      },
+      "backend_may_recompute": true,
+      "conditions": "packageName and install_instance_id must be known from co-located row"
+    },
+    {
+      "id": "fingerprint_era_c",
+      "eras": ["era_c"],
+      "commits": ["c12958b", "afe9428"],
+      "formula": "SHA256(`${subscriptionDeviceId}|${packageName}|${installInstanceId}`)",
+      "algorithm": "expo-crypto SHA256",
+      "output": "lowercase hex 64",
+      "inputs": {
+        "subscriptionDeviceId": "legacyPackageAndroidId || stableHardwareId || packageAndroidId || installInstanceId",
+        "packageName": "applicationId (com.burudanitv.app)",
+        "installInstanceId": "osmani:install_uuid"
+      },
+      "legacy_variant": {
+        "formula": "SHA256(`${legacyIdForFp}|com.osmantv.app|${installInstanceId}`)",
+        "field": "legacy_device_fingerprint",
+        "when": "packageName !== com.osmantv.app"
+      },
+      "backend_may_recompute": true,
+      "conditions": "Must use subscriptionDeviceId actually sent as device_id in that era"
+    }
+  ],
+  "allowed_edges": [
+    {
+      "edge_type": "PROVEN_INSTALL_SESSION_ALIAS",
+      "source_type": "device_id",
+      "target_type": "device_id",
+      "evidence": "app_installs rows share non-empty install_instance_id",
+      "app_commit": "970660b",
+      "versions": ["16", "17", "18", "19", "20", "21", "22", "23", "24"],
+      "deterministic": true,
+      "safe_for_union_find": true,
+      "conditions": "2-4 distinct device_id per install_instance_id; both ids in observed seed set",
+      "backend_df63a76": "IMPLEMENTED"
+    },
+    {
+      "edge_type": "PROVEN_ANDROID_ID_ALIAS",
+      "source_type": "device_id",
+      "target_type": "device_id",
+      "evidence": "device_intelligence_registry rows share valid android_id (package SSAID)",
+      "app_commit": "c12958b",
+      "versions": ["16", "17", "18", "19", "20", "21", "22", "23", "24"],
+      "deterministic": true,
+      "safe_for_union_find": true,
+      "conditions": "2-3 device_id per android_id; exclude emulator SSAIDs",
+      "backend_df63a76": "IMPLEMENTED"
+    },
+    {
+      "edge_type": "PROVEN_HASH_DERIVATION_COLOCATED",
+      "source_type": "device_id",
+      "target_type": "device_fingerprint",
+      "evidence": "Same registry row or same request body contains device_id + device_fingerprint + install_instance_id verifiable by era formula",
+      "app_commit": "d134927",
+      "versions": ["16", "17", "18", "19", "20", "21", "22", "23", "24"],
+      "deterministic": true,
+      "safe_for_union_find": false,
+      "conditions": "Links derivative to primary — does NOT merge two device_ids",
+      "backend_df63a76": "PARTIAL — see PROVEN_FINGERPRINT_PAIR"
+    },
+    {
+      "edge_type": "PROVEN_FINGERPRINT_PAIR",
+      "source_type": "device_id",
+      "target_type": "device_id",
+      "evidence": "Exactly two observed device_id share 64-hex fingerprint in registry",
+      "app_commit": "UNPROVEN cross-row without co-located install_instance",
+      "versions": ["16", "17", "18", "19", "20", "21", "22", "23", "24"],
+      "deterministic": false,
+      "safe_for_union_find": "CONDITIONAL",
+      "conditions": "Accept only when max_devices_per_anchor=2 AND at least one pair member has install_instance sibling edge OR hash rederivation validates",
+      "backend_df63a76": "IMPLEMENTED",
+      "app_verdict": "BACKEND_RULE_TOO_BROAD without rederivation guard — keep max=2 cap"
+    },
+    {
+      "edge_type": "PROVEN_LEGACY_MIGRATION",
+      "source_type": "legacy_package_android_id",
+      "target_type": "package_android_id",
+      "evidence": "migration_bridge:true payload with legacy_device_id + device_id + legacy_device_fingerprint",
+      "app_commit": "c12958b",
+      "versions": ["17", "18", "19", "20", "21", "22", "23", "24"],
+      "deterministic": true,
+      "safe_for_union_find": true,
+      "conditions": "Requires persisted verify payload archive — NOT in current DB schema",
+      "backend_df63a76": "NOT_IMPLEMENTED",
+      "app_verdict": "BACKEND_RULE_TOO_NARROW — cannot merge legacy SSAID without future persistence"
+    },
+    {
+      "edge_type": "PROVEN_STABLE_HARDWARE_ALIAS",
+      "source_type": "stable_hardware_id",
+      "target_type": "package_android_id",
+      "evidence": "Same users-intelligence/register or verify body",
+      "app_commit": "c12958b",
+      "versions": ["17", "18", "19", "20", "21", "22", "23", "24"],
+      "deterministic": true,
+      "safe_for_union_find": true,
+      "conditions": "stable_hardware_id not persisted in DB today",
+      "backend_df63a76": "NOT_IMPLEMENTED",
+      "app_verdict": "BACKEND_RULE_TOO_NARROW — merge when device_id is Widevine and android_id is SSAID in same registration row"
+    }
+  ],
+  "forbidden_edges": [
+    {
+      "rule": "same_phone_number",
+      "reason": "Phone is not device identity"
+    },
+    {
+      "rule": "same_ip_address",
+      "reason": "Network colocation"
+    },
+    {
+      "rule": "same_device_model_or_brand",
+      "reason": "Hardware model not unique"
+    },
+    {
+      "rule": "same_payment_or_subscription_row",
+      "reason": "Commerce rows not install census"
+    },
+    {
+      "rule": "device_fingerprint_as_independent_device",
+      "reason": "Derivative hash only"
+    },
+    {
+      "rule": "install_instance_id_as_canonical_physical_key",
+      "reason": "Install session only"
+    },
+    {
+      "rule": "timestamp_proximity_only",
+      "reason": "No temporal merge"
+    },
+    {
+      "rule": "sse_or_verify_call_count",
+      "reason": "Activity not identity"
+    }
+  ],
+  "payload_coexistence": [
+    {
+      "endpoint": "POST /api/analytics/install",
+      "versions": "970660b+",
+      "device_id": true,
+      "android_id": false,
+      "legacy_android_id": false,
+      "stable_hardware_id": false,
+      "device_fingerprint": false,
+      "install_instance_id": true,
+      "identity_candidates": false,
+      "phone": false,
+      "version_code": false,
+      "runtime_version": false,
+      "app_source": "api/analytics.js trackInstallOnce"
+    },
+    {
+      "endpoint": "POST /api/users-intelligence/register",
+      "versions": "1b6d004+",
+      "device_id": true,
+      "android_id": true,
+      "legacy_android_id": false,
+      "stable_hardware_id": true,
+      "device_fingerprint": true,
+      "install_instance_id": true,
+      "identity_candidates": false,
+      "phone": false,
+      "version_code": true,
+      "runtime_version": false,
+      "app_source": "lib/deviceIntelligencePayload.js"
+    },
+    {
+      "endpoint": "POST /api/subscription/verify",
+      "versions": "all device_id+fingerprint; c12958b+ full bridge",
+      "device_id": true,
+      "android_id": true,
+      "legacy_android_id": true,
+      "stable_hardware_id": true,
+      "device_fingerprint": true,
+      "install_instance_id": true,
+      "identity_candidates": "implicit via multi-candidate verify",
+      "phone": "optional",
+      "version_code": false,
+      "runtime_version": false,
+      "app_source": "api/subscription.js buildMigrationIdentityPayload"
+    },
+    {
+      "endpoint": "POST /api/transfer/request",
+      "versions": "c12958b+ with identityContext",
+      "device_id": true,
+      "android_id": true,
+      "legacy_android_id": true,
+      "stable_hardware_id": true,
+      "device_fingerprint": true,
+      "install_instance_id": true,
+      "identity_candidates": false,
+      "phone": true,
+      "version_code": false,
+      "runtime_version": false,
+      "app_source": "api/subscription.js initiateTransfer"
+    },
+    {
+      "endpoint": "POST /api/payments/*/create-order",
+      "versions": "64c798f+",
+      "device_id": true,
+      "android_id": false,
+      "legacy_android_id": false,
+      "stable_hardware_id": false,
+      "device_fingerprint": true,
+      "install_instance_id": false,
+      "identity_candidates": false,
+      "phone": true,
+      "version_code": true,
+      "runtime_version": true,
+      "app_source": "api/payment.js buildCreateOrderPayload"
+    },
+    {
+      "endpoint": "POST /api/subscription-request",
+      "versions": "64c798f+",
+      "device_id": true,
+      "android_id": false,
+      "legacy_android_id": false,
+      "stable_hardware_id": false,
+      "device_fingerprint": false,
+      "install_instance_id": false,
+      "identity_candidates": false,
+      "phone": true,
+      "version_code": true,
+      "runtime_version": true,
+      "app_source": "api/subscriptionRequest.js"
+    },
+    {
+      "endpoint": "GET /api/update-check",
+      "versions": "all",
+      "device_id": false,
+      "android_id": false,
+      "legacy_android_id": false,
+      "stable_hardware_id": false,
+      "device_fingerprint": false,
+      "install_instance_id": false,
+      "identity_candidates": false,
+      "phone": false,
+      "version_code": "query only",
+      "runtime_version": false,
+      "app_source": "lib/updateClient.js — no identity fields"
+    },
+    {
+      "endpoint": "client_api_telemetry",
+      "versions": "v16+",
+      "device_id": true,
+      "android_id": false,
+      "legacy_android_id": false,
+      "stable_hardware_id": false,
+      "device_fingerprint": false,
+      "install_instance_id": false,
+      "identity_candidates": false,
+      "phone": false,
+      "version_code": true,
+      "runtime_version": false,
+      "note": "Single-field rows — cannot infer aliases without join"
+    }
+  ],
+  "synthetic_filters": {
+    "prefixes": ["cap_", "cap67_", "verify_recovery_", "verify_", "pool_audit_", "benchmark_", "probe_", "__probe_", "test_", "aurax-live-probe"],
+    "exact": ["unknown", "unassigned-device", "admin", "web"],
+    "min_length": 8,
+    "all_zeros": true,
+    "emulator_android_ids": ["9774d56d682e549c", "0000000000000000"]
+  },
+  "canonical_precedence": [
+    { "rank": 1, "type": "package_android_id", "notes": "com.burudanitv.app SSAID" },
+    { "rank": 2, "type": "legacy_package_android_id", "notes": "com.osmantv.app SSAID when known" },
+    { "rank": 3, "type": "stable_hardware_id", "notes": "Widevine — use when device_id was Widevine" },
+    { "rank": 4, "type": "install_instance_id", "confidence": "LOW", "notes": "Only when no hardware ids in component" }
+  ],
+  "ambiguity_rules": [
+    {
+      "bucket": "HIGH_CONFIDENCE_PHYSICAL_DEVICES",
+      "definition": "Component has valid android_id anchor in registry OR merged by approved alias edge with degree caps",
+      "maps_to_backend_df63a76": "high_confidence_physical_devices"
+    },
+    {
+      "bucket": "AMBIGUOUS_LOW_CONFIDENCE",
+      "definition": "Singleton observed device_id with no android_id in registry and no merge edge",
+      "maps_to_backend_df63a76": "ambiguous_low_confidence_components",
+      "resolution_opportunities": [
+        "May be UUID-only Era A fallback — do not auto-merge without install_instance anchor",
+        "May be Widevine-only device_id never registered intelligence — cannot merge to SSAID without future stable_hardware_id persistence",
+        "May be pre-intelligence v16 device with telemetry only — cannot upgrade confidence retroactively"
+      ],
+      "estimated_count_df63a76": 4231,
+      "auto_merge_allowed": false
+    },
+    {
+      "bucket": "DETERMINISTIC_ALIAS_MERGED",
+      "definition": "Component size > 1 after capped union-find",
+      "maps_to_backend_df63a76": "deterministic_alias_merged_components"
+    }
+  ],
+  "ambiguity_resolution_qa": {
+    "uuid_only_later_becomes_ssaid": {
+      "merge_allowed": true,
+      "confidence": "MEDIUM",
+      "conditions": "PROVEN_INSTALL_SESSION_ALIAS same install_instance_id OR sequential payloads with shared install_instance in app_installs",
+      "evidence": "Era A fallback then SSAID readable on same install session"
+    },
+    "same_install_instance_two_device_ids": {
+      "merge_allowed": true,
+      "confidence": "HIGH",
+      "conditions": "app_installs degree 2-4",
+      "evidence": "970660b install tracking + c12958b OTA identity change"
+    },
+    "widevine_coexists_ssaid_in_payload": {
+      "merge_allowed": true,
+      "confidence": "HIGH",
+      "conditions": "Same register/verify body",
+      "evidence": "buildDeviceIntelligenceRegistrationBody + buildMigrationIdentityPayload"
+    },
+    "legacy_and_current_package_id_coexist": {
+      "merge_allowed": true,
+      "confidence": "HIGH",
+      "conditions": "migration_bridge request",
+      "evidence": "c12958b legacy_device_id + device_id in one POST"
+    },
+    "fingerprint_proves_cross_device_alias": {
+      "merge_allowed": false,
+      "confidence": "LOW",
+      "conditions": "Cross-row fingerprint match alone",
+      "evidence": "Hash input includes device_id — different device_ids imply different fingerprints unless stale registry data"
+    },
+    "account_copy_history": {
+      "merge_allowed": "CONDITIONAL",
+      "confidence": "LOW",
+      "conditions": "Only when displayed_account_id co-sent in verify payload with device_id",
+      "evidence": "64c798f aligned Account COPY to device_id going forward — historical admin copy mismatch not recoverable"
+    },
+    "migration_payload_old_and_new_ids": {
+      "merge_allowed": true,
+      "confidence": "HIGH",
+      "conditions": "Persisted request bodies",
+      "evidence": "buildMigrationIdentityPayload fields legacy_device_id, current_device_id, displayed_account_id"
+    }
+  },
+  "db_persistence_expectations": [
+    {
+      "field": "device_id",
+      "tables": ["app_installs", "client_api_telemetry", "device_intelligence_registry"],
+      "persisted": true
+    },
+    {
+      "field": "install_instance_id",
+      "tables": ["app_installs"],
+      "persisted": true
+    },
+    {
+      "field": "android_id",
+      "tables": ["device_intelligence_registry"],
+      "persisted": true,
+      "maps_to": "package_android_id"
+    },
+    {
+      "field": "device_fingerprint",
+      "tables": ["device_intelligence_registry"],
+      "persisted": true,
+      "derivative": true
+    },
+    {
+      "field": "stable_hardware_id",
+      "tables": [],
+      "persisted": false,
+      "gap_impact": "Widevine-as-device_id cannot link to SSAID without same-request archive"
+    },
+    {
+      "field": "legacy_package_android_id",
+      "tables": [],
+      "persisted": false,
+      "gap_impact": "Render→VPS migration pairs not reconstructable from DB alone"
+    },
+    {
+      "field": "migration_bridge_payload",
+      "tables": [],
+      "persisted": false,
+      "gap_impact": "legacy_device_id + device_id pairs lost after request"
+    }
+  ],
+  "known_unrecoverable_gaps": [
+    "stable_hardware_id not stored in PostgreSQL",
+    "legacy_device_id / legacy_package_android_id not stored as dedicated columns",
+    "client_api_telemetry stores device_id only — no fingerprint/android_id in row",
+    "identity_candidates not indexed",
+    "Phones that only ever emitted install UUID with no intelligence registration and no install_instance sibling",
+    "Factory reset changes SSAID — historical and new SSAID are different physical-era identities"
+  ],
+  "dashboard_label": "Total Unique Devices",
+  "backend_executable_edge_limits": [
     {
       "id": "PROVEN_INSTALL_SESSION_ALIAS",
-      "description": "Two or more device_id values share the same non-empty install_instance_id in app_installs.",
       "max_devices_per_anchor": 4
     },
     {
       "id": "PROVEN_ANDROID_ID_ALIAS",
-      "description": "Two or three device_id values share the same valid android_id in device_intelligence_registry.",
       "max_devices_per_anchor": 3,
       "exclude_android_ids": ["9774d56d682e549c", "unknown", "0000000000000000"]
     },
     {
       "id": "PROVEN_FINGERPRINT_PAIR",
-      "description": "Exactly two device_id values share the same 64-char hex fingerprint in registry.",
-      "max_devices_per_anchor": 2
+      "max_devices_per_anchor": 2,
+      "requires_hash_rederivation_or_install_coanchor": true
     }
   ],
-  "forbidden_merge_rules": [
-    "same_phone_number",
-    "same_ip_address",
-    "same_device_model",
-    "same_device_brand",
-    "same_payment_amount",
-    "same_plan",
-    "same_transaction",
-    "same_subscription_row",
-    "timestamp_proximity_only"
-  ],
-  "canonical_component_key_precedence": [
-    "package_android_id",
-    "install_instance_id",
-    "device_id"
-  ],
-  "synthetic_exclusion": {
-    "prefixes": [
-      "cap_",
-      "cap67_",
-      "verify_recovery_",
-      "verify_",
-      "pool_audit_",
-      "benchmark_",
-      "probe_",
-      "__probe_",
-      "test_",
-      "aurax-live-probe"
+  "admin_sync": {
+    "synced_at_utc": "2026-07-05T09:35:00Z",
+    "app_repo": "https://github.com/sokalive/osmani-tv",
+    "app_authoritative_commit": "89f840b9f1b9b2295b81810328f2c02bf59106e1",
+    "contract_sha256": "3fc6a5ba07b466c9408176be5ae551e029167e18f65b285f178991915b33df43",
+    "prior_admin_misread": "Checked osmani-admin origin/main for App commit — cross-repo confusion confirmed"
+  },
+  "backend_contract_comparison": {
+    "prior_backend_contract": "1.0.0-backend-validated at OsmaniAdmin/docs/cross-ai (created at df63a76 when App contract absent)",
+    "classification_of_prior_app_file": "A — Original App forensic draft (incomplete schema)",
+    "verdict": "MATCH on feasibility class B, synthetic filters, forbidden merges, install_instance alias",
+    "app_contract_adds_rules": [
+      "PROVEN_LEGACY_MIGRATION edge specification",
+      "PROVEN_STABLE_HARDWARE_ALIAS via co-located register/verify",
+      "PROVEN_HASH_DERIVATION_COLOCATED with era-specific formulas",
+      "legacy_package_android_id in canonical precedence",
+      "Full V16-V24 transformation map and payload coexistence matrix",
+      "ambiguity_resolution_qa for 4231 bucket"
     ],
-    "exact": ["unknown", "unassigned-device", "admin", "web"],
-    "min_length": 8
+    "backend_rule_too_broad": [
+      {
+        "edge": "PROVEN_FINGERPRINT_PAIR",
+        "reason": "Merges two device_ids on shared fingerprint without mandatory hash rederivation or install_instance co-anchor",
+        "mitigation": "Keep max_devices_per_anchor=2; prefer install_instance or android_id edges first"
+      }
+    ],
+    "backend_rule_too_narrow": [
+      {
+        "edge": "PROVEN_LEGACY_MIGRATION",
+        "reason": "Not implemented — legacy Render SSAID cannot merge to VPS SSAID from DB"
+      },
+      {
+        "edge": "PROVEN_STABLE_HARDWARE_ALIAS",
+        "reason": "Widevine device_id + SSAID android_id in same registration row not used as explicit edge"
+      },
+      {
+        "precedence": "legacy_package_android_id missing from backend canonical_component_key_precedence"
+      }
+    ],
+    "backend_rule_unsupported": [],
+    "df63a76_reconciliation": {
+      "observed_raw_identities": 8471,
+      "physical_device_components_total": 7953,
+      "merged_delta": 518,
+      "high_confidence": 3722,
+      "ambiguous_low_confidence": 4231,
+      "consistent_with_app_rules": true
+    }
   },
-  "confidence_buckets": {
-    "HIGH_CONFIDENCE_PHYSICAL_DEVICES": "Component anchored by valid android_id OR merged by approved alias edge.",
-    "DETERMINISTIC_ALIAS_MERGED": "Component size > 1 after alias edges.",
-    "AMBIGUOUS_LOW_CONFIDENCE": "Singleton device_id without android_id anchor in registry.",
-    "SYNTHETIC_EXCLUDED": "Filtered before graph construction."
-  },
-  "dashboard_primary_metric": "physical_device_components_total",
-  "dashboard_label": "Total Unique Devices"
+  "admin_ai_handoff": {
+    "authoritative_source": "Synced from sokalive/osmani-tv @ 89f840b into OsmaniAdmin/docs/cross-ai",
+    "action_required": "PROVEN_FINGERPRINT_PAIR tightened per App v2 — hash rederivation or install_instance co-anchor",
+    "do_not_use_for_census": ["device_subscriptions", "transactions", "payment_attempts", "sse_sessions", "verify_call_count"],
+    "recommended_future_persistence": [
+      "Add stable_hardware_id column to device_intelligence_registry",
+      "Add legacy_device_id column or identity_alias_edges table on verify/register",
+      "Optional read-only canonical_physical_device_key in register payload for forward census"
+    ],
+    "ota_status": "No OTA required for this documentation-only handoff"
+  }
 }
