@@ -14,6 +14,7 @@ import {
   getUsersExpiring,
   getUsersFailedPayments,
   getUsersSummary,
+  getUsersLookup,
   putUser,
   syncStreamUrl,
 } from '../lib/api'
@@ -234,6 +235,9 @@ function UsersPageContent() {
   const [page, setPage] = useState(1)
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchRevision, setSearchRevision] = useState(0)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [lookupResult, setLookupResult] = useState(null)
   const [planFilter, setPlanFilter] = useState('all')
   const [providerFilter, setProviderFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -275,9 +279,12 @@ function UsersPageContent() {
   }, [searchInput])
 
   const runSearchNow = useCallback(() => {
-    setSearchQuery(searchInput.trim())
+    const next = searchInput.trim()
+    setSearchQuery(next)
     setPage(1)
     setSelected(new Set())
+    setSearchRevision((r) => r + 1)
+    setSearchLoading(true)
   }, [searchInput])
 
   useEffect(() => {
@@ -412,11 +419,35 @@ function UsersPageContent() {
         if (e?.name === 'AbortError' || gen !== loadTabGenRef.current) return
         showToast('error', e?.message || 'Could not load users')
       } finally {
-        if (gen === loadTabGenRef.current) setTableLoading(false)
+        if (gen === loadTabGenRef.current) {
+          setTableLoading(false)
+          setSearchLoading(false)
+        }
       }
     },
     [fetchTab, showToast, applyTabResult],
   )
+
+  const fetchLookup = useCallback(async (q, revision, signal) => {
+    const term = String(q ?? '').trim()
+    if (!term) {
+      setLookupResult(null)
+      return
+    }
+    const isDevice = /^[a-f0-9]{64}$/i.test(term)
+    const digits = term.replace(/\D/g, '')
+    if (!isDevice && digits.length < 9) {
+      setLookupResult(null)
+      return
+    }
+    try {
+      const res = await getUsersLookup(term, signal ? { signal } : {})
+      setLookupResult(res?.found ? res : null)
+    } catch (e) {
+      if (e?.name === 'AbortError') return
+      setLookupResult(null)
+    }
+  }, [])
 
   useEffect(() => {
     getPlans()
@@ -427,7 +458,13 @@ function UsersPageContent() {
 
   useEffect(() => {
     void loadTab({ page })
-  }, [loadTab, page])
+  }, [loadTab, page, searchRevision])
+
+  useEffect(() => {
+    const ac = new AbortController()
+    void fetchLookup(searchQuery, searchRevision, ac.signal)
+    return () => ac.abort()
+  }, [searchQuery, searchRevision, fetchLookup])
 
   useEffect(() => {
     const es = new EventSource(syncStreamUrl(['analytics']))
@@ -706,15 +743,54 @@ function UsersPageContent() {
               <button
                 type="button"
                 onClick={runSearchNow}
-                disabled={tableLoading}
+                disabled={searchLoading}
                 className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-[#f5b301]/40 bg-[#f5b301]/15 px-4 py-3 text-sm font-semibold text-amber-100 hover:bg-[#f5b301]/25 disabled:opacity-50"
               >
-                {tableLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                {searchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                 Search
               </button>
             </div>
-            <p className="mt-1 text-[11px] text-slate-500">Press Enter or Search for immediate lookup. Auto-search also runs after typing pauses.</p>
+            <p className="mt-1 text-[11px] text-slate-500">
+              Press Enter or Search for immediate lookup. Auto-search also runs after typing pauses.
+              {searchLoading ? <span className="ml-2 text-amber-300">Searching…</span> : null}
+            </p>
           </div>
+          {lookupResult?.devices?.length ? (
+            <div className="w-full rounded-2xl border border-cyan-500/25 bg-cyan-950/20 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200/90">
+                Complete history — {lookupResult.kind === 'phone' ? 'phone' : 'device'} ({lookupResult.devices.length}{' '}
+                device{lookupResult.devices.length === 1 ? '' : 's'})
+                {lookupResult.ms != null ? (
+                  <span className="ml-2 font-normal normal-case text-slate-500">({lookupResult.ms}ms)</span>
+                ) : null}
+              </p>
+              <div className="mt-3 flex flex-col gap-4">
+                {lookupResult.devices.map((bundle) => (
+                  <div
+                    key={bundle.device_id}
+                    className="rounded-xl border border-slate-700/60 bg-slate-900/40 p-3 text-sm"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-slate-200">
+                      <span>{bundle.device_id}</span>
+                      {bundle.phone_number ? (
+                        <span className="text-slate-400">· {bundle.phone_number}</span>
+                      ) : null}
+                      {bundle.subscription?.status ? (
+                        <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] uppercase text-amber-200">
+                          {bundle.subscription.status}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 grid gap-2 text-xs text-slate-400 sm:grid-cols-3">
+                      <span>Payments: {bundle.transactions?.length ?? 0}</span>
+                      <span>Manual grants: {bundle.manual_grants?.length ?? 0}</span>
+                      <span>Revocations: {bundle.revocations?.length ?? 0}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {subscriptionRows ? (
             <>
               <div className="min-w-[140px]">
@@ -966,10 +1042,20 @@ function UsersPageContent() {
                               <button
                                 type="button"
                                 onClick={() => setProfileRow(r)}
-                                className="inline-flex rounded-lg p-2 text-slate-400 hover:bg-cyan-500/10 hover:text-cyan-300"
+                                className="mr-1 inline-flex rounded-lg p-2 text-slate-400 hover:bg-cyan-500/10 hover:text-cyan-300"
                                 aria-label="View profile"
                               >
                                 <Eye className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRevoke(r)}
+                                disabled={bulkDeleting || r.status === 'revoked'}
+                                className="inline-flex rounded-lg p-2 text-slate-400 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-40"
+                                aria-label="Revoke subscription"
+                                title="Revoke subscription (preserves payment history)"
+                              >
+                                <Trash2 className="h-4 w-4" />
                               </button>
                             </td>
                           )}

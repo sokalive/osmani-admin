@@ -28,7 +28,9 @@ import { isCompletedTransferSourceDevice } from '../lib/transferRevocationGuard.
 import {
   writeManualGrantSseEvents,
   writeSubscriptionWakeSseEvents,
+  writeAdminRevokedSseEvents,
 } from '../lib/manualSubscriptionSseContract.js'
+import { flushSseResponse } from '../lib/sseFlush.js'
 
 export const subscriptionRouter = Router()
 
@@ -194,8 +196,18 @@ function rowToPublicStatus(row) {
     }
   }
   const active = isAccessRowActive(row)
+  const isAdminRevoked =
+    String(row.status ?? '').toLowerCase() === 'revoked' || row.admin_revoked_at != null
   const status =
-    row.blocked_now === true ? 'blocked' : active ? 'active' : row.status === 'active' ? 'expired' : row.status
+    row.blocked_now === true
+      ? 'blocked'
+      : isAdminRevoked
+        ? 'revoked'
+        : active
+          ? 'active'
+          : row.status === 'active'
+            ? 'expired'
+            : row.status
   const exp = row.expires_at
   const expiresAt = exp instanceof Date ? exp.toISOString() : exp != null ? String(exp) : null
   const startedRaw = row.started_at
@@ -205,6 +217,13 @@ function rowToPublicStatus(row) {
       : startedRaw != null
         ? String(startedRaw)
         : null
+  const inactiveReason = isAdminRevoked
+    ? 'admin_revoked'
+    : active
+      ? null
+      : row.status === 'active'
+        ? 'expired'
+        : String(status || 'inactive')
   return {
     active,
     /** legacy alias used by RN clients */
@@ -216,6 +235,20 @@ function rowToPublicStatus(row) {
     started_at: startedAt,
     blocked: row.blocked_now === true,
     blockReason: row.block_reason ? String(row.block_reason) : null,
+    inactive_reason: inactiveReason,
+    inactiveReason,
+    admin_revoked: isAdminRevoked,
+    adminRevoked: isAdminRevoked,
+    suppress_expiry_popup: isAdminRevoked,
+    suppressExpiryPopup: isAdminRevoked,
+    entitlement_state: isAdminRevoked ? 'revoked' : active ? 'active' : 'inactive',
+    entitlementState: isAdminRevoked ? 'revoked' : active ? 'active' : 'inactive',
+    admin_revoked_at:
+      row.admin_revoked_at instanceof Date
+        ? row.admin_revoked_at.toISOString()
+        : row.admin_revoked_at != null
+          ? String(row.admin_revoked_at)
+          : null,
     ...reminderFieldsFromRow(row),
   }
 }
@@ -1207,6 +1240,8 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     const pub = rowToPublicStatus(row)
     return {
       isActive: pub.isActive === true,
+      active: pub.active === true,
+      status: pub.status ?? null,
       expiresAt: pub.expiresAt ?? null,
       expires_at: pub.expires_at ?? null,
       remainingSeconds: pub.remainingSeconds ?? 0,
@@ -1217,6 +1252,14 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       remaining_days: pub.remaining_days ?? 0,
       nearExpiry: pub.nearExpiry === true,
       near_expiry: pub.near_expiry === true,
+      inactive_reason: pub.inactive_reason ?? null,
+      inactiveReason: pub.inactiveReason ?? null,
+      admin_revoked: pub.admin_revoked === true,
+      adminRevoked: pub.adminRevoked === true,
+      suppress_expiry_popup: pub.suppress_expiry_popup === true,
+      suppressExpiryPopup: pub.suppressExpiryPopup === true,
+      entitlement_state: pub.entitlement_state ?? null,
+      entitlementState: pub.entitlementState ?? null,
     }
   }
 
@@ -1350,6 +1393,9 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         event,
         action: packet?.payload?.action ?? null,
         bannerId: packet?.payload?.bannerId ?? null,
+        channelId: packet?.payload?.channelId ?? packet?.payload?.channel?.id ?? null,
+        channel: packet?.payload?.channel ?? null,
+        catalog_revision: packet?.payload?.catalog_revision ?? null,
         updatedAt: packet?.payload?.updatedAt ?? packet?.payload?.synced_at ?? null,
         reason: event,
       })
@@ -1405,11 +1451,22 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       invalidateSubscriptionAccessCache(deviceId)
       const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
       const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
-      res.write(`event: device_subscription\ndata: ${JSON.stringify(toSsePayload(row))}\n\n`)
-      writeSubscriptionWakeSseEvents(res, {
-        reason: payload?.reason ?? 'device_subscription',
-        grantId: null,
-      })
+      const sseBody = JSON.stringify(toSsePayload(row))
+      res.write(`event: device_subscription\ndata: ${sseBody}\n\n`)
+      const isAdminRevoke =
+        payload?.adminRevoked === true ||
+        payload?.reason === 'admin_revoked' ||
+        String(row?.status ?? '').toLowerCase() === 'revoked' ||
+        row?.admin_revoked_at != null
+      if (isAdminRevoke) {
+        writeAdminRevokedSseEvents(res, { device_id: deviceId })
+      } else {
+        writeSubscriptionWakeSseEvents(res, {
+          reason: payload?.reason ?? 'device_subscription',
+          grantId: null,
+        })
+      }
+      flushSseResponse(res)
     } catch (e) {
       // Skip SSE push on read failure — avoids defaulting clients to revoked/inactive.
       console.error('[subscription-stream] device_subscription skipped on error:', e)
@@ -1434,9 +1491,22 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     } catch (e) {
       console.error('[subscription-stream] relayed manual_gift push failed:', e)
     }
-    void handler({ deviceId: did })
+    const reason = String(packet?.payload?.reason ?? '')
+    void handler({
+      deviceId: did,
+      reason,
+      adminRevoked: reason === 'admin_revoke' || reason === 'admin_revoked',
+    })
+  }
+
+  const subscriptionRevokedSyncHandler = (packet) => {
+    if (String(packet?.event || '') !== 'subscription_revoked') return
+    const did = String(packet?.payload?.device_id ?? packet?.payload?.deviceId ?? '').trim()
+    if (!did || did !== deviceId) return
+    void handler({ deviceId: did, reason: 'admin_revoked', adminRevoked: true })
   }
   liveSyncBus.on('sync', subscriptionUpdatedSyncHandler)
+  liveSyncBus.on('sync', subscriptionRevokedSyncHandler)
 
   const modePoll = setInterval(() => {
     void writeAppModesEvent('poll')
@@ -1475,6 +1545,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     liveSyncBus.off('sync', catalogSyncHandler)
     liveSyncBus.off('sync', phoneGateSyncHandler)
     liveSyncBus.off('sync', subscriptionUpdatedSyncHandler)
+    liveSyncBus.off('sync', subscriptionRevokedSyncHandler)
     try {
       res.end()
     } catch (e) {

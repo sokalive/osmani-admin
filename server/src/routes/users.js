@@ -8,33 +8,19 @@ import {
   listAdminExpiringSoonUsers,
   listAdminFailedPayments,
 } from '../lib/adminUsersList.js'
+import { lookupAdminUserHistory } from '../lib/adminUserLookup.js'
 import {
   insertAdminRevocationAudit,
+  notifyAdminSubscriptionRevoked,
   revokeAdminDeviceSubscription,
 } from '../lib/adminSubscriptionRevocation.js'
 import { invalidateSubscriptionAccessCache } from '../lib/subscriptionAccessCache.js'
-import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
-import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const usersRouter = Router()
 
 function notifySubscriptionRevoked(deviceId, orderId = 'admin_revoke') {
-  const d = String(deviceId ?? '').trim()
-  if (!d) return
-  invalidateSubscriptionAccessCache(d)
-  deviceSubscriptionBus.emit('update', { deviceId: d })
-  liveSyncBus.publish('analytics.subscription_updated', {
-    topics: ['analytics'],
-    deviceId: d,
-    orderId: String(orderId),
-  })
-  liveSyncBus.publish('subscription_revoked', {
-    topics: ['config'],
-    device_id: d,
-    reason: 'admin_revoke',
-    synced_at: new Date().toISOString(),
-  })
+  notifyAdminSubscriptionRevoked(deviceId, orderId)
 }
 
 function parseListQuery(req) {
@@ -119,6 +105,25 @@ usersRouter.get('/summary', requireAdminPanelAccess, async (_req, res) => {
     res.json({ ok: true, summary })
   } catch (e) {
     console.error('[users] GET /summary failed:', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Aggregated identity history for exact device ID or normalized phone (one response). */
+usersRouter.get('/lookup', requireAdminPanelAccess, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    const q = String(req.query.q ?? req.query.search ?? '').trim()
+    if (!q) {
+      return res.status(400).json({ ok: false, error: 'q is required' })
+    }
+    const out = await lookupAdminUserHistory(q)
+    if (!out) {
+      return res.json({ ok: true, found: false, query: q, devices: [] })
+    }
+    res.json({ ok: true, found: true, ...out })
+  } catch (e) {
+    console.error('[users] GET /lookup failed:', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

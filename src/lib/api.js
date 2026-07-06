@@ -368,6 +368,10 @@ export const getUsers = (params = {}, opts = {}) => {
   const qs = usersListQuery(params)
   return adminApiGet(qs ? `/users?${qs}` : '/users', opts)
 }
+export const getUsersLookup = (q, opts = {}) => {
+  const qs = new URLSearchParams({ q: String(q ?? '').trim() })
+  return adminApiGet(`/users/lookup?${qs}`, opts)
+}
 /** Full list for legacy admin screens (e.g. Plans subscriber counts). Prefer paginated getUsers. */
 export const getUsersLegacy = () => adminApiGet('/users?legacy=1')
 

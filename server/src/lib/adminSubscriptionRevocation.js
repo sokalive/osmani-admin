@@ -3,6 +3,8 @@
  */
 import { getPool } from '../db/pool.js'
 import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
+import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
+import { liveSyncBus } from './liveSyncBus.js'
 
 function requirePool() {
   const pool = getPool()
@@ -104,4 +106,27 @@ export async function insertAdminRevocationAudit(client, { deviceId, adminIdenti
       String(transactionId ?? '').slice(0, 256) || null,
     ],
   )
+}
+
+/** Post-commit realtime fan-out for admin revocation (cross-process via liveSync + deviceSubscription relay). */
+export function notifyAdminSubscriptionRevoked(deviceId, orderId = 'admin_revoke') {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return
+  invalidateSubscriptionAccessCache(d)
+  deviceSubscriptionBus.emit('update', { deviceId: d, reason: 'admin_revoked', adminRevoked: true })
+  liveSyncBus.publish('analytics.subscription_updated', {
+    topics: ['analytics'],
+    deviceId: d,
+    orderId: String(orderId),
+    reason: 'admin_revoke',
+  })
+  liveSyncBus.publish('subscription_revoked', {
+    topics: ['config'],
+    device_id: d,
+    deviceId: d,
+    reason: 'admin_revoked',
+    inactive_reason: 'admin_revoked',
+    suppress_expiry_popup: true,
+    synced_at: new Date().toISOString(),
+  })
 }

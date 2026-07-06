@@ -10,11 +10,12 @@ export function notifySubscriptionActivated(deviceId, orderId = null) {
   const did = String(deviceId ?? '').trim()
   if (!did) return false
   invalidateSubscriptionAccessCache(did)
-  deviceSubscriptionBus.emit('update', { deviceId: did })
+  deviceSubscriptionBus.emit('update', { deviceId: did, reason: 'subscription_activated' })
   liveSyncBus.publish('analytics.subscription_updated', {
     topics: ['analytics'],
     deviceId: did,
     orderId: orderId != null ? String(orderId) : null,
+    reason: 'subscription_activated',
   })
   return true
 }

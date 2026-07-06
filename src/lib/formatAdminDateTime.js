@@ -6,8 +6,8 @@
 
 export const ADMIN_DISPLAY_TIMEZONE = 'Africa/Dar_es_Salaam'
 
-/** English labels for consistency with AM/PM in the admin shell. */
-export const ADMIN_DATETIME_LOCALE = 'en-GB'
+/** English labels — en-US yields uppercase AM/PM per owner requirement. */
+export const ADMIN_DATETIME_LOCALE = 'en-US'
 
 function coerceDate(value) {
   if (value == null || value === '') return null
@@ -19,7 +19,7 @@ function coerceDate(value) {
 }
 
 /**
- * Full datetime in Dar es Salaam: e.g. "17 May 2026, 9:15 pm"
+ * Full datetime in Dar es Salaam: e.g. "May 17, 2026, 9:15 AM"
  */
 export function formatAdminDateTime(value, { fallback = '—' } = {}) {
   const d = coerceDate(value)

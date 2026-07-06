@@ -15,6 +15,7 @@ import {
 } from './multerUpload.js'
 import { wireApiCacheInvalidation } from './lib/apiCacheInvalidation.js'
 import { wireLiveSyncRelay } from './lib/liveSyncRelay.js'
+import { wireDeviceSubscriptionRelay } from './lib/deviceSubscriptionRelay.js'
 import { ensureMpingoRoutingStartupSync } from './lib/mpingoRoutingSync.js'
 import {
   isRenderRuntime,
@@ -294,6 +295,7 @@ async function runDeferredStartup({ background = false } = {}) {
         console.warn('[uploads] deferred retry: storage still not ready:', uploadRetry.error)
       }
       await wireLiveSyncRelay()
+      await wireDeviceSubscriptionRelay()
       await ensureAllApiDataFiles()
       markStartupReady()
 

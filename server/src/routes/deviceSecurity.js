@@ -2036,7 +2036,8 @@ deviceSecurityRouter.post('/subscription/revoke', async (req, res) => {
       client.release()
     }
     if (result.notFound) return res.status(404).json({ error: 'Subscription not found' })
-    invalidateSubscriptionAccessCache(deviceId)
+    const { notifyAdminSubscriptionRevoked } = await import('../lib/adminSubscriptionRevocation.js')
+    notifyAdminSubscriptionRevoked(deviceId, result.transaction_id)
     await logSecurityEvent(pool, {
       actor: 'Admin',
       eventType: 'Subscription revoked',
@@ -2051,9 +2052,15 @@ deviceSecurityRouter.post('/subscription/revoke', async (req, res) => {
         status: 'revoked',
         active_now: false,
       },
-      reason: 'revoke',
+      reason: 'admin_revoked',
     })
-    emitSync('subscription_revoked', { device_id: deviceId })
+    emitSync('subscription_revoked', {
+      device_id: deviceId,
+      deviceId,
+      reason: 'admin_revoked',
+      inactive_reason: 'admin_revoked',
+      suppress_expiry_popup: true,
+    })
     emitSync('security_logs_changed', { action: 'revoke', device_id: deviceId })
     return res.json({
       ok: true,

@@ -98,6 +98,33 @@ function appendSubscriptionSearch(search, cond, params, i) {
     params.push(q.toLowerCase())
     return i + 1
   }
+  const digits = normalizePhoneDigits(q)
+  const phoneExprs = [`COALESCE(lt.phone, pay.phone, '')`]
+  if (digits && digits.length >= 9) {
+    const phoneParts = []
+    let idx = i
+    for (const expr of phoneExprs) {
+      phoneParts.push(`${tzPhoneCanonicalSql(expr)} = $${idx}`)
+      params.push(digits)
+      idx += 1
+    }
+    phoneParts.push(`EXISTS (
+      SELECT 1 FROM transactions t_s
+      WHERE t_s.device_id = ds.device_id
+        AND ${tzPhoneCanonicalSql('t_s.phone::text')} = $${idx}
+    )`)
+    params.push(digits)
+    idx += 1
+    phoneParts.push(`EXISTS (
+      SELECT 1 FROM device_phone_registry dpr_eq
+      WHERE dpr_eq.device_id::text = ds.device_id
+        AND dpr_eq.phone_number_normalized = $${idx}
+    )`)
+    params.push(digits)
+    idx += 1
+    cond.push(`(${phoneParts.join(' OR ')})`)
+    return idx
+  }
   const esc = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
   const parts = [`ds.device_id ILIKE $${i}`]
   params.push(`%${esc}%`)
@@ -118,13 +145,11 @@ function appendSubscriptionSearch(search, cond, params, i) {
   )`)
   params.push(`%${esc}%`)
   idx += 1
-  const phoneExprs = [`COALESCE(lt.phone, pay.phone, '')`]
   for (const expr of phoneExprs) {
     parts.push(`${expr} ILIKE $${idx}`)
     params.push(`%${esc}%`)
     idx += 1
   }
-  const digits = normalizePhoneDigits(q)
   if (digits && digits.length >= 9) {
     for (const expr of phoneExprs) {
       parts.push(`${tzPhoneCanonicalSql(expr)} = $${idx}`)

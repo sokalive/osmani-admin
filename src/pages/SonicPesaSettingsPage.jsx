@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import FlashMessage from '../components/FlashMessage'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
+import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 import {
   getSonicpesaSettings,
   postSonicpesaTest,
@@ -297,7 +298,7 @@ function SonicPesaSettingsPage() {
                 </p>
                 {cfg.lastTestAt ? (
                   <p className="mt-1 text-xs text-slate-500">
-                    Last check: {new Date(cfg.lastTestAt).toLocaleString()}
+                    Last check: {formatAdminDateTime(cfg.lastTestAt, { fallback: '—' })}
                   </p>
                 ) : null}
                 {failed && cfg.lastTestMessage ? (
@@ -424,7 +425,7 @@ function SonicPesaSettingsPage() {
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Real provider webhook</p>
                 {cfg.lastProviderWebhookAt ? (
                   <p className="mt-1 text-sm text-emerald-300">
-                    {new Date(cfg.lastProviderWebhookAt).toLocaleString()}
+                    {formatAdminDateTime(cfg.lastProviderWebhookAt, { fallback: '—' })}
                   </p>
                 ) : (
                   <p className="mt-1 text-sm text-amber-300">No provider-originated webhook received yet</p>
@@ -434,7 +435,7 @@ function SonicPesaSettingsPage() {
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last engineering probe</p>
                 {cfg.lastEngineeringProbeAt ? (
                   <p className="mt-1 text-sm text-slate-400">
-                    {new Date(cfg.lastEngineeringProbeAt).toLocaleString()}
+                    {formatAdminDateTime(cfg.lastEngineeringProbeAt, { fallback: '—' })}
                   </p>
                 ) : (
                   <p className="mt-1 text-sm text-slate-500">None recorded</p>

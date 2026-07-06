@@ -62,3 +62,25 @@ export function writeSubscriptionWakeSseEvents(res, { grantId = null, reason = '
     res.write(`event: ${event}\ndata: ${wakeBody}\n\n`)
   }
 }
+
+/** Admin revocation — explicit semantics so App suppresses natural-expiry popup (Kifurushi kimekwisha). */
+export function buildAdminRevokedSseBody(extra = {}) {
+  return JSON.stringify({
+    ok: true,
+    reason: 'admin_revoked',
+    inactive_reason: 'admin_revoked',
+    admin_revoked: true,
+    suppress_expiry_popup: true,
+    entitlement_state: 'revoked',
+    requires_verify: true,
+    server_time_ms: Date.now(),
+    ...extra,
+  })
+}
+
+export function writeAdminRevokedSseEvents(res, extra = {}) {
+  const body = buildAdminRevokedSseBody(extra)
+  res.write(`event: subscription_revoked\ndata: ${body}\n\n`)
+  res.write(`event: subscription_wake\ndata: ${body}\n\n`)
+  res.write(`event: device_subscription_updated\ndata: ${body}\n\n`)
+}
