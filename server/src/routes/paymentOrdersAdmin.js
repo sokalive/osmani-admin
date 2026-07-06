@@ -1,7 +1,11 @@
 import { Router } from 'express'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { verifyAdminSensitiveActionPassword } from '../lib/adminSensitiveActionPassword.js'
-import { listPaymentOrdersLedger, getPaymentOrderDetail } from '../lib/paymentOrderLedger.js'
+import {
+  listPaymentOrdersLedger,
+  countPaymentOrdersLedger,
+  getPaymentOrderDetail,
+} from '../lib/paymentOrderLedger.js'
 import {
   recoverAdminPaymentOrder,
   rejectAdminPaymentRecovery,
@@ -56,14 +60,32 @@ paymentOrdersAdminRouter.get('/', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const q = req.query || {}
-    const rows = await listPaymentOrdersLedger({
+    const limit = Math.min(500, Math.max(1, Number(q.limit) || 50))
+    const page = Math.max(1, Number(q.page) || 1)
+    const offset =
+      q.offset != null && q.offset !== ''
+        ? Math.max(0, Number(q.offset) || 0)
+        : (page - 1) * limit
+    const filters = {
       status: q.status ?? 'all',
       provider: q.provider ?? 'all',
       search: q.search ?? q.q ?? '',
-      limit: q.limit ?? 200,
-      offset: q.offset ?? 0,
+    }
+    const [rows, total] = await Promise.all([
+      listPaymentOrdersLedger({ ...filters, limit, offset }),
+      countPaymentOrdersLedger(filters),
+    ])
+    const totalPages = Math.max(1, Math.ceil(total / limit))
+    res.json({
+      ok: true,
+      rows,
+      count: rows.length,
+      total,
+      page,
+      limit,
+      offset,
+      totalPages,
     })
-    res.json({ ok: true, rows, count: rows.length })
   } catch (e) {
     console.error('[payment-orders-admin] list', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })

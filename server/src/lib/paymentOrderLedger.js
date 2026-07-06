@@ -1,4 +1,5 @@
 import { getPool } from '../db/pool.js'
+import { normalizePhoneDigits, tzPhoneCanonicalSql } from '../billingStore.js'
 import { ledgerStatusFromTransaction } from './tzMobileNetwork.js'
 
 function requirePool() {
@@ -47,28 +48,122 @@ function activationState(row) {
   return 'inactive'
 }
 
-export async function listPaymentOrdersLedger({
-  status = 'all',
-  provider = 'all',
-  search = '',
-  limit = 200,
-  offset = 0,
-} = {}) {
-  const pool = requirePool()
-  const lim = Math.min(500, Math.max(1, Number(limit) || 200))
-  const off = Math.max(0, Number(offset) || 0)
+/** 64-char hex device_id (authoritative exact match). */
+export function isExactDeviceId(q) {
+  return /^[a-f0-9]{64}$/i.test(String(q ?? '').trim())
+}
+
+function isLikelyOrderId(q) {
+  const s = String(q ?? '').trim()
+  if (!s) return false
+  if (/^osm_[a-z]{2}_/i.test(s)) return true
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{10,}$/.test(s)
+}
+
+function looksLikePhoneQuery(q) {
+  const raw = String(q ?? '').trim()
+  if (!raw) return false
+  if (/^[+0]/.test(raw) || /^255\d{9}$/.test(raw.replace(/\D/g, ''))) return true
+  const digits = normalizePhoneDigits(raw)
+  return Boolean(digits && digits.length >= 12 && /^255\d{9}$/.test(digits))
+}
+
+/**
+ * SQL fragment for ledger tab filters — mirrors ledgerStatusFromTransaction().
+ * @returns {string|null}
+ */
+export function ledgerStatusFilterSql(status) {
+  const st = String(status ?? 'all').toUpperCase()
+  if (!st || st === 'ALL') return null
+  if (st === 'SUCCESS') {
+    return `(
+      t.status = 'completed'
+      AND COALESCE(UPPER(t.recovery_state), '') NOT IN ('MANUALLY_APPROVED', 'RECOVERY_REJECTED', 'RECOVERY_BLOCKED')
+    )`
+  }
+  if (st === 'FAILED') {
+    return `(
+      t.status = 'failed'
+      OR (t.status = 'pending' AND COALESCE(t.raw_payload->>'provider_initiation', '') = 'failed')
+      OR UPPER(COALESCE(t.recovery_state, '')) = 'RECOVERY_REJECTED'
+    )`
+  }
+  if (st === 'PENDING' || st === 'INITIATED') {
+    return `(
+      t.status = 'pending'
+      AND COALESCE(UPPER(t.recovery_state), '') NOT IN ('MANUALLY_APPROVED', 'RECOVERY_REJECTED', 'RECOVERY_BLOCKED')
+      AND COALESCE(t.raw_payload->>'provider_initiation', '') <> 'failed'
+    )`
+  }
+  if (st === 'MANUALLY_APPROVED') {
+    return `UPPER(COALESCE(t.recovery_state, '')) = 'MANUALLY_APPROVED'`
+  }
+  if (st === 'RECOVERY_REJECTED') {
+    return `UPPER(COALESCE(t.recovery_state, '')) = 'RECOVERY_REJECTED'`
+  }
+  return null
+}
+
+/**
+ * Build search WHERE clause for payment orders list.
+ * @returns {{ clause: string|null, params: unknown[], nextIndex: number }}
+ */
+export function buildPaymentOrderSearchClause(search, startIndex = 1) {
+  const q = String(search ?? '').trim()
+  if (!q) return { clause: null, params: [], nextIndex: startIndex }
+
+  if (isExactDeviceId(q)) {
+    return {
+      clause: `t.device_id = $${startIndex}`,
+      params: [q.toLowerCase()],
+      nextIndex: startIndex + 1,
+    }
+  }
+
+  if (looksLikePhoneQuery(q)) {
+    const digits = normalizePhoneDigits(q)
+    if (digits && digits.length >= 9) {
+      const clause = `(
+        ${tzPhoneCanonicalSql('t.phone::text')} = $${startIndex}
+        OR COALESCE(t.normalized_phone, '') = $${startIndex}
+        OR t.device_id IN (
+          SELECT DISTINCT trim(d.device_id::text)
+          FROM (
+            SELECT device_id FROM transactions
+            WHERE device_id IS NOT NULL AND trim(device_id) <> ''
+              AND ${tzPhoneCanonicalSql('phone::text')} = $${startIndex}
+            UNION
+            SELECT device_id FROM device_phone_registry
+            WHERE phone_number_normalized = $${startIndex}
+          ) d
+        )
+      )`
+      return { clause, params: [digits], nextIndex: startIndex + 1 }
+    }
+  }
+
+  if (isLikelyOrderId(q)) {
+    return {
+      clause: `(t.order_id = $${startIndex} OR t.external_id = $${startIndex})`,
+      params: [q],
+      nextIndex: startIndex + 1,
+    }
+  }
+
+  return {
+    clause: `(t.order_id ILIKE $${startIndex} OR t.phone ILIKE $${startIndex} OR t.device_id ILIKE $${startIndex} OR t.external_id ILIKE $${startIndex} OR t.normalized_phone ILIKE $${startIndex})`,
+    params: [`%${q}%`],
+    nextIndex: startIndex + 1,
+  }
+}
+
+function buildListConditions({ status = 'all', provider = 'all', search = '' } = {}) {
   const cond = ['t.plan_id IS NOT NULL']
   const params = []
   let i = 1
 
-  if (status && status !== 'all') {
-    const st = String(status).toUpperCase()
-    if (st === 'SUCCESS') cond.push(`t.status = 'completed'`)
-    else if (st === 'FAILED') cond.push(`t.status = 'failed'`)
-    else if (st === 'PENDING' || st === 'INITIATED') cond.push(`t.status = 'pending'`)
-    else if (st === 'MANUALLY_APPROVED') cond.push(`t.recovery_state = 'MANUALLY_APPROVED'`)
-    else if (st === 'RECOVERY_REJECTED') cond.push(`t.recovery_state = 'RECOVERY_REJECTED'`)
-  }
+  const statusSql = ledgerStatusFilterSql(status)
+  if (statusSql) cond.push(statusSql)
 
   if (provider && provider !== 'all') {
     cond.push(`COALESCE(t.provider_label, '') = $${i}`)
@@ -76,18 +171,17 @@ export async function listPaymentOrdersLedger({
     i += 1
   }
 
-  const q = String(search ?? '').trim()
-  if (q) {
-    cond.push(
-      `(t.order_id ILIKE $${i} OR t.phone ILIKE $${i} OR t.device_id ILIKE $${i} OR t.external_id ILIKE $${i} OR t.normalized_phone ILIKE $${i})`,
-    )
-    params.push(`%${q}%`)
-    i += 1
+  const searchBuilt = buildPaymentOrderSearchClause(search, i)
+  if (searchBuilt.clause) {
+    cond.push(searchBuilt.clause)
+    params.push(...searchBuilt.params)
+    i = searchBuilt.nextIndex
   }
 
-  params.push(lim, off)
-  const { rows } = await pool.query(
-    `SELECT
+  return { cond, params, nextIndex: i }
+}
+
+const LIST_SELECT = `SELECT
        t.id,
        t.order_id,
        t.external_id,
@@ -123,53 +217,81 @@ export async function listPaymentOrdersLedger({
        FROM admin_payment_recovery_actions
        WHERE order_id = t.order_id
        ORDER BY id DESC LIMIT 1
-     ) apr ON true
+     ) apr ON true`
+
+function mapLedgerRow(r) {
+  const raw = r.raw_payload && typeof r.raw_payload === 'object' ? r.raw_payload : {}
+  const ledgerStatus = ledgerStatusFromTransaction(r)
+  return {
+    id: r.id,
+    orderId: r.order_id,
+    order_id: r.order_id,
+    externalId: r.external_id ?? null,
+    provider: providerLabel(r),
+    providerKey: r.provider_label ?? null,
+    phone: r.phone ?? '',
+    normalizedPhone: r.normalized_phone ?? '',
+    mobileNetwork: r.mobile_network ?? null,
+    amount: Number(r.amount) || 0,
+    currency: r.currency ?? 'TZS',
+    planId: r.plan_id,
+    planName: r.plan_name ?? '',
+    planDurationDays: r.plan_duration_days ?? null,
+    status: r.status,
+    ledgerStatus,
+    recoveryState: r.recovery_state ?? null,
+    deviceId: r.device_id ?? '',
+    deviceIdMasked: maskDeviceId(r.device_id),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+    updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at,
+    completedAt: r.completed_at instanceof Date ? r.completed_at.toISOString() : r.completed_at,
+    recoveryApprovedAt:
+      r.recovery_approved_at instanceof Date ? r.recovery_approved_at.toISOString() : r.recovery_approved_at,
+    recoveryApprovedBy: r.recovery_approved_by ?? null,
+    subscriptionActivation: activationState(r),
+    subExpiresAt: r.sub_expires_at instanceof Date ? r.sub_expires_at.toISOString() : r.sub_expires_at,
+    subTransactionId: r.sub_transaction_id ?? null,
+    providerInitiation: raw.provider_initiation ?? null,
+    failureReason: raw.provider_initiation === 'failed' ? raw.httpStatus ?? 'provider_rejected' : null,
+    manualRecoveryUsed: String(r.recovery_state ?? '').toUpperCase() === 'MANUALLY_APPROVED',
+    recoverySmsSent: r.recovery_sms_sent === true,
+    lastRecoveryAction: r.last_recovery_action ?? null,
+    recoveryHint: recoveryHintFromRow(r),
+  }
+}
+
+export async function countPaymentOrdersLedger(filters = {}) {
+  const pool = requirePool()
+  const { cond, params } = buildListConditions(filters)
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM transactions t WHERE ${cond.join(' AND ')}`,
+    params,
+  )
+  return Number(rows[0]?.n) || 0
+}
+
+export async function listPaymentOrdersLedger({
+  status = 'all',
+  provider = 'all',
+  search = '',
+  limit = 200,
+  offset = 0,
+} = {}) {
+  const pool = requirePool()
+  const lim = Math.min(500, Math.max(1, Number(limit) || 200))
+  const off = Math.max(0, Number(offset) || 0)
+  const { cond, params, nextIndex: i } = buildListConditions({ status, provider, search })
+  params.push(lim, off)
+
+  const { rows } = await pool.query(
+    `${LIST_SELECT}
      WHERE ${cond.join(' AND ')}
      ORDER BY t.created_at DESC
      LIMIT $${i} OFFSET $${i + 1}`,
     params,
   )
 
-  return rows.map((r) => {
-    const raw = r.raw_payload && typeof r.raw_payload === 'object' ? r.raw_payload : {}
-    const ledgerStatus = ledgerStatusFromTransaction(r)
-    return {
-      id: r.id,
-      orderId: r.order_id,
-      order_id: r.order_id,
-      externalId: r.external_id ?? null,
-      provider: providerLabel(r),
-      providerKey: r.provider_label ?? null,
-      phone: r.phone ?? '',
-      normalizedPhone: r.normalized_phone ?? '',
-      mobileNetwork: r.mobile_network ?? null,
-      amount: Number(r.amount) || 0,
-      currency: r.currency ?? 'TZS',
-      planId: r.plan_id,
-      planName: r.plan_name ?? '',
-      planDurationDays: r.plan_duration_days ?? null,
-      status: r.status,
-      ledgerStatus,
-      recoveryState: r.recovery_state ?? null,
-      deviceId: r.device_id ?? '',
-      deviceIdMasked: maskDeviceId(r.device_id),
-      createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
-      updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at,
-      completedAt: r.completed_at instanceof Date ? r.completed_at.toISOString() : r.completed_at,
-      recoveryApprovedAt:
-        r.recovery_approved_at instanceof Date ? r.recovery_approved_at.toISOString() : r.recovery_approved_at,
-      recoveryApprovedBy: r.recovery_approved_by ?? null,
-      subscriptionActivation: activationState(r),
-      subExpiresAt: r.sub_expires_at instanceof Date ? r.sub_expires_at.toISOString() : r.sub_expires_at,
-      subTransactionId: r.sub_transaction_id ?? null,
-      providerInitiation: raw.provider_initiation ?? null,
-      failureReason: raw.provider_initiation === 'failed' ? raw.httpStatus ?? 'provider_rejected' : null,
-      manualRecoveryUsed: String(r.recovery_state ?? '').toUpperCase() === 'MANUALLY_APPROVED',
-      recoverySmsSent: r.recovery_sms_sent === true,
-      lastRecoveryAction: r.last_recovery_action ?? null,
-      recoveryHint: recoveryHintFromRow(r),
-    }
-  })
+  return rows.map(mapLedgerRow)
 }
 
 export async function getPaymentOrderDetail(orderId) {

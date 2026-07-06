@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ClipboardList, RefreshCw, ShieldCheck } from 'lucide-react'
+import { ClipboardList, RefreshCw, Search, ShieldCheck } from 'lucide-react'
 import Topbar from '../components/Topbar'
 import SecurityPinModal from '../components/SecurityPinModal'
 import { useToast } from '../context/ToastContext.jsx'
@@ -16,6 +16,7 @@ import { shouldReplaceRows } from '../lib/adminDataGuards'
 import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const SSE_DEBOUNCE_MS = 1200
+const PAGE_SIZE = 50
 
 const STATUS_TABS = [
   { id: 'all', label: 'All' },
@@ -54,48 +55,140 @@ function inputClass() {
   return 'w-full rounded-xl border border-slate-600/70 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-400/50 focus:outline-none focus:ring-2 focus:ring-amber-500/25'
 }
 
+function cacheKey(tab, search, page) {
+  return `payment-orders:${tab}:${String(search ?? '').trim() || '_'}:p${page}`
+}
+
+function hydrateTab(tab, search, page) {
+  const snap = readAdminSnapshot(cacheKey(tab, search, page))
+  return {
+    rows: Array.isArray(snap?.rows) ? snap.rows : [],
+    total: Number(snap?.total) || 0,
+    totalPages: Number(snap?.totalPages) || 1,
+    fromCache: Boolean(snap?.rows),
+  }
+}
+
+function PaginationBar({ page, totalPages, total, onPageChange, disabled }) {
+  if (totalPages <= 1 && total <= PAGE_SIZE) return null
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 px-4 py-3 text-sm text-slate-400">
+      <span>
+        Page {page} of {totalPages}
+        <span className="ml-2 text-slate-500">({total} total)</span>
+      </span>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={disabled || page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          className="rounded-lg border border-slate-600 px-3 py-1.5 hover:bg-slate-800 disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          disabled={disabled || page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+          className="rounded-lg border border-slate-600 px-3 py-1.5 hover:bg-slate-800 disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function PaymentOrdersPage() {
   const { showToast } = useToast()
-  const cached = readAdminSnapshot('payment-orders')
-  const [rows, setRows] = useState(Array.isArray(cached?.rows) ? cached.rows : [])
-  const rowsRef = useRef(Array.isArray(cached?.rows) ? cached.rows : [])
+  const initial = useMemo(() => hydrateTab('all', '', 1), [])
+  const [rows, setRows] = useState(initial.rows)
+  const rowsRef = useRef(initial.rows)
   rowsRef.current = rows
-  const [initialLoading, setInitialLoading] = useState(!Array.isArray(cached?.rows))
+  const [initialLoading, setInitialLoading] = useState(!initial.fromCache)
   const [refreshing, setRefreshing] = useState(false)
-  const hasRowsRef = useRef(Array.isArray(cached?.rows))
+  const [loadError, setLoadError] = useState('')
+  const hasRowsRef = useRef(initial.fromCache)
   const genRef = useRef(0)
   const [tab, setTab] = useState('all')
-  const [search, setSearch] = useState('')
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchRevision, setSearchRevision] = useState(0)
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(initial.total)
+  const [totalPages, setTotalPages] = useState(initial.totalPages)
   const [pinExec, setPinExec] = useState(null)
   const [pinBusy, setPinBusy] = useState(false)
   const [pinError, setPinError] = useState('')
   const [confirmRow, setConfirmRow] = useState(null)
   const [ownerOverride, setOwnerOverride] = useState(false)
 
+  useEffect(() => {
+    const snap = hydrateTab(tab, searchQuery, page)
+    setRows(snap.rows)
+    rowsRef.current = snap.rows
+    setTotal(snap.total)
+    setTotalPages(snap.totalPages)
+    hasRowsRef.current = snap.fromCache && snap.rows.length > 0
+    setInitialLoading(!snap.fromCache)
+    setLoadError('')
+  }, [tab, searchQuery, page])
+
+  const runSearchNow = useCallback(() => {
+    const next = searchInput.trim()
+    setSearchQuery(next)
+    setPage(1)
+    setSearchRevision((r) => r + 1)
+  }, [searchInput])
+
+  const handleTabChange = useCallback((nextTab) => {
+    setTab(nextTab)
+    setPage(1)
+  }, [])
+
   const load = useCallback(async () => {
     const gen = ++genRef.current
     const isFirst = !hasRowsRef.current
     if (isFirst) setInitialLoading(true)
     else setRefreshing(true)
+    setLoadError('')
     try {
-      const data = await getPaymentOrders({ status: tab, search: search.trim() })
+      const data = await getPaymentOrders({
+        status: tab,
+        search: searchQuery.trim() || undefined,
+        limit: PAGE_SIZE,
+        page,
+      })
       if (gen !== genRef.current) return
       const list = Array.isArray(data?.rows) ? data.rows : []
-      if (!shouldReplaceRows(rowsRef.current, list)) return
+      const nextTotal = Number(data?.total) || list.length
+      const nextTotalPages = Math.max(1, Number(data?.totalPages) || Math.ceil(nextTotal / PAGE_SIZE) || 1)
+      if (!shouldReplaceRows(rowsRef.current, list, { allowEmpty: true })) return
       setRows(list)
       rowsRef.current = list
+      setTotal(nextTotal)
+      setTotalPages(nextTotalPages)
       hasRowsRef.current = true
-      writeAdminSnapshot('payment-orders', { rows: list, tab, search: search.trim() })
+      writeAdminSnapshot(cacheKey(tab, searchQuery, page), {
+        rows: list,
+        tab,
+        search: searchQuery.trim(),
+        page,
+        total: nextTotal,
+        totalPages: nextTotalPages,
+      })
     } catch (e) {
       if (gen !== genRef.current) return
-      showToast(e.message || 'Failed to load payment orders', 'error')
+      const msg = e.message || 'Failed to load payment orders'
+      setLoadError(msg)
+      showToast(msg, 'error')
     } finally {
       if (gen === genRef.current) {
         setInitialLoading(false)
         setRefreshing(false)
       }
     }
-  }, [tab, search, showToast])
+  }, [tab, searchQuery, searchRevision, page, showToast])
 
   useEffect(() => {
     load()
@@ -114,8 +207,6 @@ export default function PaymentOrdersPage() {
       es.close()
     }
   }, [load])
-
-  const filtered = useMemo(() => rows, [rows])
 
   const runRecover = (row, withOwnerOverride = false) => {
     setConfirmRow(row)
@@ -161,6 +252,8 @@ export default function PaymentOrdersPage() {
     })
   }
 
+  const tableLoading = initialLoading || refreshing
+
   return (
     <>
       <Topbar />
@@ -177,7 +270,9 @@ export default function PaymentOrdersPage() {
           </div>
           <button
             type="button"
-            onClick={load}
+            onClick={() => {
+              setSearchRevision((r) => r + 1)
+            }}
             className="inline-flex items-center gap-2 rounded-xl border border-slate-600/70 bg-slate-900/80 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
@@ -190,7 +285,7 @@ export default function PaymentOrdersPage() {
               <button
                 key={t.id}
                 type="button"
-                onClick={() => setTab(t.id)}
+                onClick={() => handleTabChange(t.id)}
                 className={`rounded-xl px-4 py-2 text-sm font-medium ${
                   tab === t.id
                     ? 'bg-gradient-to-r from-amber-300 to-yellow-500 text-slate-950'
@@ -201,13 +296,42 @@ export default function PaymentOrdersPage() {
               </button>
             ))}
           </div>
-          <input
-            className={inputClass()}
-            placeholder="Search order ID, phone, device ID…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <div className="flex flex-wrap gap-2">
+            <input
+              className={`${inputClass()} min-w-[220px] flex-1`}
+              placeholder="Search order ID, phone, device ID…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  runSearchNow()
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={runSearchNow}
+              disabled={tableLoading}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-300 to-yellow-500 px-5 py-2 text-sm font-semibold text-slate-950 hover:opacity-95 disabled:opacity-50"
+            >
+              <Search className={`h-4 w-4 ${tableLoading ? 'animate-pulse' : ''}`} />
+              Search
+            </button>
+          </div>
+          {searchQuery ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Showing results for &ldquo;{searchQuery}&rdquo;
+              {tableLoading ? ' — searching…' : total > 0 ? ` — ${total} match${total === 1 ? '' : 'es'}` : ''}
+            </p>
+          ) : null}
         </div>
+
+        {loadError ? (
+          <div className="rounded-xl border border-rose-500/40 bg-rose-950/30 px-4 py-3 text-sm text-rose-200">
+            {loadError}
+          </div>
+        ) : null}
 
         <div className="overflow-x-auto rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
           <table className="min-w-[1280px] w-full border-collapse text-left text-sm">
@@ -229,17 +353,21 @@ export default function PaymentOrdersPage() {
               {initialLoading ? (
                 <tr>
                   <td colSpan={10} className="px-4 py-8 text-center text-slate-400">
-                    Loading…
+                    <span className="inline-flex items-center gap-2">
+                      <RefreshCw className="h-4 w-4 animate-spin" /> Loading…
+                    </span>
                   </td>
                 </tr>
-              ) : filtered.length === 0 ? (
+              ) : rows.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="px-4 py-8 text-center text-slate-400">
-                    No payment orders found
+                    {searchQuery
+                      ? `No payment orders found for "${searchQuery}"`
+                      : 'No payment orders found'}
                   </td>
                 </tr>
               ) : (
-                filtered.map((row) => (
+                rows.map((row) => (
                   <tr key={row.orderId} className="hover:bg-slate-900/40">
                     <td className="px-4 py-3 font-mono text-xs text-amber-100/90">{row.orderId}</td>
                     <td className="px-4 py-3">{row.provider}</td>
@@ -309,6 +437,13 @@ export default function PaymentOrdersPage() {
               )}
             </tbody>
           </table>
+          <PaginationBar
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            onPageChange={setPage}
+            disabled={tableLoading}
+          />
         </div>
 
         {confirmRow && (

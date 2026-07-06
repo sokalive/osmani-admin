@@ -1319,6 +1319,9 @@ export const getPaymentOrders = (params = {}) => {
   if (params.status) q.set('status', params.status)
   if (params.provider) q.set('provider', params.provider)
   if (params.search) q.set('search', params.search)
+  if (params.limit != null) q.set('limit', String(params.limit))
+  if (params.page != null) q.set('page', String(params.page))
+  if (params.offset != null) q.set('offset', String(params.offset))
   const s = q.toString()
   return adminApiGet(s ? `/admin/payment-orders?${s}` : '/admin/payment-orders')
 }
