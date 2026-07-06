@@ -54,7 +54,12 @@ function recoveryBadgeClass(row) {
   if (hint === 'Already Active' || hint === 'Manually Recovered' || hint === 'Activated / Historical') {
     return 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30'
   }
-  if (hint === 'Pending at Provider') return 'bg-amber-500/15 text-amber-100 ring-amber-400/40'
+  if (hint === 'Hamisha Transfer' || hint === 'System Migration' || hint === 'Superseded / Stacked' || hint === 'Manual Grant Override') {
+    return 'bg-sky-500/15 text-sky-200 ring-sky-500/30'
+  }
+  if (hint === 'Pending at Provider' || hint === 'Admin Revoked' || hint === 'Needs Review') {
+    return 'bg-amber-500/15 text-amber-100 ring-amber-400/40'
+  }
   if (hint === 'Failed at Provider' || hint === 'Recovery Rejected' || hint === 'Unresolved Activation') {
     return 'bg-rose-500/15 text-rose-200 ring-rose-500/30'
   }

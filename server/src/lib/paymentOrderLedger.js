@@ -193,7 +193,10 @@ const LIST_SELECT = `SELECT
        ds.admin_revoked_transaction_id,
        sup.superseding_order_id,
        sup.superseding_created_at,
-       (dt_xfer.src IS NOT NULL) AS is_transfer_source,
+       hamisha.hamisha_transfer_id,
+       hamisha.hamisha_target_device_id,
+       hamisha.hamisha_transfer_completed_at,
+       hamisha.hamisha_transfer_reason,
        apr.action AS last_recovery_action,
        apr.sms_sent AS recovery_sms_sent,
        apr.created_at AS recovery_action_at
@@ -212,11 +215,27 @@ const LIST_SELECT = `SELECT
        LIMIT 1
      ) sup ON true
      LEFT JOIN LATERAL (
-       SELECT 1 AS src
+       SELECT dt.id AS hamisha_transfer_id,
+              dt.target_device_id AS hamisha_target_device_id,
+              dt.completed_at AS hamisha_transfer_completed_at,
+              dt.reason AS hamisha_transfer_reason
        FROM device_transfers dt
-       WHERE dt.status = 'completed' AND dt.source_device_id = t.device_id
+       WHERE dt.status = 'completed'
+         AND dt.source_device_id = t.device_id
+         AND trim(coalesce(ds.transaction_id, '')) = trim(t.order_id)
+         AND coalesce(ds.transaction_id::text, '') NOT LIKE 'moved:%'
+         AND dt.completed_at >= COALESCE(t.completed_at, t.created_at)
+         AND EXISTS (
+           SELECT 1 FROM device_subscriptions ds_tgt
+           WHERE ds_tgt.device_id = dt.target_device_id
+             AND (
+               ds_tgt.transaction_id LIKE 'transfer:%'
+               OR ds_tgt.transaction_id LIKE 'force:%'
+             )
+         )
+       ORDER BY dt.completed_at DESC
        LIMIT 1
-     ) dt_xfer ON true
+     ) hamisha ON true
      LEFT JOIN LATERAL (
        SELECT action, sms_sent, created_at
        FROM admin_payment_recovery_actions

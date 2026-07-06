@@ -6,7 +6,8 @@
 export const RECOVERY_CLASS = Object.freeze({
   ALREADY_ACTIVE: 'ALREADY_ACTIVE',
   ADMIN_REVOKED: 'ADMIN_REVOKED',
-  TRANSFERRED: 'TRANSFERRED',
+  HAMISHA_TRANSFER: 'HAMISHA_TRANSFER',
+  SYSTEM_MIGRATION: 'SYSTEM_MIGRATION',
   SUPERSEDED_STACKED: 'SUPERSEDED_STACKED',
   EXPIRED: 'EXPIRED',
   MANUAL_GRANT_OVERRIDE: 'MANUAL_GRANT_OVERRIDE',
@@ -22,7 +23,8 @@ export const RECOVERY_CLASS = Object.freeze({
 export const RECOVERY_LABEL = Object.freeze({
   [RECOVERY_CLASS.ALREADY_ACTIVE]: 'Already Active',
   [RECOVERY_CLASS.ADMIN_REVOKED]: 'Admin Revoked',
-  [RECOVERY_CLASS.TRANSFERRED]: 'Transferred',
+  [RECOVERY_CLASS.HAMISHA_TRANSFER]: 'Hamisha Transfer',
+  [RECOVERY_CLASS.SYSTEM_MIGRATION]: 'System Migration',
   [RECOVERY_CLASS.SUPERSEDED_STACKED]: 'Superseded / Stacked',
   [RECOVERY_CLASS.EXPIRED]: 'Expired',
   [RECOVERY_CLASS.MANUAL_GRANT_OVERRIDE]: 'Manual Grant Override',
@@ -51,6 +53,43 @@ function parseDate(v) {
 
 function norm(row, snake, camel) {
   return row?.[snake] ?? row?.[camel] ?? ''
+}
+
+/**
+ * Parse `moved:{sourceDeviceId}:{embeddedTransactionId}` with exact canonical comparison.
+ * @param {unknown} transactionId
+ * @returns {{
+ *   isMoved: boolean,
+ *   sourceDeviceId?: string,
+ *   embeddedTransactionId?: string,
+ *   malformed?: boolean,
+ *   legacy?: boolean,
+ * }}
+ */
+export function parseMovedTransactionId(transactionId) {
+  const s = String(transactionId ?? '').trim()
+  if (!s.startsWith('moved:')) return { isMoved: false }
+
+  const m64 = /^moved:([a-f0-9]{64}):(.+)$/i.exec(s)
+  if (m64) {
+    return {
+      isMoved: true,
+      sourceDeviceId: m64[1].toLowerCase(),
+      embeddedTransactionId: m64[2],
+    }
+  }
+
+  const mLoose = /^moved:([^:]+):(.+)$/i.exec(s)
+  if (mLoose) {
+    return {
+      isMoved: true,
+      sourceDeviceId: mLoose[1],
+      embeddedTransactionId: mLoose[2],
+      legacy: true,
+    }
+  }
+
+  return { isMoved: true, malformed: true, sourceDeviceId: '', embeddedTransactionId: '' }
 }
 
 /**
@@ -96,6 +135,34 @@ function hasActivationEvidence(row) {
   return false
 }
 
+function hasCausalHamishaTransfer(row, orderId) {
+  const hamishaId = String(norm(row, 'hamisha_transfer_id', 'hamishaTransferId')).trim()
+  if (!hamishaId) return false
+
+  const subTxn = String(norm(row, 'sub_transaction_id', 'subTransactionId')).trim()
+  if (subTxn.startsWith('moved:')) return false
+  if (subTxn !== orderId) return false
+
+  const orderCompletedAt = parseDate(norm(row, 'completed_at', 'completedAt'))
+  const orderCreatedAt = parseDate(norm(row, 'created_at', 'createdAt'))
+  const transferCompletedAt = parseDate(
+    norm(row, 'hamisha_transfer_completed_at', 'hamishaTransferCompletedAt'),
+  )
+  const orderAnchorAt = orderCompletedAt ?? orderCreatedAt
+  if (orderAnchorAt && transferCompletedAt && orderAnchorAt.getTime() > transferCompletedAt.getTime()) {
+    return false
+  }
+
+  return true
+}
+
+function hasCausalSystemMigration(subTxn, orderId) {
+  const moved = parseMovedTransactionId(subTxn)
+  if (!moved.isMoved || moved.malformed) return false
+  const embedded = String(moved.embeddedTransactionId ?? '').trim()
+  return embedded !== '' && embedded === orderId
+}
+
 /**
  * @param {object} row — transaction + joined subscription evidence
  * @returns {{
@@ -118,7 +185,7 @@ export function classifyPaymentOrderRecovery(row) {
   const adminRevokedAt = norm(row, 'admin_revoked_at', 'adminRevokedAt')
   const adminRevokedTxn = String(norm(row, 'admin_revoked_transaction_id', 'adminRevokedTransactionId')).trim()
   const supersedingOrderId = String(norm(row, 'superseding_order_id', 'supersedingOrderId')).trim()
-  const isTransferSource = row?.is_transfer_source === true || row?.is_transfer_source === 't'
+  const moved = parseMovedTransactionId(subTxn)
 
   const finish = (recoveryClass, recoveryReason, extraEvidence = []) => {
     const recoveryLabel = RECOVERY_LABEL[recoveryClass] ?? recoveryClass
@@ -130,7 +197,8 @@ export function classifyPaymentOrderRecovery(row) {
       case RECOVERY_CLASS.ACTIVATED_HISTORICAL:
         recoverySeverity = RECOVERY_SEVERITY.success
         break
-      case RECOVERY_CLASS.TRANSFERRED:
+      case RECOVERY_CLASS.HAMISHA_TRANSFER:
+      case RECOVERY_CLASS.SYSTEM_MIGRATION:
       case RECOVERY_CLASS.SUPERSEDED_STACKED:
       case RECOVERY_CLASS.MANUAL_GRANT_OVERRIDE:
         recoverySeverity = RECOVERY_SEVERITY.info
@@ -213,10 +281,31 @@ export function classifyPaymentOrderRecovery(row) {
     return finish(RECOVERY_CLASS.ADMIN_REVOKED, 'Subscription entitlement was explicitly revoked by admin')
   }
 
-  if (subTxn.startsWith('moved:') || isTransferSource) {
-    if (subTxn.startsWith('moved:')) evidence.push(`sub.transaction_id=${subTxn.slice(0, 32)}`)
-    if (isTransferSource) evidence.push('device_transfers.source_device_id')
-    return finish(RECOVERY_CLASS.TRANSFERRED, 'Entitlement moved via transfer migration')
+  if (hasCausalHamishaTransfer(row, orderId)) {
+    const targetId = String(norm(row, 'hamisha_target_device_id', 'hamishaTargetDeviceId')).trim()
+    evidence.push(`hamisha_transfer_id=${norm(row, 'hamisha_transfer_id', 'hamishaTransferId')}`)
+    if (targetId) evidence.push(`hamisha_target_device_id=${targetId.slice(0, 16)}`)
+    return finish(
+      RECOVERY_CLASS.HAMISHA_TRANSFER,
+      'Completed device-to-device Hamisha transfer moved entitlement anchored by this order',
+    )
+  }
+
+  if (hasCausalSystemMigration(subTxn, orderId)) {
+    evidence.push(`moved_marker_embeds_order=${orderId}`)
+    if (moved.sourceDeviceId) evidence.push(`moved_source_device=${moved.sourceDeviceId.slice(0, 16)}`)
+    return finish(
+      RECOVERY_CLASS.SYSTEM_MIGRATION,
+      'Automatic system recovery relocated entitlement anchored by this order',
+    )
+  }
+
+  if (moved.isMoved && !moved.malformed && moved.embeddedTransactionId && moved.embeddedTransactionId !== orderId) {
+    evidence.push(`moved_marker_embeds_other=${moved.embeddedTransactionId.slice(0, 32)}`)
+    return finish(
+      RECOVERY_CLASS.SUPERSEDED_STACKED,
+      'Device subscription migrated to a different anchor order; this historical order is superseded',
+    )
   }
 
   if (subTxn.startsWith('manual_grant:')) {
@@ -254,6 +343,11 @@ export function classifyPaymentOrderRecovery(row) {
   if (supersedingOrderId && supersedingOrderId !== orderId) {
     evidence.push(`later_completed_order=${supersedingOrderId}`)
     return finish(RECOVERY_CLASS.SUPERSEDED_STACKED, 'Later completed order exists on same device')
+  }
+
+  if (moved.isMoved && moved.malformed) {
+    evidence.push('moved_marker_malformed')
+    return finish(RECOVERY_CLASS.NEEDS_REVIEW, 'Malformed moved:* subscription marker without provable order causality')
   }
 
   evidence.push('insufficient_lifecycle_evidence')
