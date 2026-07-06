@@ -1,6 +1,7 @@
 import { getPool } from '../db/pool.js'
 import { normalizePhoneDigits, tzPhoneCanonicalSql } from '../billingStore.js'
 import { ledgerStatusFromTransaction } from './tzMobileNetwork.js'
+import { classifyPaymentOrderRecovery } from './paymentOrderRecoveryClassifier.js'
 
 function requirePool() {
   const pool = getPool()
@@ -22,27 +23,9 @@ function providerLabel(row) {
   return p || 'Unknown'
 }
 
-function recoveryHintFromRow(r) {
-  const recovery = String(r.recovery_state ?? '').trim().toUpperCase()
-  if (recovery === 'MANUALLY_APPROVED') return 'Manually Recovered'
-  if (recovery === 'RECOVERY_REJECTED') return 'Recovery Rejected'
-  const st = String(r.status ?? 'pending').toLowerCase()
-  const subActive =
-    String(r.sub_status ?? '').toLowerCase() === 'active' &&
-    r.sub_expires_at &&
-    new Date(r.sub_expires_at) > new Date() &&
-    String(r.sub_transaction_id ?? '') === String(r.order_id ?? '')
-  if (subActive) return 'Already Active'
-  if (st === 'completed') return 'Activation Gap'
-  if (st === 'pending') return 'Pending at Provider'
-  if (st === 'failed') return 'Failed at Provider'
-  return 'Review Required'
-}
-
 function activationState(row) {
-  if (row.sub_status === 'active' && row.sub_expires_at && new Date(row.sub_expires_at) > new Date()) {
-    return 'active'
-  }
+  const classified = classifyPaymentOrderRecovery(row)
+  if (classified.recoveryClass === 'ALREADY_ACTIVE') return 'active'
   if (String(row.recovery_state ?? '').toUpperCase() === 'MANUALLY_APPROVED') return 'recovered'
   if (String(row.status) === 'completed') return 'completed_unverified'
   return 'inactive'
@@ -206,12 +189,34 @@ const LIST_SELECT = `SELECT
        ds.status AS sub_status,
        ds.expires_at AS sub_expires_at,
        ds.transaction_id AS sub_transaction_id,
+       ds.admin_revoked_at,
+       ds.admin_revoked_transaction_id,
+       sup.superseding_order_id,
+       sup.superseding_created_at,
+       (dt_xfer.src IS NOT NULL) AS is_transfer_source,
        apr.action AS last_recovery_action,
        apr.sms_sent AS recovery_sms_sent,
        apr.created_at AS recovery_action_at
      FROM transactions t
      LEFT JOIN plans p ON p.id = t.plan_id
      LEFT JOIN device_subscriptions ds ON ds.device_id = t.device_id
+     LEFT JOIN LATERAL (
+       SELECT t2.order_id AS superseding_order_id, t2.created_at AS superseding_created_at
+       FROM transactions t2
+       WHERE trim(coalesce(t2.device_id, '')) = trim(coalesce(t.device_id, ''))
+         AND t2.status = 'completed'
+         AND t2.order_id <> t.order_id
+         AND t2.created_at > t.created_at
+         AND t2.plan_id IS NOT NULL
+       ORDER BY t2.created_at ASC
+       LIMIT 1
+     ) sup ON true
+     LEFT JOIN LATERAL (
+       SELECT 1 AS src
+       FROM device_transfers dt
+       WHERE dt.status = 'completed' AND dt.source_device_id = t.device_id
+       LIMIT 1
+     ) dt_xfer ON true
      LEFT JOIN LATERAL (
        SELECT action, sms_sent, created_at
        FROM admin_payment_recovery_actions
@@ -222,6 +227,7 @@ const LIST_SELECT = `SELECT
 function mapLedgerRow(r) {
   const raw = r.raw_payload && typeof r.raw_payload === 'object' ? r.raw_payload : {}
   const ledgerStatus = ledgerStatusFromTransaction(r)
+  const recovery = classifyPaymentOrderRecovery(r)
   return {
     id: r.id,
     orderId: r.order_id,
@@ -251,12 +257,21 @@ function mapLedgerRow(r) {
     subscriptionActivation: activationState(r),
     subExpiresAt: r.sub_expires_at instanceof Date ? r.sub_expires_at.toISOString() : r.sub_expires_at,
     subTransactionId: r.sub_transaction_id ?? null,
+    supersedingOrderId: r.superseding_order_id ?? null,
+    adminRevokedAt: r.admin_revoked_at instanceof Date ? r.admin_revoked_at.toISOString() : r.admin_revoked_at,
+    adminRevokedTransactionId: r.admin_revoked_transaction_id ?? null,
     providerInitiation: raw.provider_initiation ?? null,
     failureReason: raw.provider_initiation === 'failed' ? raw.httpStatus ?? 'provider_rejected' : null,
     manualRecoveryUsed: String(r.recovery_state ?? '').toUpperCase() === 'MANUALLY_APPROVED',
     recoverySmsSent: r.recovery_sms_sent === true,
     lastRecoveryAction: r.last_recovery_action ?? null,
-    recoveryHint: recoveryHintFromRow(r),
+    recoveryClass: recovery.recoveryClass,
+    recoveryLabel: recovery.recoveryLabel,
+    recoveryReason: recovery.recoveryReason,
+    recoverySeverity: recovery.recoverySeverity,
+    recoveryActionable: recovery.recoveryActionable,
+    recoveryEvidence: recovery.recoveryEvidence,
+    recoveryHint: recovery.recoveryHint,
   }
 }
 

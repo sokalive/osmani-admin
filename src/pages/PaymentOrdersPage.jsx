@@ -43,12 +43,39 @@ function ledgerBadgeClass(status) {
   }
 }
 
-function recoveryHintClass(hint) {
-  if (hint === 'Already Active' || hint === 'Manually Recovered') return 'text-emerald-300'
-  if (hint === 'Activation Gap') return 'text-sky-300'
-  if (hint === 'Pending at Provider') return 'text-amber-200'
-  if (hint === 'Failed at Provider' || hint === 'Recovery Rejected') return 'text-rose-300'
+function recoveryBadgeClass(row) {
+  const sev = row?.recoverySeverity
+  if (sev === 'success') return 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30'
+  if (sev === 'info') return 'bg-sky-500/15 text-sky-200 ring-sky-500/30'
+  if (sev === 'neutral') return 'bg-slate-600/40 text-slate-300 ring-slate-500/25'
+  if (sev === 'warning') return 'bg-amber-500/15 text-amber-100 ring-amber-400/40'
+  if (sev === 'danger') return 'bg-rose-500/15 text-rose-200 ring-rose-500/30'
+  const hint = row?.recoveryLabel || row?.recoveryHint || ''
+  if (hint === 'Already Active' || hint === 'Manually Recovered' || hint === 'Activated / Historical') {
+    return 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30'
+  }
+  if (hint === 'Pending at Provider') return 'bg-amber-500/15 text-amber-100 ring-amber-400/40'
+  if (hint === 'Failed at Provider' || hint === 'Recovery Rejected' || hint === 'Unresolved Activation') {
+    return 'bg-rose-500/15 text-rose-200 ring-rose-500/30'
+  }
+  return 'bg-slate-600/40 text-slate-300 ring-slate-500/25'
+}
+
+function recoveryTextClass(row) {
+  const sev = row?.recoverySeverity
+  if (sev === 'success') return 'text-emerald-300'
+  if (sev === 'info') return 'text-sky-300'
+  if (sev === 'neutral') return 'text-slate-400'
+  if (sev === 'warning') return 'text-amber-200'
+  if (sev === 'danger') return 'text-rose-300'
   return 'text-slate-400'
+}
+
+function showRecoverAction(row) {
+  if (row?.recoveryClass === 'MANUALLY_RECOVERED' || row?.recoveryClass === 'ALREADY_ACTIVE') return false
+  if (row?.recoveryHint === 'Already Active') return false
+  if (row?.recoveryActionable === true) return true
+  return row?.recoveryClass === 'TRUE_UNRESOLVED' || row?.recoveryClass === 'NEEDS_REVIEW'
 }
 
 function inputClass() {
@@ -381,14 +408,18 @@ export default function PaymentOrdersPage() {
                         {row.ledgerStatus}
                       </span>
                     </td>
-                    <td className={`px-4 py-3 text-xs ${recoveryHintClass(row.recoveryHint)}`}>
-                      {row.recoveryHint || '—'}
+                    <td className={`px-4 py-3 text-xs ${recoveryTextClass(row)}`} title={row.recoveryReason || ''}>
+                      <span
+                        className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-medium ring-1 ${recoveryBadgeClass(row)}`}
+                      >
+                        {row.recoveryLabel || row.recoveryHint || '—'}
+                      </span>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-400">{row.deviceIdMasked || '—'}</td>
                     <td className="px-4 py-3 text-slate-300">{formatAdminDateTime(row.createdAt)}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
-                        {row.ledgerStatus !== 'MANUALLY_APPROVED' && row.recoveryHint !== 'Already Active' && (
+                        {showRecoverAction(row) && row.recoveryHint !== 'Already Active' && (
                           <button
                             type="button"
                             onClick={() => runRecover(row, false)}
@@ -457,7 +488,7 @@ export default function PaymentOrdersPage() {
             <p>Provider: {confirmRow.provider}</p>
             <p>Amount: {formatTsh(confirmRow.amount)}</p>
             <p>Plan: {confirmRow.planName}</p>
-            <p>Recovery state: {confirmRow.recoveryHint}</p>
+            <p>Recovery: {confirmRow.recoveryLabel || confirmRow.recoveryHint}</p>
             {ownerOverride ? (
               <p className="mt-2 font-semibold text-rose-200">
                 Owner override: granting without provider SUCCESS proof. Transaction status will NOT be falsified.

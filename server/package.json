@@ -40,6 +40,7 @@
     "verify:subscription-integrity-audit": "node scripts/verify-subscription-integrity-audit.mjs",
     "verify:payment-production": "node scripts/verify-payment-production.mjs",
     "verify:payment-orders-search": "node scripts/verify-payment-orders-search.mjs",
+    "verify:payment-order-recovery": "node scripts/verify-payment-order-recovery-classifier.mjs",
     "backfill:transaction-phone": "node scripts/backfill-transaction-phone-from-payload.mjs",
     "audit:duplicate-active-phones": "node scripts/audit-duplicate-active-phone-subscriptions.mjs"
   },
