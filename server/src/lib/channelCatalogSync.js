@@ -2,11 +2,16 @@ import { liveSyncBus } from './liveSyncBus.js'
 import { invalidateApiCacheNamespace } from './apiResponseCache.js'
 import { loadGlobalAppModesPayload } from '../routes/globalAppSettings.js'
 import { invalidateChannelIdNameMapCache, getChannelById } from '../store.js'
+import { notifyApiCacheBust } from './apiCacheBustRelay.js'
+import { notifyLiveSyncPeers } from './liveSyncRelay.js'
+
+const CHANNEL_CACHE_NAMESPACES = ['channels', 'runtime-app-modes']
 
 /** Purge catalog + version poll caches so accessType changes are visible on next GET. */
 export function invalidateChannelCatalogCaches() {
-  invalidateApiCacheNamespace('channels')
-  invalidateApiCacheNamespace('runtime-app-modes')
+  for (const ns of CHANNEL_CACHE_NAMESPACES) {
+    invalidateApiCacheNamespace(ns)
+  }
   invalidateChannelIdNameMapCache()
 }
 
@@ -23,21 +28,30 @@ export async function publishChannelCatalogChange(action, channelId = null, extr
     try {
       const row = await getChannelById(cid)
       if (row) {
+        const accessType = row.accessType === 'premium' ? 'premium' : 'free'
+        const updatedAt =
+          row.updatedAt instanceof Date
+            ? row.updatedAt.toISOString()
+            : row.updatedAt
+              ? String(row.updatedAt)
+              : new Date().toISOString()
         channelPatch = {
           id: row.id,
-          access_type: row.accessType === 'premium' ? 'premium' : 'free',
-          accessType: row.accessType === 'premium' ? 'premium' : 'free',
+          access_type: accessType,
+          accessType,
+          accessPremium: accessType === 'premium',
+          access_premium: accessType === 'premium',
           is_active: row.isActive !== false,
           show_in_app: row.showInApp !== false,
-          updated_at: new Date().toISOString(),
+          updated_at: updatedAt,
         }
       }
     } catch {
       /* optional patch */
     }
   }
-  const catalogRevision = Date.now()
-  liveSyncBus.publish('config.channels_changed', {
+  const catalogRevision = liveSyncBus.snapshot().configVersion + 1
+  const packet = liveSyncBus.publish('config.channels_changed', {
     topics: ['config'],
     action,
     channelId,
@@ -51,4 +65,10 @@ export async function publishChannelCatalogChange(action, channelId = null, extr
     },
     synced_at: new Date().toISOString(),
   })
+  if (packet?.payload && packet.configVersion != null) {
+    packet.payload.catalog_revision = packet.configVersion
+  }
+  await notifyApiCacheBust(CHANNEL_CACHE_NAMESPACES)
+  await notifyLiveSyncPeers(packet)
+  return packet
 }

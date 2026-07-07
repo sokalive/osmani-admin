@@ -37,4 +37,5 @@ export function applyChannelsRoutingHeaders(res) {
   const snap = liveSyncBus.snapshot()
   res.setHeader('X-Channels-Routing-Epoch', String(MPINGO_ROUTING_EPOCH))
   res.setHeader('X-Config-Version', String(snap.configVersion))
+  res.setHeader('X-Catalog-Revision', String(snap.configVersion))
 }

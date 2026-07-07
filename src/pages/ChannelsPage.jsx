@@ -139,6 +139,8 @@ function ChannelsPage() {
     }
     es.addEventListener('config.settings_changed', onChanged)
     es.addEventListener('config.channels_changed', onChannelsChanged)
+    es.addEventListener('channels_changed', onChannelsChanged)
+    es.addEventListener('channels_catalog', onChannelsChanged)
     es.addEventListener('phone_gate_changed', () => {
       void getDeviceControlSettings()
         .then((body) => {
@@ -310,10 +312,17 @@ function ChannelsPage() {
   async function handleToggleAccess(id, nextPremium) {
     const ch = channels.find((c) => c.id === id)
     if (!ch || ch.isInstructionVideo) return
+    const prevPremium = ch.accessPremium
+    setChannels((list) =>
+      list.map((c) => (c.id === id ? { ...c, accessPremium: nextPremium } : c)),
+    )
     try {
       await updateChannel(id, apiBodyFromUiChannel({ ...ch, accessPremium: nextPremium }))
       await loadChannels()
     } catch (e) {
+      setChannels((list) =>
+        list.map((c) => (c.id === id ? { ...c, accessPremium: prevPremium } : c)),
+      )
       showToast('error', e?.message || 'Update failed')
       await loadChannels()
     }

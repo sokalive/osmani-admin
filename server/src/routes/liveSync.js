@@ -108,19 +108,19 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
       send('app_update_settings', { ...au, reason: String(packet.event || 'sync') })
     }
     if (topics.includes('config') && packet?.event === 'config.channels_changed') {
-      send('channels_catalog', {
+      const catalogBody = {
         v: packet.configVersion,
+        event: packet.event,
         action: packet?.payload?.action ?? null,
-        channelId: packet?.payload?.channelId ?? null,
+        channelId: packet?.payload?.channelId ?? packet?.payload?.channel?.id ?? null,
+        channel: packet?.payload?.channel ?? null,
+        catalog_revision: packet?.payload?.catalog_revision ?? packet.configVersion ?? null,
         routing_epoch: packet?.payload?.routing_epoch ?? null,
+        updatedAt: packet?.payload?.synced_at ?? null,
         reason: String(packet.event || 'sync'),
-      })
-      send('channels_changed', {
-        v: packet.configVersion,
-        action: packet?.payload?.action ?? null,
-        channelId: packet?.payload?.channelId ?? null,
-        reason: String(packet.event || 'sync'),
-      })
+      }
+      send('channels_catalog', catalogBody)
+      send('channels_changed', catalogBody)
     }
     if (topics.includes('config') && packet?.event === 'config.banners_changed') {
       send('banners_changed', {

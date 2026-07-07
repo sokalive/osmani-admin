@@ -39,6 +39,11 @@ async function notifyPeers(packet) {
   }
 }
 
+/** Await cross-instance live sync relay (call after local publish). */
+export async function notifyLiveSyncPeers(packet) {
+  await notifyPeers(packet)
+}
+
 /**
  * Fan-out liveSyncBus events across Render + VPS via PostgreSQL NOTIFY/LISTEN.
  * Both instances share the same DB; in-memory EventEmitter alone cannot cross hosts.
