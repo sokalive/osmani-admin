@@ -1889,106 +1889,11 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
       })
     }
 
-    const fpHash = fingerprintHash(fingerprint)
-    if (!fpHash) {
-      return res.status(400).json({ error: 'fingerprint or migration hint (legacy_device_id / phone) is required' })
-    }
-    await client.query('BEGIN')
-    const { rows } = await client.query(
-      `SELECT device_id, expires_at, status
-       FROM device_subscriptions
-       WHERE fingerprint_hash = $1
-         AND status = 'active'
-         AND expires_at > now()
-         AND device_id <> $2
-       ORDER BY updated_at DESC
-       LIMIT 1
-       FOR UPDATE`,
-      [fpHash, deviceId],
-    )
-    const row = rows[0]
-    if (!row) {
-      await client.query('ROLLBACK')
-      return res.status(404).json({ ok: false, error: 'No recoverable subscription' })
-    }
-    const validity = await client.query(`SELECT ($1::timestamptz > now()) AS valid`, [row.expires_at])
-    if (!validity.rows[0]?.valid) {
-      await client.query('ROLLBACK')
-      return res.status(400).json({ ok: false, error: 'Recovered subscription expired' })
-    }
-    await client.query(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2, now(), $3, now(), $4)
-       ON CONFLICT (device_id) DO UPDATE SET
-         status = 'active',
-         expires_at = EXCLUDED.expires_at,
-         transaction_id = EXCLUDED.transaction_id,
-         updated_at = now(),
-         fingerprint_hash = EXCLUDED.fingerprint_hash`,
-      [deviceId, row.expires_at, `recovery:${row.device_id}`, fpHash],
-    )
-    const recoveredFrom = String(row.device_id || '').trim()
-    if (recoveredFrom && recoveredFrom !== deviceId) {
-      await client.query(
-        `UPDATE device_subscriptions
-         SET status = 'pending', updated_at = now()
-         WHERE device_id = $1
-           AND status = 'active'
-           AND expires_at > now()`,
-        [recoveredFrom],
-      )
-    }
-    await logSecurityEvent(client, {
-      actor: deviceId,
-      eventType: 'Subscription recovery',
-      status: 'completed',
-      detail: `Recovered subscription from ${recoveredFrom || 'unknown'}`,
-      metadata: {
-        recovered_from: recoveredFrom || null,
-        recovered_to: deviceId,
-      },
+    return res.status(403).json({
+      ok: false,
+      error: 'Automatic cross-device subscription recovery is disabled. Use Hamisha Kifurushi or Admin transfer.',
+      reason: link.reason || 'automatic_cross_device_migration_disabled',
     })
-    await client.query('COMMIT')
-    if (recoveredFrom && recoveredFrom !== deviceId) {
-      notifySubscriptionTransferred({
-        sourceDeviceId: recoveredFrom,
-        targetDeviceId: deviceId,
-        sourceRow: {
-          device_id: recoveredFrom,
-          status: 'pending',
-          expires_at: row.expires_at,
-          active_now: false,
-        },
-        targetRow: {
-          device_id: deviceId,
-          status: 'active',
-          expires_at: row.expires_at,
-          active_now: true,
-          transaction_id: `recovery:${recoveredFrom}`,
-        },
-        reason: 'recovery',
-        userInitiatedTransfer: false,
-      })
-    } else {
-      notifySubscriptionTransferred({
-        targetDeviceId: deviceId,
-        targetRow: {
-          device_id: deviceId,
-          status: 'active',
-          expires_at: row.expires_at,
-          active_now: true,
-          transaction_id: `recovery:${recoveredFrom}`,
-        },
-        reason: 'recovery',
-        userInitiatedTransfer: false,
-      })
-    }
-    emitSync('transfer_completed', { source_device_id: row.device_id, target_device_id: deviceId, reason: 'recovery' })
-    if (recoveredFrom && recoveredFrom !== deviceId) {
-      emitSync('subscription_access_sync', { device_id: recoveredFrom, reason: 'recovery' })
-    }
-    emitSync('security_logs_changed', { action: 'recovery', recovered_from: recoveredFrom || null, recovered_to: deviceId })
-    return res.json({ ok: true, recovered_from: row.device_id })
   } catch (e) {
     if (client) await client.query('ROLLBACK').catch(() => {})
     console.error('[subscription/recover]', e)

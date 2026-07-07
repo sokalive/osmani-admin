@@ -3,6 +3,7 @@ import { CalendarClock, Gift, History, Ticket } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import SecurityPinModal from '../components/SecurityPinModal'
 import Topbar from '../components/Topbar'
+import AdminDeviceIdCell from '../components/AdminDeviceIdCell'
 import { useToast } from '../context/ToastContext.jsx'
 import {
   deleteManualSubscriptionGrant,
@@ -1136,8 +1137,6 @@ function ManualSubscriptionPage() {
                         </tr>
                         {groupRows.map((row) => {
                           const st = statusLabel(row)
-                          const shortDev =
-                            row.deviceId.length > 22 ? `${row.deviceId.slice(0, 20)}…` : row.deviceId
                           const blockBusy = historyBusyId === `b:${row.deviceId}`
                           const unblockBusy = historyBusyId === `u:${row.deviceId}`
                           const delBusy = historyBusyId === `d:${row.id}`
@@ -1158,7 +1157,7 @@ function ManualSubscriptionPage() {
                                       return n
                                     })
                                   }
-                                  aria-label={`Chagua ${shortDev}`}
+                                  aria-label={`Chagua ${row.deviceId}`}
                                 />
                               </td>
                               <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-slate-300">
@@ -1167,8 +1166,8 @@ function ManualSubscriptionPage() {
                                   {txnLabel}
                                 </span>
                               </td>
-                              <td className="max-w-[200px] truncate px-3 py-2.5 font-mono text-xs text-slate-200" title={row.deviceId}>
-                                {shortDev}
+                              <td className="max-w-[14rem] px-3 py-2.5">
+                                <AdminDeviceIdCell deviceId={row.deviceId} />
                               </td>
                               <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-300">{row.phone || '—'}</td>
                               <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">

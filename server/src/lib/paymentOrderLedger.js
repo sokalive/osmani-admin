@@ -1,7 +1,7 @@
 import { getPool } from '../db/pool.js'
 import { normalizePhoneDigits, tzPhoneCanonicalSql } from '../billingStore.js'
 import { ledgerStatusFromTransaction } from './tzMobileNetwork.js'
-import { classifyPaymentOrderRecovery } from './paymentOrderRecoveryClassifier.js'
+import { classifyPaymentOrderRecovery, mapOwnerFacingRecovery } from './paymentOrderRecoveryClassifier.js'
 
 function requirePool() {
   const pool = getPool()
@@ -246,7 +246,7 @@ const LIST_SELECT = `SELECT
 function mapLedgerRow(r) {
   const raw = r.raw_payload && typeof r.raw_payload === 'object' ? r.raw_payload : {}
   const ledgerStatus = ledgerStatusFromTransaction(r)
-  const recovery = classifyPaymentOrderRecovery(r)
+  const recovery = mapOwnerFacingRecovery(classifyPaymentOrderRecovery(r))
   return {
     id: r.id,
     orderId: r.order_id,
@@ -284,7 +284,8 @@ function mapLedgerRow(r) {
     manualRecoveryUsed: String(r.recovery_state ?? '').toUpperCase() === 'MANUALLY_APPROVED',
     recoverySmsSent: r.recovery_sms_sent === true,
     lastRecoveryAction: r.last_recovery_action ?? null,
-    recoveryClass: recovery.recoveryClass,
+    recoveryClass: recovery.recoveryDiagnosticClass ?? recovery.recoveryClass,
+    recoveryDiagnosticClass: recovery.recoveryDiagnosticClass ?? recovery.recoveryClass,
     recoveryLabel: recovery.recoveryLabel,
     recoveryReason: recovery.recoveryReason,
     recoverySeverity: recovery.recoverySeverity,

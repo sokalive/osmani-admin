@@ -13,6 +13,7 @@ import {
   isIntentionalMigrationRevokedDevice,
   isReverseTransferMigrationBlocked,
 } from './transferRevocationGuard.js'
+import { rejectUnauthorizedCrossDeviceMigration } from './subscriptionEntitlementPolicy.js'
 
 function phoneCanonicalSql(expr) {
   return `(
@@ -71,6 +72,8 @@ function shouldRunFullMigrationScan(deviceId, hints) {
 
 /** Fast VPS APK reinstall path — fingerprint-only recovery (single transaction). */
 export async function tryFastFingerprintRecovery(deviceId, fingerprint) {
+  const blocked = rejectUnauthorizedCrossDeviceMigration()
+  if (blocked) return { linked: false, reason: blocked.reason }
   const d = String(deviceId ?? '').trim()
   if (await isCompletedTransferSourceDevice(d)) {
     return { linked: false, reason: 'transfer_revoked_source' }
@@ -114,7 +117,9 @@ async function findRecoverableSubscriptionRow(fpHash, excludeDeviceId, client) {
  * Move active subscription from source device to target device (APK reinstall / VPS migration).
  * Safe: no deletion; source row set to pending.
  */
-export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reason = 'auto_recover' } = {}) {
+export async function recoverSubscriptionToDevice(targetDeviceId, fpHash, { reason = 'auto_recover', ...opts } = {}) {
+  const blocked = rejectUnauthorizedCrossDeviceMigration(opts)
+  if (blocked) return blocked
   const target = String(targetDeviceId ?? '').trim()
   const hash = String(fpHash ?? '').trim()
   if (!target || !hash) {
@@ -219,6 +224,8 @@ export async function migrateSubscriptionFromSourceDevice(
   const target = String(targetDeviceId ?? '').trim()
   const source = String(sourceDeviceId ?? '').trim()
   const allowReverseTransfer = opts.allowReverseTransfer === true
+  const blocked = rejectUnauthorizedCrossDeviceMigration(opts)
+  if (blocked) return blocked
   if (!target || !source || target === source) {
     return { recovered: false, reason: 'invalid_devices' }
   }
@@ -499,23 +506,6 @@ export async function ensureSubscriptionLinkedForDevice(
     return { linked: false, reason: 'transfer_revoked_source' }
   }
 
-  const revokedVictim = await isIntentionalMigrationRevokedDevice(d)
-  if (revokedVictim) {
-    const reclaimPhones = new Set()
-    const reqDigits = normalizePhoneDigits(phone)
-    if (reqDigits && reqDigits.length >= 10) reclaimPhones.add(reqDigits)
-    for (const p of await collectPaymentPhonesForDevice(d)) reclaimPhones.add(p)
-    if (reclaimPhones.size > 0) {
-      const clusterSource = await findUniqueActiveDeviceIdForPhoneCluster([...reclaimPhones], d)
-      if (clusterSource) {
-        const linked = await tryLinkFromSource(d, clusterSource, null, 'reclaim_wrong_migration', {
-          allowRevokedTarget: true,
-        })
-        if (linked.linked) return linked
-      }
-    }
-  }
-
   const state = await getDeviceSubscriptionAccessState(d, fingerprint)
   if (state?.active_now === true && state?.blocked_now !== true) {
     const fpForTag = await resolveFingerprintForDevice(d, fingerprint)
@@ -524,71 +514,10 @@ export async function ensureSubscriptionLinkedForDevice(
   }
 
   const resolvedFingerprint = await resolveFingerprintForDevice(d, fingerprint)
-  const fpHash = hashDeviceFingerprint(resolvedFingerprint)
-  const explicitHints = hasExplicitMigrationHints({
-    phone,
-    legacyDeviceId,
-    accountId,
-  })
-
-  if (fpHash) {
-    const rec = await recoverSubscriptionToDevice(d, fpHash, { reason: 'verify_fingerprint' })
-    if (rec.recovered) return { linked: true, method: 'fingerprint', ...rec }
-  }
-
-  if (!shouldRunFullMigrationScan(d, { phone, legacyDeviceId, accountId }) && !explicitHints) {
-    const registryPhones = await collectPaymentPhonesForDevice(d)
-    if (!registryPhones.length) {
-      if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)
-      return { linked: false, reason: 'migration_throttled' }
-    }
-  }
-
-  const legacyHints = [legacyDeviceId, accountId].filter(Boolean)
-  for (const hint of legacyHints) {
-    const legacySource = await resolveActiveDeviceIdByLegacyHint(hint, d)
-    if (legacySource) {
-      const linked = await tryLinkFromSource(d, legacySource, fpHash, 'legacy_device_id')
-      if (linked.linked) return linked
-    }
-  }
-
-  // Phone-only migration uses completed transactions + device_phone_registry (not intelligence registry).
-
-  const androidSource = await findActiveDeviceIdBySharedAndroidId(d)
-  if (androidSource) {
-    const linked = await tryLinkFromSource(d, androidSource, fpHash, 'android_id')
-    if (linked.linked) return linked
-  }
-
-  const installSource = await findActiveDeviceIdBySharedInstallInstance(d)
-  if (installSource) {
-    const linked = await tryLinkFromSource(d, installSource, fpHash, 'install_instance')
-    if (linked.linked) return linked
-  }
-
-  const phones = new Set()
-  const reqDigits = normalizePhoneDigits(phone)
-  if (reqDigits && reqDigits.length >= 10) phones.add(reqDigits)
-  for (const p of await collectPaymentPhonesForDevice(d)) phones.add(p)
-
-  if (phones.size > 0) {
-    const clusterSource = await findUniqueActiveDeviceIdForPhoneCluster([...phones], d)
-    if (clusterSource) {
-      const linked = await tryLinkFromSource(d, clusterSource, fpHash, 'payment_phone_cluster')
-      if (linked.linked) return linked
-    }
-    for (const p of phones) {
-      const sourceId = await findActiveDeviceIdForPaymentPhone(p, { proofDeviceId: d })
-      if (sourceId && sourceId !== d) {
-        const linked = await tryLinkFromSource(d, sourceId, fpHash, 'payment_phone')
-        if (linked.linked) return linked
-      }
-    }
-  }
-
-  if (!explicitHints && !fpHash && phones.size === 0) {
-    return { linked: false, reason: 'no_migration_hints' }
+  const blocked = rejectUnauthorizedCrossDeviceMigration()
+  if (blocked) {
+    if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)
+    return { linked: false, reason: blocked.reason }
   }
 
   if (resolvedFingerprint) await tagActiveSubscriptionFingerprint(d, resolvedFingerprint)

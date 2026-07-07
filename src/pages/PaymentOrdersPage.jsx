@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ClipboardList, RefreshCw, Search, ShieldCheck } from 'lucide-react'
 import Topbar from '../components/Topbar'
+import AdminDeviceIdCell from '../components/AdminDeviceIdCell'
 import SecurityPinModal from '../components/SecurityPinModal'
 import { useToast } from '../context/ToastContext.jsx'
 import {
@@ -54,7 +55,7 @@ function recoveryBadgeClass(row) {
   if (hint === 'Already Active' || hint === 'Manually Recovered' || hint === 'Activated / Historical') {
     return 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30'
   }
-  if (hint === 'Hamisha Transfer' || hint === 'System Migration' || hint === 'Superseded / Stacked' || hint === 'Manual Grant Override') {
+  if (hint === 'Hamisha Transfer' || hint === 'Superseded / Stacked' || hint === 'Manual Grant Override') {
     return 'bg-sky-500/15 text-sky-200 ring-sky-500/30'
   }
   if (hint === 'Pending at Provider' || hint === 'Admin Revoked' || hint === 'Needs Review') {
@@ -78,6 +79,7 @@ function recoveryTextClass(row) {
 
 function showRecoverAction(row) {
   if (row?.recoveryClass === 'MANUALLY_RECOVERED' || row?.recoveryClass === 'ALREADY_ACTIVE') return false
+  if (row?.recoveryDiagnosticClass === 'SYSTEM_MIGRATION') return false
   if (row?.recoveryHint === 'Already Active') return false
   if (row?.recoveryActionable === true) return true
   return row?.recoveryClass === 'TRUE_UNRESOLVED' || row?.recoveryClass === 'NEEDS_REVIEW'
@@ -420,7 +422,9 @@ export default function PaymentOrdersPage() {
                         {row.recoveryLabel || row.recoveryHint || '—'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{row.deviceIdMasked || '—'}</td>
+                    <td className="px-4 py-3 max-w-[14rem]">
+                      <AdminDeviceIdCell deviceId={row.deviceId} />
+                    </td>
                     <td className="px-4 py-3 text-slate-300">{formatAdminDateTime(row.createdAt)}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">

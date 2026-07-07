@@ -4,6 +4,7 @@
 import { getPool } from '../db/pool.js'
 import { appendAdminPhoneDeviceSearch } from './phoneSearch.js'
 import { normalizePhoneDigits, tzPhoneCanonicalSql } from '../billingStore.js'
+import { parseMovedTransactionId } from './paymentOrderRecoveryClassifier.js'
 
 const DEFAULT_LIMIT = 25
 const MAX_LIMIT = 100
@@ -29,7 +30,7 @@ export function parseExpiringWithin(raw) {
 }
 
 function providerSql(alias = 'pay') {
-  return `COALESCE(NULLIF(${alias}.raw_payload->>'payment_provider',''), 'zenopay')`
+  return `NULLIF(${alias}.raw_payload->>'payment_provider','')`
 }
 
 /** Subscription row source for admin lists (payment, grant, transfer, recovery). */
@@ -39,7 +40,8 @@ function subscriptionSourceSql(dsAlias = 'ds', payAlias = 'pay') {
     WHEN ${dsAlias}.transaction_id LIKE 'offer_code:%' THEN 'offer_code'
     WHEN ${dsAlias}.transaction_id LIKE 'transfer:%' THEN 'transfer'
     WHEN ${dsAlias}.transaction_id LIKE 'recovery:%' THEN 'recovery'
-    ELSE ${providerSql(payAlias)}
+    WHEN ${dsAlias}.transaction_id LIKE 'moved:%' THEN COALESCE(NULLIF(moved_pay.moved_provider, ''), 'historical')
+    ELSE COALESCE(${providerSql(payAlias)}, NULLIF(lt.provider, ''), 'unknown')
   END`
 }
 
@@ -218,12 +220,23 @@ const SUBSCRIPTION_FROM = `
   LEFT JOIN transactions pay ON pay.order_id = ds.transaction_id
   ${MANUAL_GRANT_JOIN_SQL}
   LEFT JOIN LATERAL (
-    SELECT t.phone, t.plan_id, t.amount
+    SELECT t.phone, t.plan_id, t.amount,
+      COALESCE(NULLIF(t.raw_payload->>'payment_provider', ''), NULLIF(t.provider_label, '')) AS provider
     FROM transactions t
     WHERE t.device_id = ds.device_id
     ORDER BY t.created_at DESC
     LIMIT 1
   ) lt ON true
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(
+      NULLIF(t.raw_payload->>'payment_provider', ''),
+      NULLIF(t.provider_label, '')
+    ) AS moved_provider
+    FROM transactions t
+    WHERE ds.transaction_id LIKE 'moved:%'
+      AND t.order_id = regexp_replace(ds.transaction_id, '^moved:[^:]+:(.+)$', '\\1')
+    LIMIT 1
+  ) moved_pay ON ds.transaction_id LIKE 'moved:%'
   LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AND p.deleted_at IS NULL
 `
 
@@ -241,16 +254,31 @@ function mapSubscriptionRow(r, nowMs = Date.now()) {
     String(r.status ?? '').toLowerCase() === 'revoked' || Boolean(r.admin_revoked_at)
   const active = r.status === 'active' && futureExpiry && !revoked
   const txnId = String(r.transaction_id ?? '')
-  let source = String(r.provider ?? 'zenopay')
+  const moved = parseMovedTransactionId(txnId)
+  const isMovedSource = moved.isMoved === true
+  let source = String(r.provider ?? '').trim().toLowerCase()
   if (txnId.startsWith('manual_grant:')) source = 'manual_grant'
   else if (txnId.startsWith('offer_code:')) source = 'offer_code'
+  else if (txnId.startsWith('transfer:')) source = 'transfer'
+  else if (txnId.startsWith('recovery:')) source = 'recovery'
+  else if (isMovedSource && (!source || source === 'unknown')) source = 'historical'
+  else if (!source) source = 'unknown'
+  const status = active
+    ? 'active'
+    : revoked
+      ? 'revoked'
+      : isMovedSource && futureExpiry
+        ? 'historical'
+        : futureExpiry && r.status === 'pending'
+          ? 'pending'
+          : 'expired'
   return {
     device_id: String(r.device_id ?? ''),
     phone_number: String(r.phone_number ?? ''),
     plan_id: r.plan_id != null ? Number(r.plan_id) : null,
     plan_name: r.plan_name != null ? String(r.plan_name) : null,
     amount: r.amount != null ? Number(r.amount) : null,
-    status: active ? 'active' : revoked ? 'revoked' : futureExpiry && r.status === 'pending' ? 'revoked' : 'expired',
+    status,
     started_at: startedAt,
     expires_at: expiresAt,
     remaining: remainingMs,
@@ -268,7 +296,7 @@ function mapFailedPaymentRow(r) {
     plan_id: r.plan_id != null ? Number(r.plan_id) : null,
     plan_name: r.plan_name != null ? String(r.plan_name) : null,
     amount: r.amount != null ? Number(r.amount) : null,
-    provider: String(r.provider ?? 'zenopay'),
+    provider: String(r.provider ?? 'unknown'),
     failure_reason: String(r.failure_reason ?? ''),
     created_at: created instanceof Date && !Number.isNaN(created.getTime()) ? created.toISOString() : null,
     last_status: String(r.status ?? ''),

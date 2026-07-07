@@ -353,3 +353,24 @@ export function classifyPaymentOrderRecovery(row) {
   evidence.push('insufficient_lifecycle_evidence')
   return finish(RECOVERY_CLASS.NEEDS_REVIEW, 'Completed payment without provable lifecycle classification')
 }
+
+/**
+ * Owner-facing Payment Orders display mapping.
+ * SYSTEM_MIGRATION is preserved internally as recoveryDiagnosticClass; owner UI shows Already Active.
+ * @param {ReturnType<typeof classifyPaymentOrderRecovery>} recovery
+ */
+export function mapOwnerFacingRecovery(recovery) {
+  const diagnosticClass = recovery.recoveryClass
+  if (diagnosticClass === RECOVERY_CLASS.SYSTEM_MIGRATION) {
+    const alreadyActive = RECOVERY_LABEL[RECOVERY_CLASS.ALREADY_ACTIVE]
+    return {
+      ...recovery,
+      recoveryDiagnosticClass: diagnosticClass,
+      recoveryLabel: alreadyActive,
+      recoveryHint: alreadyActive,
+      recoverySeverity: RECOVERY_SEVERITY.success,
+      recoveryActionable: false,
+    }
+  }
+  return { ...recovery, recoveryDiagnosticClass: diagnosticClass }
+}

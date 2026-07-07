@@ -81,6 +81,7 @@ function statusBadgeClass(status) {
   if (status === 'active') return 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/40'
   if (status === 'revoked') return 'bg-orange-500/20 text-orange-200 ring-orange-400/40'
   if (status === 'failed') return 'bg-red-500/20 text-red-200 ring-red-400/40'
+  if (status === 'historical') return 'bg-sky-500/20 text-sky-200 ring-sky-400/40'
   if (status === 'pending') return 'bg-amber-500/20 text-amber-200 ring-amber-400/40'
   return 'bg-red-500/20 text-red-200 ring-red-400/40'
 }

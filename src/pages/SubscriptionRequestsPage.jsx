@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HandHelping, RefreshCw, ToggleLeft, ToggleRight, Trash2 } from 'lucide-react'
 import Topbar from '../components/Topbar'
+import AdminDeviceIdCell from '../components/AdminDeviceIdCell'
 import SecurityPinModal from '../components/SecurityPinModal'
 import { useToast } from '../context/ToastContext.jsx'
 import {
@@ -394,7 +395,9 @@ export default function SubscriptionRequestsPage() {
                       />
                     </td>
                     <td className="px-4 py-3">{row.id}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{String(row.deviceId ?? '').slice(0, 16)}…</td>
+                    <td className="px-4 py-3 max-w-[14rem]">
+                      <AdminDeviceIdCell deviceId={row.deviceId} />
+                    </td>
                     <td className="px-4 py-3">{row.phone}</td>
                     <td className="px-4 py-3">
                       {row.status === 'PENDING' ? (
