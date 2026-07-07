@@ -3,6 +3,7 @@ import { Eye, Loader2, Pencil, Search, Trash2 } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import SubscriptionEditModal from '../components/SubscriptionEditModal'
 import Topbar from '../components/Topbar'
+import AdminDeviceIdCell from '../components/AdminDeviceIdCell'
 import UserProfileDrawer from '../components/UserProfileDrawer'
 import { useToast } from '../context/ToastContext.jsx'
 import {
@@ -759,36 +760,96 @@ function UsersPageContent() {
           {lookupResult?.devices?.length ? (
             <div className="w-full rounded-2xl border border-cyan-500/25 bg-cyan-950/20 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200/90">
-                Complete history — {lookupResult.kind === 'phone' ? 'phone' : 'device'} ({lookupResult.devices.length}{' '}
-                device{lookupResult.devices.length === 1 ? '' : 's'})
+                Phone search
+                {lookupResult.normalized_phone ? (
+                  <span className="ml-2 font-mono normal-case text-slate-200">
+                    +{lookupResult.normalized_phone}
+                  </span>
+                ) : null}
+                <span className="ml-2 font-normal normal-case text-slate-400">
+                  · {lookupResult.devices.length} device{lookupResult.devices.length === 1 ? '' : 's'}
+                </span>
                 {lookupResult.ms != null ? (
                   <span className="ml-2 font-normal normal-case text-slate-500">({lookupResult.ms}ms)</span>
                 ) : null}
               </p>
-              <div className="mt-3 flex flex-col gap-4">
-                {lookupResult.devices.map((bundle) => (
-                  <div
-                    key={bundle.device_id}
-                    className="rounded-xl border border-slate-700/60 bg-slate-900/40 p-3 text-sm"
-                  >
-                    <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-slate-200">
-                      <span>{bundle.device_id}</span>
-                      {bundle.phone_number ? (
-                        <span className="text-slate-400">· {bundle.phone_number}</span>
-                      ) : null}
-                      {bundle.subscription?.status ? (
-                        <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] uppercase text-amber-200">
-                          {bundle.subscription.status}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-2 grid gap-2 text-xs text-slate-400 sm:grid-cols-3">
-                      <span>Payments: {bundle.transactions?.length ?? 0}</span>
-                      <span>Manual grants: {bundle.manual_grants?.length ?? 0}</span>
-                      <span>Revocations: {bundle.revocations?.length ?? 0}</span>
-                    </div>
-                  </div>
-                ))}
+              <div className="mt-3 overflow-x-auto rounded-xl border border-slate-700/60">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-900/60 text-left text-[11px] uppercase tracking-wide text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2">Device ID</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Provider</th>
+                      <th className="px-3 py-2">Plan</th>
+                      <th className="px-3 py-2">Expires</th>
+                      <th className="px-3 py-2">Payments</th>
+                      <th className="px-3 py-2">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {lookupResult.devices.map((bundle) => {
+                      const sub = bundle.subscription
+                      const row = sub || { device_id: bundle.device_id, status: 'unknown', provider: 'unknown' }
+                      return (
+                        <tr key={bundle.device_id} className="bg-slate-900/30 hover:bg-slate-900/50">
+                          <td className="max-w-[14rem] px-3 py-2">
+                            <AdminDeviceIdCell deviceId={bundle.device_id} />
+                          </td>
+                          <td className="px-3 py-2">
+                            {sub?.status ? (
+                              <span
+                                className={`inline-flex rounded-lg px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${statusBadgeClass(sub.status)}`}
+                              >
+                                {String(sub.status).toUpperCase()}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-500">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-slate-300">{sub?.provider || sub?.source || '—'}</td>
+                          <td className="px-3 py-2 text-xs text-slate-300">{sub?.plan_name || '—'}</td>
+                          <td className="px-3 py-2 text-xs text-slate-400">
+                            {sub?.expires_at ? formatAdminDateTime(sub.expires_at) : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-slate-400">{bundle.payment_count ?? bundle.transactions?.length ?? 0}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setProfileRow(row)}
+                                className="rounded-lg border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-800"
+                              >
+                                <Eye className="mr-1 inline h-3 w-3" />
+                                View
+                              </button>
+                              {sub ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditing(sub)}
+                                    className="rounded-lg border border-amber-500/40 px-2 py-1 text-[11px] text-amber-100 hover:bg-amber-500/10"
+                                  >
+                                    <Pencil className="mr-1 inline h-3 w-3" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={sub.status === 'revoked'}
+                                    onClick={() => handleRevoke(sub)}
+                                    className="rounded-lg border border-red-500/40 px-2 py-1 text-[11px] text-red-200 hover:bg-red-500/10 disabled:opacity-40"
+                                  >
+                                    <Trash2 className="mr-1 inline h-3 w-3" />
+                                    Revoke
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           ) : null}
@@ -986,7 +1047,9 @@ function UsersPageContent() {
                             </td>
                           ) : null}
                           <td className="px-4 py-3 font-mono text-slate-200">{r.phone_number || '-'}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-slate-200">{r.device_id}</td>
+                          <td className="max-w-[14rem] px-4 py-3">
+                            <AdminDeviceIdCell deviceId={r.device_id} />
+                          </td>
                           <td className="px-4 py-3 text-slate-300">{planLabel(r)}</td>
                           <td className="px-4 py-3 text-slate-300">
                             {r.amount != null ? formatTsh(r.amount) : '-'}

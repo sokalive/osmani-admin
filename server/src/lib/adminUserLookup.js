@@ -1,13 +1,29 @@
 /**
- * Aggregated admin identity lookup — one bounded response for device ID or phone.
+ * Aggregated admin identity lookup — operational device rows only (phone = discovery).
  */
 import { getPool } from '../db/pool.js'
 import { normalizePhoneDigits, tzPhoneCanonicalSql } from '../billingStore.js'
+import { getOperationalSubscriptionByDeviceId } from './adminUsersList.js'
 
-const MAX_DEVICES = 20
+const MAX_DEVICES = 50
 const MAX_TXNS_PER_DEVICE = 40
 const MAX_GRANTS = 20
 const MAX_REVOCATIONS = 20
+
+const SYNTHETIC_DEVICE_PREFIXES = [
+  'direct-probe',
+  'direct-proof',
+  'verify-probe',
+  'verify-proof',
+  'verify-guard',
+  'own-test',
+  'immut_test',
+  'ui-test',
+  'probe-',
+  'parity-',
+  'audit-',
+  'test-',
+]
 
 function requirePool() {
   const pool = getPool()
@@ -19,49 +35,84 @@ function isExactDeviceId(q) {
   return /^[a-f0-9]{64}$/i.test(String(q ?? '').trim())
 }
 
+/** Forensic / verification script IDs must not appear as operational subscription devices. */
+export function isSyntheticForensicDeviceId(deviceId) {
+  const s = String(deviceId ?? '').trim().toLowerCase()
+  if (!s) return true
+  return SYNTHETIC_DEVICE_PREFIXES.some((prefix) => s.startsWith(prefix))
+}
+
+/** Canonical production device identity for admin actions. */
+export function isCanonicalOperationalDeviceId(deviceId) {
+  const s = String(deviceId ?? '').trim()
+  if (!s || isSyntheticForensicDeviceId(s)) return false
+  return /^[a-f0-9]{64}$/i.test(s)
+}
+
 async function resolveDeviceIdsForPhone(pool, digits) {
   const { rows } = await pool.query(
-    `SELECT DISTINCT d.device_id
+    `SELECT DISTINCT trim(d.device_id) AS device_id
      FROM (
-       SELECT ds.device_id
+       SELECT ds.device_id::text AS device_id
        FROM device_subscriptions ds
        WHERE EXISTS (
          SELECT 1 FROM transactions t
          WHERE t.device_id = ds.device_id
            AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
        )
+       OR EXISTS (
+         SELECT 1 FROM device_phone_registry dpr
+         WHERE dpr.device_id::text = ds.device_id::text
+           AND dpr.phone_number_normalized = $1
+       )
        UNION
-       SELECT device_id FROM device_phone_registry
-       WHERE phone_number_normalized = $1
+       SELECT trim(dpr.device_id::text) AS device_id
+       FROM device_phone_registry dpr
+       WHERE dpr.phone_number_normalized = $1
+         AND trim(coalesce(dpr.device_id::text, '')) <> ''
        UNION
-       SELECT device_id FROM transactions
-       WHERE ${tzPhoneCanonicalSql('phone::text')} = $1
-         AND device_id IS NOT NULL AND trim(device_id) <> ''
+       SELECT trim(t.device_id::text) AS device_id
+       FROM transactions t
+       WHERE ${tzPhoneCanonicalSql('t.phone::text')} = $1
+         AND t.status = 'completed'
+         AND trim(coalesce(t.device_id::text, '')) <> ''
      ) d
-     WHERE d.device_id IS NOT NULL AND trim(d.device_id) <> ''
+     WHERE trim(coalesce(d.device_id, '')) <> ''
+       AND length(trim(d.device_id)) = 64
+       AND trim(d.device_id) ~ '^[a-f0-9]{64}$'
+     ORDER BY device_id
      LIMIT $2`,
     [digits, MAX_DEVICES],
   )
-  return rows.map((r) => String(r.device_id))
+  return rows
+    .map((r) => String(r.device_id).trim().toLowerCase())
+    .filter((id) => isCanonicalOperationalDeviceId(id))
 }
 
-async function fetchDeviceBundle(pool, deviceId) {
+async function deviceHasOperationalEvidence(pool, deviceId) {
   const d = String(deviceId).trim()
-  const [subRes, txnRes, grantRes, revokeRes, transferRes] = await Promise.all([
-    pool.query(
-      `SELECT ds.*, p.name AS plan_name
-       FROM device_subscriptions ds
-       LEFT JOIN plans p ON p.id = (
-         SELECT t.plan_id FROM transactions t
-         WHERE t.device_id = ds.device_id AND t.status = 'completed'
-         ORDER BY t.created_at DESC LIMIT 1
-       )
-       WHERE ds.device_id = $1 LIMIT 1`,
-      [d],
-    ),
+  const { rows } = await pool.query(
+    `SELECT
+       EXISTS (SELECT 1 FROM device_subscriptions ds WHERE ds.device_id = $1) AS has_subscription,
+       EXISTS (
+         SELECT 1 FROM transactions t
+         WHERE t.device_id = $1 AND t.status = 'completed'
+       ) AS has_completed_payment`,
+    [d],
+  )
+  const r = rows[0] ?? {}
+  return r.has_subscription === true || r.has_completed_payment === true
+}
+
+async function fetchOperationalDeviceBundle(pool, deviceId) {
+  const d = String(deviceId).trim()
+  const subscription = await getOperationalSubscriptionByDeviceId(d)
+  if (!subscription && !(await deviceHasOperationalEvidence(pool, d))) return null
+
+  const [txnRes, grantRes, revokeRes, transferRes] = await Promise.all([
     pool.query(
       `SELECT order_id, device_id, phone, plan_id, amount, status, created_at, updated_at,
-              raw_payload->>'payment_provider' AS payment_provider
+              COALESCE(NULLIF(raw_payload->>'payment_provider',''), 'unknown') AS payment_provider
        FROM transactions
        WHERE device_id = $1
        ORDER BY created_at DESC
@@ -94,20 +145,20 @@ async function fetchDeviceBundle(pool, deviceId) {
     ),
   ])
 
-  const sub = subRes.rows[0] ?? null
   const phone =
-    sub?.phone_number ??
-    txnRes.rows.find((t) => t.phone)?.phone ??
+    subscription?.phone_number ||
+    txnRes.rows.find((t) => t.phone)?.phone ||
     null
 
   return {
     device_id: d,
-    subscription: sub,
+    subscription,
     phone_number: phone,
     transactions: txnRes.rows,
     manual_grants: grantRes.rows,
     revocations: revokeRes.rows,
     transfers: transferRes.rows,
+    payment_count: txnRes.rows.length,
   }
 }
 
@@ -125,7 +176,8 @@ export async function lookupAdminUserHistory(search) {
 
   if (isExactDeviceId(q)) {
     kind = 'device'
-    deviceIds = [q.toLowerCase()]
+    const id = q.toLowerCase()
+    if (isCanonicalOperationalDeviceId(id)) deviceIds = [id]
   } else {
     const digits = normalizePhoneDigits(q)
     if (digits && digits.length >= 9) {
@@ -136,7 +188,10 @@ export async function lookupAdminUserHistory(search) {
 
   if (!deviceIds.length) return null
 
-  const devices = await Promise.all(deviceIds.map((id) => fetchDeviceBundle(pool, id)))
+  const bundles = await Promise.all(deviceIds.map((id) => fetchOperationalDeviceBundle(pool, id)))
+  const devices = bundles.filter(Boolean)
+  if (!devices.length) return null
+
   return {
     kind,
     query: q,

@@ -284,7 +284,38 @@ function mapSubscriptionRow(r, nowMs = Date.now()) {
     remaining: remainingMs,
     provider: source,
     source,
+    transaction_id: txnId,
   }
+}
+
+/** Evidence-based subscription projection for admin operational UI (exported for lookup). */
+export const mapOperationalSubscriptionRow = mapSubscriptionRow
+
+/** Single-device operational subscription row (same joins as list). */
+export async function getOperationalSubscriptionByDeviceId(deviceId) {
+  const pool = requirePool()
+  const d = String(deviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT
+       ds.device_id,
+       ds.status,
+       ds.started_at,
+       ds.expires_at,
+       ds.transaction_id,
+       ds.admin_revoked_at,
+       COALESCE(lt.phone, pay.phone, '') AS phone_number,
+       COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
+       p.name AS plan_name,
+       COALESCE(pay.amount, lt.amount, p.price) AS amount,
+       ${subscriptionSourceSql('ds', 'pay')} AS provider
+     ${SUBSCRIPTION_FROM}
+     WHERE ds.device_id = $1
+     LIMIT 1`,
+    [d],
+  )
+  if (!rows[0]) return null
+  return mapSubscriptionRow(rows[0])
 }
 
 function mapFailedPaymentRow(r) {
