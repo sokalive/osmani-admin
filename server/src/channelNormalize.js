@@ -20,7 +20,7 @@ import {
   resolveInstructionVideoPlaybackForApi,
 } from './lib/instructionVideoChannel.js'
 
-const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk', 'chrome'])
+const PLAYER_TYPES = new Set(['exo', 'webview', 'vlc', 'native', 'ijk', 'chrome', 'direct_hls'])
 
 /** Canonical playerType for API + storage */
 export function normalizePlayerType(v) {
@@ -38,6 +38,9 @@ export function normalizePlayerType(v) {
     ijkplayer: 'ijk',
     chrome: 'chrome',
     googlechrome: 'chrome',
+    directhls: 'direct_hls',
+    direct_hls: 'direct_hls',
+    'direct-hls': 'direct_hls',
   }
   const mapped = legacy[raw] ?? raw
   return PLAYER_TYPES.has(mapped) ? mapped : 'exo'
@@ -350,6 +353,9 @@ export function channelToResponse(c, req, clientVersion = 0) {
         : Boolean(m.showInApp)
   }
   const instructionPlayback = instruction ? resolveInstructionVideoPlaybackForApi(m, req) : null
+  const configuredPlayerType = normalizePlayerType(m.playerType)
+  const isDirectHls = configuredPlayerType === 'direct_hls'
+  const directHlsUpstream = String(m.url || '').trim()
   const delivery = instruction
     ? {
         playbackUrl: instructionPlayback.full,
@@ -364,7 +370,21 @@ export function channelToResponse(c, req, clientVersion = 0) {
         direct_stream_url_backup1: '',
         direct_stream_url_backup2: '',
       }
-    : buildChannelStreamDelivery(req, m)
+    : isDirectHls
+      ? {
+          playbackUrl: directHlsUpstream,
+          direct_stream_url: directHlsUpstream,
+          stream_delivery_mode: 'direct',
+          stream_delivery_effective: 'direct',
+          proxy_playback_url: '',
+          direct_stream_rollout: null,
+          streamProxy: { route: null },
+          backupPlayback1: m.backupStream1 ?? '',
+          backupPlayback2: m.backupStream2 ?? '',
+          direct_stream_url_backup1: m.backupStream1 ?? '',
+          direct_stream_url_backup2: m.backupStream2 ?? '',
+        }
+      : buildChannelStreamDelivery(req, m)
   const playback = instruction
     ? {
         playbackUrl: delivery.playbackUrl,
@@ -373,7 +393,15 @@ export function channelToResponse(c, req, clientVersion = 0) {
         effectivePlayerType: 'exo',
         mpingo_drm: null,
       }
-    : resolveClientPlaybackFields(m, delivery)
+    : isDirectHls
+      ? {
+          playbackUrl: directHlsUpstream,
+          stream_delivery_effective: 'direct',
+          playback_source: 'direct_hls',
+          effectivePlayerType: 'direct_hls',
+          mpingo_drm: null,
+        }
+      : resolveClientPlaybackFields(m, delivery)
 
   return {
     id: m.id,

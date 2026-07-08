@@ -34,6 +34,7 @@ const PLAYER_UI_TO_API = {
   VLC: 'vlc',
   Native: 'native',
   IJK: 'ijk',
+  'Direct HLS': 'direct_hls',
 }
 
 const PLAYER_API_TO_UI = {
@@ -42,6 +43,7 @@ const PLAYER_API_TO_UI = {
   vlc: 'VLC',
   native: 'Native',
   ijk: 'IJK',
+  direct_hls: 'Direct HLS',
 }
 
 function resolveThumbnailUrl(c) {
