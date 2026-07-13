@@ -38,7 +38,14 @@ const STATUS_FILTERS = [
 
 /**
  * Shared Users Intelligence / Device Registry UI.
- * @param {{ title: string, description: string, icon: import('lucide-react').LucideIcon, showStatusFilter?: boolean, totalLabel?: string }} props
+ * @param {{
+ *   title: string,
+ *   description: string,
+ *   icon: import('lucide-react').LucideIcon,
+ *   showStatusFilter?: boolean,
+ *   totalLabel?: string,
+ *   totalOverride?: number | null,
+ * }} props
  */
 export default function DeviceIntelligenceRegistryView({
   title,
@@ -46,6 +53,7 @@ export default function DeviceIntelligenceRegistryView({
   icon: Icon,
   showStatusFilter = false,
   totalLabel = 'Total devices ever seen',
+  totalOverride = null,
 }) {
   const navigate = useNavigate()
   const [statusFilter, setStatusFilter] = useState('all')
@@ -63,6 +71,11 @@ export default function DeviceIntelligenceRegistryView({
     statusFilter: showStatusFilter ? statusFilter : 'all',
   })
 
+  const overrideTotal = Number(totalOverride)
+  const hasTotalOverride = totalOverride != null && Number.isFinite(overrideTotal) && overrideTotal >= 0
+  const totalValue = hasTotalOverride ? overrideTotal : summary?.totalDevicesEverSeen
+  const showCounters = summary || hasTotalOverride
+
   return (
     <>
       <Topbar />
@@ -77,12 +90,12 @@ export default function DeviceIntelligenceRegistryView({
           </div>
         </div>
 
-        {summary ? (
+        {showCounters ? (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <CounterCard label={totalLabel} value={summary.totalDevicesEverSeen} />
-            <CounterCard label="Active devices" value={summary.activeDevices} tone="active" />
-            <CounterCard label="Blocked devices" value={summary.blockedDevices} tone="blocked" />
-            <CounterCard label="Inactive devices" value={summary.inactiveDevices} tone="inactive" />
+            <CounterCard label={totalLabel} value={totalValue ?? 0} />
+            <CounterCard label="Active devices" value={summary?.activeDevices} tone="active" />
+            <CounterCard label="Blocked devices" value={summary?.blockedDevices} tone="blocked" />
+            <CounterCard label="Inactive devices" value={summary?.inactiveDevices} tone="inactive" />
           </div>
         ) : null}
 
