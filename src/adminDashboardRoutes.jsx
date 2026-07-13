@@ -22,6 +22,7 @@ import CustomerInvestigationPage from './pages/CustomerInvestigationPage'
 import UsersPage from './pages/UsersPage'
 import UsersIntelligencePage from './pages/UsersIntelligencePage'
 import UsersIntelligenceDetailPage from './pages/UsersIntelligenceDetailPage'
+import DeviceRegistryPage from './pages/DeviceRegistryPage'
 import WhatsAppPage from './pages/WhatsAppPage'
 import ZenoPayPage from './pages/ZenoPayPage'
 import SonicPesaSettingsPage from './pages/SonicPesaSettingsPage'
@@ -50,6 +51,7 @@ export const dashboardRouteElements = [
     path="users-intelligence/:id"
     element={<UsersIntelligenceDetailPage />}
   />,
+  <Route key="device-registry" path="device-registry" element={<DeviceRegistryPage />} />,
   <Route key="notifications" path="notifications" element={<NotificationsPage />} />,
   <Route key="sms-center" path="sms-center" element={<SmsCenterPage />} />,
   <Route

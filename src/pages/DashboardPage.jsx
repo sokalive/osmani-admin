@@ -11,6 +11,10 @@ import { useAnalyticsLiveRefresh } from '../hooks/useAnalyticsLiveRefresh.js'
 import { getAnalyticsSnapshot, getAnalyticsTrend } from '../lib/api'
 import { isDegradedAnalyticsSnapshot } from '../lib/adminDataGuards'
 import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
+import {
+  fetchDeviceIntelligenceSummary,
+  readCachedUniqueDevicesTotal,
+} from '../lib/deviceIntelligenceSummary'
 
 const emerald =
   'bg-gradient-to-br from-emerald-400/92 via-emerald-500/88 to-emerald-700/90'
@@ -24,19 +28,25 @@ const OVERVIEW_FALLBACK = {
 
 function hydrateDashboard() {
   const snap = readAdminSnapshot('dashboard')
+  const cachedUnique = readCachedUniqueDevicesTotal()
   if (!snap || typeof snap !== 'object') {
     return {
-      overview: OVERVIEW_FALLBACK,
+      overview: {
+        ...OVERVIEW_FALLBACK,
+        ...(cachedUnique != null ? { totalUniqueDevices: cachedUnique } : {}),
+      },
       channels: [],
       topFiveChannels: [],
       channelLabels: {},
       locations: [],
       trend: [],
-      fromCache: false,
+      fromCache: cachedUnique != null,
     }
   }
+  const overview = { ...OVERVIEW_FALLBACK, ...(snap.overview || {}) }
+  if (cachedUnique != null) overview.totalUniqueDevices = cachedUnique
   return {
-    overview: { ...OVERVIEW_FALLBACK, ...(snap.overview || {}) },
+    overview,
     channels: Array.isArray(snap.channels) ? snap.channels : [],
     topFiveChannels: Array.isArray(snap.topFiveChannels) ? snap.topFiveChannels : [],
     channelLabels: snap.channelLabels && typeof snap.channelLabels === 'object' ? snap.channelLabels : {},
@@ -64,18 +74,31 @@ function DashboardPage() {
     const hadData = loaded || initial.fromCache
     if (hadData) setRefreshing(true)
     try {
-      const [snap, t] = await Promise.all([getAnalyticsSnapshot(), getAnalyticsTrend()])
+      const [snap, t, deviceSummary] = await Promise.all([
+        getAnalyticsSnapshot(),
+        getAnalyticsTrend(),
+        fetchDeviceIntelligenceSummary().catch(() => null),
+      ])
       if (gen !== loadGenRef.current) return
       if (isDegradedAnalyticsSnapshot(snap)) {
+        // Registry total is authoritative for the Unique Devices card — still apply it.
+        const registryTotal = Number(deviceSummary?.totalDevicesEverSeen)
+        if (Number.isFinite(registryTotal) && registryTotal >= 0) {
+          setOverview((prev) => ({ ...prev, totalUniqueDevices: registryTotal }))
+        }
         showToast('error', snap?.error || 'Dashboard refresh degraded — keeping last data')
         setLoaded(true)
         return
       }
+      const registryTotal = Number(deviceSummary?.totalDevicesEverSeen)
       const nextOverview = {
         onlineNow: snap?.onlineNow,
         watchingNow: snap?.watchingNow,
         idleNow: snap?.idleNow,
-        totalUniqueDevices: snap?.totalUniqueDevices,
+        // Authoritative: Users Intelligence device_intelligence_registry (not analytics census).
+        totalUniqueDevices: Number.isFinite(registryTotal) && registryTotal >= 0
+          ? registryTotal
+          : readCachedUniqueDevicesTotal() ?? 0,
         revenueToday: snap?.revenueToday,
         newUsersToday: snap?.newUsersToday,
         dauToday: snap?.dauToday,
