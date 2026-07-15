@@ -1,5 +1,6 @@
 /**
  * Durable SonicPesa pending-order reconciliation (poll fallback survives PM2 restart).
+ * Critical when provider webhooks are absent — must stay aggressive for several minutes.
  */
 import { getPool } from '../db/pool.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
@@ -13,12 +14,17 @@ const QUEUE_STATUS = Object.freeze({
   TERMINAL_ABANDONED: 'TERMINAL_ABANDONED',
 })
 
-const MAX_ATTEMPTS = Math.max(5, Number(process.env.SONICPESA_RECONCILE_QUEUE_MAX_ATTEMPTS) || 24)
-const WORKER_MS = Math.max(15_000, Number(process.env.SONICPESA_RECONCILE_QUEUE_MS) || 45_000)
+const MAX_ATTEMPTS = Math.max(5, Number(process.env.SONICPESA_RECONCILE_QUEUE_MAX_ATTEMPTS) || 48)
+/** Default 15s — keep polling tight while SonicPesa order-status catches up. */
+const WORKER_MS = Math.max(8_000, Number(process.env.SONICPESA_RECONCILE_QUEUE_MS) || 15_000)
 const BATCH = Math.min(20, Math.max(1, Number(process.env.SONICPESA_RECONCILE_QUEUE_BATCH) || 8))
+const STUCK_PROCESSING_MS = Math.max(15_000, Number(process.env.SONICPESA_RECONCILE_STUCK_MS) || 60_000)
+/** Cap retry delay so activation does not sit idle for minutes between polls. */
+const MAX_RETRY_MS = Math.max(5_000, Number(process.env.SONICPESA_RECONCILE_MAX_RETRY_MS) || 15_000)
 
 let workerTimer = null
 let workerRunning = false
+let workerKickScheduled = false
 
 function requirePool() {
   const pool = getPool()
@@ -27,10 +33,10 @@ function requirePool() {
 }
 
 function nextAttemptAt(attemptCount, priority = 0) {
-  const base = priority > 0 ? 2000 : 8000
-  const exp = Math.min(8, Math.max(0, attemptCount))
-  const ms = base * 2 ** exp
-  const jitter = Math.floor(Math.random() * Math.min(4000, ms * 0.15))
+  const base = priority > 0 ? 2000 : 5000
+  const exp = Math.min(4, Math.max(0, attemptCount))
+  const ms = Math.min(MAX_RETRY_MS, base * 2 ** exp)
+  const jitter = Math.floor(Math.random() * Math.min(1500, ms * 0.15))
   return new Date(Date.now() + ms + jitter)
 }
 
@@ -55,12 +61,30 @@ export async function enqueueSonicpesaPaymentReconciliation(orderId, deviceId, {
      RETURNING *`,
     [oid, did, Number(priority) || 0],
   )
+  kickSonicpesaReconciliationQueueWorker()
   return rows[0] ?? null
+}
+
+/** Reclaim rows stuck in PROCESSING after crash / hung poll. */
+export async function reclaimStuckReconciliationProcessing() {
+  const pool = requirePool()
+  const { rowCount } = await pool.query(
+    `UPDATE sonicpesa_payment_reconciliation_queue
+     SET status = 'PENDING',
+         next_attempt_at = now(),
+         last_error_redacted = COALESCE(last_error_redacted, 'reclaimed_stuck_processing'),
+         updated_at = now()
+     WHERE status = 'PROCESSING'
+       AND updated_at < now() - ($1::int * interval '1 millisecond')`,
+    [STUCK_PROCESSING_MS],
+  )
+  return Number(rowCount) || 0
 }
 
 export async function claimReconciliationQueueRows(limit = BATCH) {
   const pool = requirePool()
   const n = Math.min(30, Math.max(1, Number(limit) || BATCH))
+  await reclaimStuckReconciliationProcessing().catch(() => 0)
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -150,7 +174,9 @@ export async function runSonicpesaReconciliationQueueOnce() {
   let processed = 0
   try {
     const health = await getSonicpesaWebhookHealthSnapshot()
-    const webhookStale = Number(health?.provider_webhook_age_sec ?? 0) > 3600
+    const webhookStale =
+      health?.last_provider_webhook_at == null ||
+      Number(health?.provider_webhook_age_sec ?? 0) > 3600
     const batch = webhookStale ? Math.min(BATCH + 4, 20) : BATCH
     const rows = await claimReconciliationQueueRows(batch)
     for (const row of rows) {
@@ -189,6 +215,18 @@ export async function getReconciliationQueueMetrics() {
   return rows[0] ?? {}
 }
 
+/** Non-blocking kick after create-order / enqueue. */
+export function kickSonicpesaReconciliationQueueWorker() {
+  if (workerKickScheduled || process.env.SONICPESA_RECONCILE_QUEUE_WORKER === '0') return
+  workerKickScheduled = true
+  setImmediate(() => {
+    workerKickScheduled = false
+    void runSonicpesaReconciliationQueueOnce().catch((e) => {
+      console.warn('[sonicpesa-reconcile-queue] kick failed:', e?.message || e)
+    })
+  })
+}
+
 export function startSonicpesaReconciliationQueueWorker() {
   if (workerTimer || process.env.SONICPESA_RECONCILE_QUEUE_WORKER === '0') return
   workerTimer = setInterval(() => {
@@ -197,6 +235,18 @@ export function startSonicpesaReconciliationQueueWorker() {
     })
   }, WORKER_MS)
   if (typeof workerTimer.unref === 'function') workerTimer.unref()
+  void reclaimStuckReconciliationProcessing()
+    .then((n) => {
+      if (n > 0) console.log('[sonicpesa-reconcile-queue] reclaimed stuck processing', n)
+    })
+    .catch(() => {})
   void runSonicpesaReconciliationQueueOnce().catch(() => {})
-  console.log('[sonicpesa-reconcile-queue] started', { intervalMs: WORKER_MS })
+  console.log('[sonicpesa-reconcile-queue] started', { intervalMs: WORKER_MS, maxRetryMs: MAX_RETRY_MS })
+}
+
+export function stopSonicpesaReconciliationQueueWorker() {
+  if (workerTimer) {
+    clearInterval(workerTimer)
+    workerTimer = null
+  }
 }

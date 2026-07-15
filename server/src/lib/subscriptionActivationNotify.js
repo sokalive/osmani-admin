@@ -20,8 +20,29 @@ export function notifySubscriptionActivated(deviceId, orderId = null) {
   return true
 }
 
-/** @param {{ skipped?: boolean, deviceId?: string|null, orderId?: string|null }} act */
+/**
+ * Push when paying-device entitlement is active — including ALREADY_APPLIED so a losing
+ * concurrent path still invalidates verify cache and notifies SSE clients.
+ * @param {{
+ *   skipped?: boolean,
+ *   activated?: boolean,
+ *   entitlement_active?: boolean,
+ *   moved_to_sibling_device?: boolean,
+ *   phone_conflict?: boolean,
+ *   activation_state?: string|null,
+ *   deviceId?: string|null,
+ *   orderId?: string|null,
+ * }} act
+ */
 export function notifySubscriptionActivatedFromAct(act, orderId = null) {
-  if (!act || act.skipped || !act.deviceId) return false
+  if (!act?.deviceId) return false
+  if (act.moved_to_sibling_device === true || act.phone_conflict === true) return false
+  const state = String(act.activation_state ?? '').trim()
+  const ok =
+    act.activated === true ||
+    act.entitlement_active === true ||
+    state === 'ACTIVATED' ||
+    state === 'ALREADY_APPLIED'
+  if (!ok) return false
   return notifySubscriptionActivated(act.deviceId, orderId ?? act.orderId ?? null)
 }

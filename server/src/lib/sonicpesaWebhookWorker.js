@@ -139,7 +139,7 @@ export async function processSonicpesaInboxRow(row) {
     })
   }
 
-  if (act?.activated && act.deviceId) {
+  if (act?.deviceId) {
     notifySubscriptionActivatedFromAct(act, merchantOrderId)
   }
 

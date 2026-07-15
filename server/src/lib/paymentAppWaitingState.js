@@ -75,6 +75,19 @@ export function deriveAppWaitingState({ txn, activation = null, subscriptionActi
   }
 
   if (status === 'completed') {
+    // Prefer stored activation_result for terminal non-entitlement outcomes
+    if (
+      activationState === ACTIVATION_STATE.TERMINAL_REJECTED ||
+      activationState === ACTIVATION_STATE.INVALID_PLAN ||
+      activationState === ACTIVATION_STATE.NO_DEVICE_ID
+    ) {
+      return {
+        app_waiting_state: APP_WAITING_STATE.MANUAL_REVIEW_REQUIRED,
+        activation_state: activationState,
+        entitlement_active: false,
+        retryable: false,
+      }
+    }
     return {
       app_waiting_state: APP_WAITING_STATE.PROVIDER_CONFIRMED_ACTIVATING,
       activation_state: activationState || ACTIVATION_STATE.PROVIDER_NOT_CONFIRMED,

@@ -164,7 +164,9 @@ sonicpesaPaymentsRouter.get('/status/:orderId', async (req, res) => {
       const sub = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
       subscriptionActive =
         sub?.active === true && String(sub.transaction_id ?? '') === String(txn.order_id)
-      if (rec.activation?.activated) invalidateSubscriptionAccessCache(deviceId)
+      if (rec.activation?.activated || rec.activation?.entitlement_active) {
+        invalidateSubscriptionAccessCache(deviceId)
+      }
     }
     const waiting = deriveAppWaitingState({
       txn,
@@ -208,7 +210,9 @@ sonicpesaPaymentsRouter.get('/verify/:orderId', async (req, res) => {
       const sub = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
       subscriptionActive =
         sub?.active === true && String(sub.transaction_id ?? '') === String(txn.order_id)
-      if (rec.activation?.activated) invalidateSubscriptionAccessCache(deviceId)
+      if (rec.activation?.activated || rec.activation?.entitlement_active) {
+        invalidateSubscriptionAccessCache(deviceId)
+      }
     }
     const waiting = deriveAppWaitingState({
       txn,

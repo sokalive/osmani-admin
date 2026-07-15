@@ -1717,7 +1717,7 @@ export async function upsertDeviceSubscriptionActive(
   if (!d || !oid) throw new Error('deviceId and orderId required')
   if (await deviceSubscriptionOrderAlreadyApplied(oid, client)) {
     console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
-    return { skipped: true }
+    return { skipped: true, smsDeferred: false }
   }
   try {
     await q(
@@ -1744,19 +1744,24 @@ export async function upsertDeviceSubscriptionActive(
       deviceId: d.length > 20 ? `${d.slice(0, 18)}…` : d,
       orderId: oid.length > 24 ? `${oid.slice(0, 22)}…` : oid,
     })
-    void import('./lib/smsSubscriptionHooks.js')
-      .then((m) => m.notifySubscriptionActivated({ deviceId: d, orderId: oid, expiresAt }))
-      .catch((err) => console.warn('[sms] activation notify failed:', err))
+    // SMS is intentionally NOT sent here when `client` is set (open DB transaction).
+    // Callers must invoke notifySubscriptionActivated after COMMIT — otherwise the SMS
+    // helper re-reads the txn on another connection and skips with not_completed_payment.
+    if (!client) {
+      void import('./lib/smsSubscriptionHooks.js')
+        .then((m) => m.notifySubscriptionActivated({ deviceId: d, orderId: oid, expiresAt }))
+        .catch((err) => console.warn('[sms] activation notify failed:', err))
+    }
     invalidateSubscriptionAccessCache(d)
     void persistDevicePhoneFromTransaction(d, oid)
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)
-      return { skipped: true }
+      return { skipped: true, smsDeferred: false }
     }
     throw e
   }
-  return { skipped: false }
+  return { skipped: false, smsDeferred: Boolean(client), deviceId: d, orderId: oid, expiresAt }
 }
 
 /**

@@ -224,10 +224,11 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
   const fpHash = fpRaw ? billing.hashDeviceFingerprint(fpRaw) : null
 
   try {
-    const { skipped } = await billing.upsertDeviceSubscriptionActive(
+    const upsertResult = await billing.upsertDeviceSubscriptionActive(
       { deviceId, orderId, expiresAt, fingerprintHash: fpHash },
       client,
     )
+    const skipped = upsertResult?.skipped === true
     const state = skipped ? ACTIVATION_STATE.ALREADY_APPLIED : ACTIVATION_STATE.ACTIVATED
     const meta = buildActivationMeta({
       activation_state: state,
@@ -236,6 +237,14 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
       completion_source: source,
     })
     await persistActivationMeta(orderId, meta, client)
+    // When not inside an open txn, SMS runs from upsert. When client is set, defer until COMMIT.
+    const smsDeferred = upsertResult?.smsDeferred === true || Boolean(client)
+    // ALREADY_APPLIED may need SMS retry if the first attempt raced before COMMIT.
+    if (skipped && !client) {
+      void import('./smsSubscriptionHooks.js')
+        .then((m) => m.notifySubscriptionActivated({ deviceId, orderId, expiresAt }))
+        .catch((err) => console.warn('[sms] already-applied notify failed:', err))
+    }
     return {
       ...meta,
       activated: !skipped,
@@ -244,6 +253,8 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
       deviceId,
       orderId,
       expiresAt,
+      smsDeferred,
+      smsNeeded: true,
     }
   } catch (e) {
     console.error('[canonical-activation] upsert failed:', redactId(orderId), e?.message || e)
@@ -261,6 +272,16 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
       error: String(e?.message || e).slice(0, 200),
     }
   }
+}
+
+function schedulePaymentSuccessSmsAfterCommit(act) {
+  if (!act?.smsNeeded || !act.deviceId || !act.orderId) return
+  const deviceId = act.deviceId
+  const orderId = act.orderId
+  const expiresAt = act.expiresAt
+  void import('./smsSubscriptionHooks.js')
+    .then((m) => m.notifySubscriptionActivated({ deviceId, orderId, expiresAt }))
+    .catch((err) => console.warn('[sms] post-commit activation notify failed:', err))
 }
 
 /**
@@ -331,6 +352,7 @@ export async function applySonicpesaPaymentOutcome({
       await client.query('COMMIT')
       out.txnStatusAfter = 'completed'
       out.activation = act
+      if (act?.smsDeferred) schedulePaymentSuccessSmsAfterCommit(act)
       return out
     }
 
@@ -410,6 +432,7 @@ export async function applySonicpesaPaymentOutcome({
 
     await client.query('COMMIT')
     out.activation = act
+    if (act?.smsDeferred) schedulePaymentSuccessSmsAfterCommit(act)
     return out
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})

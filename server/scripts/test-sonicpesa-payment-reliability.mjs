@@ -134,6 +134,43 @@ async function runDbTests() {
   ])
 }
 
+// 9. App waiting state — completed without entitlement = activating; already applied = ACTIVE
+import { deriveAppWaitingState, APP_WAITING_STATE } from '../src/lib/paymentAppWaitingState.js'
+assert(
+  'completed without entitlement → PROVIDER_CONFIRMED_ACTIVATING',
+  deriveAppWaitingState({ txn: { status: 'completed' } }).app_waiting_state ===
+    APP_WAITING_STATE.PROVIDER_CONFIRMED_ACTIVATING,
+)
+assert(
+  'ALREADY_APPLIED → ACTIVE',
+  deriveAppWaitingState({
+    txn: { status: 'completed' },
+    activation: { activation_state: ACTIVATION_STATE.ALREADY_APPLIED, entitlement_active: true },
+  }).app_waiting_state === APP_WAITING_STATE.ACTIVE,
+)
+
+// 10. SSE notify helper must fire for ALREADY_APPLIED (concurrent activation race)
+import { notifySubscriptionActivatedFromAct } from '../src/lib/subscriptionActivationNotify.js'
+assert(
+  'notify accepts ALREADY_APPLIED',
+  notifySubscriptionActivatedFromAct({
+    deviceId: 'device_test_notify',
+    skipped: true,
+    entitlement_active: true,
+    activation_state: ACTIVATION_STATE.ALREADY_APPLIED,
+  }) === true,
+)
+assert(
+  'notify skips sibling move',
+  notifySubscriptionActivatedFromAct({
+    deviceId: 'device_test_notify',
+    skipped: true,
+    entitlement_active: true,
+    moved_to_sibling_device: true,
+    activation_state: ACTIVATION_STATE.MOVED_TO_SIBLING_DEVICE,
+  }) === false,
+)
+
 await runDbTests()
 
 const failed = checks.filter((c) => !c.ok)

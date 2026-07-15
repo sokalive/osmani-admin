@@ -126,6 +126,9 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
     const hintPoll = await billing.shouldProviderPollOrderForVerify(d, hint)
     if (hintPoll.poll) {
       await guardedReconcile(hint)
+    } else if (String(hintPoll.reason || '').includes('completed')) {
+      // Payment already completed (webhook/poll race) — still run activation repair.
+      await guardedReconcile(hint)
     }
   } else {
     const pend = await billing.getLatestRecentPendingTransactionForDevice(d)
@@ -135,7 +138,7 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   }
 
   const fin = await billing.tryFinalizeActivationForDevice(d)
-  if (fin.ran === true && fin.activated === true && fin.deviceId) {
+  if (fin.ran === true && fin.deviceId && (fin.activated === true || fin.entitlement_active === true)) {
     deviceSubscriptionBus.emit('update', { deviceId: fin.deviceId })
     liveSyncBus.publish('analytics.subscription_updated', {
       topics: ['analytics'],
@@ -702,7 +705,14 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     if (!isAccessRowActive(row)) {
       try {
         const fin = await billing.tryFinalizeActivationForDevice(d)
-        if (fin.ran === true && fin.activated === true) {
+        if (
+          fin.ran === true &&
+          (fin.activated === true ||
+            fin.entitlement_active === true ||
+            fin.reason === 'already_applied' ||
+            fin.activation_state === 'ALREADY_APPLIED' ||
+            fin.activation_state === 'ACTIVATED')
+        ) {
           invalidateSubscriptionAccessCache(d)
           row =
             (await billing.getDeviceSubscriptionAccessStateFast(d)) ??

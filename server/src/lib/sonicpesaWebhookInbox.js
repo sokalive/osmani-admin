@@ -140,6 +140,19 @@ export async function updateInboxStatus(id, {
 export async function claimInboxRowsForRetry(limit = 10) {
   const pool = requirePool()
   const n = Math.min(50, Math.max(1, Number(limit) || 10))
+  const stuckMs = Math.max(15_000, Number(process.env.SONICPESA_INBOX_STUCK_MS) || 60_000)
+  await pool
+    .query(
+      `UPDATE sonicpesa_webhook_inbox
+       SET processing_status = 'RETRYABLE_ERROR',
+           next_retry_at = now(),
+           last_error_redacted = COALESCE(last_error_redacted, 'reclaimed_stuck_processing'),
+           updated_at = now()
+       WHERE processing_status = 'PROCESSING'
+         AND updated_at < now() - ($1::int * interval '1 millisecond')`,
+      [stuckMs],
+    )
+    .catch(() => {})
   const client = await pool.connect()
   try {
     await client.query('BEGIN')

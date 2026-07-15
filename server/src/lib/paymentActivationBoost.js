@@ -2,13 +2,23 @@ import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import * as billing from '../billingStore.js'
 import { notifySubscriptionActivatedFromAct } from './subscriptionActivationNotify.js'
 
+/**
+ * Aggressive post-checkout polls — SonicPesa webhooks are often absent in production,
+ * so activation must not depend on the durable queue alone after ~30s.
+ * Covers ~6 minutes (matches observed "Inaanzisha" window) then hands off to queue.
+ */
 function parsePollDelaysMs() {
-  const raw = String(process.env.PAYMENT_ACTIVATION_POLL_MS || '0,750,2000,5000,10000,20000,30000')
+  const raw = String(
+    process.env.PAYMENT_ACTIVATION_POLL_MS ||
+      '0,750,2000,5000,10000,15000,20000,30000,45000,60000,90000,120000,180000,240000,300000,360000',
+  )
   const parsed = raw
     .split(',')
     .map((s) => Number(s.trim()))
     .filter((n) => Number.isFinite(n) && n >= 0)
-  return parsed.length > 0 ? parsed : [0, 750, 2000, 5000, 10000, 20000, 30000]
+  return parsed.length > 0
+    ? parsed
+    : [0, 750, 2000, 5000, 10000, 15000, 20000, 30000, 45000, 60000, 90000, 120000, 180000, 240000, 300000, 360000]
 }
 
 const inFlightOrders = new Map()
@@ -19,11 +29,17 @@ async function runActivationBoostTick(oid, did) {
     try {
       const rec = await reconcileOrderWithZenoPay(oid, { forcePoll: true })
       const fin = await billing.tryFinalizeActivationForDevice(did)
-      if (rec?.activation?.activated) {
+      if (rec?.activation?.entitlement_active || rec?.activation?.activated) {
         notifySubscriptionActivatedFromAct(rec.activation, oid)
-      } else if (fin?.activated) {
+      } else if (fin?.entitlement_active || fin?.activated) {
         notifySubscriptionActivatedFromAct(
-          { skipped: false, deviceId: fin.deviceId, orderId: fin.orderId },
+          {
+            skipped: fin.skipped === true,
+            activated: fin.activated === true,
+            entitlement_active: fin.entitlement_active === true || fin.activated === true,
+            deviceId: fin.deviceId,
+            orderId: fin.orderId,
+          },
           fin.orderId ?? oid,
         )
       }
@@ -37,7 +53,7 @@ async function runActivationBoostTick(oid, did) {
 }
 
 /**
- * Poll provider + finalize activation after payment initiation (webhook may lag).
+ * Poll provider + finalize activation after payment initiation (webhook may lag or be absent).
  * First tick runs immediately; follow-ups are backoff polls. Fire-and-forget; idempotent.
  */
 export function schedulePostPaymentActivationPolls(orderId, deviceId) {

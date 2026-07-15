@@ -336,7 +336,7 @@ restApi.get('/payment-status/:order_id', async (req, res) => {
       const sub = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
       subscriptionActive =
         sub?.active === true && String(sub.transaction_id ?? '') === String(txn.order_id)
-      if (rec.activation?.activated) {
+      if (rec.activation?.activated || rec.activation?.entitlement_active) {
         invalidateSubscriptionAccessCache(deviceId)
       }
     }
