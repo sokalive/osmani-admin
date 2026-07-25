@@ -1,0 +1,122 @@
+{
+  "title": "Kifurushi kimekwisha popup — Admin AI VPS investigation final report",
+  "generated_at": "2026-07-25T12:06:00Z",
+  "authoritative_api": "https://api.osmanitv.com",
+  "vps_host": "144.91.117.90",
+  "vps_repo": "/var/www/osmani-admin-api",
+  "commits": {
+    "fix_commit": "d43ba1bfe17599ce996e8ae6d4faaeb263508044",
+    "deploy_tooling_commit": "26a6cef22be15cbfef5ed45b961217f655cc2639",
+    "probe_commit": "abb94e5e47590699456712f4961baa136d0b4305",
+    "deployed_runtime_at_report": "abb94e5 (after Contabo Reload API) or 26a6cef (first successful API reload)"
+  },
+  "root_cause": {
+    "summary": "POST/GET subscription verify and SSE snapshot only set suppress_expiry_popup=true for admin_revoked. Natural inactive/expired/null-subscription responses omitted the flag or set it false, so the App treated inactive as natural expiry and showed \"Kifurushi kimekwisha\".",
+    "contributing": [
+      "Null subscription rows returned active=false without suppress_expiry_popup",
+      "Natural expired status returned suppress_expiry_popup=false",
+      "Three devices wrongly pending/revoked with future expires_at (false inactive) — repaired to active"
+    ]
+  },
+  "before_vs_after": {
+    "before": {
+      "suppress_expiry_popup": "true only when admin_revoked; missing on null rows",
+      "inactive_probe": "active=false, no suppress_expiry_popup field",
+      "app_effect": "Kifurushi kimekwisha popup"
+    },
+    "after": {
+      "suppress_expiry_popup": true,
+      "suppressExpiryPopup": true,
+      "expiry_popup_policy": "never",
+      "authoritativeInactive": "true when active===false (access authoritative; popup still suppressed)",
+      "inactive_probe": "suppress_expiry_popup=true, expiry_popup_policy=never",
+      "active_probe": "suppress_expiry_popup=true, expiry_popup_policy=never",
+      "sse_snapshot": "suppress_expiry_popup=true, expiry_popup_policy=never",
+      "app_effect": "Backend never authorizes the expiry popup"
+    }
+  },
+  "files_changed": [
+    "server/src/routes/subscription.js",
+    "server/src/lib/manualSubscriptionSseContract.js",
+    "server/src/lib/adminSubscriptionRevocation.js",
+    "server/scripts/test-control-plane-realtime.mjs",
+    "docs/cross-ai/expiry-popup-never-contract.json",
+    "deploy/contabo/reload-api-only.sh",
+    "deploy/contabo/apply-cutover.sh",
+    "deploy/contabo/probe-popup-fix-status.sh",
+    ".github/workflows/contabo-reload-api.yml",
+    ".github/workflows/contabo-probe-popup-fix.yml",
+    "server/scripts/watch-expiry-popup-suppress.mjs"
+  ],
+  "pm2": {
+    "osmani-admin-api": "online (serves api.osmanitv.com — popup fix)",
+    "osmani-tv-backend": "online legacy process observed during probe (long uptime) — public health matched osmani-admin-api commit",
+    "note": "Public /api/health commit matched osmani-admin-api after reload"
+  },
+  "api_verification": {
+    "health_ok": true,
+    "inactive_verify_suppress": true,
+    "active_verify_suppress": true,
+    "sse_snapshot_suppress": true,
+    "cutover_pool_ready": true,
+    "active_device_subscriptions_at_cutover": 448
+  },
+  "database_verification": {
+    "false_expired_before": 3,
+    "false_expired_after_repair": 0,
+    "repaired_devices": [
+      "16b34680-0c9a-405c-882d-62f37e66c140",
+      "3759f7b1-dd79-4cec-b046-710453c978fb",
+      "842a2fe899de4f02d5b676df5956a56b888bc968f3f0d1e4151a1f37c9e7cb15"
+    ]
+  },
+  "sse_verification": {
+    "endpoint": "/api/subscription-stream",
+    "snapshot_suppress_expiry_popup": true,
+    "snapshot_expiry_popup_policy": "never",
+    "logging_tag": "[subscription-stream-decision]"
+  },
+  "logging": {
+    "verify_tag": "[subscription-verify-decision]",
+    "stream_tag": "[subscription-stream-decision]",
+    "observed_on_vps": true
+  },
+  "app_ai_coordination": {
+    "contract": "docs/cross-ai/expiry-popup-never-contract.json",
+    "required_app_change": "Never show Kifurushi kimekwisha when suppress_expiry_popup=true OR expiry_popup_policy=never. Prefer treating policy=never as hard disable even if older builds ignore suppress.",
+    "backend_guarantees": "All verify + SSE inactive/expired/revoked/null payloads now include suppress_expiry_popup=true and expiry_popup_policy=never"
+  },
+  "preserved": [
+    "payments",
+    "manual grants",
+    "restore subscription",
+    "verification access fields",
+    "playback authorization (playbackAllowed still false when inactive)",
+    "channel access gates",
+    "OTA",
+    "updates",
+    "SMS",
+    "webhooks"
+  ],
+  "watch": {
+    "script": "server/scripts/watch-expiry-popup-suppress.mjs",
+    "duration_min": 30,
+    "devices": [
+      "cap67_inactive_probe_xyz",
+      "85970ee4273c6ca8",
+      "16b34680-0c9a-405c-882d-62f37e66c140"
+    ]
+  },
+  "proof": {
+    "inactive_verify_live": {
+      "active": false,
+      "suppress_expiry_popup": true,
+      "expiry_popup_policy": "never",
+      "authoritativeInactive": true
+    },
+    "sse_live": {
+      "suppress_expiry_popup": true,
+      "expiry_popup_policy": "never"
+    }
+  }
+}
