@@ -127,6 +127,9 @@ export function notifyAdminSubscriptionRevoked(deviceId, orderId = 'admin_revoke
     reason: 'admin_revoked',
     inactive_reason: 'admin_revoked',
     suppress_expiry_popup: true,
+    suppressExpiryPopup: true,
+    expiry_popup_policy: 'never',
+    authoritativeInactive: true,
     synced_at: new Date().toISOString(),
   })
 }

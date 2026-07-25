@@ -1,0 +1,72 @@
+{
+  "contract_version": "2026-07-25-expiry-popup-never",
+  "product_decision": "The in-app popup \"Kifurushi kimekwisha\" must NEVER be shown again.",
+  "authoritative_api": "https://api.osmanitv.com",
+  "backend_role": "Always emit suppress_expiry_popup=true on verify + subscription-stream. Access denial remains authoritative via active/playbackAllowed.",
+  "app_role": "Never present Kifurushi kimekwisha for any verify/SSE inactive/expired/revoked/null payload. Trust suppress_expiry_popup / expiry_popup_policy=never. Account renew UI and playback gates may still reflect inactive.",
+  "verify_endpoint": "POST /api/subscription/verify",
+  "status_endpoint": "GET /api/subscription-status",
+  "sse_endpoint": "GET /api/subscription-stream?device_id={device_id}",
+  "fields": {
+    "suppress_expiry_popup": {
+      "type": "boolean",
+      "always": true,
+      "aliases": ["suppressExpiryPopup"]
+    },
+    "expiry_popup_policy": {
+      "type": "string",
+      "always": "never",
+      "aliases": ["expiryPopupPolicy"]
+    },
+    "authoritativeInactive": {
+      "type": "boolean",
+      "meaning": "Access state is authoritative (do not treat as transient DB glitch). Does NOT authorize showing the expiry popup.",
+      "when_true": "active === false"
+    },
+    "active": {
+      "unchanged": true,
+      "note": "Still false when expired/revoked/missing — playback authorization preserved"
+    },
+    "inactive_reason": {
+      "values": ["expired", "admin_revoked", "inactive", "blocked", null],
+      "note": "Informational only; never gate the Kifurushi kimekwisha modal"
+    }
+  },
+  "before": {
+    "suppress_expiry_popup": "true only when admin_revoked; missing on null subscription rows",
+    "app_effect": "Natural expiry / never-subscribed verify responses triggered Kifurushi kimekwisha"
+  },
+  "after": {
+    "suppress_expiry_popup": true,
+    "expiry_popup_policy": "never",
+    "app_effect": "No Kifurushi kimekwisha from backend responses or SSE snapshots"
+  },
+  "do_not_break": [
+    "payments",
+    "manual grants",
+    "restore subscription",
+    "verification",
+    "playback authorization",
+    "channel access",
+    "OTA",
+    "updates",
+    "SMS",
+    "webhooks"
+  ],
+  "logging": {
+    "verify": "[subscription-verify-decision]",
+    "sse": "[subscription-stream-decision]",
+    "fields": [
+      "device_id",
+      "user_id",
+      "subscription_id",
+      "expiry_time",
+      "calculated_status",
+      "response_returned",
+      "sse_events_emitted",
+      "reason_emitted",
+      "suppress_expiry_popup",
+      "authoritativeInactive"
+    ]
+  }
+}

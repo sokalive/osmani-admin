@@ -63,7 +63,9 @@ export function writeSubscriptionWakeSseEvents(res, { grantId = null, reason = '
   }
 }
 
-/** Admin revocation — explicit semantics so App suppresses natural-expiry popup (Kifurushi kimekwisha). */
+/** Admin revocation — App must suppress natural-expiry popup (Kifurushi kimekwisha).
+ * Permanent product policy: suppress_expiry_popup is always true on verify + SSE snapshot too.
+ */
 export function buildAdminRevokedSseBody(extra = {}) {
   return JSON.stringify({
     ok: true,
@@ -71,6 +73,9 @@ export function buildAdminRevokedSseBody(extra = {}) {
     inactive_reason: 'admin_revoked',
     admin_revoked: true,
     suppress_expiry_popup: true,
+    suppressExpiryPopup: true,
+    expiry_popup_policy: 'never',
+    authoritativeInactive: true,
     entitlement_state: 'revoked',
     requires_verify: true,
     server_time_ms: Date.now(),

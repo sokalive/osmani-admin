@@ -185,6 +185,46 @@ function reminderFieldsFromRow(row) {
   }
 }
 
+/**
+ * Product policy (permanent): never show in-app "Kifurushi kimekwisha".
+ * Access denial (active/playback) remains authoritative; only the expiry modal is suppressed.
+ */
+const SUPPRESS_EXPIRY_POPUP_ALWAYS = true
+
+/** Temporary production investigate log — every verify prints popup-safety fields. */
+function logSubscriptionVerifyDecision(method, path, deviceId, bodyOut, extra = {}) {
+  console.log('[subscription-verify-decision]', {
+    method,
+    path,
+    device_id: shortRef(deviceId),
+    user_id: bodyOut?.user_id != null ? shortRef(String(bodyOut.user_id)) : null,
+    subscription_id:
+      bodyOut?.subscription_id != null
+        ? shortRef(String(bodyOut.subscription_id))
+        : bodyOut?.transaction_id != null
+          ? shortRef(String(bodyOut.transaction_id))
+          : null,
+    expiry_time: bodyOut?.expiresAt ?? bodyOut?.expires_at ?? null,
+    calculated_status: bodyOut?.status ?? null,
+    active: bodyOut?.active === true,
+    inactive_reason: bodyOut?.inactive_reason ?? null,
+    authoritativeInactive: bodyOut?.authoritativeInactive === true,
+    suppress_expiry_popup: bodyOut?.suppress_expiry_popup === true,
+    expiry_popup_policy: bodyOut?.expiry_popup_policy ?? null,
+    entitlement_state: bodyOut?.entitlement_state ?? null,
+    playbackAllowed: bodyOut?.playbackAllowed === true,
+    playbackGateReason: bodyOut?.playbackGateReason ?? null,
+    response_returned: {
+      active: bodyOut?.active === true,
+      status: bodyOut?.status ?? null,
+      suppress_expiry_popup: bodyOut?.suppress_expiry_popup === true,
+      authoritativeInactive: bodyOut?.authoritativeInactive === true,
+    },
+    sse_events_emitted: extra.sse_events_emitted ?? [],
+    reason_emitted: extra.reason_emitted ?? null,
+  })
+}
+
 function rowToPublicStatus(row) {
   if (!row) {
     return {
@@ -195,6 +235,19 @@ function rowToPublicStatus(row) {
       expires_at: null,
       blocked: false,
       blockReason: null,
+      inactive_reason: 'inactive',
+      inactiveReason: 'inactive',
+      admin_revoked: false,
+      adminRevoked: false,
+      /** Always true — never trigger Kifurushi kimekwisha popup. */
+      suppress_expiry_popup: SUPPRESS_EXPIRY_POPUP_ALWAYS,
+      suppressExpiryPopup: SUPPRESS_EXPIRY_POPUP_ALWAYS,
+      expiry_popup_policy: 'never',
+      expiryPopupPolicy: 'never',
+      /** Access state is authoritative; popup must still be suppressed. */
+      authoritativeInactive: true,
+      entitlement_state: 'inactive',
+      entitlementState: 'inactive',
       ...reminderFieldsFromRow(null),
     }
   }
@@ -242,8 +295,12 @@ function rowToPublicStatus(row) {
     inactiveReason,
     admin_revoked: isAdminRevoked,
     adminRevoked: isAdminRevoked,
-    suppress_expiry_popup: isAdminRevoked,
-    suppressExpiryPopup: isAdminRevoked,
+    /** Permanent product policy: never show Kifurushi kimekwisha (incl. natural expiry). */
+    suppress_expiry_popup: SUPPRESS_EXPIRY_POPUP_ALWAYS,
+    suppressExpiryPopup: SUPPRESS_EXPIRY_POPUP_ALWAYS,
+    expiry_popup_policy: 'never',
+    expiryPopupPolicy: 'never',
+    authoritativeInactive: !active,
     entitlement_state: isAdminRevoked ? 'revoked' : active ? 'active' : 'inactive',
     entitlementState: isAdminRevoked ? 'revoked' : active ? 'active' : 'inactive',
     admin_revoked_at:
@@ -1117,15 +1174,9 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
       accountId: migration.accountId,
     })
 
-    console.log('[subscription-verify] response', {
-      method: 'GET',
-      deviceId: shortRef(deviceId),
-      active: bodyOut.active === true,
-      isActive: bodyOut.isActive === true,
-      playbackAllowed: bodyOut.playbackAllowed === true,
-      playbackGateReason: bodyOut.playbackGateReason ?? null,
-      status: bodyOut.status,
-      expiresAt: bodyOut.expiresAt ? shortRef(bodyOut.expiresAt, 28) : null,
+    logSubscriptionVerifyDecision('GET', '/subscription-status', deviceId, bodyOut, {
+      sse_events_emitted: [],
+      reason_emitted: bodyOut.inactive_reason ?? null,
     })
 
     res.json(bodyOut)
@@ -1187,15 +1238,9 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
       accountId: migration.accountId,
     })
 
-    console.log('[subscription-verify] response', {
-      method: 'POST',
-      deviceId: shortRef(deviceId),
-      active: bodyOut.active === true,
-      isActive: bodyOut.isActive === true,
-      playbackAllowed: bodyOut.playbackAllowed === true,
-      playbackGateReason: bodyOut.playbackGateReason ?? null,
-      status: bodyOut.status,
-      expiresAt: bodyOut.expiresAt ? shortRef(bodyOut.expiresAt, 28) : null,
+    logSubscriptionVerifyDecision('POST', '/subscription/verify', deviceId, bodyOut, {
+      sse_events_emitted: [],
+      reason_emitted: bodyOut.inactive_reason ?? null,
     })
 
     res.json(bodyOut)
@@ -1268,6 +1313,9 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       adminRevoked: pub.adminRevoked === true,
       suppress_expiry_popup: pub.suppress_expiry_popup === true,
       suppressExpiryPopup: pub.suppressExpiryPopup === true,
+      expiry_popup_policy: pub.expiry_popup_policy ?? 'never',
+      expiryPopupPolicy: pub.expiryPopupPolicy ?? 'never',
+      authoritativeInactive: pub.authoritativeInactive === true,
       entitlement_state: pub.entitlement_state ?? null,
       entitlementState: pub.entitlementState ?? null,
     }
@@ -1279,6 +1327,17 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
         const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
         const payload = toSsePayload(row)
+        console.log('[subscription-stream-decision]', {
+          device_id: shortRef(deviceId),
+          event: 'snapshot',
+          expiry_time: payload.expiresAt,
+          calculated_status: payload.status,
+          active: payload.active === true,
+          suppress_expiry_popup: payload.suppress_expiry_popup === true,
+          authoritativeInactive: payload.authoritativeInactive === true,
+          reason_emitted: payload.inactive_reason,
+          sse_events_emitted: ['snapshot'],
+        })
         res.write(`event: snapshot\ndata: ${JSON.stringify(payload)}\n\n`)
       } catch (e) {
         // Never push inactive/revoked-shaped SSE on DB errors — client will keep last verify state.
@@ -1461,21 +1520,36 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       invalidateSubscriptionAccessCache(deviceId)
       const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
       const row = await billing.getDeviceSubscriptionAccessState(deviceId, fp)
-      const sseBody = JSON.stringify(toSsePayload(row))
+      const ssePayload = toSsePayload(row)
+      const sseBody = JSON.stringify(ssePayload)
       res.write(`event: device_subscription\ndata: ${sseBody}\n\n`)
       const isAdminRevoke =
         payload?.adminRevoked === true ||
         payload?.reason === 'admin_revoked' ||
         String(row?.status ?? '').toLowerCase() === 'revoked' ||
         row?.admin_revoked_at != null
+      const sseEvents = ['device_subscription']
       if (isAdminRevoke) {
         writeAdminRevokedSseEvents(res, { device_id: deviceId })
+        sseEvents.push('subscription_revoked', 'subscription_wake', 'device_subscription_updated')
       } else {
         writeSubscriptionWakeSseEvents(res, {
           reason: payload?.reason ?? 'device_subscription',
           grantId: null,
         })
+        sseEvents.push('subscription_wake', 'device_subscription_updated')
       }
+      console.log('[subscription-stream-decision]', {
+        device_id: shortRef(deviceId),
+        event: 'device_subscription',
+        expiry_time: ssePayload.expiresAt,
+        calculated_status: ssePayload.status,
+        active: ssePayload.active === true,
+        suppress_expiry_popup: ssePayload.suppress_expiry_popup === true,
+        authoritativeInactive: ssePayload.authoritativeInactive === true,
+        reason_emitted: payload?.reason ?? ssePayload.inactive_reason,
+        sse_events_emitted: sseEvents,
+      })
       flushSseResponse(res)
     } catch (e) {
       // Skip SSE push on read failure — avoids defaulting clients to revoked/inactive.

@@ -23,6 +23,11 @@ assert('admin user lookup lib', read('src/lib/adminUserLookup.js').includes('loo
 assert('admin revoked SSE contract', read('src/lib/manualSubscriptionSseContract.js').includes('writeAdminRevokedSseEvents'))
 assert('subscription revoked handler', read('src/routes/subscription.js').includes('subscriptionRevokedSyncHandler'))
 assert('rowToPublicStatus admin_revoked', read('src/routes/subscription.js').includes("inactive_reason: inactiveReason"))
+assert(
+  'expiry popup permanently suppressed',
+  read('src/routes/subscription.js').includes('SUPPRESS_EXPIRY_POPUP_ALWAYS = true') &&
+    read('src/routes/subscription.js').includes("expiry_popup_policy: 'never'"),
+)
 assert('channel patch in catalog', read('src/lib/channelCatalogSync.js').includes('channelPatch'))
 assert('search revision in UI', read('../src/pages/UsersPage.jsx').includes('searchRevision'))
 assert('getUsersLookup api', read('../src/lib/api.js').includes('getUsersLookup'))
