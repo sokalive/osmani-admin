@@ -414,7 +414,10 @@ export async function handleWebhook(req, res, deps) {
 
     kickSonicpesaInboxWorker()
 
-    if (process.env.SONICPESA_WEBHOOK_SYNC_PROCESS === '1') {
+    // Always process success webhooks synchronously so activation is near-instant.
+    // Worker remains the retry/fallback path. Env SONICPESA_WEBHOOK_SYNC_PROCESS=0 disables.
+    const syncProcess = process.env.SONICPESA_WEBHOOK_SYNC_PROCESS !== '0'
+    if (syncProcess) {
       const processResult = await processSonicpesaInboxRow(
         inboxRow ?? { id: inserted.id, payload: body, signature_verified: signatureOk, attempt_count: 0 },
       )

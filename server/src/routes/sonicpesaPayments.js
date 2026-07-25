@@ -65,6 +65,18 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       return res.status(503).json({ error: 'SonicPesa is disabled or not configured in admin' })
     }
     const {
+      assertNoActiveSubscriptionForPayment,
+      activeSubscriptionExistsHttpBody,
+    } = await import('../lib/activeSubscriptionPaymentGate.js')
+    const activeGate = await assertNoActiveSubscriptionForPayment(deviceId)
+    if (!activeGate.ok) {
+      console.warn('[sonicpesa] create-order blocked — ACTIVE_SUBSCRIPTION_EXISTS', {
+        deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+        expiresAt: activeGate.expiresAt,
+      })
+      return res.status(409).json(activeSubscriptionExistsHttpBody(activeGate))
+    }
+    const {
       assertPhoneSubscriptionPaymentAllowed,
       phoneSubscriptionConflictHttpBody,
     } = await import('../lib/phoneSubscriptionGuard.js')
@@ -76,6 +88,7 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
           phoneGate.ownerDeviceId && phoneGate.ownerDeviceId.length > 24
             ? `${phoneGate.ownerDeviceId.slice(0, 22)}…`
             : phoneGate.ownerDeviceId,
+        code: phoneGate.code || phoneGate.reason,
       })
       return res.status(409).json(phoneSubscriptionConflictHttpBody(phoneGate))
     }

@@ -136,6 +136,19 @@ paymentsRouter.post('/create-payment', async (req, res) => {
     }
 
     const {
+      assertNoActiveSubscriptionForPayment,
+      activeSubscriptionExistsHttpBody,
+    } = await import('../lib/activeSubscriptionPaymentGate.js')
+    const activeGate = await assertNoActiveSubscriptionForPayment(deviceId)
+    if (!activeGate.ok) {
+      console.warn('[create-payment] blocked — ACTIVE_SUBSCRIPTION_EXISTS', {
+        deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
+        expiresAt: activeGate.expiresAt,
+      })
+      return res.status(409).json(activeSubscriptionExistsHttpBody(activeGate))
+    }
+
+    const {
       assertPhoneSubscriptionPaymentAllowed,
       phoneSubscriptionConflictHttpBody,
     } = await import('../lib/phoneSubscriptionGuard.js')
@@ -147,6 +160,7 @@ paymentsRouter.post('/create-payment', async (req, res) => {
           phoneGate.ownerDeviceId && phoneGate.ownerDeviceId.length > 24
             ? `${phoneGate.ownerDeviceId.slice(0, 22)}…`
             : phoneGate.ownerDeviceId,
+        code: phoneGate.code || phoneGate.reason,
       })
       return res.status(409).json(phoneSubscriptionConflictHttpBody(phoneGate))
     }

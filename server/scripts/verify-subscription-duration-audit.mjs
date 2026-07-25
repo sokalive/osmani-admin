@@ -21,22 +21,24 @@ function pass(k, m) {
   console.log(`PASS [${k}]`, m)
 }
 
-// Local stacking math (1d, 2d, 3d, 7d, 30d, 365d)
+// Local midnight-EAT expiry math (stacking disabled)
 const durations = [1, 2, 3, 7, 30, 365]
-const t0 = Date.UTC(2026, 6, 1, 12, 0, 0)
+const t0 = Date.UTC(2026, 6, 25, 8, 0, 0) // 25 Jul 08:00 UTC
 for (const d of durations) {
   const r = computeStackedExpiryIso(null, d, t0)
-  const expected = new Date(t0 + d * 86400000).toISOString()
-  if (r.expiresAt !== expected) {
-    fail(`stack-${d}d`, `got ${r.expiresAt} expected ${expected}`)
+  if (r.stacked !== false || r.expiry_policy !== 'midnight_africa_dar_es_salaam') {
+    fail(`expiry-${d}d`, `policy ${r.expiry_policy} stacked=${r.stacked}`)
   } else {
-    pass(`stack-${d}d`, r.expiresAt)
+    pass(`expiry-${d}d`, r.expiresAt)
   }
 }
-const renew = computeStackedExpiryIso(new Date(t0 + 2 * 86400000).toISOString(), 7, t0 + 86400000)
-const renewExpected = new Date(t0 + 9 * 86400000).toISOString()
-if (renew.expiresAt === renewExpected) pass('stack-renewal', renew.expiresAt)
-else fail('stack-renewal', `${renew.expiresAt} != ${renewExpected}`)
+const activePrev = new Date(t0 + 2 * 86400000).toISOString()
+const preserve = computeStackedExpiryIso(activePrev, 7, t0)
+if (preserve.expiresAt === activePrev && preserve.stacked === false) {
+  pass('preserve-active', preserve.expiresAt)
+} else {
+  fail('preserve-active', `${preserve.expiresAt} != ${activePrev}`)
+}
 
 async function jfetch(base, path) {
   const res = await fetch(`${base}${path}`, {

@@ -1,6 +1,8 @@
 /**
  * Payment-bound entitlement: each device activates from its own trusted order record.
+ * Phone is payment/contact metadata only — never the primary identity.
  * Same phone on different devices may each hold independent active subscriptions.
+ * Active devices cannot purchase again (ACTIVE_SUBSCRIPTION_EXISTS) — stacking removed.
  * Explicit transfer flows (moved:* / device_transfers) remain separate.
  */
 import {
@@ -10,6 +12,7 @@ import {
   updateTransactionByOrderId,
 } from '../billingStore.js'
 import { getPool } from '../db/pool.js'
+import { computeRemainingCalendarDaysEat } from './subscriptionStacking.js'
 
 export const PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION = 'PHONE_ALREADY_HAS_ACTIVE_SUBSCRIPTION'
 
@@ -66,9 +69,7 @@ function phoneDevicesCteSql() {
 
 function computeRemainingDays(expiresAt) {
   if (!expiresAt) return 0
-  const exp = expiresAt instanceof Date ? expiresAt : new Date(String(expiresAt))
-  if (Number.isNaN(exp.getTime())) return 0
-  return Math.max(0, Math.ceil((exp.getTime() - Date.now()) / 86400000))
+  return computeRemainingCalendarDaysEat(expiresAt)
 }
 
 async function loadOwnerPackageDetails(deviceId) {
@@ -191,6 +192,7 @@ export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInp
      LIMIT 1`,
     [paying],
   )
+  // Stacking permanently removed — active device must not create another payment order.
   if (payingSubRows[0]) {
     const own = {
       device_id: String(payingSubRows[0].device_id ?? paying),
@@ -202,23 +204,49 @@ export async function assessPhoneSubscriptionActivation(payingDeviceId, phoneInp
     const merged = activeDevices.some((d) => d.device_id === paying)
       ? activeDevices
       : [own, ...activeDevices]
+    const expiresIso =
+      own.expires_at instanceof Date
+        ? own.expires_at.toISOString()
+        : own.expires_at
+          ? String(own.expires_at)
+          : null
     return {
-      allowed: true,
-      reason: 'same_device_renewal',
+      allowed: false,
+      reason: 'ACTIVE_SUBSCRIPTION_EXISTS',
+      code: 'ACTIVE_SUBSCRIPTION_EXISTS',
       ownerDeviceId: paying,
+      existing_device_id: paying,
+      existing_expiry: expiresIso,
+      remaining_days: computeRemainingDays(own.expires_at),
       activeDevices: merged,
-      message: null,
+      message:
+        'This device already has an active subscription. Wait until it expires before purchasing again.',
+      message_sw:
+        'Kifaa hiki tayari kina kifurushi kinachoendelea. Subiri kiishe kabla ya kununua tena.',
     }
   }
 
   const payingActive = activeDevices.find((d) => d.device_id === paying)
   if (payingActive) {
+    const expiresIso =
+      payingActive.expires_at instanceof Date
+        ? payingActive.expires_at.toISOString()
+        : payingActive.expires_at
+          ? String(payingActive.expires_at)
+          : null
     return {
-      allowed: true,
-      reason: 'same_device_renewal',
+      allowed: false,
+      reason: 'ACTIVE_SUBSCRIPTION_EXISTS',
+      code: 'ACTIVE_SUBSCRIPTION_EXISTS',
       ownerDeviceId: paying,
+      existing_device_id: paying,
+      existing_expiry: expiresIso,
+      remaining_days: computeRemainingDays(payingActive.expires_at),
       activeDevices,
-      message: null,
+      message:
+        'This device already has an active subscription. Wait until it expires before purchasing again.',
+      message_sw:
+        'Kifaa hiki tayari kina kifurushi kinachoendelea. Subiri kiishe kabla ya kununua tena.',
     }
   }
 
@@ -249,6 +277,28 @@ export async function assertPhoneSubscriptionPaymentAllowed(payingDeviceId, phon
 }
 
 export function phoneSubscriptionConflictHttpBody(assessment) {
+  if (
+    assessment.code === 'ACTIVE_SUBSCRIPTION_EXISTS' ||
+    assessment.reason === 'ACTIVE_SUBSCRIPTION_EXISTS'
+  ) {
+    return {
+      success: false,
+      ok: false,
+      code: 'ACTIVE_SUBSCRIPTION_EXISTS',
+      error: 'ACTIVE_SUBSCRIPTION_EXISTS',
+      message:
+        assessment.message ||
+        'This device already has an active subscription. Wait until it expires before purchasing again.',
+      message_sw:
+        assessment.message_sw ||
+        'Kifaa hiki tayari kina kifurushi kinachoendelea. Subiri kiishe kabla ya kununua tena.',
+      device_id: assessment.existing_device_id ?? assessment.ownerDeviceId ?? null,
+      expires_at: assessment.existing_expiry ?? null,
+      remaining_days: assessment.remaining_days ?? computeRemainingDays(assessment.existing_expiry),
+      reason: 'active_subscription_exists',
+      ownerDeviceId: assessment.existing_device_id ?? assessment.ownerDeviceId ?? null,
+    }
+  }
   const existingDeviceId = assessment.existing_device_id ?? assessment.ownerDeviceId ?? null
   const existingExpiry = assessment.existing_expiry ?? null
   const remainingDays =

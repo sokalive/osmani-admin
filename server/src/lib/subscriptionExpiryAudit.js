@@ -401,7 +401,7 @@ export async function runSubscriptionExpiryAudit(opts = {}) {
 
   return {
     audited_at: new Date().toISOString(),
-    extension_policy: 'stack_on_active',
+    extension_policy: 'no_stack_midnight_eat',
     extension_policy_detail:
       'Renewals add package duration_days onto remaining active time. plan_duration_days in verify is the last package length; remaining_days is total entitlement.',
     plans: plans.map((p) => ({

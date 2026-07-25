@@ -25,6 +25,11 @@ assert(
   guardSrc.includes('Payment-bound entitlement') && guardSrc.includes('independent_device_payment'),
 )
 assert(
+  'active device blocked from repurchase',
+  guardSrc.includes("reason: 'ACTIVE_SUBSCRIPTION_EXISTS'") ||
+    guardSrc.includes("code: 'ACTIVE_SUBSCRIPTION_EXISTS'"),
+)
+assert(
   'assess allows independent_device_payment',
   guardSrc.includes("reason: 'independent_device_payment'") && !guardSrc.includes('return buildConflictAssessment'),
 )
@@ -41,14 +46,22 @@ assert(
   activationSrc.includes('txn.device_id') && activationSrc.includes('upsertDeviceSubscriptionActive'),
 )
 
-// --- Stacking semantics unchanged ---
+// --- Midnight EAT expiry (stacking permanently disabled) ---
 {
-  const now = Date.UTC(2026, 4, 24, 12, 0, 0)
-  const MS_DAY = 86400000
-  const prev = new Date(now + MS_DAY).toISOString()
-  const out = computeStackedExpiryIso(prev, 7, now)
-  const days = (new Date(out.expiresAt).getTime() - now) / MS_DAY
-  assert('same-device stack 1d+7d', out.stacked === true && Math.abs(days - 8) < 0.01, String(days))
+  const now = Date.UTC(2026, 6, 25, 8, 0, 0)
+  const out = computeStackedExpiryIso(null, 7, now)
+  assert(
+    'new purchase midnight EAT',
+    out.stacked === false && out.expiry_policy === 'midnight_africa_dar_es_salaam',
+    out.expiresAt,
+  )
+  const prev = new Date(now + 86400000).toISOString()
+  const preserve = computeStackedExpiryIso(prev, 7, now)
+  assert(
+    'active expiry preserved (no stack)',
+    preserve.stacked === false && preserve.expiresAt === prev,
+    preserve.expiry_policy,
+  )
 }
 
 async function runDbTests() {
@@ -118,15 +131,26 @@ async function runDbTests() {
     assert('device A still active', subA2?.status === 'active' && new Date(subA2.expires_at).getTime() > Date.now())
     assert('device B active', subB?.status === 'active' && new Date(subB.expires_at).getTime() > Date.now())
 
-    // Same device new order stacking (Order C on A)
+    // Same device new completed order while active — must NOT shorten; stacking disabled
     const expBefore = subA2.expires_at
     const txnC = await insertCompleted(orderC, deviceA)
     const actC = await activateFromCompletedTxn(txnC, { source: 'admin_recovery' })
-    assert('device A stack activated', actC.activated === true)
+    assert('device A second order applied or preserved', actC.activated === true || actC.skipped === true)
     const subA3 = await billing.getDeviceSubscriptionByDeviceId(deviceA)
     assert(
-      'device A expiry extended',
-      new Date(subA3.expires_at).getTime() >= new Date(expBefore).getTime(),
+      'device A expiry not shortened',
+      new Date(subA3.expires_at).getTime() >= new Date(expBefore).getTime() - 1000,
+      `${subA3.expires_at} vs ${expBefore}`,
+    )
+
+    // Active device must be blocked from new payment assessment
+    const probeActiveA = await assessPhoneSubscriptionActivation(deviceA, phone)
+    assert(
+      'active device payment blocked',
+      probeActiveA.allowed === false &&
+        (probeActiveA.code === 'ACTIVE_SUBSCRIPTION_EXISTS' ||
+          probeActiveA.reason === 'ACTIVE_SUBSCRIPTION_EXISTS'),
+      probeActiveA.reason,
     )
 
     // Duplicate callback ×10 on Order A

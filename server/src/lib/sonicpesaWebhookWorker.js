@@ -18,7 +18,7 @@ import { sonicExplicitFailure, sonicPaymentSucceeded, webhookOrderIdCandidates, 
 import { notifySubscriptionActivatedFromAct } from './subscriptionActivationNotify.js'
 import { liveSyncBus } from './liveSyncBus.js'
 
-const WORKER_INTERVAL_MS = Math.max(5_000, Number(process.env.SONICPESA_INBOX_WORKER_MS) || 15_000)
+const WORKER_INTERVAL_MS = Math.max(2_000, Number(process.env.SONICPESA_INBOX_WORKER_MS) || 5_000)
 const WORKER_BATCH = Math.min(40, Math.max(5, Number(process.env.SONICPESA_INBOX_WORKER_BATCH) || 20))
 const ROW_CONCURRENCY = Math.min(8, Math.max(1, Number(process.env.SONICPESA_INBOX_ROW_CONCURRENCY) || 4))
 let workerTimer = null

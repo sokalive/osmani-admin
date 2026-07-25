@@ -572,8 +572,8 @@ export async function isDeviceLinkedToPaymentPhone(deviceId, phoneInput) {
 /** --- Subscriptions --- */
 
 /**
- * Voucher-style expiry: expires_at = anchor + (duration_days × 24 hours), using PostgreSQL `now()`.
- * Anchor = current expires_at while still active (stack renewals), else `now()` (new purchase / lapsed).
+ * New purchases: expires_at = (purchase calendar day in Africa/Dar_es_Salaam + duration_days) at 00:00 EAT.
+ * Stacking is permanently disabled. Existing active expiries are never shortened.
  */
 function dbQuery(client) {
   return client && typeof client.query === 'function'
@@ -602,19 +602,12 @@ export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, dur
 }
 
 /**
- * Exact-duration expiry from **now** (no stacking — legacy helper).
+ * New-subscription expiry at 00:00 Africa/Dar_es_Salaam after durationDays.
  * Prefer {@link computeDeviceSubscriptionExpiryAfterPurchase} for device activation.
  */
 export async function subscriptionExpiresAtEndOfDay(durationDays) {
-  const pool = requirePool()
-  const days = Math.max(1, Number(durationDays) || 30)
-  const { rows } = await pool.query(
-    `SELECT (now() + ($1::bigint * interval '24 hours'))::timestamptz AS expires_at`,
-    [days],
-  )
-  const exp = rows[0]?.expires_at
-  if (!exp) throw new Error('subscriptionExpiresAtEndOfDay: no result')
-  return exp instanceof Date ? exp.toISOString() : String(exp)
+  const { computeMidnightEatExpiryIso } = await import('./lib/subscriptionStacking.js')
+  return computeMidnightEatExpiryIso(durationDays)
 }
 
 export async function upsertSubscriptionAfterPayment(phone, planId, expiresAt) {
@@ -688,7 +681,13 @@ export async function getDeviceSubscriptionAccessStateFast(deviceId) {
        END AS remaining_hours,
        CASE
          WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
-         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
+         THEN GREATEST(
+           0,
+           (
+             (ds.expires_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+             - (now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+           )
+         )::int
          ELSE 0
        END AS remaining_days,
        (
@@ -738,7 +737,13 @@ export async function getVerifyAccessSnapshot(deviceId) {
        END AS remaining_hours,
        CASE
          WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
-         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
+         THEN GREATEST(
+           0,
+           (
+             (ds.expires_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+             - (now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+           )
+         )::int
          ELSE 0
        END AS remaining_days,
        (
@@ -870,7 +875,13 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
        END AS remaining_hours,
        CASE
          WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
-         THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
+         THEN GREATEST(
+           0,
+           (
+             (ds.expires_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+             - (now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+           )
+         )::int
          ELSE 0
        END AS remaining_days,
        (
@@ -924,7 +935,13 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
          END AS remaining_hours,
          CASE
            WHEN ds.status = 'active' AND ds.expires_at IS NOT NULL AND ds.expires_at > now()
-           THEN GREATEST(0, FLOOR((EXTRACT(EPOCH FROM (ds.expires_at - now()))) / 86400.0)::int)
+           THEN GREATEST(
+             0,
+             (
+               (ds.expires_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+               - (now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date
+             )
+           )::int
            ELSE 0
          END AS remaining_days,
          (
