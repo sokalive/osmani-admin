@@ -135,14 +135,25 @@ console.log('BUNNY_CDN_BASE_URL', e.BUNNY_CDN_BASE_URL || '(unset)');
 
 echo "==> Admin SPA build (same-origin /api)"
 cd "$ROOT"
-npm ci
+npm_ci_with_retry() {
+  local dir="$1"
+  (
+    cd "$dir"
+    if npm ci; then
+      return 0
+    fi
+    echo "WARN: npm ci failed in $dir — removing node_modules and retrying once"
+    rm -rf node_modules
+    npm ci
+  )
+}
+npm_ci_with_retry "$ROOT"
 VITE_API_BASE_URL= npm run build
 mkdir -p "$DIST_DIR"
 rsync -a --delete dist/ "$DIST_DIR/" 2>/dev/null || cp -a dist/. "$DIST_DIR/"
 
 echo "==> API dependencies"
-cd "$API_DIR"
-npm ci
+npm_ci_with_retry "$API_DIR"
 
 echo "==> Startup smoke test"
 node -e "import('./src/loadEnv.js').then((m)=>{const ok=m.isDatabaseUrlConfigured?.()??Boolean(process.env.DATABASE_URL); if(!ok){console.error('DATABASE_URL missing after loadEnv'); process.exit(1);} console.log('loadEnv ok', m.getLoadedEnvPaths(), 'db', ok, 'bunny', process.env.BUNNY_CDN_BASE_URL);}).catch((e)=>{console.error(e); process.exit(1);})"
