@@ -6,9 +6,10 @@
   "vps_repo": "/var/www/osmani-admin-api",
   "commits": {
     "fix_commit": "d43ba1bfe17599ce996e8ae6d4faaeb263508044",
-    "deploy_tooling_commit": "26a6cef22be15cbfef5ed45b961217f655cc2639",
-    "probe_commit": "abb94e5e47590699456712f4961baa136d0b4305",
-    "deployed_runtime_at_report": "abb94e5 (after Contabo Reload API) or 26a6cef (first successful API reload)"
+    "first_api_reload": "26a6cef22be15cbfef5ed45b961217f655cc2639",
+    "deployed_runtime": "abb94e5e47590699456712f4961baa136d0b4305",
+    "repo_head_at_report": "56bd933",
+    "vps_disk_at_probe": "abb94e5e47590699456712f4961baa136d0b4305"
   },
   "root_cause": {
     "summary": "POST/GET subscription verify and SSE snapshot only set suppress_expiry_popup=true for admin_revoked. Natural inactive/expired/null-subscription responses omitted the flag or set it false, so the App treated inactive as natural expiry and showed \"Kifurushi kimekwisha\".",
@@ -100,12 +101,22 @@
   ],
   "watch": {
     "script": "server/scripts/watch-expiry-popup-suppress.mjs",
-    "duration_min": 30,
+    "started_at": "2026-07-25T12:05:09.627Z",
+    "ended_at": "2026-07-25T12:34:43.176Z",
+    "duration_min": 29.56,
+    "rounds": 28,
+    "failure_count": 0,
+    "popup_free": true,
     "devices": [
       "cap67_inactive_probe_xyz",
       "85970ee4273c6ca8",
       "16b34680-0c9a-405c-882d-62f37e66c140"
-    ]
+    ],
+    "proof": "Every verify + SSE snapshot for ~30 minutes returned suppress_expiry_popup=true and expiry_popup_policy=never"
+  },
+  "app_ai_status": {
+    "backend_popup_free_30m": true,
+    "app_confirmation_required": "App AI must confirm client never shows Kifurushi kimekwisha when suppress_expiry_popup/expiry_popup_policy=never (OTA may still be required for old clients that ignore the flag)"
   },
   "proof": {
     "inactive_verify_live": {
@@ -117,6 +128,7 @@
     "sse_live": {
       "suppress_expiry_popup": true,
       "expiry_popup_policy": "never"
-    }
+    },
+    "watch_30m_popup_free": true
   }
 }
