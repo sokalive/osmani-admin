@@ -1,0 +1,22 @@
+name: Contabo Probe Popup Fix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe PM2 and logs
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            cd /var/www/osmani-admin-api
+            git fetch origin main >/dev/null
+            git reset --hard origin/main >/dev/null
+            bash deploy/contabo/probe-popup-fix-status.sh
