@@ -173,11 +173,21 @@ sonicpesaPaymentsRouter.get('/status/:orderId', async (req, res) => {
     }
     const deviceId = String(txn.device_id ?? '').trim()
     let subscriptionActive = false
-    if (deviceId && txn.status === 'completed') {
+    if (deviceId) {
+      // Always try finalize — covers webhook/poll races where txn is already completed.
+      if (txn.status === 'completed' || txn.status === 'pending') {
+        try {
+          await billing.tryFinalizeActivationForDevice(deviceId)
+        } catch (e) {
+          console.warn('[sonicpesa/status] finalize failed:', e?.message || e)
+        }
+      }
+      invalidateSubscriptionAccessCache(deviceId)
       const sub = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
+      const isActiveNow = sub?.active_now === true || sub?.active === true
       subscriptionActive =
-        sub?.active === true && String(sub.transaction_id ?? '') === String(txn.order_id)
-      if (rec.activation?.activated || rec.activation?.entitlement_active) {
+        isActiveNow === true && String(sub?.transaction_id ?? '') === String(txn.order_id)
+      if (rec.activation?.activated || rec.activation?.entitlement_active || subscriptionActive) {
         invalidateSubscriptionAccessCache(deviceId)
       }
     }
@@ -186,8 +196,14 @@ sonicpesaPaymentsRouter.get('/status/:orderId', async (req, res) => {
       activation: rec.activation,
       subscriptionActive,
     })
-    const st =
-      txn.status === 'completed' ? 'SUCCESS' : txn.status === 'failed' ? 'FAILED' : 'PENDING'
+    // Prefer entitlement truth for App unlock UX even if provider poll is lagging.
+    const st = subscriptionActive
+      ? 'SUCCESS'
+      : txn.status === 'completed'
+        ? 'SUCCESS'
+        : txn.status === 'failed'
+          ? 'FAILED'
+          : 'PENDING'
     res.setHeader('Cache-Control', 'no-store, private')
     res.json({
       ok: true,
@@ -219,11 +235,20 @@ sonicpesaPaymentsRouter.get('/verify/:orderId', async (req, res) => {
     const sp = await verifyPayment(cred, verifyId)
     const deviceId = String(txn.device_id ?? '').trim()
     let subscriptionActive = false
-    if (deviceId && txn.status === 'completed') {
+    if (deviceId) {
+      if (txn.status === 'completed' || txn.status === 'pending') {
+        try {
+          await billing.tryFinalizeActivationForDevice(deviceId)
+        } catch (e) {
+          console.warn('[sonicpesa/verify] finalize failed:', e?.message || e)
+        }
+      }
+      invalidateSubscriptionAccessCache(deviceId)
       const sub = await billing.getDeviceSubscriptionAccessStateFast(deviceId)
+      const isActiveNow = sub?.active_now === true || sub?.active === true
       subscriptionActive =
-        sub?.active === true && String(sub.transaction_id ?? '') === String(txn.order_id)
-      if (rec.activation?.activated || rec.activation?.entitlement_active) {
+        isActiveNow === true && String(sub?.transaction_id ?? '') === String(txn.order_id)
+      if (rec.activation?.activated || rec.activation?.entitlement_active || subscriptionActive) {
         invalidateSubscriptionAccessCache(deviceId)
       }
     }
