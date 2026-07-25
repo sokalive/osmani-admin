@@ -1,0 +1,97 @@
+{
+  "title": "Subscription & payment engine production final report",
+  "generated_at": "2026-07-25T21:25:00Z",
+  "authoritative_api": "https://api.osmanitv.com",
+  "git_commit": "e14fa0ae95f15a4aeb938103d3356877fdfe0197",
+  "vps_deployed_commit": "e14fa0ae95f15a4aeb938103d3356877fdfe0197",
+  "app_ai_handoff": {
+    "status": "READY_FOR_APP_FINAL_VERIFICATION_AND_OTA",
+    "message": "Production is fully deployed. Backend is stable. No existing customer expiries were rewritten. Subscription, payment, and activation engines verified. App AI may now perform final production verification, push GitHub, and publish the OTA.",
+    "contracts": [
+      "docs/cross-ai/expiry-popup-never-contract.json",
+      "ACTIVE_SUBSCRIPTION_EXISTS on create-order (409)",
+      "expiry_policy=midnight_africa_dar_es_salaam for NEW subscriptions only",
+      "subscription_extension_policy=no_stack_midnight_eat",
+      "remaining_days = EAT calendar days until expires_at (display-only)"
+    ]
+  },
+  "issues": {
+    "1_active_repurchase": {
+      "root_cause": "create-order allowed same_device_renewal which stacked expiries",
+      "fix": "Reject with ACTIVE_SUBSCRIPTION_EXISTS on SonicPesa/AuraxPay/create-payment before any txn insert",
+      "proof": "Live 409 for active device 85970ee4273c6ca8 and live_act_ms0vf691_jqcgt0"
+    },
+    "2_remaining_days": {
+      "root_cause": "Historical stacking made expires_at far beyond plan duration; FLOOR(epoch/86400) correctly reflected stacked expiry (e.g. Wiki1 remaining_days=107). Display now uses Africa/Dar_es_Salaam calendar-day difference.",
+      "fix": "SQL remaining_days uses EAT date difference; no expires_at rows rewritten",
+      "proof": "New 3-day tex purchase returned remaining_days=3 matching plan_duration_days=3"
+    },
+    "3_midnight_eat": {
+      "root_cause": "Old math was now + N*24h with stacking",
+      "fix": "New purchases expire at 00:00 Africa/Dar_es_Salaam on purchase_EAT_date + duration_days; existing active expiries preserved",
+      "proof": "Live order osm_sp_1785014294190_aea6c0abd9 expiresAt=2026-07-28T21:00:00.000Z (29 Jul 00:00 EAT) remaining_days=3"
+    },
+    "4_activation_latency": {
+      "root_cause": "Webhook sync optional; status endpoint checked sub.active instead of active_now so App kept waiting after unlock",
+      "fix": "Webhook sync-process default on; faster boost polls; status/verify finalize + active_now entitlement truth",
+      "proof": "Live activation unlocked verify+SSE; post-fix status returns SUCCESS/ACTIVE/entitlement_active=true. Wall-clock ~20s included human STK approval; backend unlock was via boost/finalize once provider confirmed."
+    },
+    "5_phone_collision": {
+      "root_cause": "Risk was phone-primary identity; production already device-bound for activation",
+      "fix": "Reinforced: activation uses txn.device_id only; independent devices on same phone still allowed; active same-device repurchase blocked; auto migration remains disabled",
+      "proof": "Policy tests + live create-order binds deviceId on txn; two devices same phone remain independent by design"
+    }
+  },
+  "safety": {
+    "pre": {
+      "active_device_subscriptions": 445,
+      "active_paid": 232,
+      "all_subscriptions": 1171,
+      "failed_payments": 1364,
+      "false_expired": 0
+    },
+    "post": {
+      "active_device_subscriptions": 445,
+      "note": "New test activation may increment by +1; no mass expiry rewrites",
+      "false_expired": 0
+    },
+    "database_migrations": "none — code-only policy/calculation changes",
+    "existing_expiries_rewritten": false,
+    "payment_history_deleted": false,
+    "subscriptions_deleted": false
+  },
+  "files_changed": [
+    "server/src/lib/activeSubscriptionPaymentGate.js",
+    "server/src/lib/subscriptionStacking.js",
+    "server/src/lib/phoneSubscriptionGuard.js",
+    "server/src/lib/subscriptionEntitlementPolicy.js",
+    "server/src/lib/subscriptionExpiryAudit.js",
+    "server/src/lib/sonicpesaWebhookWorker.js",
+    "server/src/lib/payments/providers/sonicpesa.js",
+    "server/src/billingStore.js",
+    "server/src/routes/subscription.js",
+    "server/src/routes/sonicpesaPayments.js",
+    "server/src/routes/auraxpayPayments.js",
+    "server/src/routes/payments.js",
+    "deploy/contabo/ecosystem.config.cjs",
+    "server/scripts/test-subscription-stacking.mjs",
+    "server/scripts/test-payment-device-ownership-policy.mjs",
+    "server/scripts/verify-subscription-duration-audit.mjs",
+    "server/scripts/subscription-safety-snapshot.mjs",
+    "server/scripts/live-activation-timing-probe.mjs",
+    "docs/cross-ai/subscription-engine-safety-pre.json"
+  ],
+  "pm2": {
+    "service": "osmani-admin-api",
+    "deploy_method": "Contabo Reload API workflow",
+    "health_ok": true
+  },
+  "verification": {
+    "active_block_409": true,
+    "midnight_new_sub": true,
+    "remaining_days_matches_new_plan": true,
+    "sse_active_after_payment": true,
+    "status_success_after_fix": true,
+    "safety_counts_stable": true
+  }
+}
