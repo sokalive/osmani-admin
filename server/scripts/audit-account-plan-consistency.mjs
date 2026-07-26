@@ -126,8 +126,13 @@ async function main() {
        AND ds.expires_at > now()
        AND ds.started_at IS NOT NULL
        AND COALESCE(t.plan_duration_days, p.duration_days, g.duration_days) IS NOT NULL
-       AND COALESCE(t.plan_duration_days, p.duration_days, g.duration_days)
-             > ${spanDaysSql('ds.started_at', 'ds.expires_at')} + 1
+       -- Require a material gap (≥5 calendar days) so midnight-EAT MWENZI spans
+       -- of 26–29 vs package 30 are not false-positive “mixed metadata”.
+       -- Catches the production Wiki-1 class bug (package 7 on a ~2–3 day timeline).
+       AND (
+         COALESCE(t.plan_duration_days, p.duration_days, g.duration_days)
+           - ${spanDaysSql('ds.started_at', 'ds.expires_at')}
+       ) >= 5
      ORDER BY ds.updated_at DESC
      LIMIT 2000`,
   )
