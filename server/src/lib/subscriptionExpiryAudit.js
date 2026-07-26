@@ -200,6 +200,7 @@ async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByDevice =
   if (linkedOrderIds.length) {
     const { rows: linkedTxns } = await pool.query(
       `SELECT t.order_id,
+              t.device_id::text AS device_id,
               COALESCE(t.completed_at, t.created_at) AS credited_at,
               p.duration_days
        FROM transactions t
@@ -210,18 +211,52 @@ async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByDevice =
       [linkedOrderIds],
     )
     const linkedByOrder = new Map(linkedTxns.map((row) => [String(row.order_id), row]))
+    const sourceIds = [
+      ...new Set(linkedTxns.map((row) => String(row.device_id ?? '').trim()).filter(Boolean)),
+    ]
+    let sourceHistory = []
+    if (sourceIds.length) {
+      const { rows } = await pool.query(
+        `SELECT t.order_id,
+                t.device_id::text AS device_id,
+                COALESCE(t.completed_at, t.created_at) AS credited_at,
+                p.duration_days
+         FROM transactions t
+         LEFT JOIN plans p ON p.id = t.plan_id
+         WHERE t.device_id = ANY($1::text[])
+           AND t.status = 'completed'
+           AND p.duration_days IS NOT NULL
+         ORDER BY COALESCE(t.completed_at, t.created_at), t.order_id`,
+        [sourceIds],
+      )
+      sourceHistory = rows
+    }
     for (const [deviceId, orderId] of linkedOrderByDevice.entries()) {
-      const row = linkedByOrder.get(orderId)
-      const atMs = toMs(row?.credited_at)
-      const days = Math.max(1, Math.trunc(Number(row?.duration_days) || 0))
+      const linked = linkedByOrder.get(orderId)
+      const linkedAtMs = toMs(linked?.credited_at)
       const list = byDevice.get(deviceId)
-      if (!list || !row || !atMs || days < 1 || list.some((event) => event.ref === orderId)) continue
-      list.push({
-        atMs,
-        durationDays: days,
-        kind: 'payment',
-        ref: orderId,
-      })
+      if (!list || !linked || linkedAtMs == null) continue
+      const sourceDeviceId = String(linked.device_id ?? '').trim()
+      for (const row of sourceHistory) {
+        const atMs = toMs(row.credited_at)
+        const days = Math.max(1, Math.trunc(Number(row.duration_days) || 0))
+        const ref = String(row.order_id)
+        if (
+          String(row.device_id ?? '').trim() !== sourceDeviceId ||
+          atMs == null ||
+          atMs > linkedAtMs ||
+          days < 1 ||
+          list.some((event) => event.ref === ref)
+        ) {
+          continue
+        }
+        list.push({
+          atMs,
+          durationDays: days,
+          kind: 'payment',
+          ref,
+        })
+      }
     }
   }
 
