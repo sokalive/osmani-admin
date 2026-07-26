@@ -7,7 +7,7 @@ import {
   CANONICAL_ENGINE_VERSION,
   SUBSCRIPTION_SCHEMA_VERSION,
 } from './subscriptionHardeningConstants.js'
-import { computeMidnightEatExpiryIso, computeRemainingCalendarDaysEat } from './subscriptionStacking.js'
+import { computeRemainingCalendarDaysEat } from './subscriptionStacking.js'
 import { isSubscriptionMigrationCompleted, migrationLockMeta } from './subscriptionMigrationLock.js'
 import { legacyLockStatus } from './subscriptionLegacyLock.js'
 
@@ -60,21 +60,23 @@ export async function runSubscriptionIntegrityAudit({ slot = 'manual' } = {}) {
     })
   }
 
-  // 1) Active rows with expired / missing expiry
+  // 1) Status label still 'active' but expiry already passed (access layer treats as inactive).
+  // Informational only — not over-credit; do not alert as high.
   {
     const { rows } = await pool.query(
       `SELECT device_id, status, expires_at, admin_revoked_at
        FROM device_subscriptions
        WHERE LOWER(COALESCE(status::text, '')) = 'active'
          AND (expires_at IS NULL OR expires_at <= now())
-       LIMIT 200`,
+       LIMIT 500`,
     )
     for (const r of rows) {
       push({
-        severity: SEVERITY.HIGH,
-        reason: 'active_status_with_non_future_expiry',
+        severity: SEVERITY.INFO,
+        reason: 'stale_active_label_on_expired_row',
         device_id: r.device_id,
-        recommended_action: 'Review row; revoke or correct via authorized admin path only',
+        recommended_action:
+          'Optional cleanup: set status=revoked for naturally expired rows. Runtime already denies access via expires_at.',
         details: { expires_at: r.expires_at, admin_revoked_at: r.admin_revoked_at },
       })
     }
@@ -101,7 +103,9 @@ export async function runSubscriptionIntegrityAudit({ slot = 'manual' } = {}) {
     }
   }
 
-  // 3) Over-credit heuristic: active remaining >> last completed plan duration (no transfer/recovery txn)
+  // 3) Over-credit heuristic vs last completed plan (exclude transfer/recovery/manual).
+  // Mild remaining > plan is often a legitimate pre-disable stack — info only.
+  // Severe remaining (> 2× plan) is high.
   {
     const { rows } = await pool.query(
       `SELECT ds.device_id,
@@ -127,28 +131,22 @@ export async function runSubscriptionIntegrityAudit({ slot = 'manual' } = {}) {
     for (const r of rows) {
       const rem = computeRemainingCalendarDaysEat(r.expires_at, nowMs)
       const days = Math.max(1, Math.trunc(Number(r.duration_days) || 0))
-      if (rem > days + 2) {
-        // Compare against midnight EAT from "now" as floor check for brand-new; flag only severe.
-        const pure = computeMidnightEatExpiryIso(days, nowMs)
-        const pureMs = toMs(pure)
-        const expMs = toMs(r.expires_at)
-        if (pureMs != null && expMs != null && expMs > pureMs + 2 * 24 * 60 * 60 * 1000) {
-          push({
-            severity: rem > days * 2 ? SEVERITY.CRITICAL : SEVERITY.HIGH,
-            reason: 'suspected_over_credit_vs_last_plan',
-            device_id: r.device_id,
-            recommended_action:
-              'Read-only flag only. Investigate payment history before any manual correction.',
-            details: {
-              remaining_days: rem,
-              plan_duration_days: days,
-              plan_name: r.plan_name,
-              expires_at: r.expires_at,
-              midnight_eat_from_now: pure,
-            },
-          })
-        }
-      }
+      if (rem <= days + 2) continue
+      const severe = rem > days * 2 + 2
+      push({
+        severity: severe ? SEVERITY.HIGH : SEVERITY.INFO,
+        reason: severe ? 'suspected_over_credit_vs_last_plan' : 'possible_legacy_stack_remaining',
+        device_id: r.device_id,
+        recommended_action: severe
+          ? 'Read-only flag only. Investigate payment history before any manual correction.'
+          : 'Likely legitimate historical stack (stacking disabled for new purchases). Monitor only.',
+        details: {
+          remaining_days: rem,
+          plan_duration_days: days,
+          plan_name: r.plan_name,
+          expires_at: r.expires_at,
+        },
+      })
     }
   }
 
