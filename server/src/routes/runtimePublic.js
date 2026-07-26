@@ -553,7 +553,7 @@ runtimePublicRouter.get('/subscription-api-parity-audit', requireLegacyAdminToke
   }
 })
 
-/** Consolidate duplicate active subscriptions on the same payment phone. */
+/** Same-phone multi-device subscriptions are intentional — consolidation permanently disabled. */
 runtimePublicRouter.post('/subscription-duplicate-phone-repair', requireLegacyAdminToken, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')

@@ -7,8 +7,8 @@ import AdminDeviceIdCell from '../components/AdminDeviceIdCell'
 import UserProfileDrawer from '../components/UserProfileDrawer'
 import { useToast } from '../context/ToastContext.jsx'
 import {
-  postUserRevoke,
-  postUsersBulkRevoke,
+  deleteUser,
+  deleteUsersBulk,
   getPlans,
   getUsers,
   getUsersActive,
@@ -539,62 +539,54 @@ function UsersPageContent() {
     }
   }
 
-  async function handleRevoke(row) {
+  async function handleDelete(row) {
     if (
       !window.confirm(
-        `Revoke subscription for device ${row.device_id}?\n\nPayment history will be preserved for audit.`,
+        `DELETE USER for device ${row.device_id}?\n\nPremium access will be removed immediately. Payment history will be preserved for audit.`,
       )
     ) {
       return
     }
     try {
-      await postUserRevoke(row.device_id, { reason: 'admin_users_page' })
+      await deleteUser(row.device_id)
       setSelected((prev) => {
         const next = new Set(prev)
         next.delete(String(row.device_id))
         return next
       })
       await Promise.all([loadTab({ page }), loadSummary()])
-      showFlash('success', 'Subscription revoked — App access should drop immediately.')
+      showFlash('success', 'User deleted — App Premium access removed immediately.')
     } catch (e) {
-      showToast('error', e?.message || 'Revoke failed')
+      showToast('error', e?.message || 'Delete User failed')
     }
   }
 
-  async function runBulkRevoke(deviceIds, { label }) {
+  async function runBulkDelete(deviceIds, { label }) {
     if (!deviceIds.length) return
     setBulkDeleting(true)
     try {
-      const out = await postUsersBulkRevoke({ device_ids: deviceIds, reason: 'admin_users_bulk' })
-      const revoked = Number(out?.revoked) || 0
+      const out = await deleteUsersBulk({ device_ids: deviceIds })
+      const deleted = Number(out?.deleted ?? out?.revoked) || 0
       const skipped = Number(out?.skipped) || 0
       setSelected(new Set())
       await Promise.all([loadTab({ page }), loadSummary()])
-      if (revoked === 0 && deviceIds.length > 0) {
-        showToast('error', 'No subscriptions were revoked. Refresh and retry.')
+      if (deleted === 0 && deviceIds.length > 0) {
+        showToast('error', 'No users were deleted. Refresh and retry.')
         return
       }
       showToast(
         'success',
         skipped > 0
-          ? `${label}: revoked ${revoked}, skipped ${skipped}. Payment history preserved.`
-          : `${label}: revoked ${revoked} subscription(s). Payment history preserved.`,
+          ? `${label}: deleted ${deleted}, skipped ${skipped}. Payment history preserved.`
+          : `${label}: deleted ${deleted} user entitlement(s). Payment history preserved.`,
       )
       showFlash('success', `${label} complete.`)
     } catch (e) {
-      showToast('error', e?.message || 'Bulk revoke failed')
+      showToast('error', e?.message || 'Bulk Delete User failed')
     } finally {
       setBulkDeleting(false)
       setConfirm(null)
     }
-  }
-
-  async function handleDelete(row) {
-    return handleRevoke(row)
-  }
-
-  async function runBulkDelete(deviceIds, opts) {
-    return runBulkRevoke(deviceIds, opts)
   }
 
   function planLabel(r) {
@@ -835,11 +827,11 @@ function UsersPageContent() {
                                   <button
                                     type="button"
                                     disabled={sub.status === 'revoked'}
-                                    onClick={() => handleRevoke(sub)}
+                                    onClick={() => handleDelete(sub)}
                                     className="rounded-lg border border-red-500/40 px-2 py-1 text-[11px] text-red-200 hover:bg-red-500/10 disabled:opacity-40"
                                   >
                                     <Trash2 className="mr-1 inline h-3 w-3" />
-                                    Revoke
+                                    Delete User
                                   </button>
                                 </>
                               ) : null}
@@ -1092,11 +1084,11 @@ function UsersPageContent() {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleRevoke(r)}
+                                onClick={() => handleDelete(r)}
                                 disabled={bulkDeleting || r.status === 'revoked'}
                                 className="inline-flex rounded-lg p-2 text-slate-400 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-40"
-                                aria-label="Revoke subscription"
-                                title="Revoke subscription (preserves payment history)"
+                                aria-label="Delete User"
+                                title="Delete User (removes Premium immediately; preserves payment history)"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </button>
@@ -1113,11 +1105,11 @@ function UsersPageContent() {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleRevoke(r)}
+                                onClick={() => handleDelete(r)}
                                 disabled={bulkDeleting || r.status === 'revoked'}
                                 className="inline-flex rounded-lg p-2 text-slate-400 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-40"
-                                aria-label="Revoke subscription"
-                                title="Revoke subscription (preserves payment history)"
+                                aria-label="Delete User"
+                                title="Delete User (removes Premium immediately; preserves payment history)"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </button>
@@ -1162,22 +1154,22 @@ function UsersPageContent() {
 
         <ConfirmModal
           open={confirm?.kind === 'selected'}
-          title="Revoke selected subscriptions?"
-          message={`Revoke ${confirm?.count ?? 0} selected subscription(s)? Payment transaction history will be preserved.`}
-          confirmLabel="Revoke selected"
+          title="Delete selected users?"
+          message={`Remove Premium access for ${confirm?.count ?? 0} selected Device ID(s) immediately? Payment transaction history will be preserved.`}
+          confirmLabel="Delete selected"
           loading={bulkDeleting}
           onCancel={() => setConfirm(null)}
-          onConfirm={() => runBulkRevoke(confirm?.ids ?? [], { label: 'Revoke selected' })}
+          onConfirm={() => runBulkDelete(confirm?.ids ?? [], { label: 'Delete selected' })}
         />
 
         <ConfirmModal
           open={confirm?.kind === 'all'}
-          title="Revoke subscriptions on this page?"
-          message="Revoke all subscriptions shown on this page? App access ends immediately. Payment history remains for audit."
-          confirmLabel="Revoke page"
+          title="Delete users on this page?"
+          message="Remove Premium access for every Device ID shown on this page immediately? Payment history remains for audit."
+          confirmLabel="Delete page"
           loading={bulkDeleting}
           onCancel={() => setConfirm(null)}
-          onConfirm={() => runBulkRevoke(confirm?.ids ?? [], { label: 'Revoke page' })}
+          onConfirm={() => runBulkDelete(confirm?.ids ?? [], { label: 'Delete page' })}
         />
       </main>
     </>

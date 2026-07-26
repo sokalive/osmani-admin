@@ -11,8 +11,6 @@ import {
   countDeniedFutureEntitlement,
 } from './subscriptionWrongDirectionRepair.js'
 import { runDirectShadowRepairBatch } from './subscriptionShadowRepairBatch.js'
-import { migrateSubscriptionFromSourceDevice } from './subscriptionRecovery.js'
-import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
 import { findIncorrectlyRevokedMigrationShadows } from './subscriptionIncidentAudit.js'
 import { runSubscriptionRestorationAudit } from './subscriptionRestorationAudit.js'
 
@@ -214,68 +212,23 @@ export async function runSubscriptionApiParityAudit(pool = requirePool()) {
 }
 
 /**
- * Consolidate multiple active subs on same phone onto canonical device (longest expiry wins).
+ * Same-phone multi-device subscriptions are intentional (Device ID ownership).
+ * Never consolidate/collapse independent Device IDs onto one phone owner.
  */
 export async function repairDuplicatePhoneClusters(opts = {}) {
   const dryRun = opts.dryRun !== false
-  const confirm = opts.confirm === true
   const pool = requirePool()
   const clusters = await findDuplicateActivePhoneClusters(pool)
-  const repaired = []
-  const failed = []
-
-  for (const cluster of clusters) {
-    const canonical = await resolveCanonicalDeviceForPhone(pool, cluster.phone_digits)
-    if (!canonical) continue
-    const sorted = [...cluster.devices].sort(
-      (a, b) => new Date(b.expires_at).getTime() - new Date(a.expires_at).getTime(),
-    )
-    const bestDevice = String(sorted[0].device_id)
-    if (dryRun) {
-      repaired.push({
-        action: 'would_consolidate',
-        canonical,
-        best_source: bestDevice,
-        expires_at: sorted[0].expires_at,
-        phone: cluster.phone_digits,
-        duplicate_devices: sorted.map((d) => d.device_id),
-      })
-      continue
-    }
-    if (!confirm) continue
-    try {
-      if (bestDevice !== canonical) {
-        const mig = await migrateSubscriptionFromSourceDevice(canonical, bestDevice, null, {
-          allowRevokedTarget: true,
-        })
-        if (!mig.recovered) {
-          failed.push({ canonical, from: bestDevice, error: mig.reason || 'not_recovered' })
-          continue
-        }
-      }
-      for (const dev of sorted) {
-        const other = String(dev.device_id)
-        if (other === canonical) continue
-        const row = await getDeviceSubscriptionAccessStateFast(other)
-        if (row?.active_now === true) {
-          await migrateSubscriptionFromSourceDevice(canonical, other, null, { allowRevokedTarget: true })
-        }
-        invalidateSubscriptionAccessCache(other)
-      }
-      invalidateSubscriptionAccessCache(canonical)
-      repaired.push({
-        action: 'consolidated',
-        canonical,
-        best_source: bestDevice,
-        phone: cluster.phone_digits,
-      })
-    } catch (e) {
-      failed.push({ canonical, error: String(e.message || e) })
-    }
+  return {
+    dry_run: dryRun,
+    repaired_count: 0,
+    repaired: [],
+    failed: [],
+    remaining_clusters: clusters.length,
+    skipped: true,
+    reason: 'independent_device_subscriptions_preserved',
+    note: 'Multiple Device IDs may share one payment phone. Consolidation is permanently disabled.',
   }
-
-  const remaining = (await findDuplicateActivePhoneClusters(pool)).length
-  return { dry_run: dryRun, repaired_count: repaired.length, repaired, failed, remaining_clusters: remaining }
 }
 
 /**

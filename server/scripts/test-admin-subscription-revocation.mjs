@@ -17,6 +17,7 @@ const usersJs = fs.readFileSync(path.join(__dirname, '../src/routes/users.js'), 
 const billingJs = fs.readFileSync(path.join(__dirname, '../src/billingStore.js'), 'utf8')
 const subJs = fs.readFileSync(path.join(__dirname, '../src/routes/subscription.js'), 'utf8')
 const cacheJs = fs.readFileSync(path.join(__dirname, '../src/lib/subscriptionAccessCache.js'), 'utf8')
+const phoneGuardJs = fs.readFileSync(path.join(__dirname, '../src/lib/phoneSubscriptionGuard.js'), 'utf8')
 const usersPage = fs.readFileSync(path.join(__dirname, '../../src/pages/UsersPage.jsx'), 'utf8')
 
 assert('users revoke route', usersJs.includes('/revoke'))
@@ -30,7 +31,10 @@ assert('active_now requires no admin revoke', billingJs.includes("AND ds.admin_r
 assert('false-expired repair skips revoked', fs.readFileSync(path.join(__dirname, '../src/lib/subscriptionFalseExpiredRepair.js'), 'utf8').includes("AND ds.admin_revoked_at IS NULL"))
 assert('cache sanitize respects revoked', cacheJs.includes('admin_revoked_at'))
 assert('search button in UI', usersPage.includes('runSearchNow') && usersPage.includes('Search'))
-assert('revoke UX wording', usersPage.includes('Revoke subscription'))
+assert('DELETE USER is primary UI action', usersPage.includes('Delete User') && usersPage.includes('deleteUser('))
+assert('DELETE USER returns authoritative inactive contract', usersJs.includes('subscription_removed: true') && usersJs.includes("entitlement_state: 'inactive'"))
+assert('DELETE USER broadcasts and invalidates cache', usersJs.includes('cache_invalidated: true') && usersJs.includes('sse_broadcast: true'))
+assert('same phone allows independent devices', phoneGuardJs.includes("reason: 'independent_device_payment'") && phoneGuardJs.includes('allowed: true'))
 assert('forceZero remaining when inactive', subJs.includes('forceZero: !active'))
 
 assert(

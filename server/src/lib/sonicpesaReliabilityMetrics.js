@@ -107,6 +107,7 @@ export async function runSonicpesaReliabilityMetrics({ days = 30 } = {}) {
        AND trim(coalesce(c.device_id, '')) <> ''
        AND ds.transaction_id = c.order_id
        AND ds.status <> 'active'
+       AND ds.admin_revoked_at IS NULL
        AND COALESCE(ds.transaction_id::text, '') NOT LIKE 'moved:%'
        AND COALESCE(ds.transaction_id::text, '') NOT LIKE 'recovery:%'`,
     [windowDays],

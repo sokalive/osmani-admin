@@ -3,6 +3,7 @@
  */
 import { getPool } from '../db/pool.js'
 import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
+import { clearVerifyAccessInflightForDevice } from './verifyAccessSingleflight.js'
 import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
 import { liveSyncBus } from './liveSyncBus.js'
 
@@ -130,6 +131,7 @@ export function notifyAdminSubscriptionRevoked(deviceId, orderId = 'admin_revoke
   const d = String(deviceId ?? '').trim()
   if (!d) return
   invalidateSubscriptionAccessCache(d)
+  clearVerifyAccessInflightForDevice(d)
   deviceSubscriptionBus.emit('update', { deviceId: d, reason: 'admin_revoked', adminRevoked: true })
   liveSyncBus.publish('analytics.subscription_updated', {
     topics: ['analytics'],

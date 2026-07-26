@@ -15,6 +15,9 @@ import {
   revokeAdminDeviceSubscription,
 } from '../lib/adminSubscriptionRevocation.js'
 import { invalidateSubscriptionAccessCache } from '../lib/subscriptionAccessCache.js'
+import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
+import { notifySubscriptionActivated } from '../lib/subscriptionActivationNotify.js'
+import { computeRemainingCalendarDaysEat } from '../lib/subscriptionStacking.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 
 export const usersRouter = Router()
@@ -52,17 +55,30 @@ function mapLegacyDeviceUsers(rows) {
       startedAtDate instanceof Date && !Number.isNaN(startedAtDate.getTime())
         ? startedAtDate.toISOString()
         : null
-    const remainingMs = expiresAt != null ? Math.max(0, new Date(expiresAt).getTime() - now) : 0
+    const revoked =
+      String(r.status ?? '').toLowerCase() === 'revoked' || r.admin_revoked_at != null
     const active =
-      r.status === 'active' && expiresAt != null && new Date(expiresAt).getTime() > now
+      !revoked &&
+      r.status === 'active' &&
+      expiresAt != null &&
+      new Date(expiresAt).getTime() > now
+    const remainingMs = active ? Math.max(0, new Date(expiresAt).getTime() - now) : 0
+    const remainingDays = active ? computeRemainingCalendarDaysEat(expiresAt) : 0
     return {
       device_id: String(r.device_id ?? ''),
       phone_number: String(r.phone_number ?? ''),
       plan_id: r.plan_id != null ? Number(r.plan_id) : null,
-      status: active ? 'active' : 'expired',
+      plan_name: r.plan_name != null ? String(r.plan_name) : null,
+      amount: r.amount != null ? Number(r.amount) : null,
+      plan_duration_days:
+        r.plan_duration_days != null ? Math.trunc(Number(r.plan_duration_days)) : null,
+      active,
+      admin_revoked: revoked,
+      status: active ? 'active' : revoked ? 'revoked' : 'expired',
       started_at: startedAt,
       expires_at: expiresAt,
       remaining: remainingMs,
+      remaining_days: remainingDays,
     }
   })
 }
@@ -195,7 +211,14 @@ usersRouter.put('/:device_id', requireAdminPanelAccess, async (req, res) => {
     const exp = row.expires_at instanceof Date ? row.expires_at : new Date(String(row.expires_at))
     const outExp = exp instanceof Date && !Number.isNaN(exp.getTime()) ? exp.toISOString() : null
     const st = row.status === 'active' && outExp && new Date(outExp).getTime() > Date.now() ? 'active' : 'expired'
-    notifySubscriptionRevoked(deviceId, 'admin_users_put')
+    if (st === 'active') {
+      notifySubscriptionActivated(deviceId, row.transaction_id ?? 'admin_users_put')
+    } else {
+      deviceSubscriptionBus.emit('update', {
+        deviceId,
+        reason: 'admin_subscription_expired',
+      })
+    }
     res.json({
       device_id: String(row.device_id ?? ''),
       status: st,
@@ -268,7 +291,10 @@ usersRouter.post('/bulk-revoke', requireAdminPanelAccess, async (req, res) => {
   }
 })
 
-/** Legacy DELETE — now revokes subscription only; payment transactions are preserved. */
+/**
+ * Authoritative DELETE USER: removes Device-ID entitlement immediately while preserving
+ * payment/audit history. Revoke endpoints remain for backwards compatibility only.
+ */
 usersRouter.delete('/bulk', requireAdminPanelAccess, async (req, res) => {
   try {
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -281,7 +307,9 @@ usersRouter.delete('/bulk', requireAdminPanelAccess, async (req, res) => {
     let revoked = 0
     let skipped = 0
     for (const deviceId of deviceIds) {
-      const result = await runRevokeForDevice(deviceId, { reason: 'admin_users_bulk_delete_legacy' })
+      const result = await runRevokeForDevice(deviceId, {
+        reason: 'admin_users_bulk_delete_authoritative',
+      })
       if (result.notFound) {
         skipped += 1
         continue
@@ -289,7 +317,18 @@ usersRouter.delete('/bulk', requireAdminPanelAccess, async (req, res) => {
       if (result.revoked || result.alreadyRevoked) revoked += 1
       else skipped += 1
     }
-    res.json({ ok: true, revoked, skipped, deleted: revoked, transactions_preserved: true })
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    res.json({
+      ok: true,
+      revoked,
+      skipped,
+      deleted: revoked,
+      subscription_removed: revoked,
+      entitlement_state: 'inactive',
+      transactions_preserved: true,
+      cache_invalidated: true,
+      sse_broadcast: true,
+    })
   } catch (e) {
     console.error('[users] DELETE /bulk failed:', e)
     res.status(500).json({ error: String(e.message || e) })
@@ -302,15 +341,26 @@ usersRouter.delete('/:device_id', requireAdminPanelAccess, async (req, res) => {
     if (!deviceId) {
       return res.status(404).json({ error: 'Device subscription not found', revoked: false })
     }
-    const result = await runRevokeForDevice(deviceId, { reason: 'admin_users_delete_legacy' })
+    const result = await runRevokeForDevice(deviceId, {
+      reason: 'admin_users_delete_authoritative',
+    })
     if (result.notFound) {
       return res.status(404).json({ error: 'Device subscription not found', revoked: false })
     }
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
     res.json({
       ok: true,
+      device_id: deviceId,
+      deleted: true,
       revoked: result.revoked === true || result.alreadyRevoked === true,
       idempotent: result.idempotent === true,
+      subscription_removed: true,
+      active: false,
+      status: 'revoked',
+      entitlement_state: 'inactive',
       transactions_preserved: true,
+      cache_invalidated: true,
+      sse_broadcast: true,
       deletedSubscription: 0,
       deletedTransactions: 0,
     })

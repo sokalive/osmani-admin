@@ -237,7 +237,7 @@ const SUBSCRIPTION_FROM = `
       AND t.order_id = regexp_replace(ds.transaction_id, '^moved:[^:]+:(.+)$', '\\1')
     LIMIT 1
   ) moved_pay ON ds.transaction_id LIKE 'moved:%'
-  LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AND p.deleted_at IS NULL
+  LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, mg.plan_id) AND p.deleted_at IS NULL
 `
 
 function mapSubscriptionRow(r, nowMs = Date.now()) {
@@ -344,9 +344,9 @@ export async function getOperationalSubscriptionByDeviceId(deviceId) {
        ds.transaction_id,
        ds.admin_revoked_at,
        COALESCE(lt.phone, pay.phone, '') AS phone_number,
-       COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
+       COALESCE(pay.plan_id, mg.plan_id) AS plan_id,
        p.name AS plan_name,
-       COALESCE(pay.amount, lt.amount, p.price) AS amount,
+       COALESCE(pay.amount, p.price) AS amount,
        COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
        ${subscriptionSourceSql('ds', 'pay')} AS provider
      ${SUBSCRIPTION_FROM}
@@ -407,7 +407,7 @@ function buildSubscriptionWhere({ search, planId, provider, status, extraWhere, 
   if (planId != null && planId !== '' && planId !== 'all') {
     const pid = Number(planId)
     if (Number.isFinite(pid) && pid > 0) {
-      cond.push(`COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) = $${i}`)
+      cond.push(`COALESCE(pay.plan_id, mg.plan_id) = $${i}`)
       params.push(pid)
       i += 1
     }
@@ -464,9 +464,9 @@ async function listSubscriptions({
          ds.transaction_id,
          ds.admin_revoked_at,
          COALESCE(lt.phone, pay.phone, '') AS phone_number,
-         COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
+         COALESCE(pay.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
-         COALESCE(pay.amount, lt.amount, p.price) AS amount,
+         COALESCE(pay.amount, p.price) AS amount,
          COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
          ${subscriptionSourceSql('ds', 'pay')} AS provider
        ${SUBSCRIPTION_FROM}
@@ -537,9 +537,9 @@ export async function listAdminExpiringSoonUsers(filters = {}) {
          ds.transaction_id,
          ds.admin_revoked_at,
          COALESCE(lt.phone, pay.phone, '') AS phone_number,
-         COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
+         COALESCE(pay.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
-         COALESCE(pay.amount, lt.amount, p.price) AS amount,
+         COALESCE(pay.amount, p.price) AS amount,
          COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
          ${subscriptionSourceSql('ds', 'pay')} AS provider
        ${SUBSCRIPTION_FROM}

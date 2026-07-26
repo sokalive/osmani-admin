@@ -444,22 +444,6 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
     ),
     linked_devices AS (
       SELECT device_id FROM phone_txn_devices
-      UNION
-      SELECT DISTINCT ai_new.device_id::text AS device_id
-      FROM app_installs ai_new
-      INNER JOIN app_installs ai_src
-        ON ai_src.install_instance_id = ai_new.install_instance_id
-       AND trim(ai_src.install_instance_id) <> ''
-       AND ai_src.device_id <> ai_new.device_id
-      INNER JOIN phone_txn_devices p ON p.device_id = ai_src.device_id::text
-      UNION
-      SELECT DISTINCT ai_new.device_id::text AS device_id
-      FROM app_installs ai_new
-      INNER JOIN app_installs ai_src
-        ON ai_src.install_instance_id = ai_new.install_instance_id
-       AND trim(ai_src.install_instance_id) <> ''
-       AND ai_src.device_id <> ai_new.device_id
-      INNER JOIN phone_txn_devices p ON p.device_id = ai_new.device_id::text
     )`
   const proofClause = ''
   if (proofDeviceId) {
@@ -544,22 +528,6 @@ export async function isDeviceLinkedToPaymentPhone(deviceId, phoneInput) {
     ),
     linked_devices AS (
       SELECT device_id FROM phone_txn_devices
-      UNION
-      SELECT DISTINCT ai_new.device_id::text AS device_id
-      FROM app_installs ai_new
-      INNER JOIN app_installs ai_src
-        ON ai_src.install_instance_id = ai_new.install_instance_id
-       AND trim(ai_src.install_instance_id) <> ''
-       AND ai_src.device_id <> ai_new.device_id
-      INNER JOIN phone_txn_devices p ON p.device_id = ai_src.device_id::text
-      UNION
-      SELECT DISTINCT ai_new.device_id::text AS device_id
-      FROM app_installs ai_new
-      INNER JOIN app_installs ai_src
-        ON ai_src.install_instance_id = ai_new.install_instance_id
-       AND trim(ai_src.install_instance_id) <> ''
-       AND ai_src.device_id <> ai_new.device_id
-      INNER JOIN phone_txn_devices p ON p.device_id = ai_new.device_id::text
     )`
   const { rows } = await pool.query(
     `WITH ${phoneDevicesCte}
@@ -2727,47 +2695,46 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
     return manualSummary
   }
 
-  let txn = await getLatestCompletedTransactionForDevice(deviceId)
+  // Prefer the entitlement-linked transaction_id (SSOT), never an unrelated newer payment.
+  const pool = requirePool()
+  const { rows: subRows } = await pool.query(
+    `SELECT transaction_id::text AS transaction_id
+     FROM device_subscriptions
+     WHERE device_id = $1
+     LIMIT 1`,
+    [d],
+  )
+  const linkedId = String(subRows[0]?.transaction_id ?? '').trim()
+
+  let txn = null
   let recoverySource = null
-  if (!txn) {
-    const pool = requirePool()
-    const { rows: subRows } = await pool.query(
-      `SELECT transaction_id::text AS transaction_id
-       FROM device_subscriptions
-       WHERE device_id = $1
-         AND status = 'active'
-         AND expires_at > now()
-       LIMIT 1`,
-      [d],
-    )
-    const linkedId = String(subRows[0]?.transaction_id ?? '').trim()
-    if (linkedId.startsWith('recovery:')) {
-      recoverySource = linkedId.slice('recovery:'.length).trim()
-      if (recoverySource && recoverySource !== d) {
-        txn = await getLatestCompletedTransactionForDevice(recoverySource)
-        if (!txn) {
-          const srcSummary = await resolveVerifyTxnSummaryForDevice(recoverySource, visited)
-          if (srcSummary) {
-            const ent = await buildEntitlementVerifyTxnSummary(d)
-            return mergeVerifyTxnSummaries({ ...ent, source: 'recovery' }, srcSummary)
-          }
+  if (linkedId.startsWith('recovery:')) {
+    recoverySource = linkedId.slice('recovery:'.length).trim()
+    if (recoverySource && recoverySource !== d) {
+      txn = await getLatestCompletedTransactionForDevice(recoverySource)
+      if (!txn) {
+        const srcSummary = await resolveVerifyTxnSummaryForDevice(recoverySource, visited)
+        if (srcSummary) {
+          const ent = await buildEntitlementVerifyTxnSummary(d)
+          return mergeVerifyTxnSummaries({ ...ent, source: 'recovery' }, srcSummary)
         }
       }
-    } else if (linkedId.startsWith('transfer:') || linkedId.startsWith('force:')) {
-      txn = await getLatestCompletedTransactionForDevice(d)
-    } else if (linkedId.startsWith('offer_code:')) {
-      const offerGrant = await getManualGrantSummaryFromSubscriptionTransactionId(d)
-      if (offerGrant) return offerGrant
-      txn = await getLatestCompletedTransactionForDevice(d)
-    } else if (linkedId) {
-      const { rows: orderRows } = await pool.query(
-        `SELECT * FROM transactions
-         WHERE order_id = $1 AND status = 'completed'
-         LIMIT 1`,
-        [linkedId],
-      )
-      txn = orderRows[0] ?? null
     }
+  } else if (linkedId.startsWith('offer_code:')) {
+    const offerGrant = await getManualGrantSummaryFromSubscriptionTransactionId(d)
+    if (offerGrant) return offerGrant
+  } else if (linkedId && !linkedId.startsWith('transfer:') && !linkedId.startsWith('force:') && !linkedId.startsWith('moved:')) {
+    const { rows: orderRows } = await pool.query(
+      `SELECT * FROM transactions
+       WHERE order_id = $1 AND status = 'completed'
+       LIMIT 1`,
+      [linkedId],
+    )
+    txn = orderRows[0] ?? null
+  }
+
+  if (!txn && (linkedId.startsWith('transfer:') || linkedId.startsWith('force:') || !linkedId)) {
+    txn = await getLatestCompletedTransactionForDevice(deviceId)
   }
   if (!txn) {
     const entitlement = await buildEntitlementVerifyTxnSummary(d)
@@ -2778,9 +2745,6 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
   const out = await buildTxnSummaryFromRow(txn)
   if (!out) return buildEntitlementVerifyTxnSummary(d)
 
-  const linkedId = String(
-    (await getDeviceSubscriptionByDeviceId(d))?.transaction_id ?? '',
-  ).trim()
   if (linkedId.startsWith('transfer:') || linkedId.startsWith('force:')) {
     out.source = 'transfer'
   } else if (linkedId.startsWith('recovery:')) {
@@ -2790,11 +2754,13 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
   }
 
   const entitlement = await buildEntitlementVerifyTxnSummary(d)
-  const merged = mergeVerifyTxnSummaries(out, entitlement)
+  // Entitlement-linked fields win over any fallback txn metadata.
+  const merged = mergeVerifyTxnSummaries(entitlement, out)
 
   if (process.env.SUBSCRIPTION_VERIFY_DEBUG === '1') {
     console.log('[subscription_duration_debug]', {
       deviceId: d.length > 22 ? `${d.slice(0, 20)}…` : d,
+      linkedTxn: linkedId.length > 24 ? `${linkedId.slice(0, 22)}…` : linkedId,
       latestTxnRow: {
         order_id: txn.order_id,
         plan_id: txn.plan_id,
@@ -2802,9 +2768,6 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
         currency: txn.currency,
       },
       normalizedPlanDurationDays: merged.plan_duration_days,
-      entitlementFilled:
-        entitlement != null &&
-        (out.plan_name == null || out.amount == null || out.plan_duration_days == null),
     })
   }
 
@@ -2845,16 +2808,21 @@ export async function listDeviceUsers() {
        ds.status,
        ds.started_at,
        ds.expires_at,
+       ds.admin_revoked_at,
        lt.phone AS phone_number,
-       lt.plan_id
+       lt.plan_id,
+       lt.amount,
+       p.name AS plan_name,
+       p.duration_days AS plan_duration_days
      FROM device_subscriptions ds
      LEFT JOIN LATERAL (
-       SELECT t.phone, t.plan_id
+       SELECT t.phone, t.plan_id, t.amount
        FROM transactions t
        WHERE t.device_id = ds.device_id
        ORDER BY t.created_at DESC
        LIMIT 1
      ) lt ON true
+     LEFT JOIN plans p ON p.id = lt.plan_id
      ORDER BY ds.updated_at DESC`,
   )
   return rows
@@ -2868,6 +2836,11 @@ export async function updateDeviceSubscriptionByDeviceId(deviceId, { expiresAt, 
     `UPDATE device_subscriptions
      SET expires_at = COALESCE($2::timestamptz, expires_at),
          status = COALESCE($3, status),
+         admin_revoked_at = CASE WHEN $3 = 'active' THEN NULL ELSE admin_revoked_at END,
+         admin_revoked_by = CASE WHEN $3 = 'active' THEN NULL ELSE admin_revoked_by END,
+         admin_revocation_reason = CASE WHEN $3 = 'active' THEN NULL ELSE admin_revocation_reason END,
+         admin_revoked_transaction_id =
+           CASE WHEN $3 = 'active' THEN NULL ELSE admin_revoked_transaction_id END,
          updated_at = now()
      WHERE device_id = $1
      RETURNING *`,

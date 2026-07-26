@@ -1,0 +1,54 @@
+{
+  "title": "DELETE USER authority + Device ID final SSOT",
+  "date": "2026-07-26",
+  "status": "pending_deploy",
+  "device_under_test": "8b94b929d89681a1",
+  "notes": {
+    "app_ai_artifact_id": "85970ee4273c6ca8 (truncated/non-resolving in live lookup)",
+    "selected_live_target": "8b94b929d89681a1 — active Siku 3 / 1000 TZS on +255678089174 (App AI payment phone)",
+    "842a_note": "842a2fe8… was restored by a new post-revoke payment osm_sp_1785049533810_2f693bff8f (expected)"
+  },
+  "root_causes": {
+    "delete_user_overlap": "Admin UI called revoke while DELETE route was a soft alias — operators could not tell which action was authoritative",
+    "cache_race": "Admin revoke invalidated cache but did not clear verify singleflight, allowing a pre-revoke active row to re-prime memory cache briefly",
+    "phone_cluster_repair": "duplicate-phone repair could collapse independent Device IDs sharing one payment phone",
+    "install_instance_spoof": "app_installs.install_instance_id alone could establish phone ownership linkage for transfer proofs",
+    "legacy_plan_mismatch": "Admin/verify preferred latest completed payment metadata over entitlement-linked transaction_id",
+    "env_override": "ALLOW_AUTOMATIC_SUBSCRIPTION_MIGRATION=1 could re-enable automatic cross-device recovery"
+  },
+  "files_changed": [
+    "src/pages/UsersPage.jsx",
+    "server/src/routes/users.js",
+    "server/src/lib/adminSubscriptionRevocation.js",
+    "server/src/lib/subscriptionEntitlementPolicy.js",
+    "server/src/lib/subscriptionApiParityAudit.js",
+    "server/src/lib/adminUsersList.js",
+    "server/src/lib/sonicpesaReliabilityMetrics.js",
+    "server/src/billingStore.js",
+    "server/src/routes/runtimePublic.js",
+    "server/scripts/test-admin-subscription-revocation.mjs",
+    "server/scripts/test-subscription-immutability-policy.mjs",
+    "docs/cross-ai/delete-user-device-id-ssot-FINAL_REPORT.json"
+  ],
+  "database_changes": "None (no schema rewrite; no expiry/plan/day mutations)",
+  "api_changes": {
+    "DELETE /api/users/:device_id": "Authoritative Delete User contract — subscription_removed, entitlement_state inactive, cache_invalidated, sse_broadcast",
+    "DELETE /api/users/bulk": "Same authoritative contract",
+    "POST /api/users/:device_id/revoke": "Preserved for compatibility",
+    "POST /runtime/subscription-duplicate-phone-repair": "Permanently no-op; preserves independent Device IDs"
+  },
+  "sse_changes": "Revoke/Delete now also clears verify singleflight before deviceSubscriptionBus + liveSync fan-out",
+  "cache_cleanup": [
+    "subscriptionAccessCache invalidate on Delete/Revoke",
+    "clearVerifyAccessInflightForDevice on Delete/Revoke",
+    "no Redis in stack",
+    "Admin lookup/list remain Cache-Control: no-store"
+  ],
+  "legacy_normalization": [
+    "Admin/verify bind plan amount/duration to entitlement-linked transaction_id",
+    "remaining_days forced to 0 when inactive/revoked",
+    "expires_at never rewritten"
+  ],
+  "git_commit": null,
+  "vps_deployed_commit": null
+}

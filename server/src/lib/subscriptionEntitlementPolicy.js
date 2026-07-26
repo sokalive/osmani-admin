@@ -11,7 +11,9 @@ export const UNAUTHORIZED_MIGRATION_REASON = 'automatic_cross_device_migration_d
 
 /** @returns {boolean} true when automatic A→B writers must not run */
 export function isAutomaticCrossDeviceMigrationBlocked() {
-  return process.env.ALLOW_AUTOMATIC_SUBSCRIPTION_MIGRATION !== '1'
+  // Device ID is the final entitlement owner. A runtime environment flag must never
+  // silently re-enable phone/fingerprint/install based ownership in production.
+  return true
 }
 
 /**

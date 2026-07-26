@@ -26,6 +26,16 @@ function assert(name, ok, detail = '') {
 
 // --- Policy module ---
 assert('automatic migration blocked by default', isAutomaticCrossDeviceMigrationBlocked() === true)
+{
+  const previous = process.env.ALLOW_AUTOMATIC_SUBSCRIPTION_MIGRATION
+  process.env.ALLOW_AUTOMATIC_SUBSCRIPTION_MIGRATION = '1'
+  assert(
+    'legacy environment flag cannot override Device ID ownership',
+    isAutomaticCrossDeviceMigrationBlocked() === true,
+  )
+  if (previous == null) delete process.env.ALLOW_AUTOMATIC_SUBSCRIPTION_MIGRATION
+  else process.env.ALLOW_AUTOMATIC_SUBSCRIPTION_MIGRATION = previous
+}
 assert(
   'unauthorized migration rejected',
   rejectUnauthorizedCrossDeviceMigration()?.reason === UNAUTHORIZED_MIGRATION_REASON,
