@@ -160,6 +160,18 @@ async function probeApiActive(deviceId) {
  * @param {{ dryRun?: boolean; confirm?: boolean }} opts
  */
 export async function repairFalseExpiredSubscriptions(opts = {}) {
+  try {
+    const { guardLegacyRepairWrite, LEGACY_PATHS } = await import('./subscriptionLegacyLock.js')
+    await guardLegacyRepairWrite(LEGACY_PATHS.FALSE_EXPIRED_REPAIR)
+  } catch (lockErr) {
+    return {
+      dry_run: true,
+      legacy_locked: true,
+      code: lockErr?.code || 'LEGACY_LOCKED',
+      error: lockErr?.message || String(lockErr),
+      repaired_count: 0,
+    }
+  }
   const dryRun = opts.dryRun !== false
   const confirm = opts.confirm === true
   if (!dryRun && !confirm) {

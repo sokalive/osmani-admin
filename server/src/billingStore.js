@@ -1837,6 +1837,26 @@ export async function upsertDeviceSubscriptionActiveAt(
     console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
     return { skipped: true }
   }
+  const { getAdminRevocationState, isAdminRevokedOrderBlocked } = await import(
+    './lib/adminSubscriptionRevocation.js'
+  )
+  const revocation = await getAdminRevocationState(d, client)
+  if (revocation?.admin_revoked_at) {
+    // Custom grants create a new order_id (manual_grant:*) after revoke — allow only if
+    // the grant order is not blocked by revoke SSOT (same fail-closed rules as payment).
+    const { rows: txnRows } = await q(
+      `SELECT created_at, updated_at FROM transactions WHERE order_id = $1 LIMIT 1`,
+      [oid],
+    )
+    const createdAt = txnRows[0]?.created_at ?? txnRows[0]?.updated_at ?? new Date()
+    if (isAdminRevokedOrderBlocked(revocation, oid, createdAt)) {
+      console.warn('[device_subscriptions] skip custom upsert — admin revoke blocks order', {
+        deviceId: d.length > 20 ? `${d.slice(0, 18)}…` : d,
+        orderId: oid.length > 24 ? `${oid.slice(0, 22)}…` : oid,
+      })
+      return { skipped: true, blocked_by_admin_revoke: true }
+    }
+  }
   const { assertWritableEntitlement, ENTITLEMENT_GUARD_SOURCES } = await import(
     './lib/subscriptionEntitlementGuard.js'
   )

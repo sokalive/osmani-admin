@@ -61,25 +61,73 @@ export async function commitSubscriptionTransfer(client, opts) {
   }
 
   const targetExisting = await client.query(
-    `SELECT device_id, status, expires_at FROM device_subscriptions WHERE device_id = $1 FOR UPDATE`,
+    `SELECT device_id, status, expires_at, admin_revoked_at FROM device_subscriptions WHERE device_id = $1 FOR UPDATE`,
     [tgt],
   )
   const targetRow = targetExisting.rows[0]
+  if (targetRow?.admin_revoked_at) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'Target device is admin-revoked (DELETE USER). Transfer blocked until a post-revoke payment restores access.',
+      code: 'ADMIN_REVOKED_TARGET',
+    }
+  }
   const targetExpiry = computeTransferTargetExpiry(sub.expires_at, targetRow?.expires_at)
   if (!targetExpiry) return { ok: false, status: 400, error: 'Source subscription expired' }
 
+  const { assertWritableEntitlement, ENTITLEMENT_GUARD_SOURCES } = await import(
+    './subscriptionEntitlementGuard.js'
+  )
+  const {
+    CANONICAL_ENGINE_VERSION,
+    SUBSCRIPTION_SCHEMA_VERSION,
+  } = await import('./subscriptionHardeningConstants.js')
+  const { invalidateSubscriptionAccessCache } = await import('./subscriptionAccessCache.js')
+  try {
+    await assertWritableEntitlement({
+      deviceId: tgt,
+      orderId: txnId,
+      expiresAt: targetExpiry,
+      previousExpiresAt: targetRow?.expires_at ?? sub.expires_at,
+      allowAbsoluteCustom: true,
+      source: ENTITLEMENT_GUARD_SOURCES.TRANSFER,
+    })
+  } catch (guardErr) {
+    return {
+      ok: false,
+      status: 400,
+      error: guardErr?.message || 'Entitlement Guard rejected transfer',
+      code: guardErr?.code || 'ENTITLEMENT_GUARD_REJECTED',
+    }
+  }
+
   const upsertTarget = await client.query(
-    `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-     VALUES ($1, 'active', $2, $3, $4, now(), $5)
+    `INSERT INTO device_subscriptions (
+       device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash,
+       subscription_schema_version, canonical_engine_version, migration_completed_at
+     )
+     VALUES ($1, 'active', $2, $3, $4, now(), $5, $6, $7, now())
      ON CONFLICT (device_id) DO UPDATE SET
        status = 'active',
        expires_at = EXCLUDED.expires_at,
        started_at = COALESCE(device_subscriptions.started_at, EXCLUDED.started_at),
        transaction_id = EXCLUDED.transaction_id,
        updated_at = now(),
-       fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)
+       fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash),
+       subscription_schema_version = EXCLUDED.subscription_schema_version,
+       canonical_engine_version = EXCLUDED.canonical_engine_version,
+       migration_completed_at = COALESCE(device_subscriptions.migration_completed_at, now())
      RETURNING device_id, status, expires_at, started_at, transaction_id`,
-    [tgt, targetExpiry, sub.started_at ?? new Date(), txnId, targetFpHash],
+    [
+      tgt,
+      targetExpiry,
+      sub.started_at ?? new Date(),
+      txnId,
+      targetFpHash,
+      SUBSCRIPTION_SCHEMA_VERSION,
+      CANONICAL_ENGINE_VERSION,
+    ],
   )
   if (!upsertTarget.rows[0]) {
     return { ok: false, status: 500, error: 'Target subscription activation failed' }
@@ -108,6 +156,9 @@ export async function commitSubscriptionTransfer(client, opts) {
   if (sourceAfter?.active_now) {
     return { ok: false, status: 500, error: 'Transfer verification failed: source still active after revoke' }
   }
+
+  invalidateSubscriptionAccessCache(src)
+  invalidateSubscriptionAccessCache(tgt)
 
   return {
     ok: true,
