@@ -92,17 +92,28 @@ function appendSearch(search, deviceCol, phoneCol, cond, params, i) {
   return appendAdminPhoneDeviceSearch(search, deviceCol, [phoneCol], cond, params, i)
 }
 
+// Real production Device ID shapes: 16/32/64-hex + installation UUID. Kept in sync with
+// adminUserLookup.CANONICAL_DEVICE_ID_FORMAT (duplicated locally to avoid an import cycle).
+const SUBSCRIPTION_DEVICE_ID_FORMAT =
+  /^([a-f0-9]{16}|[a-f0-9]{32}|[a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+
 function appendSubscriptionSearch(search, cond, params, i) {
   const q = String(search ?? '').trim()
   if (!q) return i
-  if (/^[a-f0-9]{64}$/i.test(q)) {
-    cond.push(`ds.device_id = $${i}`)
+  // Exact Device ID match for any real client shape (legacy 16-hex / UUID included).
+  // Must run before the phone branch: a 16-hex id yields >=9 extracted digits and would
+  // otherwise be misrouted to phone matching and never found.
+  if (SUBSCRIPTION_DEVICE_ID_FORMAT.test(q)) {
+    cond.push(`lower(ds.device_id) = $${i}`)
     params.push(q.toLowerCase())
     return i + 1
   }
   const digits = normalizePhoneDigits(q)
   const phoneExprs = [`COALESCE(lt.phone, pay.phone, '')`]
-  if (digits && digits.length >= 9) {
+  // Only treat as a phone when the query has no hex letters (real phones are digits/+/() only).
+  // A device id containing a-f must fall through to the substring branch (ds.device_id ILIKE).
+  const isPhoneShaped = !/[a-z]/i.test(q)
+  if (isPhoneShaped && digits && digits.length >= 9) {
     const phoneParts = []
     let idx = i
     for (const expr of phoneExprs) {

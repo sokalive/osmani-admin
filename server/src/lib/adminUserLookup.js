@@ -31,8 +31,25 @@ function requirePool() {
   return pool
 }
 
+/**
+ * Real production Device ID shapes (all historical clients):
+ *  - 16-hex  → legacy Android SSAID (ANDROID_ID)
+ *  - 32-hex  → legacy hashed identity
+ *  - 64-hex  → current hashed identity
+ *  - UUID    → installation UUID (8-4-4-4-12)
+ * A previous fix restricted this to 64-hex only, which silently hid every legacy
+ * (16-hex / UUID) subscriber from Admin lookup, search and Delete User. Recognizing
+ * the real shapes restores canonical parity without touching identity ownership rules.
+ */
+const CANONICAL_DEVICE_ID_FORMAT =
+  /^([a-f0-9]{16}|[a-f0-9]{32}|[a-f0-9]{64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+
+export function isDeviceIdShaped(q) {
+  return CANONICAL_DEVICE_ID_FORMAT.test(String(q ?? '').trim())
+}
+
 function isExactDeviceId(q) {
-  return /^[a-f0-9]{64}$/i.test(String(q ?? '').trim())
+  return isDeviceIdShaped(q)
 }
 
 /** Forensic / verification script IDs must not appear as operational subscription devices. */
@@ -46,7 +63,7 @@ export function isSyntheticForensicDeviceId(deviceId) {
 export function isCanonicalOperationalDeviceId(deviceId) {
   const s = String(deviceId ?? '').trim()
   if (!s || isSyntheticForensicDeviceId(s)) return false
-  return /^[a-f0-9]{64}$/i.test(s)
+  return CANONICAL_DEVICE_ID_FORMAT.test(s)
 }
 
 async function resolveDeviceIdsForPhone(pool, digits) {
@@ -78,8 +95,12 @@ async function resolveDeviceIdsForPhone(pool, digits) {
          AND trim(coalesce(t.device_id::text, '')) <> ''
      ) d
      WHERE trim(coalesce(d.device_id, '')) <> ''
-       AND length(trim(d.device_id)) = 64
-       AND trim(d.device_id) ~ '^[a-f0-9]{64}$'
+       AND (
+         trim(d.device_id) ~* '^[a-f0-9]{16}$'
+         OR trim(d.device_id) ~* '^[a-f0-9]{32}$'
+         OR trim(d.device_id) ~* '^[a-f0-9]{64}$'
+         OR trim(d.device_id) ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       )
      ORDER BY device_id
      LIMIT $2`,
     [digits, MAX_DEVICES],

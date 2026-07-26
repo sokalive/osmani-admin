@@ -22,7 +22,15 @@ assert(
   'canonical 64-char accepted',
   isCanonicalOperationalDeviceId('4fce58117943a0b5a8607a5fb5e2eb8b292637c5c8989af41eef03f8f3bdd9a1'),
 )
-assert('short legacy id rejected', !isCanonicalOperationalDeviceId('840446757bec23ac'))
+// Legacy real production identities (16-hex Android SSAID + installation UUID) MUST be
+// operational so Admin lookup / search / Delete User can manage them. Only synthetic
+// forensic IDs and malformed strings are rejected.
+assert('legacy 16-hex SSAID accepted', isCanonicalOperationalDeviceId('840446757bec23ac'))
+assert(
+  'installation UUID accepted',
+  isCanonicalOperationalDeviceId('3dc1f3a2-0677-4dac-8d73-035158e32834'),
+)
+assert('malformed short id rejected', !isCanonicalOperationalDeviceId('abc123'))
 assert('synthetic rejected as canonical', !isCanonicalOperationalDeviceId('direct-probe-458f2c58'))
 
 {
