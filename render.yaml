@@ -54,6 +54,10 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
+      # Trusted internal admin install: server/src/loadEnv.js forces
+      # ADMIN_PANEL_AUTH_REQUIRED=false on Render (RENDER=true) and Contabo (OSMANI_VPS=1),
+      # so both dashboards open without email/PIN/OTP. Admin APIs still require
+      # X-Admin-Token. Set ADMIN_TRUSTED_INSTALL=0 here to restore the login screen.
       - key: UPLOAD_DIR
         value: /var/render/media/uploads
       - key: NOTIFICATION_IMAGE_STORAGE

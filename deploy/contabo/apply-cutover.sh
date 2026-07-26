@@ -267,6 +267,13 @@ if [[ -f "$API_DIR/scripts/regression-payment-system-completion.mjs" ]]; then
     exit 1
   }
 fi
+if [[ -f "$API_DIR/scripts/regression-trusted-admin-install.mjs" ]]; then
+  echo "==> regression-trusted-admin-install.mjs"
+  (cd "$API_DIR" && node scripts/regression-trusted-admin-install.mjs) || {
+    echo "ERROR: trusted admin install regression failed" >&2
+    exit 1
+  }
+fi
 if [[ -f "$API_DIR/scripts/sim-500-concurrent-activations.mjs" ]]; then
   echo "==> sim-500-concurrent-activations.mjs"
   (cd "$API_DIR" && node scripts/sim-500-concurrent-activations.mjs) || {

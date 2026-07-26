@@ -51,6 +51,20 @@ function shouldLoadCutoverEnv() {
 }
 
 /**
+ * Trusted internal Admin installs — Contabo VPS (OSMANI_VPS=1) and Render (RENDER=true) —
+ * open the dashboard directly with no email/PIN/OTP screen. This only removes the
+ * interactive login UI: every admin route still goes through requireAdminPanelAccess,
+ * which demands a matching X-Admin-Token. Set ADMIN_TRUSTED_INSTALL=0 to restore login.
+ */
+function isTrustedAdminInstall() {
+  const explicit = String(process.env.ADMIN_TRUSTED_INSTALL ?? '').trim().toLowerCase()
+  if (['0', 'false', 'no', 'off'].includes(explicit)) return false
+  if (['1', 'true', 'yes', 'on'].includes(explicit)) return true
+  if (String(process.env.OSMANI_VPS || '').trim() === '1') return true
+  return String(process.env.RENDER || '').trim().toLowerCase() === 'true'
+}
+
+/**
  * Load env files for Contabo/Render:
  * 1. .env.cutover — Contabo-only when OSMANI_LOAD_CUTOVER_ENV=1 (or non-Render local cutover testing)
  * 2. server/.env, repo-root/.env — secrets (DATABASE_URL); override cutover
@@ -83,10 +97,9 @@ export function loadProcessEnv() {
     loadEnvFile(filePath, { override: true })
   }
 
-  // Contabo trusted Admin install (OSMANI_VPS=1): open dashboard without interactive login.
-  // Secrets .env may still set ADMIN_PANEL_AUTH_REQUIRED=true — override only on Contabo.
-  // API routes remain protected by X-Admin-Token via requireAdminPanelAccess.
-  if (String(process.env.OSMANI_VPS || '').trim() === '1') {
+  // Applied after the secret files because server/.env may still carry
+  // ADMIN_PANEL_AUTH_REQUIRED=true from the pre-cutover install.
+  if (isTrustedAdminInstall()) {
     process.env.ADMIN_PANEL_AUTH_REQUIRED = 'false'
   }
 
