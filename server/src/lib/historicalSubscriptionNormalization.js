@@ -245,18 +245,57 @@ function buildLineage(evidence) {
   return { uf, devicesByRoot, txnByOrder }
 }
 
-function buildEventsByRoot(evidence, lineage) {
-  const byRoot = new Map()
-  const add = (deviceId, event) => {
-    if (!event) return
-    const root = lineage.uf.find(deviceId)
-    if (!root) return
-    if (!byRoot.has(root)) byRoot.set(root, new Map())
-    byRoot.get(root).set(event.key, event)
+/**
+ * Resolve the current Device-ID owner of every credit event by replaying explicit
+ * transfer/recovery edges chronologically. This avoids two opposite errors:
+ * - counting one migrated payment on both source and target;
+ * - merging later independent purchases merely because devices shared old lineage.
+ */
+function buildOwnedEvents(evidence, lineage) {
+  const edges = []
+  for (const transfer of evidence.transfers) {
+    const atMs = ms(transfer.completed_at) ?? ms(transfer.created_at)
+    const source = text(transfer.source_device_id)
+    const target = text(transfer.target_device_id)
+    if (atMs != null && source && target && source !== target) {
+      edges.push({ source, target, at_ms: atMs, kind: 'device_transfer', ref: String(transfer.id) })
+    }
   }
-  for (const txn of evidence.transactions) add(txn.device_id, paymentEvent(txn))
-  for (const grant of evidence.grants) add(grant.device_id, grantEvent(grant))
-  return byRoot
+  for (const sub of evidence.subscriptions) {
+    const target = text(sub.device_id)
+    const source = parseRecoverySource(sub.transaction_id)
+    const atMs = ms(sub.updated_at)
+    if (atMs != null && source && target && source !== target) {
+      edges.push({ source, target, at_ms: atMs, kind: 'recovery', ref: text(sub.transaction_id) })
+    }
+    const linkedTxn = lineage.txnByOrder.get(text(sub.transaction_id))
+    const payingDevice = text(linkedTxn?.device_id)
+    if (atMs != null && payingDevice && target && payingDevice !== target) {
+      edges.push({
+        source: payingDevice,
+        target,
+        at_ms: atMs,
+        kind: 'linked_order_move',
+        ref: text(sub.transaction_id),
+      })
+    }
+  }
+  edges.sort((a, b) => a.at_ms - b.at_ms || a.ref.localeCompare(b.ref))
+
+  const byOwner = new Map()
+  const assign = (event) => {
+    if (!event) return
+    let owner = text(event.device_id)
+    for (const edge of edges) {
+      if (edge.at_ms >= event.at_ms && edge.source === owner) owner = edge.target
+    }
+    if (!owner) return
+    if (!byOwner.has(owner)) byOwner.set(owner, new Map())
+    byOwner.get(owner).set(event.key, { ...event, entitlement_owner_device_id: owner })
+  }
+  for (const txn of evidence.transactions) assign(paymentEvent(txn))
+  for (const grant of evidence.grants) assign(grantEvent(grant))
+  return { byOwner, edges }
 }
 
 function actionFor(expectedMs, nowMs) {
@@ -267,7 +306,7 @@ export async function auditHistoricalSubscriptionNormalization({ includeAll = fa
   const pool = requirePool()
   const evidence = await loadEvidence(pool)
   const lineage = buildLineage(evidence)
-  const eventsByRoot = buildEventsByRoot(evidence, lineage)
+  const ownership = buildOwnedEvents(evidence, lineage)
   const activeByRoot = new Map()
   for (const sub of evidence.subscriptions) {
     const root = lineage.uf.find(sub.device_id)
@@ -280,7 +319,7 @@ export async function auditHistoricalSubscriptionNormalization({ includeAll = fa
   for (const sub of evidence.subscriptions) {
     const deviceId = text(sub.device_id)
     const root = lineage.uf.find(deviceId)
-    const events = [...(eventsByRoot.get(root)?.values() ?? [])]
+    const events = [...(ownership.byOwner.get(deviceId)?.values() ?? [])]
       .sort((a, b) => a.at_ms - b.at_ms || a.key.localeCompare(b.key))
     const replay = replayCanonicalEntitlement(events)
     const actualMs = ms(sub.expires_at)
@@ -289,17 +328,23 @@ export async function auditHistoricalSubscriptionNormalization({ includeAll = fa
     const linkedDevices = [...(lineage.devicesByRoot.get(root) ?? new Set([deviceId]))].sort()
     const activeOwners = [...(activeByRoot.get(root) ?? [])].sort()
     const blockers = []
-    if (!events.length) blockers.push('no_completed_payment_or_undeleted_grant_in_lineage')
     if (events.some((event) => event.plan_id == null && event.kind === 'payment')) {
       blockers.push('completed_payment_missing_plan')
     }
-    if (activeOwners.length > 1) blockers.push('multiple_active_entitlements_in_lineage')
-    const overCredited = deltaMs != null && deltaMs > TOLERANCE_MS
+    const unsupported = events.length === 0
+    const overCredited = unsupported || (deltaMs != null && deltaMs > TOLERANCE_MS)
     const materiallyOverCredited = deltaMs != null && deltaMs > MATERIAL_OVER_CREDIT_MS
     const candidate = overCredited
     const lastEvent = events.at(-1) ?? null
     const paymentHistory = events.filter((event) => event.kind === 'payment')
     const grantHistory = events.filter((event) => event.kind !== 'payment')
+    const unsupportedExpiry = new Date(nowMs).toISOString()
+    const newExpiresAt = unsupported ? unsupportedExpiry : replay.expected_expires_at
+    const newAction = unsupported
+      ? 'remove_unsupported_entitlement'
+      : candidate
+        ? actionFor(expectedMs, nowMs)
+        : 'none'
     const row = {
       device_id: deviceId,
       subscription_id: text(sub.transaction_id),
@@ -309,13 +354,14 @@ export async function auditHistoricalSubscriptionNormalization({ includeAll = fa
       started_at: iso(sub.started_at),
       old_expires_at: iso(sub.expires_at),
       expected_expires_at: replay.expected_expires_at,
+      new_expires_at: newExpiresAt,
       old_remaining_days: computeRemainingCalendarDaysEat(sub.expires_at, nowMs),
-      new_remaining_days: computeRemainingCalendarDaysEat(replay.expected_expires_at, nowMs),
+      new_remaining_days: computeRemainingCalendarDaysEat(newExpiresAt, nowMs),
       over_credited: overCredited,
       materially_over_credited: materiallyOverCredited,
       over_credit_ms: deltaMs != null && deltaMs > 0 ? deltaMs : 0,
       over_credit_days: deltaMs != null && deltaMs > 0 ? Math.round((deltaMs / DAY_MS) * 100) / 100 : 0,
-      action: candidate ? actionFor(expectedMs, nowMs) : 'none',
+      action: newAction,
       plan_id: lastEvent?.plan_id ?? null,
       plan_name: lastEvent?.plan_name ?? null,
       plan_price: lastEvent?.amount ?? null,
@@ -329,8 +375,8 @@ export async function auditHistoricalSubscriptionNormalization({ includeAll = fa
       legitimate_stack_count: replay.legitimate_stack_count,
       replay_steps: replay.steps,
       root_cause: candidate
-        ? activeOwners.length > 1
-          ? 'historical_migration_or_recovery_duplicate_with_inflated_expiry'
+        ? unsupported
+          ? 'active_entitlement_has_no_completed_payment_or_undeleted_grant_owned_by_this_device'
           : events.length > 1
             ? 'stored_expiry_exceeds_completed_payment_and_grant_replay'
             : 'stored_expiry_exceeds_single_purchased_or_granted_entitlement'
@@ -361,11 +407,14 @@ export async function auditHistoricalSubscriptionNormalization({ includeAll = fa
       remove_expired_entitlement: candidates.filter(
         (row) => row.blockers.length === 0 && row.action === 'remove_expired_entitlement',
       ).length,
+      remove_unsupported_entitlement: candidates.filter(
+        (row) => row.blockers.length === 0 && row.action === 'remove_unsupported_entitlement',
+      ).length,
       keep_valid_remaining_time: candidates.filter(
         (row) => row.blockers.length === 0 && row.action === 'recalculate_active_expiry',
       ).length,
       legitimate_stacked: candidates.filter((row) => row.entitlement_stacked).length,
-      ambiguous_or_missing_evidence: blockers.length,
+      blocked_by_invalid_evidence: blockers.length,
     },
     candidates,
     blockers,
@@ -431,8 +480,11 @@ export async function applyHistoricalSubscriptionNormalization({
       ) {
         throw new Error(`Concurrent subscription change detected for ${row.device_id}; no rows applied`)
       }
-      const targetExpiry = row.expected_expires_at
-      const targetStatus = ms(targetExpiry) > Date.now() ? 'active' : 'expired'
+      const targetExpiry = row.new_expires_at
+      const targetStatus =
+        row.action === 'remove_unsupported_entitlement' || ms(targetExpiry) <= Date.now()
+          ? 'expired'
+          : 'active'
       await client.query(
         `INSERT INTO subscription_normalization_backups
            (batch_id, device_id, old_row, computed_evidence, new_status, new_expires_at, applied_by)
