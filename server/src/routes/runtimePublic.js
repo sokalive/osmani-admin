@@ -696,6 +696,22 @@ runtimePublicRouter.post('/historical-subscription-normalization-apply', require
   }
 })
 
+/** Read-only rollback batch evidence for final verification and reporting. */
+runtimePublicRouter.get('/historical-subscription-normalization-batch', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { getHistoricalSubscriptionNormalizationBatch } = await import(
+      '../lib/historicalSubscriptionNormalization.js'
+    )
+    const batchId = String(req.query.batch_id ?? '').trim()
+    const report = await getHistoricalSubscriptionNormalizationBatch(batchId)
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/historical-subscription-normalization-batch]', e)
+    res.status(400).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
 /** Audit users wrongly inactive after expiry repair (read-only). */
 runtimePublicRouter.get('/subscription-expiry-restore-audit', requireLegacyAdminToken, async (req, res) => {
   try {

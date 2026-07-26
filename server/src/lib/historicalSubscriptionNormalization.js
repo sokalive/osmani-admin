@@ -418,6 +418,7 @@ export async function auditHistoricalSubscriptionNormalization({ includeAll = fa
     },
     candidates,
     blockers,
+    ...(includeAll ? { rows } : {}),
   }
 }
 
@@ -566,5 +567,89 @@ export async function applyHistoricalSubscriptionNormalization({
     corrected_count: changed.length,
     changed,
     preflight_totals: audit.totals,
+  }
+}
+
+/** Read a completed rollback batch for final reporting/verification. */
+export async function getHistoricalSubscriptionNormalizationBatch(batchId) {
+  const id = text(batchId)
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('valid batch_id is required')
+  const pool = requirePool()
+  const { rows } = await pool.query(
+    `SELECT b.batch_id,
+            b.device_id,
+            b.old_row,
+            b.computed_evidence,
+            b.new_status,
+            b.new_expires_at,
+            b.applied_at,
+            b.applied_by,
+            ds.status AS current_status,
+            ds.expires_at AS current_expires_at,
+            ds.transaction_id AS current_subscription_id
+     FROM subscription_normalization_backups b
+     LEFT JOIN device_subscriptions ds ON ds.device_id = b.device_id
+     WHERE b.batch_id = $1::uuid
+     ORDER BY b.device_id`,
+    [id],
+  )
+  const out = rows.map((row) => {
+    const evidence =
+      row.computed_evidence && typeof row.computed_evidence === 'object'
+        ? row.computed_evidence
+        : {}
+    const payments = Array.isArray(evidence.payment_history) ? evidence.payment_history : []
+    const grants = Array.isArray(evidence.grant_history) ? evidence.grant_history : []
+    const events = [...payments, ...grants].sort(
+      (a, b) => ms(a.purchased_at) - ms(b.purchased_at),
+    )
+    const last = events.at(-1) ?? null
+    const oldExpiry = iso(row.old_row?.expires_at)
+    const newExpiry = iso(row.new_expires_at)
+    const appliedAtMs = ms(row.applied_at) ?? Date.now()
+    const unsupported = events.length === 0
+    const inactive = text(row.new_status) !== 'active' || ms(newExpiry) <= appliedAtMs
+    return {
+      device_id: text(row.device_id),
+      subscription_id: text(evidence.subscription_id ?? row.current_subscription_id),
+      plan_id: last?.plan_id ?? null,
+      plan_name: last?.plan_name ?? null,
+      amount_paid: payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0),
+      purchased_duration_days: events.reduce(
+        (sum, event) => sum + (Number(event.duration_days) || 0),
+        0,
+      ),
+      purchase_date: last?.purchased_at ?? null,
+      old_expiry: oldExpiry,
+      new_expiry: newExpiry,
+      old_remaining_days: computeRemainingCalendarDaysEat(oldExpiry, appliedAtMs),
+      new_remaining_days:
+        text(row.new_status) === 'active'
+          ? computeRemainingCalendarDaysEat(newExpiry, appliedAtMs)
+          : 0,
+      old_status: text(row.old_row?.status),
+      new_status: text(row.new_status),
+      current_status: text(row.current_status),
+      current_expires_at: iso(row.current_expires_at),
+      action_taken: unsupported
+        ? 'removed_unsupported_entitlement'
+        : inactive
+          ? 'removed_expired_entitlement'
+          : 'recalculated_active_expiry',
+      reason: evidence.root_cause ?? null,
+      payment_history: payments,
+      grant_history: grants,
+      replay_steps: Array.isArray(evidence.replay_steps) ? evidence.replay_steps : [],
+      entitlement_stacked: (evidence.replay_steps ?? []).some((step) => step.stacked === true),
+      applied_at: iso(row.applied_at),
+      applied_by: text(row.applied_by),
+    }
+  })
+  return {
+    batch_id: id,
+    backup_table: 'subscription_normalization_backups',
+    backup_rows: out.length,
+    applied_at: out[0]?.applied_at ?? null,
+    rows: out,
   }
 }

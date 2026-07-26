@@ -3,7 +3,7 @@
  * Stacking on active renewals is intentional (see subscriptionStacking.js).
  */
 import { getPool } from '../db/pool.js'
-import { computeStackedExpiryIso } from './subscriptionStacking.js'
+import { computeMidnightEatExpiryIso } from './subscriptionStacking.js'
 import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
 
 const MS_TOLERANCE = 2 * 60 * 1000 // 2 minutes clock skew
@@ -60,15 +60,18 @@ export function replayStackedExpiryFromEvents(events) {
       })
       continue
     }
-    const stack = computeStackedExpiryIso(current, ev.durationDays, ev.atMs)
-    current = stack.expiresAt
+    const currentMs = toMs(current)
+    const stacked = currentMs != null && currentMs > ev.atMs
+    current = stacked
+      ? new Date(currentMs + ev.durationDays * 24 * 60 * 60 * 1000).toISOString()
+      : computeMidnightEatExpiryIso(ev.durationDays, ev.atMs)
     steps.push({
       ref: ev.ref,
       kind: ev.kind,
       duration_days: ev.durationDays,
       at: new Date(ev.atMs).toISOString(),
       expires_after: current,
-      stacked: stack.stacked,
+      stacked,
     })
   }
   return { expectedExpiresAt: current, steps }
@@ -81,7 +84,7 @@ export function computeLastPaymentFloorExpiry(events) {
   const atMs = last.atMs
   const days = Math.max(1, Math.trunc(Number(last.durationDays) || 0))
   if (!atMs || days < 1) return null
-  return computeStackedExpiryIso(null, days, atMs).expiresAt
+  return computeMidnightEatExpiryIso(days, atMs)
 }
 
 export async function loadCreditEventsForDevice(pool, deviceId) {
