@@ -7,10 +7,33 @@ import { getPool } from '../db/pool.js'
 export const ACTIVE_SUBSCRIPTION_EXISTS = 'ACTIVE_SUBSCRIPTION_EXISTS'
 
 export const ACTIVE_SUBSCRIPTION_EXISTS_MESSAGE_SW =
-  'Kifaa hiki tayari kina kifurushi kinachoendelea. Subiri kiishe kabla ya kununua tena.'
+  'User huyu tayari ana kifurushi kinachoendelea. Subiri kimalizike kwanza.'
 
 export const ACTIVE_SUBSCRIPTION_EXISTS_MESSAGE =
-  'This device already has an active subscription. Wait until it expires before purchasing again.'
+  'This user already has an active subscription. Wait until it finishes first.'
+
+/** Same gate message for admin Toa Kifurushi / Omba / Offer grants. */
+export const ACTIVE_SUBSCRIPTION_GRANT_REJECT_SW = ACTIVE_SUBSCRIPTION_EXISTS_MESSAGE_SW
+
+export class ActiveSubscriptionExistsError extends Error {
+  constructor(block = {}) {
+    super(ACTIVE_SUBSCRIPTION_EXISTS_MESSAGE_SW)
+    this.name = 'ActiveSubscriptionExistsError'
+    this.code = ACTIVE_SUBSCRIPTION_EXISTS
+    this.block = block
+    this.statusCode = 409
+  }
+}
+
+/**
+ * Reject admin grants / approvals while the device already has a live entitlement.
+ * @throws {ActiveSubscriptionExistsError}
+ */
+export async function assertNoActiveSubscriptionForGrant(deviceId) {
+  const block = await getActiveDeviceSubscriptionBlock(deviceId)
+  if (block.blocked) throw new ActiveSubscriptionExistsError(block)
+  return block
+}
 
 function requirePool() {
   const pool = getPool()

@@ -1037,6 +1037,10 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
     throw new Error(`Invalid device_id or duration_days (allowed: ${list})`)
   }
 
+  // Permanent: never stack / duplicate while entitlement is already live.
+  const { assertNoActiveSubscriptionForGrant } = await import('./lib/activeSubscriptionPaymentGate.js')
+  await assertNoActiveSubscriptionForGrant(d)
+
   let smsPhone = phone
   if (!smsPhone) {
     const resolved = await resolvePaymentPhoneForDevice(d)
@@ -1059,7 +1063,13 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   const expiresAt = stack.expiresAt
   const orderId = `manual_grant:${grantId}`
 
-  const { skipped } = await upsertDeviceSubscriptionActive(
+  // Record txn BEFORE upsert so admin-revoke SSOT can prove this grant is post-revoke.
+  await recordManualGrantPhoneAndTransaction(
+    { deviceId: d, grantId, planId: plan?.id ?? null, phone: smsPhone || phone },
+    client,
+  )
+
+  const upsertResult = await upsertDeviceSubscriptionActive(
     {
       deviceId: d,
       orderId,
@@ -1069,18 +1079,18 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
     },
     client,
   )
-  if (skipped) {
-    console.warn('[manual_grant] unexpected upsert skip — order_id should be unique:', orderId)
+  if (upsertResult?.blocked_by_admin_revoke) {
+    throw new Error(
+      'Grant blocked: device was admin-revoked and this order is not allowed to restore access',
+    )
+  }
+  if (upsertResult?.skipped) {
+    throw new Error(`Grant activation skipped unexpectedly for ${orderId}`)
   }
 
   await q(
     `UPDATE manual_subscription_grants SET expires_at_snapshot = $2::timestamptz WHERE id = $1`,
     [grantId, expiresAt],
-  )
-
-  await recordManualGrantPhoneAndTransaction(
-    { deviceId: d, grantId, planId: plan?.id ?? null, phone: smsPhone || phone },
-    client,
   )
 
   if (smsPhone) {
@@ -1099,12 +1109,17 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
       .catch((err) => console.warn('[sms] manual grant notify failed:', err))
   }
 
-  publishManualGrantActivationRealtime(d, {
+  // When inside an open DB transaction, defer SSE until after COMMIT so the app
+  // never wakes before the entitlement row is visible.
+  const realtimeMeta = {
     grantId,
     nonce: String(nonce),
     durationDays: days,
     orderId,
-  })
+  }
+  if (!client) {
+    publishManualGrantActivationRealtime(d, realtimeMeta)
+  }
 
   return {
     grantId,
@@ -1113,7 +1128,10 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
     durationDays: days,
     stackedFromExpiresAt: stack.previousExpiresAt ?? null,
     anchorAt: stack.anchorAt ?? null,
-    skipped,
+    skipped: false,
+    realtimeDeferred: Boolean(client),
+    realtimeMeta,
+    deviceId: d,
   }
 }
 
@@ -1150,6 +1168,9 @@ export async function grantCustomManualDeviceSubscription(
     throw new Error('expires_at must be later than started_at')
   }
 
+  const { assertNoActiveSubscriptionForGrant } = await import('./lib/activeSubscriptionPaymentGate.js')
+  await assertNoActiveSubscriptionForGrant(d)
+
   const plan = await getPlanRowByIdAny(pid)
   if (!plan || plan.deleted_at) {
     throw new Error('Plan not found')
@@ -1172,20 +1193,26 @@ export async function grantCustomManualDeviceSubscription(
   if (!grantId || nonce == null) throw new Error('manual custom grant insert failed')
 
   const orderId = `manual_grant:${grantId}`
-  const { skipped } = await upsertDeviceSubscriptionActiveAt(
+
+  await recordManualGrantPhoneAndTransaction({ deviceId: d, grantId, planId: pid, phone: phoneRaw }, client)
+
+  const upsertResult = await upsertDeviceSubscriptionActiveAt(
     { deviceId: d, orderId, expiresAt: exp.toISOString(), startedAt: start.toISOString() },
     client,
   )
-  if (skipped) {
-    console.warn('[manual_grant_custom] unexpected upsert skip — order_id should be unique:', orderId)
+  if (upsertResult?.blocked_by_admin_revoke) {
+    throw new Error(
+      'Custom grant blocked: device was admin-revoked and this order is not allowed to restore access',
+    )
+  }
+  if (upsertResult?.skipped) {
+    throw new Error(`Custom grant activation skipped unexpectedly for ${orderId}`)
   }
 
   await q(`UPDATE manual_subscription_grants SET expires_at_snapshot = $2::timestamptz WHERE id = $1`, [
     grantId,
     exp.toISOString(),
   ])
-
-  await recordManualGrantPhoneAndTransaction({ deviceId: d, grantId, planId: pid, phone: phoneRaw }, client)
 
   void import('./lib/smsSubscriptionHooks.js')
     .then((m) =>
@@ -1201,12 +1228,15 @@ export async function grantCustomManualDeviceSubscription(
     )
     .catch((err) => console.warn('[sms] manual custom grant notify failed:', err))
 
-  publishManualGrantActivationRealtime(d, {
+  const realtimeMeta = {
     grantId,
     nonce: String(nonce),
     durationDays: days,
     orderId,
-  })
+  }
+  if (!client) {
+    publishManualGrantActivationRealtime(d, realtimeMeta)
+  }
 
   return {
     grantId,
@@ -1219,7 +1249,10 @@ export async function grantCustomManualDeviceSubscription(
     customExpiry: true,
     manualCustom: true,
     createdBy: creator,
-    skipped,
+    skipped: false,
+    realtimeDeferred: Boolean(client),
+    realtimeMeta,
+    deviceId: d,
   }
 }
 
@@ -1886,6 +1919,10 @@ export async function upsertDeviceSubscriptionActiveAt(
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
          manual_admin_blocked = false,
+         admin_revoked_at = NULL,
+         admin_revoked_by = NULL,
+         admin_revocation_reason = NULL,
+         admin_revoked_transaction_id = NULL,
          subscription_schema_version = EXCLUDED.subscription_schema_version,
          canonical_engine_version = EXCLUDED.canonical_engine_version,
          migration_completed_at = COALESCE(device_subscriptions.migration_completed_at, now())`,
@@ -3453,6 +3490,9 @@ export async function redeemOfferCodeForDevice(deviceId, rawCode) {
     }
 
     await client.query('COMMIT')
+    if (grant.realtimeDeferred && grant.realtimeMeta) {
+      publishManualGrantActivationRealtime(d, grant.realtimeMeta)
+    }
     await resetOfferCodeDeviceAttempts(d)
     offerCodeAudit('redeemed', { device_id: d, code, grant_id: grant.grantId })
     return { ok: true, grant }

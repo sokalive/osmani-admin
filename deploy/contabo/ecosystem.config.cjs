@@ -68,6 +68,11 @@ for (const key of SECRET_ENV_KEYS) {
   if (val) pm2Env[key] = val
 }
 
+// Trusted Contabo Admin install: open dashboard without interactive login.
+// API routes remain protected by X-Admin-Token (requireAdminPanelAccess).
+// Does NOT expose public endpoints or weaken payment/subscription auth.
+pm2Env.ADMIN_PANEL_AUTH_REQUIRED = 'false'
+
 if (!String(pm2Env.DATABASE_URL || '').trim()) {
   console.error(
     '[ecosystem] DATABASE_URL missing — add to',

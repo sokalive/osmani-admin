@@ -234,6 +234,13 @@ export async function recoverAdminPaymentOrder({
         act.expiresAt ?? null,
       ])
       await client.query('COMMIT')
+      // Instant device wake — do not wait for verify poll / boost queue.
+      try {
+        const { notifySubscriptionActivatedFromAct } = await import('./subscriptionActivationNotify.js')
+        notifySubscriptionActivatedFromAct(act, oid)
+      } catch (notifyErr) {
+        console.warn('[admin_payment_recovery] SSE notify failed:', notifyErr?.message || notifyErr)
+      }
       return {
         ok: true,
         activated: act.activated === true,
@@ -320,6 +327,14 @@ export async function recoverAdminPaymentOrder({
     ])
 
     await client.query('COMMIT')
+
+    // Instant device wake after owner-override activation.
+    try {
+      const { notifySubscriptionActivated } = await import('./subscriptionActivationNotify.js')
+      notifySubscriptionActivated(deviceId, oid)
+    } catch (notifyErr) {
+      console.warn('[admin_payment_recovery] override SSE notify failed:', notifyErr?.message || notifyErr)
+    }
 
     void import('./smsSubscriptionHooks.js')
       .then((m) =>

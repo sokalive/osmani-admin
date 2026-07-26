@@ -161,6 +161,15 @@ subscriptionRequestsAdminRouter.post('/:requestId/approve', async (req, res) => 
     })
     res.json({ ok: true, ...result, request: mapRequestRow(result.request) })
   } catch (e) {
+    if (e?.name === 'ActiveSubscriptionExistsError' || e?.code === 'ACTIVE_SUBSCRIPTION_EXISTS') {
+      return res.status(409).json({
+        ok: false,
+        code: 'ACTIVE_SUBSCRIPTION_EXISTS',
+        error: e.message,
+        message_sw: e.message,
+        ...(e.block || {}),
+      })
+    }
     console.error('[subscription-requests-admin] approve', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }

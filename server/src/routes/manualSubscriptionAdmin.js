@@ -501,6 +501,15 @@ manualSubscriptionAdminRouter.post('/grant-custom', rateLimitGrant, async (req, 
       createdBy: result.createdBy,
     })
   } catch (e) {
+    if (e?.name === 'ActiveSubscriptionExistsError' || e?.code === 'ACTIVE_SUBSCRIPTION_EXISTS') {
+      return res.status(409).json({
+        ok: false,
+        code: 'ACTIVE_SUBSCRIPTION_EXISTS',
+        error: e.message,
+        message_sw: e.message,
+        ...(e.block || {}),
+      })
+    }
     const msg = String(e?.message || e)
     if (/must be later|Invalid started_at|Invalid expires_at|Plan not found/i.test(msg)) {
       return res.status(400).json({ ok: false, error: msg })
@@ -568,6 +577,15 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
       durationDays: result.durationDays,
     })
   } catch (e) {
+    if (e?.name === 'ActiveSubscriptionExistsError' || e?.code === 'ACTIVE_SUBSCRIPTION_EXISTS') {
+      return res.status(409).json({
+        ok: false,
+        code: 'ACTIVE_SUBSCRIPTION_EXISTS',
+        error: e.message,
+        message_sw: e.message,
+        ...(e.block || {}),
+      })
+    }
     console.error('[manual_grant]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }

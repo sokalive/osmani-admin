@@ -260,6 +260,20 @@ if [[ -f "$API_DIR/scripts/regression-subscription-hardening.mjs" ]]; then
     exit 1
   }
 fi
+if [[ -f "$API_DIR/scripts/regression-payment-system-completion.mjs" ]]; then
+  echo "==> regression-payment-system-completion.mjs"
+  (cd "$API_DIR" && node scripts/regression-payment-system-completion.mjs) || {
+    echo "ERROR: payment system completion regression failed" >&2
+    exit 1
+  }
+fi
+if [[ -f "$API_DIR/scripts/sim-500-concurrent-activations.mjs" ]]; then
+  echo "==> sim-500-concurrent-activations.mjs"
+  (cd "$API_DIR" && node scripts/sim-500-concurrent-activations.mjs) || {
+    echo "ERROR: 500 concurrent activation simulation failed" >&2
+    exit 1
+  }
+fi
 if [[ -f "$API_DIR/scripts/test-payment-recovery-db-integration.mjs" ]]; then
   echo "==> test-payment-recovery-db-integration.mjs (isolated fixtures)"
   (cd "$API_DIR" && node scripts/test-payment-recovery-db-integration.mjs) || {

@@ -51,6 +51,7 @@ async function parseJsonSafe(res) {
 }
 
 function msgFromBody(body, status) {
+  if (body && typeof body === 'object' && body.message_sw) return String(body.message_sw)
   if (body && typeof body === 'object' && body.providerMessage) return String(body.providerMessage)
   if (body && typeof body === 'object' && body.error) return String(body.error)
   if (body && typeof body === 'object' && body.message) return String(body.message)

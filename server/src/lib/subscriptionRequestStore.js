@@ -227,6 +227,12 @@ export async function approveSubscriptionRequest({
 
     await client.query('COMMIT')
 
+    // Publish SSE only AFTER COMMIT so verify/status see the new entitlement immediately.
+    if (grant.realtimeDeferred && grant.realtimeMeta) {
+      const { publishManualGrantActivationRealtime } = await import('./manualGrantRealtime.js')
+      publishManualGrantActivationRealtime(grant.deviceId || req.device_id, grant.realtimeMeta)
+    }
+
     const { rows: updated } = await pool.query(`SELECT * FROM subscription_requests WHERE id = $1`, [rid])
     return { ok: true, alreadyApproved: false, grant, request: updated[0] }
   } catch (e) {
