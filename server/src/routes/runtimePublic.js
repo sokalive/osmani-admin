@@ -712,6 +712,28 @@ runtimePublicRouter.get('/historical-subscription-normalization-batch', requireL
   }
 })
 
+/** Finalize pre-marker batch removals as authoritative revocations. */
+runtimePublicRouter.post('/historical-subscription-normalization-finalize', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { finalizeHistoricalNormalizationInactiveBatch } = await import(
+      '../lib/historicalSubscriptionNormalization.js'
+    )
+    const confirm = String(req.query.confirm ?? req.body?.confirm ?? '0').trim() === '1'
+    const batchId = String(req.query.batch_id ?? req.body?.batch_id ?? '').trim()
+    const appliedBy = String(req.body?.applied_by ?? 'admin_ai').trim()
+    const report = await finalizeHistoricalNormalizationInactiveBatch({
+      batchId,
+      appliedBy,
+      confirm,
+    })
+    res.status(report.ok === false ? 409 : 200).json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/historical-subscription-normalization-finalize]', e)
+    res.status(500).json({ ok: false, finalized: false, error: String(e.message || e) })
+  }
+})
+
 /** Audit users wrongly inactive after expiry repair (read-only). */
 runtimePublicRouter.get('/subscription-expiry-restore-audit', requireLegacyAdminToken, async (req, res) => {
   try {

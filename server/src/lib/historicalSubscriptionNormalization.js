@@ -482,11 +482,12 @@ export async function applyHistoricalSubscriptionNormalization({
         throw new Error(`Concurrent subscription change detected for ${row.device_id}; no rows applied`)
       }
       const targetExpiry = row.new_expires_at
-      // Production constraint permits active | pending | revoked. A past expiry plus
-      // pending is the canonical non-revoked inactive state used by verify/status APIs.
+      // Removed historical entitlements must be authoritative: revoked markers prevent
+      // old completed-payment finalize/verify paths from restoring them. A genuinely
+      // new payment created after this marker may restore access via the normal flow.
       const targetStatus =
         row.action === 'remove_unsupported_entitlement' || ms(targetExpiry) <= Date.now()
-          ? 'pending'
+          ? 'revoked'
           : 'active'
       await client.query(
         `INSERT INTO subscription_normalization_backups
@@ -512,16 +513,34 @@ export async function applyHistoricalSubscriptionNormalization({
         `UPDATE device_subscriptions
          SET status = $2,
              expires_at = $3::timestamptz,
+             admin_revoked_at = CASE WHEN $2 = 'revoked' THEN now() ELSE admin_revoked_at END,
+             admin_revoked_by = CASE WHEN $2 = 'revoked' THEN $5 ELSE admin_revoked_by END,
+             admin_revocation_reason =
+               CASE WHEN $2 = 'revoked' THEN 'historical_over_credit_normalization' ELSE admin_revocation_reason END,
+             admin_revoked_transaction_id =
+               CASE WHEN $2 = 'revoked' THEN transaction_id ELSE admin_revoked_transaction_id END,
              updated_at = now()
          WHERE device_id = $1
            AND status = 'active'
            AND expires_at = $4::timestamptz
            AND admin_revoked_at IS NULL
          RETURNING *`,
-        [row.device_id, targetStatus, targetExpiry, row.old_expires_at],
+        [row.device_id, targetStatus, targetExpiry, row.old_expires_at, text(appliedBy) || 'admin_ai'],
       )
       if (updated.rowCount !== 1) {
         throw new Error(`Compare-and-swap failed for ${row.device_id}; no rows applied`)
+      }
+      if (targetStatus === 'revoked') {
+        await client.query(
+          `INSERT INTO admin_subscription_revocation_actions
+             (device_id, admin_identity, reason, revoked_transaction_id, created_at)
+           VALUES ($1, $2, 'historical_over_credit_normalization', $3, now())`,
+          [
+            row.device_id,
+            text(appliedBy) || 'admin_ai',
+            text(updated.rows[0]?.transaction_id) || null,
+          ],
+        )
       }
       changed.push({
         device_id: row.device_id,
@@ -567,6 +586,115 @@ export async function applyHistoricalSubscriptionNormalization({
     corrected_count: changed.length,
     changed,
     preflight_totals: audit.totals,
+  }
+}
+
+/**
+ * One-time closure for batches written before authoritative revoke markers were added.
+ * A new transaction created after the batch applied_at is never revoked.
+ */
+export async function finalizeHistoricalNormalizationInactiveBatch({
+  batchId,
+  appliedBy = 'admin_ai',
+  confirm = false,
+} = {}) {
+  if (!confirm) return { ok: false, finalized: false, error: 'confirm=true is required' }
+  const id = text(batchId)
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('valid batch_id is required')
+  const pool = requirePool()
+  const client = await pool.connect()
+  const finalized = []
+  const skippedNewPurchases = []
+  try {
+    await client.query('BEGIN')
+    const { rows } = await client.query(
+      `SELECT b.device_id, b.applied_at, b.new_expires_at, b.old_row, ds.*
+       FROM subscription_normalization_backups b
+       INNER JOIN device_subscriptions ds ON ds.device_id = b.device_id
+       WHERE b.batch_id = $1::uuid
+         AND b.new_status = 'pending'
+       ORDER BY b.device_id
+       FOR UPDATE OF ds`,
+      [id],
+    )
+    for (const row of rows) {
+      const currentTxn = text(row.transaction_id)
+      const oldTxn = text(row.old_row?.transaction_id)
+      const { rows: paymentRows } = await client.query(
+        `SELECT created_at
+         FROM transactions
+         WHERE order_id = $1
+           AND status = 'completed'
+         LIMIT 1`,
+        [currentTxn],
+      )
+      const paymentCreatedMs = ms(paymentRows[0]?.created_at)
+      const appliedAtMs = ms(row.applied_at)
+      const hasNewPurchase =
+        currentTxn &&
+        currentTxn !== oldTxn &&
+        paymentCreatedMs != null &&
+        appliedAtMs != null &&
+        paymentCreatedMs > appliedAtMs
+      if (hasNewPurchase) {
+        skippedNewPurchases.push({
+          device_id: text(row.device_id),
+          transaction_id: currentTxn,
+          payment_created_at: iso(paymentRows[0]?.created_at),
+        })
+        continue
+      }
+      const updated = await client.query(
+        `UPDATE device_subscriptions
+         SET status = 'revoked',
+             expires_at = LEAST(expires_at, $2::timestamptz),
+             admin_revoked_at = now(),
+             admin_revoked_by = $3,
+             admin_revocation_reason = 'historical_over_credit_normalization',
+             admin_revoked_transaction_id = transaction_id,
+             updated_at = now()
+         WHERE device_id = $1
+         RETURNING device_id, status, expires_at, transaction_id, admin_revoked_at`,
+        [row.device_id, row.new_expires_at, text(appliedBy) || 'admin_ai'],
+      )
+      if (updated.rowCount !== 1) throw new Error(`Failed to finalize ${row.device_id}`)
+      await client.query(
+        `INSERT INTO admin_subscription_revocation_actions
+           (device_id, admin_identity, reason, revoked_transaction_id, created_at)
+         VALUES ($1, $2, 'historical_over_credit_normalization', $3, now())`,
+        [row.device_id, text(appliedBy) || 'admin_ai', currentTxn || null],
+      )
+      finalized.push(updated.rows[0])
+    }
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+  for (const row of finalized) {
+    const deviceId = text(row.device_id)
+    invalidateSubscriptionAccessCache(deviceId)
+    clearVerifyAccessInflightForDevice(deviceId)
+    deviceSubscriptionBus.emit('update', {
+      deviceId,
+      reason: 'historical_subscription_normalized_revoked',
+    })
+    liveSyncBus.publish('subscription_revoked', {
+      topics: ['analytics'],
+      device_id: deviceId,
+      reason: 'historical_over_credit_normalization',
+      batch_id: id,
+    })
+  }
+  return {
+    ok: true,
+    finalized: true,
+    batch_id: id,
+    finalized_count: finalized.length,
+    skipped_new_purchase_count: skippedNewPurchases.length,
+    skipped_new_purchases: skippedNewPurchases,
   }
 }
 
