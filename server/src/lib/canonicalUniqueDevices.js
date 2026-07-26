@@ -43,10 +43,37 @@ export { syntheticSqlExclude }
 
 let _canonicalCache = null
 let _canonicalCacheAt = 0
+let _canonicalRefreshInFlight = null
 const CANONICAL_CACHE_MS = Math.max(
   30_000,
   Math.min(300_000, Number(process.env.CANONICAL_DEVICES_CACHE_MS) || 120_000),
 )
+
+/** Sync peek — never blocks the dashboard hot path. */
+export function peekCanonicalUniqueDeviceCountCache() {
+  if (!_canonicalCache) return null
+  const age = Date.now() - _canonicalCacheAt
+  return {
+    ..._canonicalCache,
+    cached: true,
+    cacheAgeMs: age,
+    stale: age >= CANONICAL_CACHE_MS,
+  }
+}
+
+/** Background refresh so cold unique-device scans never stall /analytics/snapshot. */
+export function scheduleCanonicalUniqueDeviceRefresh() {
+  if (_canonicalRefreshInFlight) return _canonicalRefreshInFlight
+  _canonicalRefreshInFlight = queryCanonicalUniqueDeviceCount()
+    .catch((e) => {
+      console.error('[canonicalUniqueDevices] background refresh failed:', e)
+      return null
+    })
+    .finally(() => {
+      _canonicalRefreshInFlight = null
+    })
+  return _canonicalRefreshInFlight
+}
 
 /**
  * @returns {Promise<{ ok: boolean, totalUniqueDevices: number, sources: object, sql: string }>}

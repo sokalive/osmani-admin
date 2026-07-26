@@ -20,7 +20,7 @@ import {
   sumChannelViewers,
 } from '../lib/livePresenceStats.js'
 import { queryMigrationDevicePopulationSummary } from '../lib/appVersionMigration.js'
-import { queryCanonicalUniqueDeviceCount } from '../lib/canonicalUniqueDevices.js'
+import { peekCanonicalUniqueDeviceCountCache, scheduleCanonicalUniqueDeviceRefresh } from '../lib/canonicalUniqueDevices.js'
 import {
   peekPhysicalDeviceCensusCache,
   schedulePhysicalDeviceCensusRefresh,
@@ -104,6 +104,10 @@ async function queryOverviewStats(pool) {
   if (!physicalCensusPeek || physicalCensusPeek.stale) {
     schedulePhysicalDeviceCensusRefresh()
   }
+  const canonicalPeek = peekCanonicalUniqueDeviceCountCache()
+  if (!canonicalPeek || canonicalPeek.stale) {
+    scheduleCanonicalUniqueDeviceRefresh()
+  }
 
   const [
     presenceTotals,
@@ -111,7 +115,6 @@ async function queryOverviewStats(pool) {
     newUsersTodayRaw,
     revenueTodayRaw,
     totalInstallsRaw,
-    canonicalUnique,
   ] = await Promise.all([
       queryLivePresenceTotals(pool).catch((e) => {
         console.error('[analytics] overview.presenceTotals:', e)
@@ -148,12 +151,9 @@ async function queryOverviewStats(pool) {
         'overview.totalInstalls',
         (r) => numOrZero(r?.c),
       ),
-      queryCanonicalUniqueDeviceCount().catch((e) => {
-        console.error('[analytics] overview.canonicalUniqueDevices:', e)
-        return { ok: false, totalUniqueDevices: 0 }
-      }),
     ])
   const physicalCensus = physicalCensusPeek
+  const canonicalUnique = canonicalPeek
   let totalUniqueDevices = 0
   let totalUniqueDevicesMethod = 'unknown'
   if (physicalCensus?.ok && physicalCensus.counts?.physical_device_components_total != null) {
@@ -163,17 +163,14 @@ async function queryOverviewStats(pool) {
       : 'physical_device_graph_v1'
   } else if (canonicalUnique?.ok && canonicalUnique.totalUniqueDevices != null) {
     totalUniqueDevices = numOrZero(canonicalUnique.totalUniqueDevices)
-    totalUniqueDevicesMethod = 'canonical_observed_identities_fallback'
+    totalUniqueDevicesMethod = canonicalUnique.stale
+      ? 'canonical_observed_identities_stale_cache'
+      : 'canonical_observed_identities_fallback'
   } else {
-    const migrationSummary = await queryMigrationDevicePopulationSummary().catch((e) => {
-      console.error('[analytics] overview.totalUniqueDevices fallback:', e)
-      return { ok: false }
-    })
-    totalUniqueDevices =
-      migrationSummary?.ok && migrationSummary.summary
-        ? numOrZero(migrationSummary.summary.totalUniqueDevices)
-        : 0
-    totalUniqueDevicesMethod = 'legacy_migration_fallback'
+    // Do not block snapshot on migration fallback — dashboard Unique Devices card
+    // uses Users Intelligence summary. Background canonical refresh will fill next hit.
+    totalUniqueDevices = 0
+    totalUniqueDevicesMethod = 'pending_background_unique_refresh'
   }
   const onlineNow = presenceTotals?.onlineNow ?? 0
   const watchingNow = presenceTotals?.watchingNow ?? 0
