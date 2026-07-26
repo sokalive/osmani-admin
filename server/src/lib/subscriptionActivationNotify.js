@@ -6,16 +6,35 @@ import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
 import { liveSyncBus } from './liveSyncBus.js'
 import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
 
-export function notifySubscriptionActivated(deviceId, orderId = null) {
+/** Congratulations payload pushed over SSE right after a payment activates. */
+export function buildPaymentCongratsSsePayload({ orderId = null } = {}) {
+  return {
+    showPopup: true,
+    orderId: orderId != null ? String(orderId) : null,
+    title: 'Hongera!',
+    body: 'Malipo yako yamekamilika na kifurushi chako kimewashwa. Karibu utazame channel zote.',
+    ctaLabel: 'ASANTE',
+    reason: 'payment_activated',
+  }
+}
+
+export function notifySubscriptionActivated(deviceId, orderId = null, opts = {}) {
   const did = String(deviceId ?? '').trim()
   if (!did) return false
   invalidateSubscriptionAccessCache(did)
+  // Congratulations only on a FRESH activation — re-notifies (reconcile polls hitting
+  // ALREADY_APPLIED) must not replay the popup.
+  const paymentCongrats = opts.congrats === true ? buildPaymentCongratsSsePayload({ orderId }) : null
   deviceSubscriptionBus.emit('update', { deviceId: did, reason: 'subscription_activated' })
+  if (paymentCongrats) {
+    deviceSubscriptionBus.emit('payment_congrats', { deviceId: did, paymentCongrats })
+  }
   liveSyncBus.publish('analytics.subscription_updated', {
     topics: ['analytics'],
     deviceId: did,
     orderId: orderId != null ? String(orderId) : null,
     reason: 'subscription_activated',
+    ...(paymentCongrats ? { paymentCongrats } : {}),
   })
   return true
 }
@@ -44,5 +63,8 @@ export function notifySubscriptionActivatedFromAct(act, orderId = null) {
     state === 'ACTIVATED' ||
     state === 'ALREADY_APPLIED'
   if (!ok) return false
-  return notifySubscriptionActivated(act.deviceId, orderId ?? act.orderId ?? null)
+  const fresh = act.activated === true && state !== 'ALREADY_APPLIED'
+  return notifySubscriptionActivated(act.deviceId, orderId ?? act.orderId ?? null, {
+    congrats: fresh,
+  })
 }

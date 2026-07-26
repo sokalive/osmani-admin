@@ -283,9 +283,13 @@ export async function recoverAdminPaymentOrder({
 
     const plan = await getPlanRowByIdAny(lockedTxn.plan_id)
     if (!plan) throw new Error('Plan not found')
+    const planDurationDays = Math.trunc(Number(plan.duration_days))
+    if (!Number.isFinite(planDurationDays) || planDurationDays < 1) {
+      throw new Error(`Plan ${lockedTxn.plan_id} has invalid duration_days (${plan.duration_days})`)
+    }
 
     const raw = lockedTxn.raw_payload && typeof lockedTxn.raw_payload === 'object' ? lockedTxn.raw_payload : {}
-    const stack = await computeDeviceSubscriptionExpiryAfterPurchase(deviceId, plan.duration_days, client)
+    const stack = await computeDeviceSubscriptionExpiryAfterPurchase(deviceId, planDurationDays, client)
     const expiresAt = stack.expiresAt
     const fpRaw = String(raw.device_fingerprint ?? raw.fingerprint ?? '').trim()
     const fpHash = fpRaw ? hashDeviceFingerprint(fpRaw) : null
@@ -296,7 +300,7 @@ export async function recoverAdminPaymentOrder({
         orderId: oid,
         expiresAt,
         fingerprintHash: fpHash,
-        durationDays: plan.duration_days,
+        durationDays: planDurationDays,
         source: 'recovery',
       },
       client,

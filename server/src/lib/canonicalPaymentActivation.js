@@ -212,7 +212,24 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
     }
   }
 
-  const stack = await billing.computeDeviceSubscriptionExpiryAfterPurchase(deviceId, plan.duration_days)
+  // Canonical plan engine: the Admin plan row is the only duration source.
+  // Reject explicitly instead of ever substituting a default duration.
+  const planDurationDays = Math.trunc(Number(plan.duration_days))
+  if (!Number.isFinite(planDurationDays) || planDurationDays < 1) {
+    return {
+      ...buildActivationMeta({
+        activation_state: ACTIVATION_STATE.INVALID_PLAN,
+        completion_source: source,
+      }),
+      activated: false,
+      skipped: true,
+      reason: 'invalid_plan_duration',
+      deviceId,
+      orderId,
+    }
+  }
+
+  const stack = await billing.computeDeviceSubscriptionExpiryAfterPurchase(deviceId, planDurationDays)
   const expiresAt = stack.expiresAt
   const phone = String(txn.phone ?? '').trim() || billing.phoneFromTransactionRow(txn)
   if (phone && !String(txn.phone ?? '').trim()) {
@@ -229,7 +246,7 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
         orderId,
         expiresAt,
         fingerprintHash: fpHash,
-        durationDays: plan.duration_days,
+        durationDays: planDurationDays,
         source: 'payment',
       },
       client,

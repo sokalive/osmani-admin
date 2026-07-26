@@ -26,19 +26,24 @@ offerCodesAdminRouter.post('/generate', async (req, res) => {
     if (!(await billing.verifyManualSubscriptionGrantPin(pin))) {
       return res.status(403).json({ ok: false, error: 'Invalid PIN' })
     }
+    const planId = Number(body.plan_id ?? body.planId) || null
     const durationDays = Number(body.duration_days ?? body.durationDays)
-    const allowed = await billing.getManualGrantAllowedDurationDays()
-    if (!allowed.has(durationDays)) {
-      const list = [...allowed].sort((a, b) => a - b).join(', ')
-      return res.status(400).json({
-        ok: false,
-        error: `duration_days must be one of: ${list}`,
-      })
+    // Canonical plan engine: prefer exact Admin plan id; duration derives from the plan row.
+    if (!planId) {
+      const allowed = await billing.getManualGrantAllowedDurationDays()
+      if (!allowed.has(durationDays)) {
+        const list = [...allowed].sort((a, b) => a - b).join(', ')
+        return res.status(400).json({
+          ok: false,
+          error: `plan_id or duration_days is required (duration_days: ${list})`,
+        })
+      }
     }
-    const row = await billing.insertOfferCodeRow({ durationDays, createdBy: 'admin' })
+    const row = await billing.insertOfferCodeRow({ durationDays, planId, createdBy: 'admin' })
     billing.offerCodeAudit('generated', {
       code: row.code,
       duration_days: row.duration_days,
+      plan_id: row.plan_id != null ? Number(row.plan_id) : null,
     })
     const exp = row.expires_at
     publishOfferCodesSync('generated', { code: String(row.code) })
@@ -46,6 +51,7 @@ offerCodesAdminRouter.post('/generate', async (req, res) => {
       ok: true,
       code: String(row.code),
       durationDays: Number(row.duration_days),
+      planId: row.plan_id != null ? Number(row.plan_id) : null,
       id: Number(row.id),
       expiresAt: exp instanceof Date ? exp.toISOString() : exp != null ? String(exp) : null,
     })

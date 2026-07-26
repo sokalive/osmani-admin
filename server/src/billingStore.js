@@ -550,10 +550,17 @@ function dbQuery(client) {
 }
 
 export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, durationDays, client = null) {
-  const q = dbQuery(client)
   const d = String(deviceId ?? '').trim()
   if (!d) throw new Error('computeDeviceSubscriptionExpiryAfterPurchase: deviceId required')
-  const days = Math.max(1, Number(durationDays) || 30)
+  // Canonical plan engine: duration must come from the resolved Admin plan.
+  // Never silently substitute a default duration.
+  const days = Math.trunc(Number(durationDays))
+  if (!Number.isFinite(days) || days < 1) {
+    throw new Error(
+      `computeDeviceSubscriptionExpiryAfterPurchase: invalid duration_days (${durationDays}); plan duration is required`,
+    )
+  }
+  const q = dbQuery(client)
   const { rows } = await q(
     `SELECT expires_at FROM device_subscriptions WHERE device_id = $1 LIMIT 1`,
     [d],
@@ -1027,14 +1034,32 @@ export async function recordManualGrantPhoneAndTransaction(
 }
 
 export async function grantManualDeviceSubscription(deviceId, durationDays, client = null, opts = {}) {
-  const q = dbQuery(client)
   const d = String(deviceId ?? '').trim()
-  const days = Number(durationDays)
   const phone = String(opts.phone ?? '').trim()
-  const allowed = await getManualGrantAllowedDurationDays()
-  if (!d || !allowed.has(days)) {
-    const list = [...allowed].sort((a, b) => a - b).join(', ')
-    throw new Error(`Invalid device_id or duration_days (allowed: ${list})`)
+  if (!d) throw new Error('Invalid device_id')
+
+  // Canonical plan engine: when the caller identifies the exact Admin plan, that row is
+  // the single source of truth for duration + price + plan identity. The legacy
+  // duration-only path (duration → plan match) remains for old callers only.
+  const requestedPlanId = opts.planId != null ? Number(opts.planId) : null
+  let plan = null
+  let days = Number(durationDays)
+  if (requestedPlanId != null) {
+    if (!Number.isSafeInteger(requestedPlanId) || requestedPlanId < 1) {
+      throw new Error('Invalid plan_id')
+    }
+    plan = await getPlanRowByIdAny(requestedPlanId)
+    if (!plan) throw new Error(`Plan ${requestedPlanId} not found`)
+    days = Math.trunc(Number(plan.duration_days))
+    if (!Number.isFinite(days) || days < 1) {
+      throw new Error(`Plan ${requestedPlanId} has invalid duration_days (${plan.duration_days})`)
+    }
+  } else {
+    const allowed = await getManualGrantAllowedDurationDays()
+    if (!allowed.has(days)) {
+      const list = [...allowed].sort((a, b) => a - b).join(', ')
+      throw new Error(`Invalid device_id or duration_days (allowed: ${list})`)
+    }
   }
 
   // Permanent: never stack / duplicate while entitlement is already live.
@@ -1047,8 +1072,9 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
     smsPhone = String(resolved?.phone ?? '').trim()
   }
 
-  const plan = await getActivePlanByDurationDays(days)
+  if (!plan) plan = await getActivePlanByDurationDays(days)
 
+  const q = dbQuery(client)
   const ins = await q(
     `INSERT INTO manual_subscription_grants (device_id, duration_days, plan_id)
      VALUES ($1, $2, $3)
@@ -2157,7 +2183,7 @@ async function getActivePlanByDurationDays(durationDays) {
   const n = Number(durationDays)
   if (!Number.isFinite(n) || n < 1) return null
   const { rows } = await pool.query(
-    `SELECT id, price, duration_days
+    `SELECT id, name, price, duration_days
      FROM plans
      WHERE deleted_at IS NULL
        AND is_active = true
@@ -2333,14 +2359,9 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
     )
     if (priceRows[0]?.price != null) amount = Number(priceRows[0].price)
   }
-  if (amount == null && planDurationDays != null && planDurationDays > 60) {
-    const { rows: tierRows } = await pool.query(
-      `SELECT price FROM plans
-       WHERE deleted_at IS NULL AND duration_days >= 30
-       ORDER BY duration_days DESC, id ASC LIMIT 1`,
-    )
-    if (tierRows[0]?.price != null) amount = Number(tierRows[0].price)
-  }
+  // Canonical plan engine: never invent a price from a different plan tier.
+  // If no plan matches this entitlement, amount stays null rather than showing
+  // another package's price on the Account screen.
 
   return {
     amount,
@@ -3332,14 +3353,30 @@ export async function resetOfferCodeDeviceAttempts(deviceId) {
   )
 }
 
-export async function insertOfferCodeRow({ durationDays, createdBy = 'admin' }) {
-  const pool = requirePool()
-  const days = Number(durationDays)
-  const allowed = await getManualGrantAllowedDurationDays()
-  if (!allowed.has(days)) {
-    const list = [...allowed].sort((a, b) => a - b).join(', ')
-    throw new Error(`Invalid duration_days (allowed: ${list})`)
+export async function insertOfferCodeRow({ durationDays, planId = null, createdBy = 'admin' }) {
+  // Canonical plan engine: prefer the exact Admin plan; duration follows the plan row.
+  const requestedPlanId = planId != null ? Number(planId) : null
+  let days = Number(durationDays)
+  if (requestedPlanId != null) {
+    if (!Number.isSafeInteger(requestedPlanId) || requestedPlanId < 1) {
+      throw new Error('Invalid plan_id')
+    }
+    const plan = await getPlanById(requestedPlanId)
+    if (!plan || plan.is_active !== true) {
+      throw new Error(`Plan ${requestedPlanId} not found or inactive`)
+    }
+    days = Math.trunc(Number(plan.duration_days))
+    if (!Number.isFinite(days) || days < 1) {
+      throw new Error(`Plan ${requestedPlanId} has invalid duration_days (${plan.duration_days})`)
+    }
+  } else {
+    const allowed = await getManualGrantAllowedDurationDays()
+    if (!allowed.has(days)) {
+      const list = [...allowed].sort((a, b) => a - b).join(', ')
+      throw new Error(`Invalid duration_days (allowed: ${list})`)
+    }
   }
+  const pool = requirePool()
   const shelfDays = Math.min(
     3650,
     Math.max(1, Number(process.env.OFFER_CODE_SHELF_DAYS) || 365),
@@ -3349,10 +3386,10 @@ export async function insertOfferCodeRow({ durationDays, createdBy = 'admin' }) 
     const code = String(n)
     try {
       const { rows } = await pool.query(
-        `INSERT INTO offer_codes (code, duration_days, created_by, expires_at, failed_attempts, lock_until)
-         VALUES ($1, $2, $3, now() + ($4::int * interval '1 day'), 0, NULL)
-         RETURNING id, code, duration_days, created_at, expires_at`,
-        [code, days, String(createdBy || 'admin').slice(0, 120), shelfDays],
+        `INSERT INTO offer_codes (code, duration_days, plan_id, created_by, expires_at, failed_attempts, lock_until)
+         VALUES ($1, $2, $3, $4, now() + ($5::int * interval '1 day'), 0, NULL)
+         RETURNING id, code, duration_days, plan_id, created_at, expires_at`,
+        [code, days, requestedPlanId, String(createdBy || 'admin').slice(0, 120), shelfDays],
       )
       if (rows[0]) return rows[0]
     } catch (e) {
@@ -3376,7 +3413,7 @@ export async function listOfferCodesHistoryAdmin({ limit = 500 } = {}) {
   const pool = requirePool()
   const lim = Math.min(1000, Math.max(1, Number(limit) || 500))
   const { rows } = await pool.query(
-    `SELECT id, code, duration_days, created_by, created_at, used_by_device, used_at, expires_at,
+    `SELECT id, code, duration_days, plan_id, created_by, created_at, used_by_device, used_at, expires_at,
             blocked, deleted_at
      FROM offer_codes
      ORDER BY created_at DESC
@@ -3387,6 +3424,7 @@ export async function listOfferCodesHistoryAdmin({ limit = 500 } = {}) {
     id: Number(r.id),
     code: String(r.code ?? ''),
     durationDays: Number(r.duration_days) || 0,
+    planId: r.plan_id != null ? Number(r.plan_id) : null,
     createdBy: String(r.created_by ?? ''),
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
     usedByDevice: r.used_by_device ? String(r.used_by_device) : null,
@@ -3475,8 +3513,15 @@ export async function redeemOfferCodeForDevice(deviceId, rawCode) {
     }
 
     const durationDays = Number(oc.duration_days)
+    const offerPlanId = oc.plan_id != null ? Number(oc.plan_id) : null
 
-    const grant = await grantManualDeviceSubscription(d, durationDays, client)
+    // Canonical plan engine: codes generated from an Admin plan carry the exact plan id.
+    const grant = await grantManualDeviceSubscription(
+      d,
+      durationDays,
+      client,
+      offerPlanId ? { planId: offerPlanId } : {},
+    )
 
     const mark = await client.query(
       `UPDATE offer_codes

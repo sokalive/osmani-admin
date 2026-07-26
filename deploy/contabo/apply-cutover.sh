@@ -267,6 +267,13 @@ if [[ -f "$API_DIR/scripts/regression-payment-system-completion.mjs" ]]; then
     exit 1
   }
 fi
+if [[ -f "$API_DIR/scripts/regression-canonical-plan-engine.mjs" ]]; then
+  echo "==> regression-canonical-plan-engine.mjs (plan table = only source of truth)"
+  (cd "$API_DIR" && node scripts/regression-canonical-plan-engine.mjs) || {
+    echo "ERROR: canonical plan engine regression failed" >&2
+    exit 1
+  }
+fi
 if [[ -f "$API_DIR/scripts/regression-admin-api-base.mjs" ]]; then
   echo "==> regression-admin-api-base.mjs"
   (cd "$API_DIR" && node scripts/regression-admin-api-base.mjs) || {

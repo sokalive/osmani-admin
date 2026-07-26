@@ -829,13 +829,15 @@ export async function postManualSubscriptionSetupPin({ pin, confirmPin }) {
   return body
 }
 
-export async function postManualSubscriptionGrant({ deviceId, durationDays, phone, pin }) {
+export async function postManualSubscriptionGrant({ deviceId, planId, durationDays, phone, pin }) {
   const res = await fetch(joinPath('/admin/manual-subscription/grant'), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
       device_id: String(deviceId ?? '').trim(),
+      // Canonical plan engine: server resolves duration/price from this exact plan.
+      ...(planId != null ? { plan_id: Number(planId) } : {}),
       duration_days: Number(durationDays),
       phone: String(phone ?? '').trim(),
       pin: String(pin ?? ''),
@@ -936,13 +938,15 @@ export async function postManualSubscriptionHistoryDeleteAll({ securityPin, conf
   return body
 }
 
-export async function postOfferCodeGenerate({ durationDays, pin }) {
+export async function postOfferCodeGenerate({ durationDays, planId, pin }) {
   const res = await fetch(joinPath('/admin/offer-codes/generate'), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
     headers: adminPanelApiHeaders(),
     body: JSON.stringify({
       duration_days: Number(durationDays),
+      // Canonical plan engine: the code carries the exact Admin plan id.
+      ...(planId != null ? { plan_id: Number(planId) } : {}),
       pin: String(pin ?? ''),
     }),
   })

@@ -307,6 +307,7 @@ function ManualSubscriptionPage() {
     try {
       const out = await postOfferCodeGenerate({
         durationDays: days,
+        planId: offerSelectedPlan.id,
         pin: offerPin.trim(),
       })
       setGeneratedOfferCode(String(out.code ?? ''))
@@ -334,6 +335,7 @@ function ManualSubscriptionPage() {
     try {
       const out = await postOfferCodeGenerate({
         durationDays: days,
+        planId: offerSelectedPlan.id,
         pin: offerPin.trim(),
       })
       setGeneratedOfferCode(String(out.code ?? ''))
@@ -432,6 +434,7 @@ function ManualSubscriptionPage() {
     try {
       const out = await postManualSubscriptionGrant({
         deviceId: d,
+        planId: selectedPlan.id,
         durationDays: days,
         phone,
         pin: pin.trim(),

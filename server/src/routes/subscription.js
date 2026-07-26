@@ -1567,6 +1567,28 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     }
   }
 
+  // Congratulations right after a payment activates (fresh activation only).
+  // Deduped per connection: the local bus emit and the liveSync packet both arrive here.
+  const pushedCongratsOrderIds = new Set()
+  const writePaymentCongratsEvent = (paymentCongrats) => {
+    if (!paymentCongrats?.showPopup) return
+    const key = String(paymentCongrats.orderId ?? '')
+    if (key && pushedCongratsOrderIds.has(key)) return
+    if (key) pushedCongratsOrderIds.add(key)
+    const body = JSON.stringify({ ...paymentCongrats, server_time_ms: Date.now() })
+    res.write(`event: payment_activated\ndata: ${body}\n\n`)
+    flushSseResponse(res)
+  }
+
+  const paymentCongratsHandler = (payload) => {
+    if (!payload || payload.deviceId !== deviceId) return
+    try {
+      writePaymentCongratsEvent(payload.paymentCongrats)
+    } catch (e) {
+      console.error('[subscription-stream] payment_congrats push failed:', e)
+    }
+  }
+
   const subscriptionUpdatedSyncHandler = (packet) => {
     if (String(packet?.event || '') !== 'analytics.subscription_updated') return
     const did = String(packet?.payload?.deviceId ?? '').trim()
@@ -1575,6 +1597,11 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       writeManualGiftEvent(packet?.payload?.manualGift)
     } catch (e) {
       console.error('[subscription-stream] relayed manual_gift push failed:', e)
+    }
+    try {
+      writePaymentCongratsEvent(packet?.payload?.paymentCongrats)
+    } catch (e) {
+      console.error('[subscription-stream] relayed payment_congrats push failed:', e)
     }
     const reason = String(packet?.payload?.reason ?? '')
     void handler({
@@ -1602,6 +1629,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
 
   deviceSubscriptionBus.on('update', handler)
   deviceSubscriptionBus.on('manual_gift', manualGiftHandler)
+  deviceSubscriptionBus.on('payment_congrats', paymentCongratsHandler)
 
   const ping = setInterval(() => {
     res.write(': ping\n\n')
@@ -1624,6 +1652,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     clearInterval(modePoll)
     deviceSubscriptionBus.off('update', handler)
     deviceSubscriptionBus.off('manual_gift', manualGiftHandler)
+    deviceSubscriptionBus.off('payment_congrats', paymentCongratsHandler)
     liveSyncBus.off('sync', modeSyncHandler)
     liveSyncBus.off('sync', trialSyncHandler)
     liveSyncBus.off('sync', appUpdateSyncHandler)

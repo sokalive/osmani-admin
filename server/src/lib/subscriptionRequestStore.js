@@ -198,8 +198,11 @@ export async function approveSubscriptionRequest({
     const plan = await getPlanRowByIdAny(finalPlanId)
     if (!plan) throw new Error('Plan not found')
 
+    // Canonical plan engine: pass the exact approved plan id so the grant records the
+    // approved plan's identity/price — never a duration-based re-match to another plan.
     const grant = await grantManualDeviceSubscription(req.device_id, plan.duration_days, client, {
       phone: req.phone,
+      planId: finalPlanId,
     })
 
     await client.query(

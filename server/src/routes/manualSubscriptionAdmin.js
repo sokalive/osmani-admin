@@ -534,26 +534,38 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
     }
 
     const deviceId = String(body.device_id ?? body.deviceId ?? '').trim()
+    const planId = Number(body.plan_id ?? body.planId) || null
     const durationDays = Number(body.duration_days ?? body.durationDays)
     const phone = String(body.phone ?? body.phone_number ?? body.phoneNumber ?? '').trim()
-    const allowed = await billing.getManualGrantAllowedDurationDays()
-    if (!deviceId || !allowed.has(durationDays)) {
-      const list = [...allowed].sort((a, b) => a - b).join(', ')
-      return res.status(400).json({
-        ok: false,
-        error: `device_id and duration_days are required (duration_days: ${list})`,
-      })
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: 'device_id is required' })
+    }
+    // Canonical plan engine: prefer the exact Admin plan id; duration/price come from
+    // the plans table inside the grant. Duration-only requests remain for legacy callers.
+    if (!planId) {
+      const allowed = await billing.getManualGrantAllowedDurationDays()
+      if (!allowed.has(durationDays)) {
+        const list = [...allowed].sort((a, b) => a - b).join(', ')
+        return res.status(400).json({
+          ok: false,
+          error: `plan_id or duration_days is required (duration_days: ${list})`,
+        })
+      }
     }
     if (!phone) {
       return res.status(400).json({ ok: false, error: 'phone is required' })
     }
 
-    const result = await billing.grantManualDeviceSubscription(deviceId, durationDays, null, { phone })
+    const result = await billing.grantManualDeviceSubscription(deviceId, durationDays, null, {
+      phone,
+      ...(planId ? { planId } : {}),
+    })
 
     void recordSystemNotificationEvent('subscription_manual_grant', {
       device_id: deviceId,
       grant_id: result.grantId,
-      duration_days: durationDays,
+      plan_id: planId,
+      duration_days: result.durationDays ?? durationDays,
     }).catch((err) => {
       console.error('[manual_grant] notification sync failed:', err)
     })

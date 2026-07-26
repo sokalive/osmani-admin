@@ -939,6 +939,7 @@ export async function ensureBillingTables(client) {
       id SERIAL PRIMARY KEY,
       code TEXT NOT NULL UNIQUE,
       duration_days INTEGER NOT NULL,
+      plan_id INTEGER,
       created_by TEXT NOT NULL DEFAULT 'admin',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       used_by_device TEXT,
@@ -949,6 +950,10 @@ export async function ensureBillingTables(client) {
       failed_attempts INTEGER NOT NULL DEFAULT 0,
       lock_until TIMESTAMPTZ
     );
+  `)
+  /** Canonical plan engine: codes carry the exact Admin plan id (nullable for legacy codes). */
+  await client.query(`
+    ALTER TABLE offer_codes ADD COLUMN IF NOT EXISTS plan_id INTEGER;
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS offer_codes_created_at_idx ON offer_codes (created_at DESC);
