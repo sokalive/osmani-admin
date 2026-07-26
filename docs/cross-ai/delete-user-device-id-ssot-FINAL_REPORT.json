@@ -1,12 +1,12 @@
 {
   "title": "DELETE USER authority + Device ID final SSOT",
   "date": "2026-07-26",
-  "status": "pending_deploy",
+  "status": "deployed_verified",
   "device_under_test": "8b94b929d89681a1",
   "notes": {
     "app_ai_artifact_id": "85970ee4273c6ca8 (truncated/non-resolving in live lookup)",
     "selected_live_target": "8b94b929d89681a1 — active Siku 3 / 1000 TZS on +255678089174 (App AI payment phone)",
-    "842a_note": "842a2fe8… was restored by a new post-revoke payment osm_sp_1785049533810_2f693bff8f (expected)"
+    "842a_note": "842a2fe8… was restored by a new post-revoke payment osm_sp_1785049533810_2f693bff8f (expected new payment after revoke)"
   },
   "root_causes": {
     "delete_user_overlap": "Admin UI called revoke while DELETE route was a soft alias — operators could not tell which action was authoritative",
@@ -30,25 +30,84 @@
     "server/scripts/test-subscription-immutability-policy.mjs",
     "docs/cross-ai/delete-user-device-id-ssot-FINAL_REPORT.json"
   ],
-  "database_changes": "None (no schema rewrite; no expiry/plan/day mutations)",
+  "database_changes": "None (no schema rewrite; no expiry/plan/day mutations; payment history preserved)",
   "api_changes": {
     "DELETE /api/users/:device_id": "Authoritative Delete User contract — subscription_removed, entitlement_state inactive, cache_invalidated, sse_broadcast",
     "DELETE /api/users/bulk": "Same authoritative contract",
     "POST /api/users/:device_id/revoke": "Preserved for compatibility",
     "POST /runtime/subscription-duplicate-phone-repair": "Permanently no-op; preserves independent Device IDs"
   },
-  "sse_changes": "Revoke/Delete now also clears verify singleflight before deviceSubscriptionBus + liveSync fan-out",
+  "sse_changes": "Revoke/Delete clears verify singleflight before deviceSubscriptionBus + liveSync fan-out; stream snapshot returns revoked/authoritativeInactive",
   "cache_cleanup": [
     "subscriptionAccessCache invalidate on Delete/Revoke",
     "clearVerifyAccessInflightForDevice on Delete/Revoke",
     "no Redis in stack",
-    "Admin lookup/list remain Cache-Control: no-store"
+    "Admin lookup/list remain Cache-Control: no-store",
+    "critical_unresolved metric excludes admin_revoked rows"
   ],
   "legacy_normalization": [
     "Admin/verify bind plan amount/duration to entitlement-linked transaction_id",
     "remaining_days forced to 0 when inactive/revoked",
     "expires_at never rewritten"
   ],
-  "git_commit": null,
-  "vps_deployed_commit": null
+  "before_vs_after": {
+    "before": {
+      "device": "8b94b929d89681a1",
+      "verify": {
+        "active": true,
+        "status": "active",
+        "remaining_days": 3,
+        "amount": 1000,
+        "plan_duration_days": 3,
+        "expires_at": "2026-07-28T21:00:00.000Z"
+      }
+    },
+    "after_delete_user": {
+      "verify": {
+        "active": false,
+        "status": "revoked",
+        "remaining_days": 0,
+        "admin_revoked": true,
+        "amount": 1000,
+        "plan_duration_days": 3,
+        "expires_at": "2026-07-28T21:00:00.000Z"
+      },
+      "sse_snapshot": {
+        "active": false,
+        "status": "revoked",
+        "remaining_days": 0,
+        "admin_revoked": true,
+        "authoritativeInactive": true
+      },
+      "still_in_active_list": false
+    }
+  },
+  "proofs": {
+    "delete_user_immediate_removal": true,
+    "device_id_strongest_identity": true,
+    "admin_matches_app_after_delete": true,
+    "same_phone_multi_device_independent": true,
+    "phone_0678089174_still_has_active_842a_after_deleting_8b94": true,
+    "no_expiry_rewrite": true,
+    "payment_history_preserved": true,
+    "critical_unresolved_completed": 0,
+    "existing_production_fixes_preserved": true
+  },
+  "git_commit": "2d2d7624a0e05c19953dbadb00c0fb66a00f173b",
+  "vps_deployed_commit": "2d2d7624a0e05c19953dbadb00c0fb66a00f173b",
+  "deploy_run": "https://github.com/sokalive/osmani-admin/actions/runs/30194047964",
+  "pm2_verification": {
+    "health_ok": true,
+    "startup_ready": true,
+    "commit_match": true
+  },
+  "app_ai_handoff": {
+    "backend_ready": true,
+    "delete_user_authoritative": true,
+    "device_id_ssot": true,
+    "same_phone_independent_devices": true,
+    "test_phone": "0678089174",
+    "test_plan": "TSh 1,000 / 3 Day",
+    "instruction": "App AI may proceed with a NEW emulator Device ID and payment on 0678089174 to prove multi-device independence."
+  }
 }
