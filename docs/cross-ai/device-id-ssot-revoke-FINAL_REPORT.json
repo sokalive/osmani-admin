@@ -1,7 +1,7 @@
 {
   "title": "Device ID SSOT + permanent Admin revoke",
   "date": "2026-07-26",
-  "status": "pending_deploy",
+  "status": "deployed_verified",
   "device_under_test": "842a2fe899de4f02d5b676df5956a56b888bc968f3f0d1e4151a1f37c9e7cb15",
   "root_cause": [
     "subscriptionFalseExpiredRepair treated status≠active + future expires_at as false-expired and set status=active — reactivating admin-revoked rows",
@@ -15,7 +15,7 @@
     "active_now and remaining_* SQL require admin_revoked_at IS NULL",
     "rowToPublicStatus forceZero remaining when !active; Admin mapSubscriptionRow remaining_days=0 when revoked",
     "Inactive verify still loads txn summary for canonical Account fields",
-    "Existing upsert/finalize paths pass order created_at into revoke gate; relay+cache invalidate unchanged"
+    "Existing upsert/finalize paths pass order created_at into revoke gate; deviceSubscriptionRelay + cache invalidate on revoke unchanged"
   ],
   "safety": {
     "no_expiry_rewrite": true,
@@ -23,7 +23,9 @@
     "no_days_added": true,
     "no_days_removed": true,
     "midnight_policy": "applies only to new purchases after natural expiry; existing expiries preserved",
-    "payment_history_preserved": true
+    "payment_history_preserved": true,
+    "no_subscription_added_for_test": true,
+    "no_accidental_mass_removal": true
   },
   "files_changed": [
     "server/src/lib/adminSubscriptionRevocation.js",
@@ -35,24 +37,85 @@
     "server/scripts/test-admin-subscription-revocation.mjs",
     "docs/cross-ai/device-id-ssot-revoke-FINAL_REPORT.json"
   ],
-  "before_production_probe": {
-    "commit": "e14fa0ae95f15a4aeb938103d3356877fdfe0197",
-    "verify": {
-      "active": false,
-      "status": "revoked",
-      "remaining_days": 96,
-      "admin_revoked": true,
-      "amount": null,
-      "plan_duration_days": null
+  "before_vs_after": {
+    "before": {
+      "commit": "e14fa0ae95f15a4aeb938103d3356877fdfe0197",
+      "verify": {
+        "active": false,
+        "status": "revoked",
+        "remaining_days": 96,
+        "admin_revoked": true,
+        "amount": null,
+        "plan_duration_days": null,
+        "expires_at": "2026-10-30T12:19:34.822Z"
+      },
+      "admin_lookup": {
+        "status": "revoked",
+        "amount": 3000,
+        "remaining": 8316919814,
+        "note": "status matched App but remaining inflated; canonical plan fields incomplete on verify"
+      }
     },
-    "admin_lookup": {
-      "status": "revoked",
-      "amount": 3000,
-      "remaining_ms_nonzero": true,
-      "note": "status matched App but remaining still inflated; amount present only in Admin"
+    "after": {
+      "commit": "7d7364eafe0067c089ecbb8f02fcfa4e2b2eda50",
+      "verify": {
+        "active": false,
+        "status": "revoked",
+        "remaining_days": 0,
+        "remaining_seconds": 0,
+        "admin_revoked": true,
+        "amount": 3000,
+        "plan_duration_days": 7,
+        "plan_name": "Wiki 1",
+        "expires_at": "2026-10-30T12:19:34.822Z"
+      },
+      "admin_lookup": {
+        "active": false,
+        "status": "revoked",
+        "remaining_days": 0,
+        "remaining": 0,
+        "admin_revoked": true,
+        "amount": 3000,
+        "plan_duration_days": 7,
+        "plan_name": "Wiki 1",
+        "expires_at": "2026-10-30T12:19:34.822Z"
+      },
+      "parity": {
+        "status": true,
+        "active": true,
+        "remaining_days": true,
+        "revoked_zero_remaining": true,
+        "expires_unchanged": true
+      }
     }
   },
-  "after": null,
-  "git_commit": null,
-  "vps_deployed_commit": null
+  "api_verification": {
+    "GET /api/health": "commit 7d7364eafe0067c089ecbb8f02fcfa4e2b2eda50",
+    "GET /api/users/lookup?q=<deviceId>": "Cache-Control no-store; live operational row matches verify",
+    "POST /api/subscription/verify": "active=false status=revoked remaining_days=0 with canonical amount/duration",
+    "POST /api/users/:device_id/revoke": "idempotent alreadyRevoked=true; transactions_preserved; expires_at unchanged"
+  },
+  "sse_verification": {
+    "notifyAdminSubscriptionRevoked": "invalidates access cache + deviceSubscriptionBus update + liveSync subscription_revoked",
+    "deviceSubscriptionRelay": "PG NOTIFY cross-worker fan-out",
+    "subscription-stream": "emits device_subscription + writeAdminRevokedSseEvents (subscription_revoked, subscription_wake, device_subscription_updated) with suppress_expiry_popup"
+  },
+  "database_verification": {
+    "device_row_preserved": true,
+    "expires_at_unchanged": "2026-10-30T12:19:34.822Z",
+    "status": "revoked",
+    "admin_revoked_at": "set (idempotent revoke)",
+    "false_expired_repair_skips_revoked": true,
+    "pre_revoke_orders_cannot_reactivate": true
+  },
+  "proofs": {
+    "search_matches_app": true,
+    "revoke_stays_revoked": true,
+    "existing_subscription_fields_preserved": true,
+    "no_days_added_or_removed": true,
+    "no_subscription_added": true
+  },
+  "git_commit": "7d7364eafe0067c089ecbb8f02fcfa4e2b2eda50",
+  "vps_deployed_commit": "7d7364eafe0067c089ecbb8f02fcfa4e2b2eda50",
+  "deploy_run": "https://github.com/sokalive/osmani-admin/actions/runs/30190479014"
 }
