@@ -424,12 +424,12 @@ export async function getLatestCompletedTransactionByNormalizedPhone(phoneInput)
 }
 
 /**
- * Resolve the device_id that currently holds an active subscription tied to this payment phone.
- * When proofDeviceId is set, require that device to also have a txn with the same phone (migration safety).
+ * List every device that currently holds an active subscription tied to this payment phone.
+ * Phone is discovery only — never an ownership key when more than one device is active.
  */
-export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
+export async function listActiveDeviceIdsForPaymentPhone(phoneInput, opts = {}) {
   const digits = normalizePhoneDigits(phoneInput)
-  if (!digits || digits.length < 10) return null
+  if (!digits || digits.length < 10) return []
   const proofDeviceId = String(opts.proofDeviceId ?? '').trim()
   const pool = requirePool()
   const phoneDevicesCte = `
@@ -458,17 +458,14 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
     linked_devices AS (
       SELECT device_id FROM phone_txn_devices
     )`
-  const proofClause = ''
   if (proofDeviceId) {
     const { rows: linkRows } = await pool.query(
       `WITH ${phoneDevicesCte}
        SELECT 1 FROM linked_devices WHERE device_id = $2 LIMIT 1`,
       [digits, proofDeviceId],
     )
-    if (!linkRows[0]) return null
+    if (!linkRows[0]) return []
   }
-  const params = [digits]
-
   const { rows } = await pool.query(
     `WITH ${phoneDevicesCte}
      SELECT ds.device_id::text AS device_id
@@ -476,38 +473,62 @@ export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
      WHERE ds.status = 'active'
        AND ds.expires_at > now()
        AND ds.device_id IN (SELECT device_id FROM linked_devices)
-       ${proofClause}
-     ORDER BY ds.expires_at DESC
-     LIMIT 1`,
-    params,
+     ORDER BY ds.expires_at DESC, ds.device_id ASC`,
+    [digits],
   )
-  if (rows[0]?.device_id) return String(rows[0].device_id)
+  return rows.map((r) => String(r.device_id)).filter(Boolean)
+}
 
-  const txn = await getLatestCompletedTransactionByNormalizedPhone(phoneInput)
-  if (!txn) return null
-  const raw = txn.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
-  const dev = String(txn.device_id ?? '').trim() || String(raw.device_id ?? '').trim()
-  if (!dev) return null
-  if (proofDeviceId && proofDeviceId !== dev) {
-    const { rows: proofRows } = await pool.query(
-      `WITH ${phoneDevicesCte}
-       SELECT 1 FROM linked_devices WHERE device_id = $2 LIMIT 1`,
-      [digits, proofDeviceId],
-    )
-    if (!proofRows[0]) return null
+/**
+ * Resolve the single active device for a payment phone.
+ * Returns null when zero or multiple actives share the phone (never pick by expires_at).
+ */
+export async function findActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
+  // preferredDeviceId only — never treat proofDeviceId as preferred (proof = linkage gate).
+  const preferred = String(opts.preferredDeviceId ?? '').trim()
+  const actives = await listActiveDeviceIdsForPaymentPhone(phoneInput, {
+    proofDeviceId: opts.proofDeviceId,
+  })
+  if (actives.length === 0) return null
+  if (preferred && actives.includes(preferred)) {
+    return preferred
   }
-  const { rows: dr } = await pool.query(
-    `WITH ${phoneDevicesCte}
-     SELECT ds.device_id::text AS device_id
-     FROM device_subscriptions ds
-     WHERE ds.device_id = $2
-       AND ds.status = 'active'
-       AND ds.expires_at > now()
-       AND ds.device_id IN (SELECT device_id FROM linked_devices)
-     LIMIT 1`,
-    [digits, dev],
-  )
-  return dr[0]?.device_id ? String(dr[0].device_id) : null
+  if (actives.length === 1) return actives[0]
+  // Ambiguous: multiple independent devices share this phone — never guess ownership.
+  return null
+}
+
+/** Structured resolve for transfer/admin paths that need an ambiguity signal. */
+export async function resolveUniqueActiveDeviceIdForPaymentPhone(phoneInput, opts = {}) {
+  const preferred = String(opts.preferredDeviceId ?? '').trim()
+  const actives = await listActiveDeviceIdsForPaymentPhone(phoneInput, {
+    proofDeviceId: opts.proofDeviceId,
+  })
+  if (preferred && actives.includes(preferred)) {
+    return {
+      deviceId: preferred,
+      ambiguous: false,
+      activeCount: actives.length,
+      candidates: actives,
+    }
+  }
+  if (actives.length === 0) {
+    return { deviceId: null, ambiguous: false, activeCount: 0, candidates: [] }
+  }
+  if (actives.length === 1) {
+    return {
+      deviceId: actives[0],
+      ambiguous: false,
+      activeCount: 1,
+      candidates: actives,
+    }
+  }
+  return {
+    deviceId: null,
+    ambiguous: true,
+    activeCount: actives.length,
+    candidates: actives,
+  }
 }
 
 /** True when device_id is tied to a completed payment phone (txn, registry, or install_instance sibling). */

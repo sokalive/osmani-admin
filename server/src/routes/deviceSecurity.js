@@ -1224,17 +1224,32 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
     if (!sourceDeviceId || !paymentPhone) {
       return res.status(400).json({ error: 'source_device_id and payment_phone are required' })
     }
-    const ownerDeviceId = await billing.findActiveDeviceIdForPaymentPhone(paymentPhone)
-    if (!ownerDeviceId) return res.status(404).json({ error: 'No active subscription found for this payment phone' })
-    let effectiveSourceId = ownerDeviceId
-    if (ownerDeviceId !== sourceDeviceId) {
-      const linked = await billing.isDeviceLinkedToPaymentPhone(sourceDeviceId, paymentPhone)
-      if (!linked) {
-        return res.status(403).json({
-          error: 'Requesting device is not the active subscription owner for this payment phone',
-        })
-      }
+    const linked = await billing.isDeviceLinkedToPaymentPhone(sourceDeviceId, paymentPhone)
+    if (!linked) {
+      return res.status(403).json({
+        error: 'Requesting device is not linked to this payment phone',
+      })
     }
+    // Device isolation: if the requesting device itself holds an active entitlement,
+    // transfer THAT entitlement — never another sibling's by phone/expires_at guess.
+    const resolved = await billing.resolveUniqueActiveDeviceIdForPaymentPhone(paymentPhone, {
+      preferredDeviceId: sourceDeviceId,
+    })
+    if (resolved.ambiguous) {
+      return res.status(409).json({
+        ok: false,
+        error: 'AMBIGUOUS_PHONE_OWNERSHIP',
+        code: 'AMBIGUOUS_PHONE_OWNERSHIP',
+        message:
+          'Multiple devices share this phone with active subscriptions. Transfer must use the device that owns the entitlement.',
+        active_count: resolved.activeCount,
+      })
+    }
+    const ownerDeviceId = resolved.deviceId
+    if (!ownerDeviceId) {
+      return res.status(404).json({ error: 'No active subscription found for this payment phone' })
+    }
+    const effectiveSourceId = ownerDeviceId
     const sourceSub = await resolveSubscriptionByDevice(pool, effectiveSourceId)
     if (!sourceSub || sourceSub.status !== 'active') {
       return res.status(400).json({ error: 'Source subscription is not active' })
@@ -1820,10 +1835,30 @@ deviceSecurityRouter.post('/transfer/admin-force-phone', requireAdminPanelAccess
     }
     const paymentPhone = text(b.payment_phone ?? b.phone, 40)
     const targetDeviceId = text(b.target_device_id ?? b.new_device_id, 128)
+    const explicitSource = text(b.source_device_id ?? b.from_device_id, 128)
     if (!paymentPhone || !targetDeviceId) {
       return res.status(400).json({ error: 'payment_phone and target_device_id are required' })
     }
-    const sourceDeviceId = await billing.findActiveDeviceIdForPaymentPhone(paymentPhone)
+    const resolved = await billing.resolveUniqueActiveDeviceIdForPaymentPhone(paymentPhone, {
+      preferredDeviceId: explicitSource || undefined,
+    })
+    if (resolved.ambiguous && !explicitSource) {
+      return res.status(409).json({
+        ok: false,
+        error: 'AMBIGUOUS_PHONE_OWNERSHIP',
+        code: 'AMBIGUOUS_PHONE_OWNERSHIP',
+        message:
+          'Multiple active devices share this payment phone. Pass source_device_id explicitly.',
+        active_count: resolved.activeCount,
+      })
+    }
+    if (explicitSource) {
+      const linked = await billing.isDeviceLinkedToPaymentPhone(explicitSource, paymentPhone)
+      if (!linked) {
+        return res.status(403).json({ error: 'source_device_id is not linked to this payment phone' })
+      }
+    }
+    const sourceDeviceId = explicitSource || resolved.deviceId
     if (!sourceDeviceId) {
       return res.status(404).json({ error: 'No active subscription found for this payment phone' })
     }

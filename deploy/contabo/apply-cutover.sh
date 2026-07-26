@@ -290,6 +290,22 @@ if [[ -f "$API_DIR/scripts/regression-account-plan-consistency.mjs" ]]; then
   }
 fi
 
+if [[ -f "$API_DIR/scripts/regression-device-isolation.mjs" ]]; then
+  echo "==> regression-device-isolation.mjs (phone never owns sibling entitlement)"
+  (cd "$API_DIR" && node scripts/regression-device-isolation.mjs) || {
+    echo "ERROR: device isolation regression failed" >&2
+    exit 1
+  }
+fi
+
+if [[ -f "$API_DIR/scripts/audit-device-isolation.mjs" ]]; then
+  echo "==> audit-device-isolation.mjs (read-only production isolation proof)"
+  (cd "$API_DIR" && node scripts/audit-device-isolation.mjs) || {
+    echo "ERROR: device isolation audit failed" >&2
+    exit 1
+  }
+fi
+
 if [[ -f "$API_DIR/scripts/audit-account-plan-consistency.mjs" ]]; then
   echo "==> audit-account-plan-consistency.mjs --repair (metadata link only; never expires_at)"
   (cd "$API_DIR" && node scripts/audit-account-plan-consistency.mjs --repair) || {

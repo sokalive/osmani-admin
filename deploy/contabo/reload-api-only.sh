@@ -44,7 +44,13 @@ echo "==> regression-account-plan-consistency.mjs"
   exit 1
 }
 
-echo "==> audit-account-plan-consistency.mjs --repair (metadata only)"
+echo "==> regression-device-isolation.mjs"
+(cd "$API_DIR" && node scripts/regression-device-isolation.mjs) || {
+  echo "ERROR: device isolation regression failed" >&2
+  exit 1
+}
+
+echo "==> audit-device-isolation.mjs (read-only)"
 # Load DATABASE_URL into this shell the same way PM2 does.
 eval "$(node -e "
 const { loadContaboPm2Env } = require('$ROOT/deploy/contabo/loadPm2Env.cjs');
@@ -53,6 +59,12 @@ const u = String(e.DATABASE_URL || '').trim();
 if (!u) { console.error('FATAL: DATABASE_URL missing for audit'); process.exit(1); }
 process.stdout.write('export DATABASE_URL=' + JSON.stringify(u) + '\n');
 ")"
+(cd "$API_DIR" && node scripts/audit-device-isolation.mjs) || {
+  echo "ERROR: device isolation audit failed" >&2
+  exit 1
+}
+
+echo "==> audit-account-plan-consistency.mjs --repair (metadata only)"
 (cd "$API_DIR" && node scripts/audit-account-plan-consistency.mjs --repair) || {
   echo "ERROR: account plan consistency audit/repair failed" >&2
   exit 1
