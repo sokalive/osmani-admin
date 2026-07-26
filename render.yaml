@@ -65,6 +65,14 @@ services:
       # ADMIN_PANEL_AUTH_REQUIRED=false on Render (RENDER=true) and Contabo (OSMANI_VPS=1),
       # so both dashboards open without email/PIN/OTP. Admin APIs still require
       # X-Admin-Token. Set ADMIN_TRUSTED_INSTALL=0 here to restore the login screen.
+      # Contabo media ingest (channel/banner uploads mirrored from Render → VPS disk).
+      # Token falls back to ADMIN_API_TOKEN / NOTIFICATION_IMAGE_INGEST_TOKEN when unset.
+      - key: ADMIN_MEDIA_VPS_INGEST_URL
+        value: https://api.osmanitv.com/api/internal/admin-media
+      - key: ADMIN_MEDIA_INGEST_TOKEN
+        sync: false
+      - key: BASE_URL
+        value: https://api.osmanitv.com
       - key: UPLOAD_DIR
         value: /var/render/media/uploads
       - key: NOTIFICATION_IMAGE_STORAGE
@@ -93,8 +101,6 @@ services:
         value: "20"
       # Set in Render dashboard to your Bunny pull zone (e.g. https://osmani-media.b-cdn.net)
       - key: BUNNY_CDN_BASE_URL
-        sync: false
-      - key: BASE_URL
         sync: false
       - key: SERVER_HEALTH_BACKGROUND_ENABLED
         value: "0"

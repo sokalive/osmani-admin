@@ -109,7 +109,7 @@ export function buildSafeImageFilename(originalname, mimetype) {
 /**
  * Persist an in-memory upload to UPLOADS_DIR with a pre-write disk check.
  * @param {Buffer} buffer
- * @param {{ originalname?: string, mimetype?: string, filename?: string }} [opts]
+ * @param {{ originalname?: string, mimetype?: string, filename?: string, skipMirror?: boolean }} [opts]
  */
 export async function persistImageBufferToUploads(buffer, opts = {}) {
   if (!buffer?.length) {
@@ -136,6 +136,27 @@ export async function persistImageBufferToUploads(buffer, opts = {}) {
       { path: fullPath, cause: e },
     )
   }
+
+  if (!opts.skipMirror) {
+    try {
+      const { mirrorAdminMediaToVps } = await import('./adminMediaMirror.js')
+      await mirrorAdminMediaToVps({
+        filename,
+        buffer,
+        contentType: opts.mimetype || 'application/octet-stream',
+      })
+    } catch (mirrorErr) {
+      // Roll back local orphan so Contabo/apps never reference a Render-only file.
+      await fsPromises.unlink(fullPath).catch(() => {})
+      console.error('[uploads] VPS media mirror failed — upload rolled back', mirrorErr)
+      throw new UploadDiskError(
+        UPLOAD_STORAGE_UNAVAILABLE_CODE,
+        'Image could not be saved to the primary media store. Please try again.',
+        { path: fullPath, cause: mirrorErr },
+      )
+    }
+  }
+
   return { filename, fullPath, relativePath: `/uploads/${filename}` }
 }
 

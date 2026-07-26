@@ -92,10 +92,15 @@ export function isCdnEnabled() {
   return Boolean(getCdnBaseUrl())
 }
 
-/** API origin (Render) — Bunny pull zone origin + upload ingest target. */
+/** API origin — Bunny pull zone origin + upload ingest target. */
 export function getOriginBaseUrl(req) {
   const fromEnv = trimSlash(process.env.BASE_URL || process.env.ASSET_ORIGIN_URL || '')
   if (fromEnv) return fromEnv
+  // Render Node API shares DB with Contabo but must advertise the Contabo media origin
+  // once uploads are mirrored to VPS disk (see adminMediaMirror.js).
+  if (String(process.env.RENDER || '').trim().toLowerCase() === 'true') {
+    return 'https://api.osmanitv.com'
+  }
   if (req) {
     const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]
     const host = String(req.headers['x-forwarded-host'] || req.get('host') || '').split(',')[0].trim()
