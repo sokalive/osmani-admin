@@ -1,0 +1,102 @@
+{
+  "report": "Osmani TV — DELETE USER + Legacy Subscription production verification",
+  "date": "2026-07-26",
+  "verified_against_live_commit": "db74ed1b1dff",
+  "scope_note": "Verification + correction only. No redesign, no migration, no feature. Every prior production fix preserved.",
+
+  "objective_1_delete_user": {
+    "question": "Is DELETE USER (A) only another name for soft revoke, or (B) a true authoritative subscription removal?",
+    "answer": "B — authoritative removal, implemented as a history-preserving revoke (payment + audit history intentionally kept per requirement).",
+    "was_it_merely_soft_revoke": "No. The word 'soft' only describes that the row and payments are NOT hard-deleted. The entitlement effect is authoritative and permanent.",
+    "how_it_is_authoritative": [
+      "device_subscriptions.status set to 'revoked' and admin_revoked_at set (revokeAdminDeviceSubscription).",
+      "active_now / remaining_seconds / remaining_days SQL all require admin_revoked_at IS NULL, so the App loses Premium immediately and remaining days become 0 (forceZero).",
+      "verify (/api/subscription-status, /api/subscription/verify), SSE snapshot, and Admin all report active:false, status:'revoked', remaining_days:0, admin_revoked:true.",
+      "isAdminRevokedOrderBlocked blocks: the exact revoked order; ANY order created at/before admin_revoked_at; and any order with unknown created_at (fail-closed). No stale finalize/webhook can restore.",
+      "Only a brand-new payment created AFTER admin_revoked_at restores access, which creates a new entitlement and clears admin_revoked_* (upsertDeviceSubscriptionActive).",
+      "notifyAdminSubscriptionRevoked invalidates the access cache and clears the verify singleflight so no stale ACTIVE is re-served."
+    ],
+    "code_change_needed_this_task": "None. DELETE USER was already authoritative from the prior stabilization; re-verified live.",
+    "live_evidence": {
+      "delete_contract": "DELETE /api/users/8b94b929d89681a1 -> {deleted:true, subscription_removed:true, active:false, status:'revoked', entitlement_state:'inactive', transactions_preserved:true, cache_invalidated:true, sse_broadcast:true, deletedSubscription:0, deletedTransactions:0}",
+      "post_delete_verify": "{active:false, status:'revoked', remaining_days:0, expires_at:'2026-07-28T21:00:00Z' (preserved), admin_revoked:true}",
+      "sse_snapshot": "{active:false, status:'revoked', remaining_days:0, inactive_reason:'admin_revoked', admin_revoked:true, expiresAt preserved}",
+      "permanence": "Previously-revoked device 8b94b929d89681a1 remains revoked/inactive over time — no auto-restore without a new payment."
+    }
+  },
+
+  "objective_2_legacy_subscriptions": {
+    "finding_A_value_canonicalization": {
+      "status": "Already fixed in the prior stabilization; re-verified consistent across every API.",
+      "evidence_device": "f55886a3652434a0",
+      "verify_vs_admin_lookup_vs_panel_search": "IDENTICAL — plan_name 'MWENZI 1', amount 5000, plan_duration_days 30, remaining_days 1850, expires_at 2031-08-19, is_stacked_entitlement true.",
+      "policy": "Canonical plan metadata (plan_id, plan_name, amount, plan_duration_days) is bound to the entitlement transaction; remaining_days is derived from the real stored expiry; over-credit is flagged via is_stacked_entitlement. Expiry is NOT rewritten."
+    },
+    "finding_B_root_cause_this_task": {
+      "title": "Legacy Device IDs invisible to Admin lookup / search / Delete User",
+      "root_cause": "The operational-device gate (adminUserLookup.isExactDeviceId / isCanonicalOperationalDeviceId) and the paginated subscription search (adminUsersList.appendSubscriptionSearch) hard-required a 64-hex Device ID. Real production clients also use 16-hex Android SSAID (ANDROID_ID) and 36-char installation UUIDs. Additionally a 16-hex id yields >=9 extracted digits, so it was mis-routed to the phone-number search branch and never matched by device_id — returning found:false / 0 rows even though the device is active.",
+      "impact": "486 sixteen-hex rows (127 active) + 215 installation-UUID rows were unfindable in Admin lookup and the Admin Panel search box, and could not be deleted by exact Device ID via those paths.",
+      "over_credited_legacy_expiries": "58 over-credited + 86 minor-over-credited active subscriptions carry stored expiries beyond a single-plan replay (e.g. a 30-day/5000 MWENZI 1 payment on 2026-06-16 stored expiry 2031-08-19). These are historical activation/stacking/migration data anomalies. Per instructions they were NOT rewritten; responses expose canonical plan metadata + is_stacked_entitlement and derive remaining_days from the untouched expiry."
+    },
+    "records_inspected": {
+      "device_rows_censused": 1175,
+      "active_subscriptions_categorized": 254,
+      "device_id_length_distribution": {"16_hex_ssaid": 486, "36_uuid": 215, "64_hex": 451, "32_hex": 2, "29": 14, "24": 3, "20": 1, "15": 1, "other": 2},
+      "expiry_categories": {"replay_match": 3, "over_credited": 58, "minor_over_credited": 86, "transfer_or_recovery": 57, "no_credit_history": 49, "under_credited": 0}
+    },
+    "records_corrected": 0,
+    "records_corrected_note": "Zero database rows modified. The correction is at the response/query layer only (recognize real Device ID shapes for lookup/search). No expiry, no duration, no valid subscription changed."
+  },
+
+  "files_changed": [
+    "server/src/lib/adminUserLookup.js — recognize 16/32/64-hex + installation UUID as canonical operational Device IDs (keep synthetic-forensic exclusion); relax phone->device resolution SQL from 64-only to all real shapes.",
+    "server/src/lib/adminUsersList.js — appendSubscriptionSearch: exact match lower(ds.device_id)=$ for any real Device ID shape BEFORE the phone branch; never treat a hex id (contains a-f) as a phone.",
+    "server/scripts/test-users-lookup-operational.mjs — updated assertions: legacy 16-hex SSAID + installation UUID accepted, malformed/synthetic rejected.",
+    "deploy/contabo/apply-cutover.sh — DEPLOY PIPELINE FIX: startup smoke test ran import('./src/loadEnv.js') from ROOT (loadEnv.js is in server/), so with set -e it exited BEFORE the PM2 restart. The last two deploys pulled code to disk but never restarted PM2. Now runs the smoke test from API_DIR in a subshell so PM2 restart always executes."
+  ],
+
+  "database_queries_changed": [
+    "adminUserLookup.resolveDeviceIdsForPhone: WHERE length=64 AND ~ '^[a-f0-9]{64}$'  ->  match 16/32/64-hex OR UUID (8-4-4-4-12).",
+    "adminUsersList.appendSubscriptionSearch: exact device branch changed from /^[a-f0-9]{64}$/ only to all real shapes with lower(ds.device_id) = $; phone branch gated to non-hex queries."
+  ],
+
+  "api_endpoints_affected_behavior_only": [
+    "GET /api/users/lookup?q=<deviceId> — now returns canonical subscription for legacy 16-hex / UUID devices (was found:false).",
+    "GET /api/users?search=<deviceId> (paginated Admin list) — now returns the row for legacy device IDs (was 0 results).",
+    "GET /api/subscription-status, POST /api/subscription/verify, GET /api/subscription-stream, DELETE /api/users/:id — UNCHANGED; re-verified correct."
+  ],
+
+  "before_vs_after": {
+    "lookup_f55886a3652434a0": {"before": "found:false, devices:[]", "after": "found:true, canonical sub {MWENZI 1, 5000, 30d, rem 1850, exp 2031-08-19}"},
+    "panel_search_f55886a3652434a0": {"before": "count:0", "after": "count:1 (canonical row)"},
+    "phone_lookup_+255699122231": {"before": "16-hex device dropped by 64-only filter", "after": "returns real paid device f55886a3652434a0"},
+    "delete_user_8b94b929": {"before": "already authoritative", "after": "re-confirmed authoritative + permanent; SSE inactive; expiry preserved"}
+  },
+
+  "devices_tested": [
+    "f55886a3652434a0 (legacy 16-hex Android SSAID, active, over-credited)",
+    "a0621f5a9a86a580504597d0918675a69ce135d4ef994f5eceb930f59ed863c4 (64-hex, 7-day plan, replay_match)",
+    "c8775ff23f47416b (16-hex, 3-day plan, replay_match)",
+    "8b94b929d89681a1 (previously revoked user)",
+    "phone +255699122231 (multi-device owner)"
+  ],
+
+  "confirmations": {
+    "no_subscription_duration_added_or_removed": "CONFIRMED. Active subscriptions ~254 unchanged; expiry categories unchanged (58 over / 86 minor-over — only natural day-boundary drift). Example expiries preserved exactly: f55886a3 = 2031-08-19, 8b94b929 = 2026-07-28. Zero DB rows modified.",
+    "delete_user_permanent_until_new_payment": "CONFIRMED. Revoked devices stay inactive with remaining_days 0; isAdminRevokedOrderBlocked blocks same-order, at/before-revoke, and unknown-created_at orders (fail-closed); only a payment created AFTER admin_revoked_at restores access."
+  },
+
+  "deployment": {
+    "git_commits": [
+      "9f445b6393d5922ff66207c2cba4bf51a2425725 — Fix Admin lookup/search hiding legacy 16-hex + UUID Device IDs",
+      "db74ed1b1dff9d64f171bb250eb6fc12cce37555 — Fix Contabo deploy smoke test skipping PM2 restart"
+    ],
+    "vps_deployed_commit": "db74ed1b1dff9d64f171bb250eb6fc12cce37555",
+    "pm2_verification": "GitHub Actions Deploy Contabo restarted osmani-admin-api. /api/health -> {commit: db74ed1b1dff, startup.ready: true} with healthy pool. PM2 restart now executes on every CI deploy (smoke-test blocker fixed).",
+    "regression_suites_live": {
+      "test-admin-subscription-revocation.mjs": "23/23 passed",
+      "test-users-lookup-operational.mjs": "14/14 passed",
+      "test-subscription-immutability-policy.mjs": "19/19 passed"
+    }
+  }
+}
