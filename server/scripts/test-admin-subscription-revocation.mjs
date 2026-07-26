@@ -25,10 +25,13 @@ assert('no cascade delete in users route', !usersJs.includes('deleteDeviceUserCa
 assert('tryFinalize blocks admin revoke', billingJs.includes('admin_revoked_order_blocked'))
 assert('upsert clears revoke fields', billingJs.includes('admin_revoked_at = NULL'))
 assert('isAccessRowActive checks revoked', subJs.includes("status === 'revoked'"))
-assert('remaining_seconds requires active status', billingJs.includes("WHEN ds.status = 'active' AND ds.expires_at"))
+assert('remaining_seconds requires active status', billingJs.includes("WHEN ds.status = 'active' AND ds.admin_revoked_at IS NULL AND ds.expires_at"))
+assert('active_now requires no admin revoke', billingJs.includes("AND ds.admin_revoked_at IS NULL) AS active_now"))
+assert('false-expired repair skips revoked', fs.readFileSync(path.join(__dirname, '../src/lib/subscriptionFalseExpiredRepair.js'), 'utf8').includes("AND ds.admin_revoked_at IS NULL"))
 assert('cache sanitize respects revoked', cacheJs.includes('admin_revoked_at'))
 assert('search button in UI', usersPage.includes('runSearchNow') && usersPage.includes('Search'))
 assert('revoke UX wording', usersPage.includes('Revoke subscription'))
+assert('forceZero remaining when inactive', subJs.includes('forceZero: !active'))
 
 assert(
   'block same order replay',
@@ -40,9 +43,25 @@ assert(
 assert(
   'allow new order after revoke',
   isAdminRevokedOrderBlocked(
+    { admin_revoked_at: new Date('2020-01-01T00:00:00Z'), admin_revoked_transaction_id: 'order_a' },
+    'order_b',
+    new Date('2020-01-02T00:00:00Z'),
+  ) === false,
+)
+assert(
+  'block pre-revoke pending order',
+  isAdminRevokedOrderBlocked(
+    { admin_revoked_at: new Date('2020-01-02T00:00:00Z'), admin_revoked_transaction_id: 'order_a' },
+    'order_pending',
+    new Date('2020-01-01T00:00:00Z'),
+  ) === true,
+)
+assert(
+  'block unknown created_at after revoke',
+  isAdminRevokedOrderBlocked(
     { admin_revoked_at: new Date(), admin_revoked_transaction_id: 'order_a' },
     'order_b',
-  ) === false,
+  ) === true,
 )
 
 async function liveChecks() {

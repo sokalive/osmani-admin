@@ -159,7 +159,7 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
     './adminSubscriptionRevocation.js'
   )
   const revocation = await getAdminRevocationState(deviceId, client)
-  if (isAdminRevokedOrderBlocked(revocation, orderId)) {
+  if (isAdminRevokedOrderBlocked(revocation, orderId, txn.created_at ?? txn.updated_at)) {
     return {
       ...buildActivationMeta({
         activation_state: ACTIVATION_STATE.TERMINAL_REJECTED,
@@ -175,8 +175,7 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
   }
 
   if (await isIntentionalMigrationRevokedDevice(deviceId)) {
-    const phone = String(txn.phone ?? '').trim() || billing.phoneFromTransactionRow(txn)
-    const sibling = phone ? await findSiblingEntitlementDevice(phone, deviceId) : null
+    const sibling = await findSiblingEntitlementDevice(null, deviceId)
     const meta = buildActivationMeta({
       activation_state: ACTIVATION_STATE.MOVED_TO_SIBLING_DEVICE,
       entitlement_active: Boolean(sibling),

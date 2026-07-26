@@ -73,6 +73,8 @@ export async function findFalseExpiredSubscriptions(pool = requirePool()) {
          OR COALESCE(ds.manual_admin_blocked, false) = true
        )
        AND COALESCE(ds.transaction_id, '') NOT LIKE 'moved:%'
+       AND LOWER(COALESCE(ds.status::text, '')) <> 'revoked'
+       AND ds.admin_revoked_at IS NULL
      ORDER BY ds.expires_at DESC`,
   )
 
@@ -142,6 +144,7 @@ async function probeApiActive(deviceId) {
   const active =
     row.blocked_now !== true &&
     String(row.status ?? '').toLowerCase() === 'active' &&
+    row.admin_revoked_at == null &&
     row.active_now === true
   return {
     active,
@@ -202,6 +205,8 @@ export async function repairFalseExpiredSubscriptions(opts = {}) {
            WHERE device_id = $1
              AND expires_at > now()
              AND status <> 'active'
+             AND LOWER(COALESCE(status::text, '')) <> 'revoked'
+             AND admin_revoked_at IS NULL
              AND COALESCE(transaction_id, '') NOT LIKE 'moved:%'`,
           [deviceId],
         )

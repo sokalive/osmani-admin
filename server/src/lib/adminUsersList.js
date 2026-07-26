@@ -248,7 +248,6 @@ function mapSubscriptionRow(r, nowMs = Date.now()) {
     startedAtDate instanceof Date && !Number.isNaN(startedAtDate.getTime())
       ? startedAtDate.toISOString()
       : null
-  const remainingMs = expiresAt != null ? Math.max(0, new Date(expiresAt).getTime() - nowMs) : 0
   const futureExpiry = expiresAt != null && new Date(expiresAt).getTime() > nowMs
   const revoked =
     String(r.status ?? '').toLowerCase() === 'revoked' || Boolean(r.admin_revoked_at)
@@ -272,16 +271,56 @@ function mapSubscriptionRow(r, nowMs = Date.now()) {
         : futureExpiry && r.status === 'pending'
           ? 'pending'
           : 'expired'
+
+  // Canonical remaining days in Africa/Dar_es_Salaam — matches App verify (0 when not active).
+  let remainingDays = 0
+  let remainingMs = 0
+  if (active && expiresAt) {
+    remainingMs = Math.max(0, new Date(expiresAt).getTime() - nowMs)
+    try {
+      const fmt = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Africa/Dar_es_Salaam',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      })
+      const partsOf = (ms) =>
+        Object.fromEntries(fmt.formatToParts(new Date(ms)).map((p) => [p.type, p.value]))
+      const nowP = partsOf(nowMs)
+      const expP = partsOf(new Date(expiresAt).getTime())
+      const a = Date.UTC(Number(nowP.year), Number(nowP.month) - 1, Number(nowP.day))
+      const b = Date.UTC(Number(expP.year), Number(expP.month) - 1, Number(expP.day))
+      remainingDays = Math.max(0, Math.round((b - a) / 86400000))
+    } catch {
+      remainingDays = Math.max(0, Math.floor(remainingMs / 86400000))
+    }
+  }
+
+  const planDurationDays =
+    r.plan_duration_days != null && Number.isFinite(Number(r.plan_duration_days))
+      ? Math.trunc(Number(r.plan_duration_days))
+      : null
+
   return {
     device_id: String(r.device_id ?? ''),
     phone_number: String(r.phone_number ?? ''),
     plan_id: r.plan_id != null ? Number(r.plan_id) : null,
     plan_name: r.plan_name != null ? String(r.plan_name) : null,
     amount: r.amount != null ? Number(r.amount) : null,
+    plan_duration_days: planDurationDays,
+    planDurationDays,
     status,
+    active,
+    isActive: active,
+    admin_revoked: revoked,
+    adminRevoked: revoked,
     started_at: startedAt,
     expires_at: expiresAt,
     remaining: remainingMs,
+    remaining_days: remainingDays,
+    remainingDays,
+    remaining_seconds: active ? Math.max(0, Math.floor(remainingMs / 1000)) : 0,
+    remainingSeconds: active ? Math.max(0, Math.floor(remainingMs / 1000)) : 0,
     provider: source,
     source,
     transaction_id: txnId,
@@ -308,6 +347,7 @@ export async function getOperationalSubscriptionByDeviceId(deviceId) {
        COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
        p.name AS plan_name,
        COALESCE(pay.amount, lt.amount, p.price) AS amount,
+       COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
        ${subscriptionSourceSql('ds', 'pay')} AS provider
      ${SUBSCRIPTION_FROM}
      WHERE ds.device_id = $1
@@ -427,6 +467,7 @@ async function listSubscriptions({
          COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
          COALESCE(pay.amount, lt.amount, p.price) AS amount,
+         COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
          ${subscriptionSourceSql('ds', 'pay')} AS provider
        ${SUBSCRIPTION_FROM}
        ${where}
@@ -499,6 +540,7 @@ export async function listAdminExpiringSoonUsers(filters = {}) {
          COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
          COALESCE(pay.amount, lt.amount, p.price) AS amount,
+         COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
          ${subscriptionSourceSql('ds', 'pay')} AS provider
        ${SUBSCRIPTION_FROM}
        ${where}

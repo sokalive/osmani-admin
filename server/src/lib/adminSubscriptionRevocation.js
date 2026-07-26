@@ -25,13 +25,30 @@ export async function getAdminRevocationState(deviceId, client = null) {
   return rows[0] ?? null
 }
 
-/** Block replay of the same completed order after intentional admin revocation. New orders may activate. */
-export function isAdminRevokedOrderBlocked(revocationRow, orderId) {
+/**
+ * Block replay of revoked entitlement.
+ * Same order always blocked; any order at/before revoke blocked; unknown created_at fail-closed.
+ * Only a payment created AFTER admin_revoked_at may restore access.
+ */
+export function isAdminRevokedOrderBlocked(revocationRow, orderId, orderCreatedAt = null) {
   if (!revocationRow?.admin_revoked_at) return false
-  const revokedTxn = String(revocationRow.admin_revoked_transaction_id ?? revocationRow.transaction_id ?? '').trim()
+  const revokedTxn = String(
+    revocationRow.admin_revoked_transaction_id ?? revocationRow.transaction_id ?? '',
+  ).trim()
   const oid = String(orderId ?? '').trim()
-  if (!revokedTxn || !oid) return Boolean(revocationRow.admin_revoked_at)
-  return oid === revokedTxn
+  if (revokedTxn && oid && oid === revokedTxn) return true
+
+  const revokedAtMs = new Date(revocationRow.admin_revoked_at).getTime()
+  if (!Number.isFinite(revokedAtMs)) return true
+
+  if (orderCreatedAt == null || orderCreatedAt === '') {
+    // Cannot prove this payment is post-revoke — never restore access from stale finalize/webhook.
+    return true
+  }
+  const createdMs = new Date(orderCreatedAt).getTime()
+  if (!Number.isFinite(createdMs)) return true
+  // Pending/completed payments that existed at or before revoke must not restore access.
+  return createdMs <= revokedAtMs
 }
 
 /**

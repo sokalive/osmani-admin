@@ -153,8 +153,8 @@ async function reconcileOrdersForVerify(deviceId, orderIdHint) {
   }
 }
 
-function reminderFieldsFromRow(row) {
-  if (!row) {
+function reminderFieldsFromRow(row, { forceZero = false } = {}) {
+  if (!row || forceZero) {
     return {
       remainingSeconds: 0,
       remaining_seconds: 0,
@@ -309,7 +309,7 @@ function rowToPublicStatus(row) {
         : row.admin_revoked_at != null
           ? String(row.admin_revoked_at)
           : null,
-    ...reminderFieldsFromRow(row),
+    ...reminderFieldsFromRow(row, { forceZero: !active }),
   }
 }
 
@@ -930,11 +930,12 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     trialWatchSettings = trialSettingsFallback
     plansRows = null
   } else if (!isActiveNow) {
-    ;[modesPayload, plansRows] = await Promise.all([
+    ;[modesPayload, plansRows, txnSummary] = await Promise.all([
       loadGlobalAppModesPayload().catch(() => modesFallback()),
       needsPlans ? billing.listActivePlansForVerify().catch(() => []) : Promise.resolve(null),
+      // Canonical Account fields (price/duration/source) even when revoked/expired — remaining stays 0 via rowToPublicStatus.
+      billing.getLatestCompletedSubscriptionTxnSummary(d).catch(() => null),
     ])
-    txnSummary = null
     securityPolicy = null
     trialStatus = null
     pendingGift = null
