@@ -481,9 +481,11 @@ export async function applyHistoricalSubscriptionNormalization({
         throw new Error(`Concurrent subscription change detected for ${row.device_id}; no rows applied`)
       }
       const targetExpiry = row.new_expires_at
+      // Production constraint permits active | pending | revoked. A past expiry plus
+      // pending is the canonical non-revoked inactive state used by verify/status APIs.
       const targetStatus =
         row.action === 'remove_unsupported_entitlement' || ms(targetExpiry) <= Date.now()
-          ? 'expired'
+          ? 'pending'
           : 'active'
       await client.query(
         `INSERT INTO subscription_normalization_backups

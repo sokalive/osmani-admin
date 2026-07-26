@@ -108,6 +108,11 @@ check('compare-and-swap protects concurrent payments', () => {
   assert.match(source, /AND expires_at = \$4::timestamptz/)
 })
 
+check('inactive normalization uses production-compatible pending status', () => {
+  assert.match(source, /\? 'pending'\s*:\s*'active'/)
+  assert.doesNotMatch(source, /targetStatus[\s\S]{0,120}\? 'expired'/)
+})
+
 check('payment and audit history are never deleted', () => {
   assert.doesNotMatch(source, /DELETE\s+FROM\s+(transactions|manual_subscription_grants|admin_)/i)
 })
