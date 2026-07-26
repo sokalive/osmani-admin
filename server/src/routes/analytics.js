@@ -19,7 +19,6 @@ import {
   queryLivePresenceTotals,
   sumChannelViewers,
 } from '../lib/livePresenceStats.js'
-import { queryMigrationDevicePopulationSummary } from '../lib/appVersionMigration.js'
 import { peekCanonicalUniqueDeviceCountCache, scheduleCanonicalUniqueDeviceRefresh } from '../lib/canonicalUniqueDevices.js'
 import {
   peekPhysicalDeviceCensusCache,
