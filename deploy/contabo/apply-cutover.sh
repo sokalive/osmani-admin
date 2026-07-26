@@ -156,7 +156,10 @@ echo "==> API dependencies"
 npm_ci_with_retry "$API_DIR"
 
 echo "==> Startup smoke test"
-node -e "import('./src/loadEnv.js').then((m)=>{const ok=m.isDatabaseUrlConfigured?.()??Boolean(process.env.DATABASE_URL); if(!ok){console.error('DATABASE_URL missing after loadEnv'); process.exit(1);} console.log('loadEnv ok', m.getLoadedEnvPaths(), 'db', ok, 'bunny', process.env.BUNNY_CDN_BASE_URL);}).catch((e)=>{console.error(e); process.exit(1);})"
+# loadEnv.js lives in server/ (API_DIR), but CWD is $ROOT after the SPA build above.
+# Run the smoke test from API_DIR in a subshell so `./src/loadEnv.js` resolves and the
+# PM2 restart below is never skipped by a spurious ERR_MODULE_NOT_FOUND.
+( cd "$API_DIR" && node -e "import('./src/loadEnv.js').then((m)=>{const ok=m.isDatabaseUrlConfigured?.()??Boolean(process.env.DATABASE_URL); if(!ok){console.error('DATABASE_URL missing after loadEnv'); process.exit(1);} console.log('loadEnv ok', m.getLoadedEnvPaths(), 'db', ok, 'bunny', process.env.BUNNY_CDN_BASE_URL);}).catch((e)=>{console.error(e); process.exit(1);})" )
 
 echo "==> PM2 restart"
 if command -v pm2 >/dev/null 2>&1; then
