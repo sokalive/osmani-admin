@@ -1,7 +1,22 @@
 {
   "title": "FINAL BACKEND HARDENING — Permanent Subscription Protection",
   "completed_at": "2026-07-26T12:30:00-07:00",
-  "status": "IMPLEMENTED_AWAITING_DEPLOY_VERIFY",
+  "status": "PRODUCTION_VERIFIED",
+  "git_commit": "225d046",
+  "vps_deployed_commit": "225d046c2cbdc2606ba31271bc80f78b70d5585c",
+  "pm2_verification": {
+    "health_ok": true,
+    "pool_waitingCount": 0,
+    "api": "https://api.osmanitv.com/api/health"
+  },
+  "production_verification": {
+    "hardening_status": "ok — migration_completed=true, legacy_lock=true, cache SoT=database, stale_restore_disabled=true",
+    "integrity_audit_manual": "ok=true, read_only=true, critical=0, high=0, alert=false (info-only natural-expiry labels remain)",
+    "verify_api": "canonical_engine_version=canonical-v1, validator.ok=true",
+    "regression_suite_local": { "total": 12, "passed": 12, "failed": 0 }
+  },
+  "completed_at": "2026-07-26T12:30:00-07:00",
+  "status_note": "IMPLEMENTED_AND_PRODUCTION_VERIFIED",
   "objective": "Guarantee historical over-credit, legacy subscription logic, and stale-cache restoration can never return.",
   "protections_added": [
     "Entitlement Guard on all entitlement writes (payment, manual, custom, recovery, transfer, admin PUT)",
