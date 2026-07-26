@@ -55,6 +55,18 @@ async function resolveMigrationDirection(pair, probeActive) {
  * @param {{ shadowLimit?: number, orphanLimit?: number }} opts
  */
 export async function runDirectShadowRepairBatch(opts = {}) {
+  try {
+    const { guardLegacyRepairWrite } = await import('./subscriptionLegacyLock.js')
+    await guardLegacyRepairWrite('runDirectShadowRepairBatch')
+  } catch (lockErr) {
+    return {
+      legacy_locked: true,
+      code: lockErr?.code || 'LEGACY_LOCKED',
+      error: lockErr?.message || String(lockErr),
+      migrated: [],
+      failed: [],
+    }
+  }
   const pool = requirePool()
   const shadowLimit = Math.max(0, Math.min(50, Number(opts.shadowLimit) || 10))
   const orphanLimit = Math.max(0, Math.min(20, Number(opts.orphanLimit) || 5))

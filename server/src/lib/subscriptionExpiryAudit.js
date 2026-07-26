@@ -565,6 +565,24 @@ async function findOverCreditedBatch({ limit = 50, offset = 0 } = {}) {
  * @param {{ dryRun?: boolean; maxRepairs?: number; offset?: number; confirm?: boolean }} opts
  */
 export async function repairSubscriptionExpiryOverCredits(opts = {}) {
+  // PERMANENT LEGACY LOCK — over-credit clawback path must never mutate production again.
+  // Historical over-credit was normalized once; Entitlement Guard prevents recurrence.
+  try {
+    const { guardLegacyRepairWrite, LEGACY_PATHS } = await import('./subscriptionLegacyLock.js')
+    await guardLegacyRepairWrite(LEGACY_PATHS.EXPIRY_OVERCREDIT_REPAIR)
+  } catch (lockErr) {
+    return {
+      dry_run: true,
+      legacy_locked: true,
+      error: lockErr?.message || String(lockErr),
+      code: lockErr?.code || 'LEGACY_LOCKED',
+      repaired_count: 0,
+      flagged_count: 0,
+      repaired: [],
+      flagged: [],
+    }
+  }
+
   const dryRun = opts.dryRun !== false
   const confirm = opts.confirm === true
   if (!dryRun && !confirm) {

@@ -284,7 +284,14 @@ export async function recoverAdminPaymentOrder({
     const fpHash = fpRaw ? hashDeviceFingerprint(fpRaw) : null
 
     const { skipped } = await upsertDeviceSubscriptionActive(
-      { deviceId, orderId: oid, expiresAt, fingerprintHash: fpHash },
+      {
+        deviceId,
+        orderId: oid,
+        expiresAt,
+        fingerprintHash: fpHash,
+        durationDays: plan.duration_days,
+        source: 'recovery',
+      },
       client,
     )
 

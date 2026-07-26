@@ -14,10 +14,10 @@ import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint, tr
 import { parseChannelRefFromRequest } from '../lib/analyticsPresence.js'
 import {
   getCachedSubscriptionAccess,
-  getStaleCachedSubscriptionAccess,
   invalidateSubscriptionAccessCache,
   setCachedSubscriptionAccess,
 } from '../lib/subscriptionAccessCache.js'
+import { validateVerifyResponse } from '../lib/subscriptionCanonicalValidator.js'
 import {
   canUseInactiveVerifyFallback,
   isDbTimeoutOrPressureError,
@@ -352,7 +352,7 @@ export function normalizeVerifyResponse(pub, txnSummary) {
     })
   }
 
-  return {
+  const built = {
     ...pub,
     expiresAt,
     expires_at: expiresAt,
@@ -384,6 +384,13 @@ export function normalizeVerifyResponse(pub, txnSummary) {
       planDurationDays != null &&
       (pub.remaining_days ?? pub.remainingDays ?? 0) > planDurationDays + 0,
   }
+
+  // Canonical Validator — never expose inconsistent subscription fields.
+  const validated = validateVerifyResponse(built, {
+    surface: 'verify',
+    deviceId: pub.device_id ?? pub.deviceId ?? null,
+  })
+  return validated.payload
 }
 
 function appModesForVerify(modesPayload) {
@@ -559,31 +566,26 @@ async function buildActiveVerifyFallbackFromCache(req, deviceId, row) {
   }
 }
 
+/** Fresh in-TTL cache only — never restore entitlement from stale (TTL-expired) cache. */
 async function maybeActiveVerifyFallback(req, deviceId, fingerprint, err) {
   if (!isDbTimeoutOrPressureError(err)) return null
-  const stale =
-    getCachedSubscriptionAccess(deviceId, fingerprint) ??
-    getStaleCachedSubscriptionAccess(deviceId, fingerprint)
-  if (!isAccessRowActive(stale)) return null
+  const fresh = getCachedSubscriptionAccess(deviceId, fingerprint)
+  if (!isAccessRowActive(fresh)) return null
   try {
-    return await buildActiveVerifyFallbackFromCache(req, deviceId, stale)
+    return await buildActiveVerifyFallbackFromCache(req, deviceId, fresh)
   } catch (fallbackErr) {
     console.error('[subscription-verify-active-fallback] failed:', fallbackErr)
     return null
   }
 }
 
-/** Never downgrade paid users: cache → stale cache → fast DB before any inactive verify body. */
+/** Never restore paid state from stale cache. Prefer fresh cache → fast DB. */
 async function tryLastResortActiveVerifyFallback(req, deviceId, fingerprint) {
   const fp = String(fingerprint ?? '').trim()
   const transferRevokedSource = await isCompletedTransferSourceDevice(deviceId)
   const cached = getCachedSubscriptionAccess(deviceId, fp)
   if (isAccessRowActive(cached) && !transferRevokedSource) {
     return buildActiveVerifyFallbackFromCache(req, deviceId, cached)
-  }
-  const stale = getStaleCachedSubscriptionAccess(deviceId, fp)
-  if (isAccessRowActive(stale) && !transferRevokedSource) {
-    return buildActiveVerifyFallbackFromCache(req, deviceId, stale)
   }
   if (transferRevokedSource) {
     try {
@@ -704,24 +706,18 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
       )
       row = accessSnapshot.row
     } catch (e) {
-      const staleActive = getStaleCachedSubscriptionAccess(d, fp)
-      const transferRevokedSource = await isCompletedTransferSourceDevice(d)
-      if (isAccessRowActive(staleActive) && !transferRevokedSource) {
-        row = staleActive
-        timing.stale_active_cache = true
-      } else {
-        const lastResort = await tryLastResortActiveVerifyFallback(req, d, fp)
-        if (lastResort) {
-          timing.last_resort_active = true
-          return lastResort
-        }
-        const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
-        if (fb) {
-          timing.access_pressure_fallback = true
-          return fb
-        }
-        throw e
+      // Stale cache restore permanently disabled — refresh from DB via last-resort/fast path only.
+      const lastResort = await tryLastResortActiveVerifyFallback(req, d, fp)
+      if (lastResort) {
+        timing.last_resort_active = true
+        return lastResort
       }
+      const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
+      if (fb) {
+        timing.access_pressure_fallback = true
+        return fb
+      }
+      throw e
     }
     setCachedSubscriptionAccess(d, fp, row)
   }

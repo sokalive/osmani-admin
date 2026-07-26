@@ -643,7 +643,7 @@ runtimePublicRouter.get('/subscription-expiry-audit', requireLegacyAdminToken, a
   }
 })
 
-/** Repair over-credited subscriptions (>1 day beyond payment replay). ?dry_run=0 to apply. */
+/** Repair over-credited subscriptions (>1 day beyond payment replay). Permanently legacy-locked. */
 runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
@@ -656,6 +656,51 @@ runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken,
     res.json({ ok: true, ...report, commit: getServerGitCommit() })
   } catch (e) {
     console.error('[runtime/subscription-expiry-repair]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Permanent read-only integrity audit (manual trigger). Never modifies expiry. */
+runtimePublicRouter.get('/subscription-integrity-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { runSubscriptionIntegrityAudit, getLatestIntegrityAuditReport } =
+      await import('../lib/subscriptionIntegrityAudit.js')
+    if (String(req.query.run ?? '0').trim() === '1') {
+      const report = await runSubscriptionIntegrityAudit({ slot: 'manual' })
+      return res.json({ ok: true, ...report, commit: getServerGitCommit() })
+    }
+    const latest = await getLatestIntegrityAuditReport()
+    res.json({ ok: true, latest, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/subscription-integrity-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+runtimePublicRouter.get('/subscription-hardening-status', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { migrationLockMeta, isSubscriptionMigrationCompleted, isLegacySubscriptionLockEnabled } =
+      await import('../lib/subscriptionMigrationLock.js')
+    const { legacyLockStatus } = await import('../lib/subscriptionLegacyLock.js')
+    const { subscriptionAccessCacheStats } = await import('../lib/subscriptionAccessCache.js')
+    const { listIntegrityAuditReports } = await import('../lib/subscriptionIntegrityAudit.js')
+    const reports = await listIntegrityAuditReports({ limit: 5 })
+    res.json({
+      ok: true,
+      migration: {
+        ...migrationLockMeta(),
+        completed: await isSubscriptionMigrationCompleted(),
+        legacy_lock: await isLegacySubscriptionLockEnabled(),
+      },
+      legacy: await legacyLockStatus(),
+      cache: subscriptionAccessCacheStats(),
+      recent_integrity_audits: reports,
+      commit: getServerGitCommit(),
+    })
+  } catch (e) {
+    console.error('[runtime/subscription-hardening-status]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

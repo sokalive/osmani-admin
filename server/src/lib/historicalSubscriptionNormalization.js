@@ -447,6 +447,19 @@ export async function applyHistoricalSubscriptionNormalization({
   confirm = false,
   appliedBy = 'admin_ai',
 } = {}) {
+  // PERMANENT MIGRATION LOCK — historical apply must never run again after production seal.
+  try {
+    const { guardHistoricalNormalizationApply } = await import('./subscriptionLegacyLock.js')
+    await guardHistoricalNormalizationApply()
+  } catch (lockErr) {
+    return {
+      ok: false,
+      applied: false,
+      migration_locked: true,
+      code: lockErr?.code || 'MIGRATION_LOCKED',
+      error: lockErr?.message || String(lockErr),
+    }
+  }
   if (!confirm) {
     return { ok: false, applied: false, error: 'confirm=true is required' }
   }

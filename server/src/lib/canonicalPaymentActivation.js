@@ -224,7 +224,14 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
 
   try {
     const upsertResult = await billing.upsertDeviceSubscriptionActive(
-      { deviceId, orderId, expiresAt, fingerprintHash: fpHash },
+      {
+        deviceId,
+        orderId,
+        expiresAt,
+        fingerprintHash: fpHash,
+        durationDays: plan.duration_days,
+        source: 'payment',
+      },
       client,
     )
     const skipped = upsertResult?.skipped === true
@@ -256,6 +263,22 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
       smsNeeded: true,
     }
   } catch (e) {
+    if (e?.name === 'EntitlementGuardError' || e?.reject === true) {
+      console.error('[canonical-activation] entitlement guard rejected:', redactId(orderId), e?.code, e?.message)
+      return {
+        ...buildActivationMeta({
+          activation_state: ACTIVATION_STATE.TERMINAL_REJECTED,
+          completion_source: source,
+        }),
+        activated: false,
+        skipped: true,
+        reason: 'entitlement_guard_rejected',
+        code: e?.code || 'ENTITLEMENT_GUARD_REJECTED',
+        deviceId,
+        orderId,
+        error: String(e?.message || e).slice(0, 200),
+      }
+    }
     console.error('[canonical-activation] upsert failed:', redactId(orderId), e?.message || e)
     return {
       ...buildActivationMeta({

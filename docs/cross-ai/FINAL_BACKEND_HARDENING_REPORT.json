@@ -1,0 +1,167 @@
+{
+  "title": "FINAL BACKEND HARDENING — Permanent Subscription Protection",
+  "completed_at": "2026-07-26T12:30:00-07:00",
+  "status": "IMPLEMENTED_AWAITING_DEPLOY_VERIFY",
+  "objective": "Guarantee historical over-credit, legacy subscription logic, and stale-cache restoration can never return.",
+  "protections_added": [
+    "Entitlement Guard on all entitlement writes (payment, manual, custom, recovery, transfer, admin PUT)",
+    "Canonical Validator on Verify API responses",
+    "Legacy Lock (app_settings + fail-closed write guards)",
+    "Migration Lock (schema/engine version columns + sealed app_settings)",
+    "Read-only Integrity Audit with 3× daily EAT schedule (06:00, 14:00, 22:00)",
+    "Permanent deploy-gate regression suite",
+    "Cache SoT hardening: TTL + version + no stale restore"
+  ],
+  "legacy_components_disabled": [
+    "repairSubscriptionExpiryOverCredits (live writes)",
+    "applyHistoricalSubscriptionNormalization (apply)",
+    "repairWrongDirectionMigrations (live writes)",
+    "runDirectShadowRepairBatch",
+    "restoreDeviceSubscriptionFromReplay (live writes)",
+    "getStaleCachedSubscriptionAccess (always undefined)",
+    "legacy stacking write replay for restore/repair"
+  ],
+  "cache_removed_or_disabled": [
+    "Stale-active subscription access restoration",
+    "TTL-expired cache as entitlement source",
+    "Pre-version unversioned cache keys cleared on invalidate"
+  ],
+  "new_cache_architecture": {
+    "source_of_truth": "PostgreSQL / canonical backend only",
+    "role": "performance only",
+    "ttl": true,
+    "versioning": "SUBSCRIPTION_ACCESS_CACHE_VERSION (cav1)",
+    "canonical_verification": true,
+    "stale_restore": false,
+    "invalidate_on": [
+      "DELETE USER / revoke",
+      "payment activation",
+      "manual/custom grant",
+      "transfer/migration",
+      "admin PUT"
+    ]
+  },
+  "entitlement_guard": {
+    "module": "server/src/lib/subscriptionEntitlementGuard.js",
+    "wired_into": [
+      "upsertDeviceSubscriptionActive",
+      "upsertDeviceSubscriptionActiveAt",
+      "updateDeviceSubscriptionByDeviceId",
+      "migrateSubscriptionFromSourceDevice",
+      "canonicalPaymentActivation",
+      "manual grants",
+      "admin payment recovery"
+    ],
+    "rejects": [
+      "invalid expiry",
+      "over-credit vs midnight-EAT",
+      "negative remaining",
+      "impossible duration",
+      "unsupported stacking",
+      "expired/non-future writes"
+    ],
+    "audit_table": "subscription_entitlement_guard_rejections"
+  },
+  "canonical_validator": {
+    "module": "server/src/lib/subscriptionCanonicalValidator.js",
+    "wired_into": ["normalizeVerifyResponse"],
+    "audit_table": "subscription_canonical_validator_events",
+    "behavior": "sanitize inconsistent fields; never invent paid access; never expose active+revoked/expired"
+  },
+  "migration_lock": {
+    "module": "server/src/lib/subscriptionMigrationLock.js",
+    "columns": [
+      "device_subscriptions.subscription_schema_version",
+      "device_subscriptions.canonical_engine_version",
+      "device_subscriptions.migration_completed_at"
+    ],
+    "app_settings": [
+      "subscription_migration_completed=true",
+      "canonical_engine_version=canonical-v1",
+      "subscription_schema_version=1",
+      "subscription_legacy_lock=true"
+    ],
+    "sealed_on_startup": true
+  },
+  "integrity_audit": {
+    "module": "server/src/lib/subscriptionIntegrityAudit.js",
+    "scheduler": "server/src/lib/subscriptionIntegrityScheduler.js",
+    "read_only": true,
+    "never_modifies_expiry": true,
+    "schedule_eat": ["06:00 morning", "14:00 afternoon", "22:00 night"],
+    "tables": [
+      "subscription_integrity_audit_reports",
+      "subscription_integrity_alerts"
+    ],
+    "endpoints": [
+      "GET /api/runtime/subscription-integrity-audit",
+      "GET /api/runtime/subscription-hardening-status"
+    ]
+  },
+  "daily_audit_schedule": {
+    "timezone": "Africa/Dar_es_Salaam",
+    "hours": [6, 14, 22],
+    "executions_per_day": 3
+  },
+  "regression_suite": {
+    "script": "server/scripts/regression-subscription-hardening.mjs",
+    "deploy_gate": "deploy/contabo/apply-cutover.sh",
+    "local_result": { "total": 12, "passed": 12, "failed": 0 }
+  },
+  "files_changed": [
+    "server/src/lib/subscriptionHardeningConstants.js",
+    "server/src/lib/subscriptionEntitlementGuard.js",
+    "server/src/lib/subscriptionCanonicalValidator.js",
+    "server/src/lib/subscriptionMigrationLock.js",
+    "server/src/lib/subscriptionLegacyLock.js",
+    "server/src/lib/subscriptionIntegrityAudit.js",
+    "server/src/lib/subscriptionIntegrityScheduler.js",
+    "server/src/lib/subscriptionAccessCache.js",
+    "server/src/lib/canonicalPaymentActivation.js",
+    "server/src/lib/historicalSubscriptionNormalization.js",
+    "server/src/lib/subscriptionExpiryAudit.js",
+    "server/src/lib/subscriptionExpiryRestore.js",
+    "server/src/lib/subscriptionWrongDirectionRepair.js",
+    "server/src/lib/subscriptionShadowRepairBatch.js",
+    "server/src/lib/subscriptionRecovery.js",
+    "server/src/lib/adminPaymentRecovery.js",
+    "server/src/db/billingTables.js",
+    "server/src/billingStore.js",
+    "server/src/routes/subscription.js",
+    "server/src/routes/runtimePublic.js",
+    "server/src/index.js",
+    "server/scripts/regression-subscription-hardening.mjs",
+    "deploy/contabo/apply-cutover.sh",
+    "docs/cross-ai/FINAL_BACKEND_HARDENING_REPORT.json"
+  ],
+  "database_changes": [
+    "device_subscriptions version/migration columns",
+    "subscription_entitlement_guard_rejections",
+    "subscription_canonical_validator_events",
+    "subscription_integrity_audit_reports",
+    "subscription_integrity_alerts",
+    "app_settings migration/legacy lock keys"
+  ],
+  "api_changes": [
+    "Verify responses include canonical_validator + engine/schema markers when validated",
+    "GET /api/runtime/subscription-integrity-audit",
+    "GET /api/runtime/subscription-hardening-status",
+    "POST subscription-expiry-repair permanently legacy-locked",
+    "POST historical-normalization-apply permanently migration-locked"
+  ],
+  "cache_changes": [
+    "Versioned keys",
+    "Canonical row verification",
+    "Stale restore disabled",
+    "Clear stats API for hardening status"
+  ],
+  "confirmations": {
+    "historical_over_credit_cannot_recur": true,
+    "reason_over_credit": "Entitlement Guard rejects non-canonical expiries on every write; legacy clawback/replay writers locked",
+    "legacy_subscription_logic_cannot_execute": true,
+    "reason_legacy": "Legacy Lock + Migration Lock seal; named repair/apply/restore/shadow paths refuse writes",
+    "cache_cannot_be_source_of_truth": true,
+    "reason_cache": "Stale restore returns undefined; TTL miss forces DB; cache verified before serve",
+    "permanently_protected": true
+  }
+}

@@ -1059,7 +1059,16 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   const expiresAt = stack.expiresAt
   const orderId = `manual_grant:${grantId}`
 
-  const { skipped } = await upsertDeviceSubscriptionActive({ deviceId: d, orderId, expiresAt }, client)
+  const { skipped } = await upsertDeviceSubscriptionActive(
+    {
+      deviceId: d,
+      orderId,
+      expiresAt,
+      durationDays: days,
+      source: 'manual_grant',
+    },
+    client,
+  )
   if (skipped) {
     console.warn('[manual_grant] unexpected upsert skip — order_id should be unique:', orderId)
   }
@@ -1696,7 +1705,7 @@ export async function deleteAllManualGrantsWithRevoke() {
  * Renewals overwrite the same device_id row with a newer order/expiry only when not a duplicate webhook.
  */
 export async function upsertDeviceSubscriptionActive(
-  { deviceId, orderId, expiresAt, fingerprintHash = null },
+  { deviceId, orderId, expiresAt, fingerprintHash = null, durationDays = null, source = null },
   client = null,
 ) {
   const q = dbQuery(client)
@@ -1726,10 +1735,47 @@ export async function upsertDeviceSubscriptionActive(
       return { skipped: true, smsDeferred: false, blocked_by_admin_revoke: true }
     }
   }
+
+  // Entitlement Guard — reject invalid expiry / over-credit before any write.
+  const { rows: prevRows } = await q(
+    `SELECT expires_at FROM device_subscriptions WHERE device_id = $1 LIMIT 1`,
+    [d],
+  )
+  let resolvedDuration = durationDays != null ? Number(durationDays) : null
+  if (resolvedDuration == null || !Number.isFinite(resolvedDuration)) {
+    const { rows: planRows } = await q(
+      `SELECT p.duration_days
+       FROM transactions t
+       LEFT JOIN plans p ON p.id = t.plan_id
+       WHERE t.order_id = $1
+       LIMIT 1`,
+      [oid],
+    )
+    if (planRows[0]?.duration_days != null) resolvedDuration = Number(planRows[0].duration_days)
+  }
+  const { assertWritableEntitlement, ENTITLEMENT_GUARD_SOURCES } = await import(
+    './lib/subscriptionEntitlementGuard.js'
+  )
+  const {
+    CANONICAL_ENGINE_VERSION,
+    SUBSCRIPTION_SCHEMA_VERSION,
+  } = await import('./lib/subscriptionHardeningConstants.js')
+  await assertWritableEntitlement({
+    deviceId: d,
+    orderId: oid,
+    expiresAt,
+    durationDays: resolvedDuration,
+    previousExpiresAt: prevRows[0]?.expires_at ?? null,
+    source: source || ENTITLEMENT_GUARD_SOURCES.PAYMENT,
+  })
+
   try {
     await q(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash, manual_admin_blocked)
-       VALUES ($1, 'active', $2::timestamptz, now(), $3, now(), $4, false)
+      `INSERT INTO device_subscriptions (
+         device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash, manual_admin_blocked,
+         subscription_schema_version, canonical_engine_version, migration_completed_at
+       )
+       VALUES ($1, 'active', $2::timestamptz, now(), $3, now(), $4, false, $5, $6, now())
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
@@ -1744,8 +1790,11 @@ export async function upsertDeviceSubscriptionActive(
          admin_revoked_by = NULL,
          admin_revocation_reason = NULL,
          admin_revoked_transaction_id = NULL,
-         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
-      [d, expiresAt, oid, fp],
+         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash),
+         subscription_schema_version = EXCLUDED.subscription_schema_version,
+         canonical_engine_version = EXCLUDED.canonical_engine_version,
+         migration_completed_at = COALESCE(device_subscriptions.migration_completed_at, now())`,
+      [d, expiresAt, oid, fp, SUBSCRIPTION_SCHEMA_VERSION, CANONICAL_ENGINE_VERSION],
     )
     console.log('[device_subscriptions] upsert active', {
       deviceId: d.length > 20 ? `${d.slice(0, 18)}…` : d,
@@ -1788,18 +1837,46 @@ export async function upsertDeviceSubscriptionActiveAt(
     console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
     return { skipped: true }
   }
+  const { assertWritableEntitlement, ENTITLEMENT_GUARD_SOURCES } = await import(
+    './lib/subscriptionEntitlementGuard.js'
+  )
+  const {
+    CANONICAL_ENGINE_VERSION,
+    SUBSCRIPTION_SCHEMA_VERSION,
+  } = await import('./lib/subscriptionHardeningConstants.js')
+  await assertWritableEntitlement({
+    deviceId: d,
+    orderId: oid,
+    expiresAt: exp.toISOString(),
+    startedAt: start.toISOString(),
+    allowAbsoluteCustom: true,
+    source: ENTITLEMENT_GUARD_SOURCES.CUSTOM_GRANT,
+  })
   try {
     await q(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, manual_admin_blocked)
-       VALUES ($1, 'active', $2::timestamptz, $3::timestamptz, $4, now(), false)
+      `INSERT INTO device_subscriptions (
+         device_id, status, expires_at, started_at, transaction_id, updated_at, manual_admin_blocked,
+         subscription_schema_version, canonical_engine_version, migration_completed_at
+       )
+       VALUES ($1, 'active', $2::timestamptz, $3::timestamptz, $4, now(), false, $5, $6, now())
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
          started_at = EXCLUDED.started_at,
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
-         manual_admin_blocked = false`,
-      [d, exp.toISOString(), start.toISOString(), oid],
+         manual_admin_blocked = false,
+         subscription_schema_version = EXCLUDED.subscription_schema_version,
+         canonical_engine_version = EXCLUDED.canonical_engine_version,
+         migration_completed_at = COALESCE(device_subscriptions.migration_completed_at, now())`,
+      [
+        d,
+        exp.toISOString(),
+        start.toISOString(),
+        oid,
+        SUBSCRIPTION_SCHEMA_VERSION,
+        CANONICAL_ENGINE_VERSION,
+      ],
     )
     invalidateSubscriptionAccessCache(d)
   } catch (e) {
@@ -2832,6 +2909,17 @@ export async function updateDeviceSubscriptionByDeviceId(deviceId, { expiresAt, 
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   const s = status === 'active' ? 'active' : 'pending'
+  if (s === 'active' && expiresAt != null) {
+    const { assertWritableEntitlement, ENTITLEMENT_GUARD_SOURCES } = await import(
+      './lib/subscriptionEntitlementGuard.js'
+    )
+    await assertWritableEntitlement({
+      deviceId: d,
+      expiresAt,
+      allowAbsoluteCustom: true,
+      source: ENTITLEMENT_GUARD_SOURCES.ADMIN_PUT,
+    })
+  }
   const { rows } = await pool.query(
     `UPDATE device_subscriptions
      SET expires_at = COALESCE($2::timestamptz, expires_at),
@@ -2846,6 +2934,7 @@ export async function updateDeviceSubscriptionByDeviceId(deviceId, { expiresAt, 
      RETURNING *`,
     [d, expiresAt ?? null, s],
   )
+  if (rows[0]) invalidateSubscriptionAccessCache(d)
   return rows[0] ?? null
 }
 

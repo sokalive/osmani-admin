@@ -820,6 +820,120 @@ export async function ensureBillingTables(client) {
     ON admin_subscription_revocation_actions (device_id, created_at DESC);
   `)
 
+  /** Permanent hardening: migration / canonical engine version stamps (Migration Lock). */
+  await client.query(`
+    ALTER TABLE device_subscriptions
+      ADD COLUMN IF NOT EXISTS subscription_schema_version INTEGER;
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions
+      ADD COLUMN IF NOT EXISTS canonical_engine_version TEXT;
+  `)
+  await client.query(`
+    ALTER TABLE device_subscriptions
+      ADD COLUMN IF NOT EXISTS migration_completed_at TIMESTAMPTZ;
+  `)
+  await client.query(`
+    UPDATE device_subscriptions
+    SET subscription_schema_version = COALESCE(subscription_schema_version, 1),
+        canonical_engine_version = COALESCE(NULLIF(trim(canonical_engine_version), ''), 'canonical-v1'),
+        migration_completed_at = COALESCE(migration_completed_at, now())
+    WHERE subscription_schema_version IS NULL
+       OR canonical_engine_version IS NULL
+       OR trim(COALESCE(canonical_engine_version, '')) = ''
+       OR migration_completed_at IS NULL;
+  `)
+  await client.query(`
+    INSERT INTO app_settings (key, value)
+    VALUES
+      ('subscription_migration_completed', 'true'),
+      ('canonical_engine_version', 'canonical-v1'),
+      ('subscription_schema_version', '1'),
+      ('subscription_legacy_lock', 'true')
+    ON CONFLICT (key) DO NOTHING;
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS subscription_entitlement_guard_rejections (
+      id BIGSERIAL PRIMARY KEY,
+      device_id TEXT,
+      order_id TEXT,
+      source TEXT NOT NULL DEFAULT 'other',
+      code TEXT NOT NULL,
+      message TEXT NOT NULL DEFAULT '',
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      proposed_expires_at TIMESTAMPTZ,
+      duration_days INTEGER,
+      canonical_engine_version TEXT NOT NULL DEFAULT 'canonical-v1',
+      subscription_schema_version INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS subscription_entitlement_guard_rejections_created_idx
+    ON subscription_entitlement_guard_rejections (created_at DESC);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS subscription_entitlement_guard_rejections_device_idx
+    ON subscription_entitlement_guard_rejections (device_id, created_at DESC);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS subscription_canonical_validator_events (
+      id BIGSERIAL PRIMARY KEY,
+      device_id TEXT,
+      surface TEXT NOT NULL DEFAULT 'unknown',
+      code TEXT NOT NULL,
+      message TEXT NOT NULL DEFAULT '',
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      rejected BOOLEAN NOT NULL DEFAULT false,
+      canonical_engine_version TEXT NOT NULL DEFAULT 'canonical-v1',
+      subscription_schema_version INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS subscription_canonical_validator_events_created_idx
+    ON subscription_canonical_validator_events (created_at DESC);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS subscription_integrity_audit_reports (
+      id BIGSERIAL PRIMARY KEY,
+      slot TEXT NOT NULL DEFAULT 'manual',
+      started_at TIMESTAMPTZ NOT NULL,
+      finished_at TIMESTAMPTZ NOT NULL,
+      ok BOOLEAN NOT NULL DEFAULT true,
+      anomaly_count INTEGER NOT NULL DEFAULT 0,
+      critical_count INTEGER NOT NULL DEFAULT 0,
+      high_count INTEGER NOT NULL DEFAULT 0,
+      alerted BOOLEAN NOT NULL DEFAULT false,
+      report JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS subscription_integrity_audit_reports_created_idx
+    ON subscription_integrity_audit_reports (created_at DESC);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS subscription_integrity_alerts (
+      id BIGSERIAL PRIMARY KEY,
+      report_id BIGINT,
+      severity TEXT NOT NULL DEFAULT 'high',
+      summary TEXT NOT NULL DEFAULT '',
+      device_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      acknowledged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS subscription_integrity_alerts_created_idx
+    ON subscription_integrity_alerts (created_at DESC);
+  `)
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS offer_codes (
       id SERIAL PRIMARY KEY,

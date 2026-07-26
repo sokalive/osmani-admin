@@ -186,6 +186,18 @@ async function probeActive(deviceId) {
  * @param {{ dryRun?: boolean; confirm?: boolean; limit?: number }} opts
  */
 export async function repairWrongDirectionMigrations(opts = {}) {
+  try {
+    const { guardLegacyRepairWrite, LEGACY_PATHS } = await import('./subscriptionLegacyLock.js')
+    await guardLegacyRepairWrite(LEGACY_PATHS.WRONG_DIRECTION_REPAIR)
+  } catch (lockErr) {
+    return {
+      dry_run: true,
+      legacy_locked: true,
+      code: lockErr?.code || 'LEGACY_LOCKED',
+      error: lockErr?.message || String(lockErr),
+      repaired_count: 0,
+    }
+  }
   const dryRun = opts.dryRun !== false
   const confirm = opts.confirm === true
   const limit = Math.max(1, Math.min(100, Number(opts.limit) || 50))

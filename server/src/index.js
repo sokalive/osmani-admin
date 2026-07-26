@@ -352,6 +352,27 @@ async function runDeferredStartup({ background = false } = {}) {
         )
       }
 
+      // Permanent subscription hardening: seal migration lock + 3× daily integrity audit.
+      try {
+        const { ensureSubscriptionMigrationLockSealed } = await import(
+          './lib/subscriptionMigrationLock.js'
+        )
+        const sealed = await ensureSubscriptionMigrationLockSealed()
+        console.log('[subscription-hardening] migration lock sealed:', sealed)
+      } catch (e) {
+        console.error('[subscription-hardening] migration lock seal failed:', e?.message || e)
+      }
+      if (!isRenderRuntime()) {
+        try {
+          const { startSubscriptionIntegrityAuditScheduler } = await import(
+            './lib/subscriptionIntegrityScheduler.js'
+          )
+          startSubscriptionIntegrityAuditScheduler()
+        } catch (e) {
+          console.error('[subscription-hardening] integrity scheduler failed:', e?.message || e)
+        }
+      }
+
       console.log('[startup] deferred init complete')
       return
     } catch (err) {

@@ -1,5 +1,6 @@
 import { getPool } from '../db/pool.js'
 import { notifySubscriptionTransferred } from './subscriptionTransferNotify.js'
+import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
 import {
   findActiveDeviceIdForPaymentPhone,
   getDeviceSubscriptionAccessState,
@@ -271,19 +272,50 @@ export async function migrateSubscriptionFromSourceDevice(
       [source, freedSourceTxnId],
     )
     const startedAt = row.started_at ?? new Date()
+    const { assertWritableEntitlement, ENTITLEMENT_GUARD_SOURCES } = await import(
+      './subscriptionEntitlementGuard.js'
+    )
+    const {
+      CANONICAL_ENGINE_VERSION,
+      SUBSCRIPTION_SCHEMA_VERSION,
+    } = await import('./subscriptionHardeningConstants.js')
+    await assertWritableEntitlement({
+      deviceId: target,
+      orderId: txnId,
+      expiresAt: row.expires_at,
+      previousExpiresAt: row.expires_at,
+      allowAbsoluteCustom: true,
+      source: ENTITLEMENT_GUARD_SOURCES.TRANSFER,
+    })
     await client.query(
-      `INSERT INTO device_subscriptions (device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash)
-       VALUES ($1, 'active', $2, $3, $4, now(), $5)
+      `INSERT INTO device_subscriptions (
+         device_id, status, expires_at, started_at, transaction_id, updated_at, fingerprint_hash,
+         subscription_schema_version, canonical_engine_version, migration_completed_at
+       )
+       VALUES ($1, 'active', $2, $3, $4, now(), $5, $6, $7, now())
        ON CONFLICT (device_id) DO UPDATE SET
          status = 'active',
          expires_at = EXCLUDED.expires_at,
          started_at = EXCLUDED.started_at,
          transaction_id = EXCLUDED.transaction_id,
          updated_at = now(),
-         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash)`,
-      [target, row.expires_at, startedAt, txnId, hash],
+         fingerprint_hash = COALESCE(EXCLUDED.fingerprint_hash, device_subscriptions.fingerprint_hash),
+         subscription_schema_version = EXCLUDED.subscription_schema_version,
+         canonical_engine_version = EXCLUDED.canonical_engine_version,
+         migration_completed_at = COALESCE(device_subscriptions.migration_completed_at, now())`,
+      [
+        target,
+        row.expires_at,
+        startedAt,
+        txnId,
+        hash,
+        SUBSCRIPTION_SCHEMA_VERSION,
+        CANONICAL_ENGINE_VERSION,
+      ],
     )
     await client.query('COMMIT')
+    invalidateSubscriptionAccessCache(source)
+    invalidateSubscriptionAccessCache(target)
     notifySubscriptionTransferred({
       sourceDeviceId: source,
       targetDeviceId: target,

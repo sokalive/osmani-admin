@@ -123,9 +123,26 @@ export async function findPaymentReplayRestoreCandidates(pool = requirePool(), {
 
 /**
  * Restore one device from payment replay. Never reduces expires_at.
+ * PERMANENT: live writes locked — legacy stack replay must not re-introduce over-credit.
  */
 export async function restoreDeviceSubscriptionFromReplay(deviceId, opts = {}) {
   const dryRun = opts.dryRun !== false
+  if (!dryRun) {
+    try {
+      const { guardLegacyRepairWrite } = await import('./subscriptionLegacyLock.js')
+      await guardLegacyRepairWrite('restoreDeviceSubscriptionFromReplay')
+    } catch (lockErr) {
+      return {
+        restored: false,
+        dry_run: false,
+        legacy_locked: true,
+        code: lockErr?.code || 'LEGACY_LOCKED',
+        reason: 'legacy_locked',
+        error: lockErr?.message || String(lockErr),
+        device_id: String(deviceId ?? '').trim() || null,
+      }
+    }
+  }
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return { restored: false, reason: 'missing_device_id' }

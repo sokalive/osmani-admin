@@ -253,6 +253,13 @@ if [[ -f "$API_DIR/scripts/verify-vps-render-independence.mjs" ]]; then
     exit 1
   }
 fi
+if [[ -f "$API_DIR/scripts/regression-subscription-hardening.mjs" ]]; then
+  echo "==> regression-subscription-hardening.mjs (permanent deploy gate)"
+  (cd "$API_DIR" && node scripts/regression-subscription-hardening.mjs) || {
+    echo "ERROR: subscription hardening regression suite failed" >&2
+    exit 1
+  }
+fi
 if [[ -f "$API_DIR/scripts/test-payment-recovery-db-integration.mjs" ]]; then
   echo "==> test-payment-recovery-db-integration.mjs (isolated fixtures)"
   (cd "$API_DIR" && node scripts/test-payment-recovery-db-integration.mjs) || {
