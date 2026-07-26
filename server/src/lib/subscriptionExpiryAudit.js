@@ -162,7 +162,7 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
 }
 
 /** Bulk-load credit events for many devices (2 queries instead of N). */
-async function loadCreditEventsForDevices(pool, deviceIds) {
+async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByDevice = new Map()) {
   const ids = [...new Set(deviceIds.map((d) => String(d).trim()).filter(Boolean))]
   const byDevice = new Map(ids.map((id) => [id, []]))
   if (!ids.length) return byDevice
@@ -191,6 +191,38 @@ async function loadCreditEventsForDevices(pool, deviceIds) {
       kind: 'payment',
       ref: String(row.order_id),
     })
+  }
+
+  // Historical migrations may preserve the entitlement-linked order_id while the
+  // transaction row still belongs to the prior Device ID. Include that exact order
+  // for the current owner; never infer ownership from phone.
+  const linkedOrderIds = [...new Set([...linkedOrderByDevice.values()].filter(Boolean))]
+  if (linkedOrderIds.length) {
+    const { rows: linkedTxns } = await pool.query(
+      `SELECT t.order_id,
+              COALESCE(t.completed_at, t.created_at) AS credited_at,
+              p.duration_days
+       FROM transactions t
+       LEFT JOIN plans p ON p.id = t.plan_id
+       WHERE t.order_id = ANY($1::text[])
+         AND t.status = 'completed'
+         AND p.duration_days IS NOT NULL`,
+      [linkedOrderIds],
+    )
+    const linkedByOrder = new Map(linkedTxns.map((row) => [String(row.order_id), row]))
+    for (const [deviceId, orderId] of linkedOrderByDevice.entries()) {
+      const row = linkedByOrder.get(orderId)
+      const atMs = toMs(row?.credited_at)
+      const days = Math.max(1, Math.trunc(Number(row?.duration_days) || 0))
+      const list = byDevice.get(deviceId)
+      if (!list || !row || !atMs || days < 1 || list.some((event) => event.ref === orderId)) continue
+      list.push({
+        atMs,
+        durationDays: days,
+        kind: 'payment',
+        ref: orderId,
+      })
+    }
   }
 
   const { rows: grants } = await pool.query(
@@ -366,6 +398,11 @@ export async function runSubscriptionExpiryAudit(opts = {}) {
   const eventsByDevice = await loadCreditEventsForDevices(
     pool,
     subs.map((s) => s.device_id),
+    new Map(
+      subs
+        .map((sub) => [String(sub.device_id), String(sub.transaction_id ?? '').trim()])
+        .filter(([, orderId]) => orderId && !orderId.includes(':')),
+    ),
   )
 
   const categories = {
@@ -470,6 +507,11 @@ async function findOverCreditedBatch({ limit = 50, offset = 0 } = {}) {
   const eventsByDevice = await loadCreditEventsForDevices(
     pool,
     subs.map((s) => s.device_id),
+    new Map(
+      subs
+        .map((sub) => [String(sub.device_id), String(sub.transaction_id ?? '').trim()])
+        .filter(([, orderId]) => orderId && !orderId.includes(':')),
+    ),
   )
   const over = []
   for (const sub of subs) {
