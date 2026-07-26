@@ -281,6 +281,22 @@ if [[ -f "$API_DIR/scripts/regression-payment-activation-latency.mjs" ]]; then
     exit 1
   }
 fi
+
+if [[ -f "$API_DIR/scripts/regression-account-plan-consistency.mjs" ]]; then
+  echo "==> regression-account-plan-consistency.mjs (one entitlement owns all Account boxes)"
+  (cd "$API_DIR" && node scripts/regression-account-plan-consistency.mjs) || {
+    echo "ERROR: account plan consistency regression failed" >&2
+    exit 1
+  }
+fi
+
+if [[ -f "$API_DIR/scripts/audit-account-plan-consistency.mjs" ]]; then
+  echo "==> audit-account-plan-consistency.mjs --repair (metadata link only; never expires_at)"
+  (cd "$API_DIR" && node scripts/audit-account-plan-consistency.mjs --repair) || {
+    echo "ERROR: account plan consistency audit/repair failed" >&2
+    exit 1
+  }
+fi
 if [[ -f "$API_DIR/scripts/audit-plan-canonicality.mjs" ]]; then
   echo "==> audit-plan-canonicality.mjs --repair (safe plan_id metadata fill only)"
   (cd "$API_DIR" && node scripts/audit-plan-canonicality.mjs --repair) || {

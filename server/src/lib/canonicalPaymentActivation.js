@@ -241,6 +241,46 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
     await billing.backfillTransactionPhoneIfMissing(orderId, phone)
   }
 
+  // CRITICAL: preserve_existing_active must NOT rewrite device_subscriptions.transaction_id.
+  // Doing so attached a newer Plan's price/duration/name to an older expiry timeline
+  // (Account: Wiki 1 / Duration 7 + Remaining 2 / old Expiry). Payment is already completed;
+  // entitlement timeline stays owned by the prior canonical source.
+  if (stack.expiry_policy === 'preserve_existing_active') {
+    console.warn('[canonical-activation] preserve_existing_active — skip entitlement upsert', {
+      deviceId: redactId(deviceId),
+      orderId: redactId(orderId, 22),
+      expiresAt,
+      purchasedDurationDays: planDurationDays,
+    })
+    const meta = buildActivationMeta({
+      activation_state: ACTIVATION_STATE.ALREADY_APPLIED,
+      entitlement_active: true,
+      entitlement_device_id_redacted: redactId(deviceId),
+      completion_source: source,
+    })
+    await persistActivationMeta(
+      orderId,
+      {
+        ...meta,
+        expiry_policy: 'preserve_existing_active',
+        entitlement_unchanged: true,
+        purchased_duration_days: planDurationDays,
+      },
+      client,
+    )
+    return {
+      ...meta,
+      activated: false,
+      skipped: true,
+      reason: 'preserve_existing_active',
+      deviceId,
+      orderId,
+      expiresAt,
+      smsDeferred: false,
+      smsNeeded: false,
+    }
+  }
+
   const fpRaw = String(raw.device_fingerprint ?? raw.fingerprint ?? raw.deviceFingerprint ?? '').trim()
   const fpHash = fpRaw ? billing.hashDeviceFingerprint(fpRaw) : null
 

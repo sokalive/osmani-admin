@@ -38,6 +38,26 @@ echo "==> Startup smoke (loadEnv)"
 cd "$API_DIR"
 node -e "import('./src/loadEnv.js').then((m)=>{const ok=m.isDatabaseUrlConfigured?.()??Boolean(process.env.DATABASE_URL); if(!ok){console.error('DATABASE_URL missing after loadEnv'); process.exit(1);} console.log('loadEnv ok');}).catch((e)=>{console.error(e); process.exit(1);})"
 
+echo "==> regression-account-plan-consistency.mjs"
+(cd "$API_DIR" && node scripts/regression-account-plan-consistency.mjs) || {
+  echo "ERROR: account plan consistency regression failed" >&2
+  exit 1
+}
+
+echo "==> audit-account-plan-consistency.mjs --repair (metadata only)"
+# Load DATABASE_URL into this shell the same way PM2 does.
+eval "$(node -e "
+const { loadContaboPm2Env } = require('$ROOT/deploy/contabo/loadPm2Env.cjs');
+const e = loadContaboPm2Env('$ROOT');
+const u = String(e.DATABASE_URL || '').trim();
+if (!u) { console.error('FATAL: DATABASE_URL missing for audit'); process.exit(1); }
+process.stdout.write('export DATABASE_URL=' + JSON.stringify(u) + '\n');
+")"
+(cd "$API_DIR" && node scripts/audit-account-plan-consistency.mjs --repair) || {
+  echo "ERROR: account plan consistency audit/repair failed" >&2
+  exit 1
+}
+
 echo "==> PM2 restart (API only)"
 if ! command -v pm2 >/dev/null 2>&1; then
   echo "ERROR: pm2 not installed" >&2

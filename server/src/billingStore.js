@@ -1855,7 +1855,14 @@ export async function upsertDeviceSubscriptionActive(
            WHEN device_subscriptions.expires_at > now() THEN device_subscriptions.started_at
            ELSE EXCLUDED.started_at
          END,
-         transaction_id = EXCLUDED.transaction_id,
+         -- Preserve entitlement ownership when expiry is unchanged (preserve_existing_active).
+         -- Never attach a newer Plan's metadata to an older expiry timeline.
+         transaction_id = CASE
+           WHEN device_subscriptions.expires_at > now()
+            AND device_subscriptions.expires_at IS NOT DISTINCT FROM EXCLUDED.expires_at
+           THEN device_subscriptions.transaction_id
+           ELSE EXCLUDED.transaction_id
+         END,
          updated_at = now(),
          manual_admin_blocked = false,
          admin_revoked_at = NULL,
@@ -2250,7 +2257,7 @@ function verifySourceFromTransactionId(txnId) {
   return 'payment'
 }
 
-/** Resolve plan/amount/duration from active entitlement when payment txn lookup is incomplete. */
+/** Resolve plan/amount/duration from the ONE entitlement-linked source only (no mixed txns). */
 async function buildEntitlementVerifyTxnSummary(deviceId) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
@@ -2260,13 +2267,21 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
        ds.transaction_id,
        ds.started_at,
        ds.expires_at,
-       COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AS plan_id,
-       COALESCE(pay.amount, lt.amount, p.price) AS amount,
-       COALESCE(pay.currency, lt.currency, 'TZS') AS currency,
-       COALESCE(pay.updated_at, lt.updated_at, mg.created_at, ds.updated_at) AS activated_at,
+       pay.plan_id AS pay_plan_id,
+       pay.amount AS pay_amount,
+       pay.currency AS pay_currency,
+       pay.updated_at AS pay_updated_at,
+       pay.plan_duration_days AS pay_plan_duration_days,
+       mg.plan_id AS grant_plan_id,
+       mg.duration_days AS grant_duration_days,
+       mg.created_at AS grant_created_at,
+       mg.custom_expiry AS grant_custom_expiry,
+       mg.started_at_custom AS grant_started_at_custom,
+       mg.expires_at_custom AS grant_expires_at_custom,
+       p.id AS plan_id,
        p.name AS plan_name,
-       p.duration_days AS plan_duration_days,
-       mg.duration_days AS grant_duration_days
+       p.price AS plan_price,
+       p.duration_days AS plan_duration_days
      FROM device_subscriptions ds
      LEFT JOIN transactions pay
        ON pay.order_id = ds.transaction_id AND pay.status = 'completed'
@@ -2277,14 +2292,7 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
          THEN (substring(ds.transaction_id from 14))::bigint
        END
      )
-     LEFT JOIN LATERAL (
-       SELECT t.plan_id, t.amount, t.currency, t.updated_at
-       FROM transactions t
-       WHERE t.device_id = ds.device_id AND t.status = 'completed'
-       ORDER BY COALESCE(t.updated_at, t.created_at) DESC
-       LIMIT 1
-     ) lt ON true
-     LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, lt.plan_id, mg.plan_id) AND p.deleted_at IS NULL
+     LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, mg.plan_id)
      WHERE ds.device_id = $1
        AND ds.status = 'active'
        AND ds.expires_at > now()
@@ -2295,12 +2303,27 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
   if (!row) return null
 
   const txnId = String(row.transaction_id ?? '').trim()
-  let planDurationDays =
-    row.plan_duration_days != null ? Math.trunc(Number(row.plan_duration_days)) : null
-  if (planDurationDays == null || !Number.isFinite(planDurationDays) || planDurationDays < 1) {
-    const grantDays = Number(row.grant_duration_days)
-    if (Number.isFinite(grantDays) && grantDays >= 1) {
-      planDurationDays = Math.trunc(grantDays)
+  let planDurationDays = null
+  const snap = Math.trunc(Number(row.pay_plan_duration_days))
+  if (Number.isFinite(snap) && snap >= 1) {
+    planDurationDays = snap
+  } else if (row.plan_duration_days != null) {
+    const n = Math.trunc(Number(row.plan_duration_days))
+    if (Number.isFinite(n) && n >= 1) planDurationDays = n
+  }
+  if ((planDurationDays == null || planDurationDays < 1) && row.grant_duration_days != null) {
+    const grantDays = Math.trunc(Number(row.grant_duration_days))
+    if (Number.isFinite(grantDays) && grantDays >= 1) planDurationDays = grantDays
+  }
+  if (
+    row.grant_custom_expiry === true &&
+    row.grant_started_at_custom &&
+    row.grant_expires_at_custom
+  ) {
+    const startMs = toMs(row.grant_started_at_custom)
+    const endMs = toMs(row.grant_expires_at_custom)
+    if (startMs != null && endMs != null && endMs > startMs) {
+      planDurationDays = Math.max(1, Math.ceil((endMs - startMs) / 86400000))
     }
   }
   if (planDurationDays == null || planDurationDays < 1) {
@@ -2311,81 +2334,41 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
     }
   }
 
+  const planId =
+    row.plan_id != null
+      ? Number(row.plan_id)
+      : row.pay_plan_id != null
+        ? Number(row.pay_plan_id)
+        : row.grant_plan_id != null
+          ? Number(row.grant_plan_id)
+          : null
   let planName = row.plan_name != null ? String(row.plan_name).trim() || null : null
-  let amount = row.amount != null ? Number(row.amount) : null
-  const planId = row.plan_id != null ? Number(row.plan_id) : null
-  if ((!planName || amount == null) && planDurationDays != null) {
-    const plan = await getActivePlanByDurationDays(planDurationDays)
-    if (plan) {
-      const full = await getPlanRowByIdAny(plan.id)
-      if (!planName && full?.name) planName = String(full.name).trim() || null
-      if (amount == null && plan.price != null) amount = Number(plan.price)
-    }
-  }
-  if (!planName && planId != null) {
+  let amount =
+    row.pay_amount != null
+      ? Number(row.pay_amount)
+      : row.plan_price != null
+        ? Number(row.plan_price)
+        : null
+  // Linked plan row only — never invent from duration tier or an unrelated latest payment.
+  if ((!planName || amount == null) && planId != null) {
     const plan = await getPlanRowByIdAny(planId)
-    if (plan?.name) planName = String(plan.name).trim() || null
+    if (plan?.name && !planName) planName = String(plan.name).trim() || null
     if (amount == null && plan?.price != null) amount = Number(plan.price)
     if ((planDurationDays == null || planDurationDays < 1) && plan?.duration_days != null) {
       planDurationDays = Math.trunc(Number(plan.duration_days))
     }
   }
-  if (amount == null) {
-    const { rows: amtRows } = await pool.query(
-      `SELECT amount, plan_id
-       FROM transactions
-       WHERE device_id = $1 AND status = 'completed' AND amount IS NOT NULL
-       ORDER BY COALESCE(updated_at, created_at) DESC
-       LIMIT 1`,
-      [d],
-    )
-    if (amtRows[0]?.amount != null) amount = Number(amtRows[0].amount)
-    else if (amtRows[0]?.plan_id != null) {
-      const p = await getPlanRowByIdAny(Number(amtRows[0].plan_id))
-      if (p?.price != null) amount = Number(p.price)
-    }
-  }
-  if (amount == null && txnId.startsWith('recovery:')) {
-    const sourceDev = txnId.slice('recovery:'.length).trim()
-    if (sourceDev && sourceDev !== d) {
-      const { rows: srcAmt } = await pool.query(
-        `SELECT amount, plan_id
-         FROM transactions
-         WHERE device_id = $1 AND status = 'completed' AND amount IS NOT NULL
-         ORDER BY COALESCE(updated_at, created_at) DESC
-         LIMIT 1`,
-        [sourceDev],
-      )
-      if (srcAmt[0]?.amount != null) amount = Number(srcAmt[0].amount)
-      else if (srcAmt[0]?.plan_id != null) {
-        const p = await getPlanRowByIdAny(Number(srcAmt[0].plan_id))
-        if (p?.price != null) amount = Number(p.price)
-      }
-    }
-  }
-  if (amount == null && planDurationDays != null) {
-    const { rows: priceRows } = await pool.query(
-      `SELECT price FROM plans
-       WHERE deleted_at IS NULL AND duration_days = $1
-       ORDER BY is_active DESC, id ASC LIMIT 1`,
-      [planDurationDays],
-    )
-    if (priceRows[0]?.price != null) amount = Number(priceRows[0].price)
-  }
-  // Canonical plan engine: never invent a price from a different plan tier.
-  // If no plan matches this entitlement, amount stays null rather than showing
-  // another package's price on the Account screen.
 
   return {
     amount,
-    currency: String(row.currency ?? 'TZS').trim() || 'TZS',
+    currency: String(row.pay_currency ?? 'TZS').trim() || 'TZS',
     plan_id: planId,
     plan_name:
       planName ||
       (planDurationDays != null ? `Kifurushi ${planDurationDays} siku` : 'Kifurushi'),
     plan_duration_days: planDurationDays,
     started_at: toIsoTimestamp(row.started_at),
-    activated_at: toIsoTimestamp(row.activated_at),
+    activated_at: toIsoTimestamp(row.pay_updated_at ?? row.grant_created_at),
     source: verifySourceFromTransactionId(txnId),
     transaction_id: txnId || null,
   }
@@ -2905,7 +2888,7 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
     txn = orderRows[0] ?? null
   }
 
-  if (!txn && (linkedId.startsWith('transfer:') || linkedId.startsWith('force:') || !linkedId)) {
+  if (!txn && (linkedId.startsWith('transfer:') || linkedId.startsWith('force:') || linkedId.startsWith('moved:'))) {
     txn = await getLatestCompletedTransactionForDevice(deviceId)
   }
   if (!txn) {
