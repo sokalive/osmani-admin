@@ -46,6 +46,16 @@ async function tick() {
   try {
     const { runSubscriptionIntegrityAudit } = await import('./subscriptionIntegrityAudit.js')
     await runSubscriptionIntegrityAudit({ slot: slotName(hour) })
+    // SAFE AUTO FIX (System Health Center): cache/monitoring maintenance only.
+    // Never repairs subscriptions, payments, expiry, or entitlement records.
+    try {
+      const { isSafeAutoFixEnabled, runSafeAutoFixBundle } = await import('./systemHealthCenter.js')
+      if (await isSafeAutoFixEnabled()) {
+        await runSafeAutoFixBundle({ mode: 'auto', performedBy: 'safe_auto_fix' })
+      }
+    } catch (autoErr) {
+      console.error('[integrity-audit-scheduler] safe auto fix:', autoErr?.message || autoErr)
+    }
   } catch (e) {
     console.error('[integrity-audit-scheduler]', e?.message || e)
   } finally {

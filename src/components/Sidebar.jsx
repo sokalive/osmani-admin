@@ -66,6 +66,7 @@ const menuItems = [
   { id: 'whatsapp', label: 'WhatsApp Support', icon: MessageCircle, path: '/whatsapp' },
   { id: 'app-update', label: 'App Update', icon: Download, path: '/app-update' },
   { id: 'server-health', label: 'Server Health', icon: Server, path: '/server-health' },
+  { id: 'system-health', label: 'Afya ya Mfumo', icon: ShieldCheck, path: '/system-health' },
   { id: 'popup', label: 'Popup Settings', icon: PanelTopOpen, path: '/popup-settings' },
   { id: 'device', label: 'Device Control', icon: TabletSmartphone, path: '/device-control' },
   { id: 'trial-watch', label: 'Trial Watch', icon: Clock, path: '/trial-watch' },

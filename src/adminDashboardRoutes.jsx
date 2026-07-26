@@ -15,6 +15,7 @@ import PopupSettingsPage from './pages/PopupSettingsPage'
 import SecurityDashboardPage from './pages/SecurityDashboardPage'
 import SecurityRiskDeviceInvestigationPage from './pages/SecurityRiskDeviceInvestigationPage'
 import ServerHealthPage from './pages/ServerHealthPage'
+import SystemHealthCenterPage from './pages/SystemHealthCenterPage'
 import TransferCodesPage from './pages/TransferCodesPage'
 import ManualSubscriptionPage from './pages/ManualSubscriptionPage'
 import TransactionsPage from './pages/TransactionsPage'
@@ -66,6 +67,7 @@ export const dashboardRouteElements = [
   <Route key="whatsapp" path="whatsapp" element={<WhatsAppPage />} />,
   <Route key="app-update" path="app-update" element={<AppUpdatePage />} />,
   <Route key="server-health" path="server-health" element={<ServerHealthPage />} />,
+  <Route key="system-health" path="system-health" element={<SystemHealthCenterPage />} />,
   <Route key="popup-settings" path="popup-settings" element={<PopupSettingsPage />} />,
   <Route key="device-control" path="device-control" element={<DeviceControlPage />} />,
   <Route key="trial-watch" path="trial-watch" element={<TrialWatchPage />} />,

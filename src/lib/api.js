@@ -1287,6 +1287,21 @@ export const getServerHealth = () => adminApiGet('/server-health')
 export const getApiHealth = () => apiGet('/health')
 export const getAdminPanelDiagnostics = () => adminApiGet('/admin/panel-diagnostics')
 
+/** --- 🛡️ System Health Center --- */
+export const getSystemHealthSnapshot = () => adminApiGet('/admin/system-health/snapshot')
+export const getSystemHealthAlerts = () => adminApiGet('/admin/system-health/alerts')
+export const postSystemHealthAckAlert = (id) =>
+  adminApiPost(`/admin/system-health/alerts/${encodeURIComponent(id)}/acknowledge`, {})
+export const getSystemHealthAudits = (range = 'week') =>
+  adminApiGet(`/admin/system-health/audits?range=${encodeURIComponent(range)}`)
+export const getSystemHealthMaintenance = () => adminApiGet('/admin/system-health/maintenance')
+export const getSystemHealthSettings = () => adminApiGet('/admin/system-health/settings')
+export const putSystemHealthSettings = (body) => adminApiPut('/admin/system-health/settings', body)
+export const postSystemHealthMode = (mode) => adminApiPost('/admin/system-health/mode', { mode })
+export const postSystemHealthAction = (action) =>
+  adminApiPost(`/admin/system-health/actions/${encodeURIComponent(action)}`, {})
+export const getSystemHealthReport = () => adminApiGet('/admin/system-health/report')
+
 export const getUsersIntelligenceList = (q) => {
   const params = new URLSearchParams()
   if (q) params.set('q', q)
