@@ -4,13 +4,16 @@ import { notifySubscriptionActivatedFromAct } from './subscriptionActivationNoti
 
 /**
  * Aggressive post-checkout polls — SonicPesa webhooks are often absent in production,
- * so activation must not depend on the durable queue alone after ~30s.
- * Covers ~6 minutes (matches observed "Inaanzisha" window) then hands off to queue.
+ * so activation must not depend on the durable queue alone.
+ *
+ * Dense first ~30s (provider often confirms within seconds of M-Pesa toast), then
+ * coarser polls out to ~3 minutes. The durable reconcile queue covers beyond that.
+ * Never wait 45–60s between early polls — that was the ~1 minute "Inaanzisha" lag.
  */
 function parsePollDelaysMs() {
   const raw = String(
     process.env.PAYMENT_ACTIVATION_POLL_MS ||
-      '0,750,2000,5000,10000,15000,20000,30000,45000,60000,90000,120000,180000,240000,300000,360000',
+      '0,400,900,1600,2500,4000,6000,9000,13000,18000,25000,35000,50000,75000,110000,160000',
   )
   const parsed = raw
     .split(',')
@@ -18,7 +21,7 @@ function parsePollDelaysMs() {
     .filter((n) => Number.isFinite(n) && n >= 0)
   return parsed.length > 0
     ? parsed
-    : [0, 750, 2000, 5000, 10000, 15000, 20000, 30000, 45000, 60000, 90000, 120000, 180000, 240000, 300000, 360000]
+    : [0, 400, 900, 1600, 2500, 4000, 6000, 9000, 13000, 18000, 25000, 35000, 50000, 75000, 110000, 160000]
 }
 
 const inFlightOrders = new Map()

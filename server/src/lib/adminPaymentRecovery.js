@@ -283,7 +283,10 @@ export async function recoverAdminPaymentOrder({
 
     const plan = await getPlanRowByIdAny(lockedTxn.plan_id)
     if (!plan) throw new Error('Plan not found')
-    const planDurationDays = Math.trunc(Number(plan.duration_days))
+    const snapDuration = Math.trunc(Number(lockedTxn.plan_duration_days))
+    const liveDuration = Math.trunc(Number(plan.duration_days))
+    const planDurationDays =
+      Number.isFinite(snapDuration) && snapDuration >= 1 ? snapDuration : liveDuration
     if (!Number.isFinite(planDurationDays) || planDurationDays < 1) {
       throw new Error(`Plan ${lockedTxn.plan_id} has invalid duration_days (${plan.duration_days})`)
     }

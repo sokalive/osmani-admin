@@ -106,6 +106,7 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       currency: 'TZS',
       status: 'pending',
       device_id: deviceId,
+      plan_duration_days: plan.duration_days,
       raw_payload: {
         step: 'created',
         payment_provider: 'sonicpesa',

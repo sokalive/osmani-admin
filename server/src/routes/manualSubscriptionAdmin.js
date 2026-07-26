@@ -540,17 +540,12 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
     if (!deviceId) {
       return res.status(400).json({ ok: false, error: 'device_id is required' })
     }
-    // Canonical plan engine: prefer the exact Admin plan id; duration/price come from
-    // the plans table inside the grant. Duration-only requests remain for legacy callers.
+    // Canonical plan engine: exact Admin plan id is required. Duration is derived from the plan.
     if (!planId) {
-      const allowed = await billing.getManualGrantAllowedDurationDays()
-      if (!allowed.has(durationDays)) {
-        const list = [...allowed].sort((a, b) => a - b).join(', ')
-        return res.status(400).json({
-          ok: false,
-          error: `plan_id or duration_days is required (duration_days: ${list})`,
-        })
-      }
+      return res.status(400).json({
+        ok: false,
+        error: 'plan_id is required (select an Admin Plan — duration guessing is disabled)',
+      })
     }
     if (!phone) {
       return res.status(400).json({ ok: false, error: 'phone is required' })
@@ -558,7 +553,7 @@ manualSubscriptionAdminRouter.post('/grant', rateLimitGrant, async (req, res) =>
 
     const result = await billing.grantManualDeviceSubscription(deviceId, durationDays, null, {
       phone,
-      ...(planId ? { planId } : {}),
+      planId,
     })
 
     void recordSystemNotificationEvent('subscription_manual_grant', {

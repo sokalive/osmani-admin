@@ -360,6 +360,10 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE transactions ADD COLUMN IF NOT EXISTS device_id TEXT;
   `)
+  /** Purchase-time plan duration snapshot — activation must not follow later Admin plan edits. */
+  await client.query(`
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS plan_duration_days INTEGER;
+  `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS transactions_device_id_idx ON transactions (device_id)
     WHERE device_id IS NOT NULL AND trim(device_id) <> '';

@@ -229,10 +229,22 @@ export async function insertTransaction(row) {
     row.device_id != null && String(row.device_id).trim()
       ? String(row.device_id).trim()
       : null
+  // Canonical plan engine: freeze duration at purchase so webhook/recovery cannot
+  // inherit a later Admin plan edit for this paid order.
+  let planDurationDays =
+    row.plan_duration_days != null ? Math.trunc(Number(row.plan_duration_days)) : null
+  if ((!Number.isFinite(planDurationDays) || planDurationDays < 1) && row.plan_id != null) {
+    const plan = await getPlanById(Number(row.plan_id)).catch(() => null)
+    const d = Math.trunc(Number(plan?.duration_days))
+    if (Number.isFinite(d) && d >= 1) planDurationDays = d
+  }
+  if (!Number.isFinite(planDurationDays) || planDurationDays < 1) planDurationDays = null
+
   const { rows } = await pool.query(
     `INSERT INTO transactions (
-       order_id, external_id, plan_id, phone, amount, currency, status, raw_payload, device_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+       order_id, external_id, plan_id, phone, amount, currency, status, raw_payload, device_id,
+       plan_duration_days
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
      RETURNING *`,
     [
       row.order_id,
@@ -244,6 +256,7 @@ export async function insertTransaction(row) {
       row.status ?? 'pending',
       raw,
       deviceId,
+      planDurationDays,
     ],
   )
   void import('./lib/adminPaymentRecovery.js')
@@ -2811,8 +2824,12 @@ async function buildTxnSummaryFromRow(txn) {
   if (!txn) return null
   const planId = txn.plan_id != null ? Number(txn.plan_id) : null
   const planRow = planId != null ? await getPlanRowByIdAny(planId) : null
+  // Prefer purchase-time duration snapshot; fall back to live plan for legacy txns.
   let planDurationDays = null
-  if (planRow != null && planRow.duration_days != null) {
+  const snap = Math.trunc(Number(txn.plan_duration_days))
+  if (Number.isFinite(snap) && snap >= 1) {
+    planDurationDays = snap
+  } else if (planRow != null && planRow.duration_days != null) {
     const n = Number(planRow.duration_days)
     if (Number.isFinite(n) && n >= 0) planDurationDays = Math.trunc(n)
   }

@@ -274,6 +274,20 @@ if [[ -f "$API_DIR/scripts/regression-canonical-plan-engine.mjs" ]]; then
     exit 1
   }
 fi
+if [[ -f "$API_DIR/scripts/regression-payment-activation-latency.mjs" ]]; then
+  echo "==> regression-payment-activation-latency.mjs (no 45s/60s activation gaps)"
+  (cd "$API_DIR" && node scripts/regression-payment-activation-latency.mjs) || {
+    echo "ERROR: payment activation latency regression failed" >&2
+    exit 1
+  }
+fi
+if [[ -f "$API_DIR/scripts/audit-plan-canonicality.mjs" ]]; then
+  echo "==> audit-plan-canonicality.mjs --repair (safe plan_id metadata fill only)"
+  (cd "$API_DIR" && node scripts/audit-plan-canonicality.mjs --repair) || {
+    echo "ERROR: plan canonicality audit/repair failed" >&2
+    exit 1
+  }
+fi
 if [[ -f "$API_DIR/scripts/regression-admin-api-base.mjs" ]]; then
   echo "==> regression-admin-api-base.mjs"
   (cd "$API_DIR" && node scripts/regression-admin-api-base.mjs) || {

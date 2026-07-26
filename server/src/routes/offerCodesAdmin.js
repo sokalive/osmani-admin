@@ -28,16 +28,12 @@ offerCodesAdminRouter.post('/generate', async (req, res) => {
     }
     const planId = Number(body.plan_id ?? body.planId) || null
     const durationDays = Number(body.duration_days ?? body.durationDays)
-    // Canonical plan engine: prefer exact Admin plan id; duration derives from the plan row.
+    // Canonical plan engine: exact Admin plan id is required for new offer codes.
     if (!planId) {
-      const allowed = await billing.getManualGrantAllowedDurationDays()
-      if (!allowed.has(durationDays)) {
-        const list = [...allowed].sort((a, b) => a - b).join(', ')
-        return res.status(400).json({
-          ok: false,
-          error: `plan_id or duration_days is required (duration_days: ${list})`,
-        })
-      }
+      return res.status(400).json({
+        ok: false,
+        error: 'plan_id is required (select an Admin Plan — duration guessing is disabled)',
+      })
     }
     const row = await billing.insertOfferCodeRow({ durationDays, planId, createdBy: 'admin' })
     billing.offerCodeAudit('generated', {

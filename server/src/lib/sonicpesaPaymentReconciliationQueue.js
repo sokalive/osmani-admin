@@ -15,12 +15,12 @@ const QUEUE_STATUS = Object.freeze({
 })
 
 const MAX_ATTEMPTS = Math.max(5, Number(process.env.SONICPESA_RECONCILE_QUEUE_MAX_ATTEMPTS) || 48)
-/** Default 15s — keep polling tight while SonicPesa order-status catches up. */
-const WORKER_MS = Math.max(8_000, Number(process.env.SONICPESA_RECONCILE_QUEUE_MS) || 15_000)
+/** Default 5s (floor 3s) — webhook-absent fallback must not add ~15s idle between polls. */
+const WORKER_MS = Math.max(3_000, Number(process.env.SONICPESA_RECONCILE_QUEUE_MS) || 5_000)
 const BATCH = Math.min(20, Math.max(1, Number(process.env.SONICPESA_RECONCILE_QUEUE_BATCH) || 8))
 const STUCK_PROCESSING_MS = Math.max(15_000, Number(process.env.SONICPESA_RECONCILE_STUCK_MS) || 60_000)
 /** Cap retry delay so activation does not sit idle for minutes between polls. */
-const MAX_RETRY_MS = Math.max(5_000, Number(process.env.SONICPESA_RECONCILE_MAX_RETRY_MS) || 15_000)
+const MAX_RETRY_MS = Math.max(3_000, Number(process.env.SONICPESA_RECONCILE_MAX_RETRY_MS) || 8_000)
 
 let workerTimer = null
 let workerRunning = false
@@ -33,10 +33,10 @@ function requirePool() {
 }
 
 function nextAttemptAt(attemptCount, priority = 0) {
-  const base = priority > 0 ? 2000 : 5000
-  const exp = Math.min(4, Math.max(0, attemptCount))
+  const base = priority > 0 ? 1000 : 2500
+  const exp = Math.min(3, Math.max(0, attemptCount))
   const ms = Math.min(MAX_RETRY_MS, base * 2 ** exp)
-  const jitter = Math.floor(Math.random() * Math.min(1500, ms * 0.15))
+  const jitter = Math.floor(Math.random() * Math.min(800, ms * 0.15))
   return new Date(Date.now() + ms + jitter)
 }
 

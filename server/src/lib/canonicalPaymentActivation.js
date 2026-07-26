@@ -212,9 +212,14 @@ export async function activateFromCompletedTxn(txn, { source = null, client = nu
     }
   }
 
-  // Canonical plan engine: the Admin plan row is the only duration source.
-  // Reject explicitly instead of ever substituting a default duration.
-  const planDurationDays = Math.trunc(Number(plan.duration_days))
+  // Canonical plan engine: prefer purchase-time duration snapshot on the txn.
+  // Fall back to the live Admin plan only for historical rows without a snapshot.
+  const snapDuration = Math.trunc(Number(txn.plan_duration_days))
+  const liveDuration = Math.trunc(Number(plan.duration_days))
+  const planDurationDays =
+    Number.isFinite(snapDuration) && snapDuration >= 1
+      ? snapDuration
+      : liveDuration
   if (!Number.isFinite(planDurationDays) || planDurationDays < 1) {
     return {
       ...buildActivationMeta({
@@ -392,6 +397,12 @@ export async function applySonicpesaPaymentOutcome({
       out.txnStatusAfter = 'completed'
       out.activation = act
       if (act?.smsDeferred) schedulePaymentSuccessSmsAfterCommit(act)
+      // Chokepoint: every SonicPesa completion path notifies after COMMIT so status/boost
+      // callers cannot miss SSE even if they forget to notify.
+      if (act?.deviceId) {
+        const { notifySubscriptionActivatedFromAct } = await import('./subscriptionActivationNotify.js')
+        notifySubscriptionActivatedFromAct(act, oid)
+      }
       return out
     }
 
@@ -472,6 +483,10 @@ export async function applySonicpesaPaymentOutcome({
     await client.query('COMMIT')
     out.activation = act
     if (act?.smsDeferred) schedulePaymentSuccessSmsAfterCommit(act)
+    if (act?.deviceId) {
+      const { notifySubscriptionActivatedFromAct } = await import('./subscriptionActivationNotify.js')
+      notifySubscriptionActivatedFromAct(act, oid)
+    }
     return out
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})

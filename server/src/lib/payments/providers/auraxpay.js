@@ -901,7 +901,7 @@ export async function handleWebhook(req, res, deps) {
         status: 'completed',
         order_id: merchantOrderId,
       })
-      if (!act.skipped && act.deviceId) {
+      if (act?.deviceId) {
         notifySubscriptionActivatedFromAct(act, merchantOrderId)
       }
       return res.sendStatus(200)
@@ -936,7 +936,7 @@ export async function handleWebhook(req, res, deps) {
         status: 'completed',
         order_id: merchantOrderId,
       })
-      if (!act.skipped && act.deviceId) {
+      if (act?.deviceId) {
         notifySubscriptionActivatedFromAct(act, merchantOrderId)
       }
     }
