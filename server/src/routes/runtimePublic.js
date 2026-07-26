@@ -660,6 +660,42 @@ runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken,
   }
 })
 
+/** Full lineage-aware historical over-credit audit (read-only). */
+runtimePublicRouter.get('/historical-subscription-normalization-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { auditHistoricalSubscriptionNormalization } = await import(
+      '../lib/historicalSubscriptionNormalization.js'
+    )
+    const includeAll = String(req.query.include_all ?? '0').trim() === '1'
+    const report = await auditHistoricalSubscriptionNormalization({ includeAll })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/historical-subscription-normalization-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/**
+ * Atomic historical over-credit normalization.
+ * Requires confirm=1; stops without writing when any candidate has ambiguous evidence.
+ */
+runtimePublicRouter.post('/historical-subscription-normalization-apply', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { applyHistoricalSubscriptionNormalization } = await import(
+      '../lib/historicalSubscriptionNormalization.js'
+    )
+    const confirm = String(req.query.confirm ?? req.body?.confirm ?? '0').trim() === '1'
+    const appliedBy = String(req.body?.applied_by ?? 'admin_ai').trim()
+    const report = await applyHistoricalSubscriptionNormalization({ confirm, appliedBy })
+    res.status(report.ok === false ? 409 : 200).json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/historical-subscription-normalization-apply]', e)
+    res.status(500).json({ ok: false, applied: false, error: String(e.message || e) })
+  }
+})
+
 /** Audit users wrongly inactive after expiry repair (read-only). */
 runtimePublicRouter.get('/subscription-expiry-restore-audit', requireLegacyAdminToken, async (req, res) => {
   try {
