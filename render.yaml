@@ -13,12 +13,19 @@ services:
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     envVars:
-      # Leave empty — same as VPS (deploy/contabo/apply-cutover.sh). Runtime api.js resolves
-      # osmani-admin-mpya.onrender.com → Render Node API; admin.osmanitv.com → same-origin /api.
+      # CRITICAL: leave empty. Runtime api.js forces osmani-admin-mpya.onrender.com →
+      # https://api.osmanitv.com/api so channel/banner uploads land on Contabo disk
+      # (same as admin.osmanitv.com). Never bake osmani-admin-api.onrender.com here —
+      # that writes images to the wrong disk and Contabo/apps return 404.
       - key: VITE_API_BASE_URL
         value: ""
+      # Also clear any dashboard override of VITE_API_URL if present.
+      - key: VITE_API_URL
+        value: ""
     routes:
-      # Static host has no Node /api — proxy to VPS API (uploads live on Contabo disk).
+      # Static host has no Node /api — browser must call api.osmanitv.com directly
+      # (see src/lib/api.js). This redirect is a fallback only; live Render may still
+      # serve SPA HTML for /api/* — do not rely on it for uploads.
       - type: redirect
         source: /api/*
         destination: https://api.osmanitv.com/api/:splat

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Pencil, Trash2 } from 'lucide-react'
 import FlashMessage from '../components/FlashMessage'
 import ToggleSwitch from '../components/ToggleSwitch'
 import Topbar from '../components/Topbar'
 import { useToast } from '../context/ToastContext.jsx'
+import { useAdminLiveRefresh } from '../hooks/useAdminLiveRefresh.js'
 import { deletePlan, getPlans, getUsersLegacy, postPlan, putPlan } from '../lib/api'
 import { formatTsh } from '../lib/formatMoney'
 import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
@@ -108,16 +109,11 @@ function PlansPage() {
     }
   }, [showToast])
 
-  useEffect(() => {
-    let cancelled = false
-    const raf = requestAnimationFrame(() => {
-      if (!cancelled) void loadAll()
-    })
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(raf)
-    }
-  }, [loadAll])
+  useAdminLiveRefresh(loadAll, {
+    topics: ['config', 'analytics'],
+    events: ['config.plans_changed', 'analytics.subscription_updated', 'snapshot'],
+    pollMs: 60_000,
+  })
 
   const [draft, setDraft] = useState(() => emptyDraft())
   const [editingPlanId, setEditingPlanId] = useState(null)

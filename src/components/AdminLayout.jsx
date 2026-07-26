@@ -17,18 +17,13 @@ function DeployFooter() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      try {
-        const h = await getApiHealth()
-        if (!cancelled) setApiHealth(h)
-      } catch {
-        if (!cancelled) setApiHealth(null)
-      }
-      try {
-        const d = await getAdminPanelDiagnostics()
-        if (!cancelled) setPanel(d)
-      } catch {
-        if (!cancelled) setPanel(null)
-      }
+      const [h, d] = await Promise.all([
+        getApiHealth().catch(() => null),
+        getAdminPanelDiagnostics().catch(() => null),
+      ])
+      if (cancelled) return
+      setApiHealth(h)
+      setPanel(d)
     })()
     return () => {
       cancelled = true

@@ -267,6 +267,13 @@ if [[ -f "$API_DIR/scripts/regression-payment-system-completion.mjs" ]]; then
     exit 1
   }
 fi
+if [[ -f "$API_DIR/scripts/regression-admin-api-base.mjs" ]]; then
+  echo "==> regression-admin-api-base.mjs"
+  (cd "$API_DIR" && node scripts/regression-admin-api-base.mjs) || {
+    echo "ERROR: admin API base regression failed" >&2
+    exit 1
+  }
+fi
 if [[ -f "$API_DIR/scripts/regression-trusted-admin-install.mjs" ]]; then
   echo "==> regression-trusted-admin-install.mjs"
   (cd "$API_DIR" && node scripts/regression-trusted-admin-install.mjs) || {

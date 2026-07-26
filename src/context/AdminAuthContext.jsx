@@ -13,19 +13,47 @@ import {
 
 const AdminAuthContext = createContext(null)
 
+/** Persist last panelAuthRequired so trusted installs skip the Inapakia gate on reopen. */
+const PANEL_AUTH_HINT_KEY = 'osmani_admin_panel_auth_required_v1'
+
+function readPanelAuthHint() {
+  if (typeof localStorage === 'undefined') return false
+  try {
+    return localStorage.getItem(PANEL_AUTH_HINT_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function writePanelAuthHint(required) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(PANEL_AUTH_HINT_KEY, required ? 'true' : 'false')
+  } catch {
+    /* ignore */
+  }
+}
+
 export function AdminAuthProvider({ children }) {
-  const [ready, setReady] = useState(false)
-  const [panelAuthRequired, setPanelAuthRequired] = useState(false)
+  // Optimistic: Contabo + Render trusted installs keep panelAuthRequired=false.
+  // Paint the shell immediately; reconcile from /admin/auth/status in the background.
+  const [panelAuthRequired, setPanelAuthRequired] = useState(() => readPanelAuthHint())
+  const [ready, setReady] = useState(true)
   const [token, setTokenState] = useState(() => getAdminSessionToken())
   const [email, setEmail] = useState(() => getAdminSessionEmail())
-  const [sessionChecked, setSessionChecked] = useState(false)
+  const [sessionChecked, setSessionChecked] = useState(() => !readPanelAuthHint())
 
   const refreshStatus = useCallback(async () => {
     try {
       const d = await getAdminAuthStatus()
-      setPanelAuthRequired(d?.panelAuthRequired === true)
+      const required = d?.panelAuthRequired === true
+      setPanelAuthRequired(required)
+      writePanelAuthHint(required)
+      if (!required) setSessionChecked(true)
     } catch {
       setPanelAuthRequired(false)
+      writePanelAuthHint(false)
+      setSessionChecked(true)
     } finally {
       setReady(true)
     }

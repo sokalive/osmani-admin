@@ -30,6 +30,7 @@ import {
   postSystemHealthMode,
   putSystemHealthSettings,
 } from '../lib/api'
+import { readAdminSnapshot, writeAdminSnapshot } from '../lib/adminSnapshotCache'
 
 const COLOR_STYLES = {
   green: {
@@ -114,9 +115,10 @@ const RANGE_LABELS = [
 
 function SystemHealthCenterPage() {
   const { showToast } = useToast()
+  const cached = readAdminSnapshot('system-health')
   const [tab, setTab] = useState('dashboard')
-  const [snapshot, setSnapshot] = useState(null)
-  const [alerts, setAlerts] = useState([])
+  const [snapshot, setSnapshot] = useState(cached?.snapshot ?? null)
+  const [alerts, setAlerts] = useState(Array.isArray(cached?.alerts) ? cached.alerts : [])
   const [audits, setAudits] = useState([])
   const [maintenance, setMaintenance] = useState([])
   const [range, setRange] = useState('week')
@@ -133,6 +135,12 @@ function SystemHealthCenterPage() {
       ])
       if (snap?.ok) setSnapshot(snap)
       if (al?.ok) setAlerts(al.alerts || [])
+      if (snap?.ok) {
+        writeAdminSnapshot('system-health', {
+          snapshot: snap,
+          alerts: al?.ok ? al.alerts || [] : [],
+        })
+      }
     } catch (e) {
       showToast('error', e?.message || 'Imeshindikana kupakia hali ya mfumo')
     }
@@ -150,8 +158,8 @@ function SystemHealthCenterPage() {
   }, [])
 
   useEffect(() => {
-    load()
-    const t = setInterval(load, 60_000)
+    void load()
+    const t = setInterval(() => void load(), 30_000)
     return () => clearInterval(t)
   }, [load])
 

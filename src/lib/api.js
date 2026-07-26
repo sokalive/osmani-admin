@@ -6,26 +6,53 @@ const API_BASE_ENV = String(
   import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
 ).trim()
 
-/** Render static admin must call the VPS API (shared PostgreSQL; uploads live on VPS disk). */
-const VPS_PRODUCTION_API = 'https://api.osmanitv.com/api'
+/** Contabo VPS API — canonical media disk + shared PostgreSQL. */
+export const VPS_PRODUCTION_API = 'https://api.osmanitv.com/api'
 
-function resolveBrowserApiBase(origin) {
-  const host = String(origin || '')
+const RENDER_STATIC_ADMIN_HOST = 'osmani-admin-mpya.onrender.com'
+const RENDER_NODE_API_HOST = 'osmani-admin-api.onrender.com'
+
+function hostOf(urlOrOrigin) {
+  return String(urlOrOrigin || '')
     .replace(/^https?:\/\//i, '')
     .split('/')[0]
     .toLowerCase()
-  if (host === 'osmani-admin-mpya.onrender.com') {
-    return VPS_PRODUCTION_API
-  }
+}
+
+function isRenderStaticAdminHost(host) {
+  return host === RENDER_STATIC_ADMIN_HOST
+}
+
+/** Render Node API has its own disk — never use it for the static admin SPA uploads. */
+function isRenderNodeApiUrl(url) {
+  return hostOf(url) === RENDER_NODE_API_HOST
+}
+
+function resolveBrowserApiBase(origin) {
+  const host = hostOf(origin)
+  if (isRenderStaticAdminHost(host)) return VPS_PRODUCTION_API
   return `${String(origin).replace(/\/$/, '')}/api`
 }
 
-function normalizeApiBase(raw) {
+/**
+ * Resolve admin API base.
+ * Render static admin ALWAYS posts to the VPS API (even if a stale VITE_API_BASE_URL
+ * points at osmani-admin-api.onrender.com). Contabo same-origin /api is unchanged.
+ */
+export function normalizeApiBase(raw) {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    if (isRenderStaticAdminHost(hostOf(window.location.origin))) {
+      return VPS_PRODUCTION_API
+    }
+  }
   const s = String(raw || '').trim()
   if (s) {
     const clean = s.replace(/\/$/, '')
-    if (/\/api$/i.test(clean)) return clean
-    return `${clean}/api`
+    const withApi = /\/api$/i.test(clean) ? clean : `${clean}/api`
+    // Stale Render builds bake the Node API URL — rewrite to VPS so channel/banner
+    // images land on the Contabo disk that apps and Contabo Admin already use.
+    if (isRenderNodeApiUrl(withApi)) return VPS_PRODUCTION_API
+    return withApi
   }
   if (typeof window !== 'undefined' && window.location?.origin) {
     return resolveBrowserApiBase(window.location.origin)

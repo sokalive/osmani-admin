@@ -4,29 +4,13 @@ import {
   serializeVisibleTabs,
   tabsFromCheckboxState,
 } from '../../server/src/lib/channelTabs.js'
+import { API_ORIGIN } from './api.js'
 
 const CATEGORY_GRADIENTS = {
   Home: 'from-indigo-600 to-purple-700',
   Sports: 'from-red-600 to-rose-700',
   Tamthilia: 'from-violet-600 to-purple-800',
 }
-
-const API_BASE_ENV = String(
-  import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '',
-).trim()
-
-function resolveApiOrigin() {
-  if (API_BASE_ENV) {
-    const clean = API_BASE_ENV.replace(/\/$/, '').replace(/\/api$/i, '')
-    if (clean) return clean
-  }
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin.replace(/\/$/, '')
-  }
-  return ''
-}
-
-const API_ORIGIN = resolveApiOrigin()
 
 const PLAYER_UI_TO_API = {
   Exo: 'exo',

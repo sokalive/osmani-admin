@@ -5,6 +5,7 @@ import SecurityPinModal from '../components/SecurityPinModal'
 import Topbar from '../components/Topbar'
 import AdminDeviceIdCell from '../components/AdminDeviceIdCell'
 import { useToast } from '../context/ToastContext.jsx'
+import { useAdminLiveRefresh } from '../hooks/useAdminLiveRefresh.js'
 import {
   deleteManualSubscriptionGrant,
   deleteOfferCode,
@@ -200,10 +201,6 @@ function ManualSubscriptionPage() {
   }, [showToast])
 
   useEffect(() => {
-    void loadPlans()
-  }, [loadPlans])
-
-  useEffect(() => {
     if (tab !== 'history') setHistSelected(new Set())
   }, [tab])
 
@@ -275,6 +272,25 @@ function ManualSubscriptionPage() {
   useEffect(() => {
     if (tab === 'offer') void loadOfferHistory()
   }, [tab, loadOfferHistory])
+
+  const tabRef = useRef(tab)
+  tabRef.current = tab
+  const liveSyncManual = useCallback(async () => {
+    await loadPlans()
+    if (tabRef.current === 'history') await loadHistory()
+    if (tabRef.current === 'offer') await loadOfferHistory()
+  }, [loadPlans, loadHistory, loadOfferHistory])
+
+  useAdminLiveRefresh(liveSyncManual, {
+    topics: ['config', 'analytics'],
+    events: [
+      'config.plans_changed',
+      'analytics.subscription_updated',
+      'subscription_request_updated',
+      'snapshot',
+    ],
+    pollMs: 60_000,
+  })
 
   async function handleOfferGenerate(e) {
     e?.preventDefault?.()

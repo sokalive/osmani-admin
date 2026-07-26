@@ -123,7 +123,7 @@ function AnalyticsPage() {
     }
   }, [showToast])
 
-  useAnalyticsLiveRefresh(load, { pollMs: 15_000 })
+  useAnalyticsLiveRefresh(load, { pollMs: 60_000 })
 
   const onlineNow = Number(overview?.onlineNow) || 0
   const watchingNow = Number(overview?.watchingNow) || 0

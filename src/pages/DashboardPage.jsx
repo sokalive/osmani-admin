@@ -148,7 +148,7 @@ function DashboardPage() {
     }
   }, [showToast, loaded, initial.fromCache])
 
-  useAnalyticsLiveRefresh(load, { pollMs: 15_000 })
+  useAnalyticsLiveRefresh(load, { pollMs: 60_000 })
 
   const uniqueDevicesFormatted = useMemo(() => {
     const n = Number(overview?.totalUniqueDevices)

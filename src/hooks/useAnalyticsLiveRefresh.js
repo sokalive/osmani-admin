@@ -11,7 +11,7 @@ const ANALYTICS_SSE_DEBOUNCE_MS = 350
  * @param {{ pollMs?: number, sse?: boolean }} [opts]
  */
 export function useAnalyticsLiveRefresh(load, opts = {}) {
-  const pollMs = Math.max(5000, Number(opts.pollMs) || 15_000)
+  const pollMs = Math.max(20_000, Number(opts.pollMs) || 60_000)
   const sseEnabled = opts.sse !== false
   const loadRef = useRef(load)
   loadRef.current = load
