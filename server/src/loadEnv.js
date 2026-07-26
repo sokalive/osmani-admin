@@ -82,6 +82,14 @@ export function loadProcessEnv() {
     seen.add(filePath)
     loadEnvFile(filePath, { override: true })
   }
+
+  // Contabo trusted Admin install (OSMANI_VPS=1): open dashboard without interactive login.
+  // Secrets .env may still set ADMIN_PANEL_AUTH_REQUIRED=true — override only on Contabo.
+  // API routes remain protected by X-Admin-Token via requireAdminPanelAccess.
+  if (String(process.env.OSMANI_VPS || '').trim() === '1') {
+    process.env.ADMIN_PANEL_AUTH_REQUIRED = 'false'
+  }
+
   return [...loadedPaths]
 }
 
