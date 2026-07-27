@@ -407,25 +407,27 @@ export function tzPhoneCanonicalSql(expr) {
   )`
 }
 
+/**
+ * FORBIDDEN for ownership. Transactions are read-only historical records.
+ * Phone → latest completed payment must NEVER determine who owns an entitlement.
+ * Canonical SoT: device_subscriptions by device_id.
+ * @deprecated Permanently refused — kept only so accidental callers fail closed.
+ */
 export async function getLatestCompletedTransactionByNormalizedPhone(phoneInput) {
-  const digits = normalizePhoneDigits(phoneInput)
-  if (!digits || digits.length < 10) return null
-  const pool = requirePool()
-  const { rows } = await pool.query(
-    `SELECT *
-     FROM transactions t
-     WHERE t.status = 'completed'
-       AND ${tzPhoneCanonicalSql('t.phone::text')} = $1
-     ORDER BY t.created_at DESC
-     LIMIT 1`,
-    [digits],
+  const { refuseTransactionHistoryOwnership, FORBIDDEN_OWNERSHIP_SURFACES } = await import(
+    './lib/transactionOwnershipGuard.js'
   )
-  return rows[0] ?? null
+  const digitsLen = normalizePhoneDigits(phoneInput)?.length ?? 0
+  refuseTransactionHistoryOwnership(
+    FORBIDDEN_OWNERSHIP_SURFACES.LATEST_TXN_BY_PHONE,
+    `phoneDigitsLen=${digitsLen}`,
+  )
 }
 
 /**
  * List every device that currently holds an active subscription tied to this payment phone.
  * Phone is discovery only — never an ownership key when more than one device is active.
+ * Active ownership itself always comes from device_subscriptions, never from txn ORDER BY.
  */
 export async function listActiveDeviceIdsForPaymentPhone(phoneInput, opts = {}) {
   const digits = normalizePhoneDigits(phoneInput)
@@ -2950,7 +2952,9 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
   return merged
 }
 
-/** Repair path: completed txn exists but device_subscriptions not yet updated. */
+/** Repair path: completed txn exists but device_subscriptions not yet updated.
+ * Device-scoped only. Prefer the entitlement-linked order_id when present.
+ * Never uses phone → latest transaction for ownership. */
 export async function tryFinalizeActivationForDevice(deviceId) {
   const d = String(deviceId ?? '').trim()
   const { overrides, grant } = await manualGrantOverridesCompletedPayment(d)
@@ -2967,7 +2971,40 @@ export async function tryFinalizeActivationForDevice(deviceId) {
     './lib/adminSubscriptionRevocation.js'
   )
   const revocation = await getAdminRevocationState(d)
-  const txn = await getLatestCompletedTransactionForDevice(d)
+
+  const pool = requirePool()
+  const { rows: subRows } = await pool.query(
+    `SELECT transaction_id::text AS transaction_id
+     FROM device_subscriptions
+     WHERE device_id = $1
+     LIMIT 1`,
+    [d],
+  )
+  const linkedId = String(subRows[0]?.transaction_id ?? '').trim()
+  let txn = null
+  if (
+    linkedId &&
+    !linkedId.startsWith('manual_grant:') &&
+    !linkedId.startsWith('moved:') &&
+    !linkedId.startsWith('transfer:') &&
+    !linkedId.startsWith('force:') &&
+    !linkedId.startsWith('recovery:') &&
+    !linkedId.startsWith('offer_code:')
+  ) {
+    const { rows: linkedRows } = await pool.query(
+      `SELECT * FROM transactions
+       WHERE order_id = $1
+         AND status = 'completed'
+         AND device_id = $2
+       LIMIT 1`,
+      [linkedId, d],
+    )
+    txn = linkedRows[0] ?? null
+  }
+  // Same-device fallback only (never phone → latest payment).
+  if (!txn) {
+    txn = await getLatestCompletedTransactionForDevice(d)
+  }
   if (!txn) return { ran: false, reason: 'no_completed_txn' }
   if (isAdminRevokedOrderBlocked(revocation, txn.order_id, txn.created_at ?? txn.updated_at)) {
     return { ran: false, reason: 'admin_revoked_order_blocked', orderId: txn.order_id }

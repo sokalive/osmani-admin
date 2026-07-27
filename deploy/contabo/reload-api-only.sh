@@ -50,6 +50,12 @@ echo "==> regression-device-isolation.mjs"
   exit 1
 }
 
+echo "==> regression-transaction-read-only-ownership.mjs"
+(cd "$API_DIR" && node scripts/regression-transaction-read-only-ownership.mjs) || {
+  echo "ERROR: transaction read-only ownership regression failed" >&2
+  exit 1
+}
+
 echo "==> audit-device-isolation.mjs (read-only)"
 # Load DATABASE_URL into this shell the same way PM2 does.
 eval "$(node -e "
@@ -61,6 +67,12 @@ process.stdout.write('export DATABASE_URL=' + JSON.stringify(u) + '\n');
 ")"
 (cd "$API_DIR" && node scripts/audit-device-isolation.mjs) || {
   echo "ERROR: device isolation audit failed" >&2
+  exit 1
+}
+
+echo "==> audit-transaction-read-only-ownership.mjs (read-only)"
+(cd "$API_DIR" && node scripts/audit-transaction-read-only-ownership.mjs) || {
+  echo "ERROR: transaction ownership audit failed" >&2
   exit 1
 }
 
