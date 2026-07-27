@@ -2221,6 +2221,62 @@ export async function getLatestCompletedTransactionForDevice(deviceId) {
   return rows[0] ?? null
 }
 
+/** Resolve purchase metadata for a transfer target via completed device_transfers → source lineage. */
+async function getTransferSourceCompletedTransaction(targetDeviceId) {
+  const pool = requirePool()
+  const d = String(targetDeviceId ?? '').trim()
+  if (!d) return null
+  const { rows } = await pool.query(
+    `SELECT dt.source_device_id
+     FROM device_transfers dt
+     WHERE dt.target_device_id = $1
+       AND dt.status = 'completed'
+     ORDER BY COALESCE(dt.completed_at, dt.created_at) DESC
+     LIMIT 1`,
+    [d],
+  )
+  const sourceId = String(rows[0]?.source_device_id ?? '').trim()
+  if (!sourceId) return null
+
+  const { rows: srcSubRows } = await pool.query(
+    `SELECT transaction_id::text AS transaction_id
+     FROM device_subscriptions
+     WHERE device_id = $1
+     LIMIT 1`,
+    [sourceId],
+  )
+  const srcTxnId = String(srcSubRows[0]?.transaction_id ?? '').trim()
+  if (srcTxnId.startsWith('moved:')) {
+    const embedded = srcTxnId.replace(/^moved:[^:]+:/, '').trim()
+    if (embedded && !embedded.startsWith('transfer:') && !embedded.startsWith('force:')) {
+      const { rows: txnRows } = await pool.query(
+        `SELECT * FROM transactions
+         WHERE order_id = $1 AND status = 'completed'
+         LIMIT 1`,
+        [embedded],
+      )
+      if (txnRows[0]) return txnRows[0]
+    }
+  }
+
+  const direct = await getLatestCompletedTransactionForDevice(sourceId)
+  if (direct) return direct
+
+  const { rows: phoneRows } = await pool.query(
+    `SELECT t.*
+     FROM device_transfers dt
+     INNER JOIN transactions t ON t.device_id = dt.source_device_id
+       AND t.status = 'completed'
+       AND t.plan_id IS NOT NULL
+     WHERE dt.target_device_id = $1
+       AND dt.status = 'completed'
+     ORDER BY COALESCE(dt.completed_at, dt.created_at) DESC, t.created_at DESC
+     LIMIT 1`,
+    [d],
+  )
+  return phoneRows[0] ?? null
+}
+
 async function getActivePlanByDurationDays(durationDays) {
   const pool = requirePool()
   const n = Number(durationDays)
@@ -2913,6 +2969,9 @@ async function resolveVerifyTxnSummaryForDevice(deviceId, visited) {
 
   if (!txn && (linkedId.startsWith('transfer:') || linkedId.startsWith('force:') || linkedId.startsWith('moved:'))) {
     txn = await getLatestCompletedTransactionForDevice(deviceId)
+    if (!txn) {
+      txn = await getTransferSourceCompletedTransaction(deviceId)
+    }
   }
   if (!txn) {
     const entitlement = await buildEntitlementVerifyTxnSummary(d)

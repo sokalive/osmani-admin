@@ -371,6 +371,20 @@ async function checkTransferLimits(pool, sourceDeviceId, cooldownMinutes, dailyL
   return { ok: true, dayCount, weekCount, cooldownMinutes }
 }
 
+async function findExistingActiveTransferCode(pool, sourceDeviceId) {
+  const { rows } = await pool.query(
+    `SELECT id, code, status, expires_at
+     FROM transfer_codes
+     WHERE source_device_id = $1
+       AND status IN ('active', 'pending_confirmation')
+       AND expires_at > now()
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [sourceDeviceId],
+  )
+  return rows[0] ?? null
+}
+
 /** Shared admin force transfer by device IDs. Emits SSE + subscription bus after commit. */
 export async function executeAdminForceTransfer(pool, {
   sourceDeviceId,
@@ -1347,6 +1361,31 @@ deviceSecurityRouter.post('/transfer/request', async (req, res) => {
       dayCount: limits.dayCount,
       weekCount: limits.weekCount,
     })
+    const existingTransfer = await findExistingActiveTransferCode(pool, effectiveSourceId)
+    if (existingTransfer) {
+      await logSecurityEvent(pool, {
+        actor: sourceDeviceId,
+        eventType: 'Transfer request',
+        status: 'failed',
+        detail: 'Active transfer code already exists',
+        metadata: {
+          source_device_id: effectiveSourceId,
+          code: String(existingTransfer.code),
+          reason: 'ACTIVE_TRANSFER_EXISTS',
+        },
+      })
+      return res.status(409).json({
+        ok: false,
+        code: 'ACTIVE_TRANSFER_EXISTS',
+        error: 'An active transfer is already in progress for this device',
+        existing_code: String(existingTransfer.code),
+        status: String(existingTransfer.status),
+        expires_at:
+          existingTransfer.expires_at instanceof Date
+            ? existingTransfer.expires_at.toISOString()
+            : String(existingTransfer.expires_at),
+      })
+    }
     const generatedCode = randomTransferCode()
     const { rows } = await pool.query(
       `INSERT INTO transfer_codes

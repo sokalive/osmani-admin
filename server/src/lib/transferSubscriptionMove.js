@@ -25,6 +25,23 @@ export function computeTransferTargetExpiry(sourceExpiresAt, targetExistingExpir
   return new Date(srcMs)
 }
 
+/** Preserve purchase/manual-grant transaction_id on the target; never replace with transfer: audit markers. */
+export function resolvePreservedTransactionIdForTransfer(sourceSub, fallbackCode) {
+  const raw = String(sourceSub?.transaction_id ?? '').trim()
+  const code = String(fallbackCode ?? '').trim()
+  if (!raw) return code ? `transfer:${code}` : 'transfer:unknown'
+  if (raw.startsWith('moved:')) return code ? `transfer:${code}` : 'transfer:unknown'
+  if (raw.startsWith('transfer:') || raw.startsWith('force:')) return raw
+  return raw
+}
+
+export function buildMovedSourceTransactionId(sourceDeviceId, preservedTxnId) {
+  const src = String(sourceDeviceId ?? '').trim()
+  const txn = String(preservedTxnId ?? '').trim()
+  if (!src || !txn) return null
+  return `moved:${src}:${txn}`.slice(0, 240)
+}
+
 /**
  * @param {import('pg').PoolClient} client
  * @param {{
@@ -43,7 +60,7 @@ export async function commitSubscriptionTransfer(client, opts) {
   const tgt = String(opts.targetDeviceId ?? '').trim()
   const code = String(opts.code ?? '').trim()
   const targetFpHash = opts.targetFpHash ?? null
-  const txnId = `${opts.transactionPrefix || 'transfer'}:${code}`
+  const auditTxnId = `${opts.transactionPrefix || 'transfer'}:${code}`
   if (!src || !tgt || src === tgt) {
     return { ok: false, status: 400, error: 'Invalid source or target device' }
   }
@@ -76,6 +93,12 @@ export async function commitSubscriptionTransfer(client, opts) {
   const targetExpiry = computeTransferTargetExpiry(sub.expires_at, targetRow?.expires_at)
   if (!targetExpiry) return { ok: false, status: 400, error: 'Source subscription expired' }
 
+  const preservedTxnId = resolvePreservedTransactionIdForTransfer(sub, code)
+  const freedSourceTxnId = buildMovedSourceTransactionId(src, preservedTxnId)
+  if (!freedSourceTxnId) {
+    return { ok: false, status: 500, error: 'Transfer source marker failed' }
+  }
+
   const { assertWritableEntitlement, ENTITLEMENT_GUARD_SOURCES } = await import(
     './subscriptionEntitlementGuard.js'
   )
@@ -87,7 +110,7 @@ export async function commitSubscriptionTransfer(client, opts) {
   try {
     await assertWritableEntitlement({
       deviceId: tgt,
-      orderId: txnId,
+      orderId: preservedTxnId,
       expiresAt: targetExpiry,
       previousExpiresAt: targetRow?.expires_at ?? sub.expires_at,
       allowAbsoluteCustom: true,
@@ -100,6 +123,21 @@ export async function commitSubscriptionTransfer(client, opts) {
       error: guardErr?.message || 'Entitlement Guard rejected transfer',
       code: guardErr?.code || 'ENTITLEMENT_GUARD_REJECTED',
     }
+  }
+
+  const revokeSource = await client.query(
+    `UPDATE device_subscriptions
+     SET status = 'pending',
+         transaction_id = $2,
+         updated_at = now()
+     WHERE device_id = $1
+       AND status = 'active'
+       AND expires_at > now()
+     RETURNING device_id, status, expires_at, transaction_id`,
+    [src, freedSourceTxnId],
+  )
+  if (!revokeSource.rows[0]) {
+    return { ok: false, status: 500, error: 'Source subscription revoke failed' }
   }
 
   const upsertTarget = await client.query(
@@ -123,7 +161,7 @@ export async function commitSubscriptionTransfer(client, opts) {
       tgt,
       targetExpiry,
       sub.started_at ?? new Date(),
-      txnId,
+      preservedTxnId,
       targetFpHash,
       SUBSCRIPTION_SCHEMA_VERSION,
       CANONICAL_ENGINE_VERSION,
@@ -131,16 +169,6 @@ export async function commitSubscriptionTransfer(client, opts) {
   )
   if (!upsertTarget.rows[0]) {
     return { ok: false, status: 500, error: 'Target subscription activation failed' }
-  }
-
-  const revokeSource = await client.query(
-    `UPDATE device_subscriptions SET status = 'pending', updated_at = now()
-     WHERE device_id = $1
-     RETURNING device_id, status, expires_at`,
-    [src],
-  )
-  if (!revokeSource.rows[0]) {
-    return { ok: false, status: 500, error: 'Source subscription revoke failed' }
   }
 
   const postState = await client.query(
@@ -165,6 +193,8 @@ export async function commitSubscriptionTransfer(client, opts) {
     sourceDeviceId: src,
     targetDeviceId: tgt,
     expiresAt: targetAfter.expires_at,
+    preservedTransactionId: preservedTxnId,
+    auditTransactionId: auditTxnId,
     sourceAfter,
     targetAfter,
     transferReason: opts.transferReason || 'confirmed_by_code',

@@ -56,6 +56,12 @@ echo "==> regression-transaction-read-only-ownership.mjs"
   exit 1
 }
 
+echo "==> regression-transfer-subscription.mjs"
+(cd "$API_DIR" && node scripts/regression-transfer-subscription.mjs) || {
+  echo "ERROR: transfer subscription regression failed" >&2
+  exit 1
+}
+
 echo "==> audit-device-isolation.mjs (read-only)"
 # Load DATABASE_URL into this shell the same way PM2 does.
 eval "$(node -e "
