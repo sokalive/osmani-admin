@@ -10,27 +10,27 @@ function clampInt(n, min, max) {
   return Math.min(max, Math.max(min, Math.trunc(n)))
 }
 
-/** Rows count as "live" when updated_at is within this window (default 45s, clamp 10–120). */
+/** Rows count as "live" when updated_at is within this window (default 20s, clamp 10–120). */
 export const LIVE_PRESENCE_WINDOW_SECONDS = (() => {
   const explicit = clampInt(Number(process.env.ANALYTICS_LIVE_PRESENCE_WINDOW_SECONDS), 10, 120)
   if (explicit != null) return explicit
   const legacy = clampInt(Number(process.env.ANALYTICS_SESSION_TTL_SECONDS), 10, 120)
   if (legacy != null) return legacy
-  return 60
+  return 20
 })()
 
-/** DELETE idle rows after this (default max(window+30, 90), min window+5). */
+/** DELETE idle rows after this (default window+10, min window+5). */
 export const SESSION_PRUNE_SECONDS = (() => {
   const explicit = clampInt(Number(process.env.ANALYTICS_SESSION_PRUNE_SECONDS), 15, 600)
   if (explicit != null) {
     return Math.max(explicit, LIVE_PRESENCE_WINDOW_SECONDS + 5)
   }
-  return Math.max(LIVE_PRESENCE_WINDOW_SECONDS + 30, 90)
+  return LIVE_PRESENCE_WINDOW_SECONDS + 10
 })()
 
 export const JANITOR_INTERVAL_MS = Math.min(
   30_000,
-  Math.max(8_000, Number(process.env.ANALYTICS_PRESENCE_JANITOR_MS) || 10_000),
+  Math.max(3_000, Number(process.env.ANALYTICS_PRESENCE_JANITOR_MS) || 5_000),
 )
 
 export function livePresenceWindowInterval() {

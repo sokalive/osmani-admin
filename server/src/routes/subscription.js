@@ -11,7 +11,10 @@ import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../li
 import { loadAppUpdatePublicPayload } from './appUpdate.js'
 import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
 import { ensureSubscriptionLinkedForDevice, tagActiveSubscriptionFingerprint, tryFastFingerprintRecovery } from '../lib/subscriptionRecovery.js'
-import { parseChannelRefFromRequest } from '../lib/analyticsPresence.js'
+import { clearLiveChannelHint } from '../lib/liveChannelHint.js'
+import { syncLivePresenceFromRequest } from '../lib/livePresenceSync.js'
+import { removeLiveSession } from '../lib/liveSessionStore.js'
+import { getPool } from '../db/pool.js'
 import {
   getCachedSubscriptionAccess,
   invalidateSubscriptionAccessCache,
@@ -40,17 +43,11 @@ deviceSubscriptionBus.on('update', ({ deviceId }) => {
 
 /** Cross-instance fallback: modes are in Postgres; 1200ms proven stable at ~500 concurrent (ed9541d). */
 const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(750, Number(process.env.MODE_SSE_POLL_MS) || 1200))
-
-function countryFromRequest(req) {
-  const raw =
-    req.headers['cf-ipcountry'] ||
-    req.headers['x-country-code'] ||
-    req.headers['x-vercel-ip-country'] ||
-    ''
-  const c = String(raw ?? '').trim().toUpperCase()
-  if (!c || c.length < 2) return null
-  return c.slice(0, 2)
-}
+/** Keep live_sessions fresh while subscription-stream is open (default 8s). */
+const PRESENCE_STREAM_PING_MS = Math.min(
+  30_000,
+  Math.max(3_000, Number(process.env.PRESENCE_STREAM_PING_MS) || 8_000),
+)
 
 function shortRef(id, n = 14) {
   const s = String(id ?? '')
@@ -661,14 +658,10 @@ async function maybeInactiveVerifyFallback(req, ctx, err) {
  */
 async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerprint, phone = null, legacyDeviceId = null, accountId = null }) {
   const verifyT0 = Date.now()
-  const country = countryFromRequest(req)
   const d = String(deviceId ?? '').trim()
   const hint = String(orderIdHint ?? '').trim()
   const fp = String(fingerprint ?? '').trim()
   const paymentPhone = String(phone ?? '').trim()
-  const channelRef = parseChannelRefFromRequest(req)
-  const channelId = channelRef.channelId
-  const channelName = channelRef.channelName
   const fallbackCtx = verifyFallbackContext({
     deviceId: d,
     orderIdHint: hint,
@@ -683,10 +676,11 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
     path: req.path || req.url || '',
   }
 
-  void billing.touchLivePresence({ deviceId: d, country, channelId, channelName }).catch((e) => {
-    console.error('[subscription-verify] touchLivePresence failed:', e)
-  })
-  liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId: d })
+  try {
+    await syncLivePresenceFromRequest(req, d, { event: 'analytics.session_heartbeat' })
+  } catch (e) {
+    console.error('[subscription-verify] syncLivePresence failed:', e)
+  }
 
   const tAccess0 = Date.now()
   let cached = getCachedSubscriptionAccess(d, fp)
@@ -1279,14 +1273,9 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     res.status(400).json({ error: 'device_id is required' })
     return
   }
-  const country = countryFromRequest(req)
-  const channelRef = parseChannelRefFromRequest(req)
-  const channelId = channelRef.channelId
-  const channelName = channelRef.channelName
-  void billing.touchLivePresence({ deviceId, country, channelId, channelName }).catch((e) => {
-    console.error('[subscription-stream] touchLivePresence failed:', e)
+  void syncLivePresenceFromRequest(req, deviceId, { event: 'analytics.session_start' }).catch((e) => {
+    console.error('[subscription-stream] initial presence sync failed:', e)
   })
-  liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
@@ -1633,19 +1622,10 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
 
   const ping = setInterval(() => {
     res.write(': ping\n\n')
-    const liveRef = parseChannelRefFromRequest(req)
-    void billing
-      .touchLivePresence({
-        deviceId,
-        country,
-        channelId: liveRef.channelId,
-        channelName: liveRef.channelName,
-      })
-      .catch((e) => {
-        console.error('[subscription-stream] presence ping failed:', e)
-      })
-    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
-  }, 20_000)
+    void syncLivePresenceFromRequest(req, deviceId, { event: 'analytics.session_heartbeat' }).catch((e) => {
+      console.error('[subscription-stream] presence ping failed:', e)
+    })
+  }, PRESENCE_STREAM_PING_MS)
 
   req.on('close', () => {
     clearInterval(ping)
@@ -1660,6 +1640,18 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     liveSyncBus.off('sync', phoneGateSyncHandler)
     liveSyncBus.off('sync', subscriptionUpdatedSyncHandler)
     liveSyncBus.off('sync', subscriptionRevokedSyncHandler)
+    clearLiveChannelHint(deviceId)
+    void (async () => {
+      try {
+        const pool = getPool()
+        if (pool) {
+          await removeLiveSession(pool, deviceId)
+          liveSyncBus.publish('analytics.session_end', { topics: ['analytics'], deviceId })
+        }
+      } catch (e) {
+        console.error('[subscription-stream] presence cleanup failed:', e)
+      }
+    })()
     try {
       res.end()
     } catch (e) {

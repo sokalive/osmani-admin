@@ -98,9 +98,9 @@ function AnalyticsPage() {
       const nextLocations = Array.isArray(snap?.locations) ? snap.locations : []
       const nextTrend = Array.isArray(t) ? t : []
       setOverview((prev) => ({ ...prev, ...nextOverview }))
-      if (nextChannels.length > 0) setChannels(nextChannels)
-      if (Object.keys(nextLabels).length > 0) setChannelLabels(nextLabels)
-      if (nextLocations.length > 0) setLocations(nextLocations)
+      setChannels(nextChannels)
+      setChannelLabels(nextLabels)
+      setLocations(nextLocations)
       if (nextTrend.length > 0) setTrend(nextTrend)
       writeAdminSnapshot('analytics', {
         overview: nextOverview,
@@ -123,7 +123,7 @@ function AnalyticsPage() {
     }
   }, [showToast])
 
-  useAnalyticsLiveRefresh(load, { pollMs: 60_000 })
+  useAnalyticsLiveRefresh(load, { pollMs: 120_000 })
 
   const onlineNow = Number(overview?.onlineNow) || 0
   const watchingNow = Number(overview?.watchingNow) || 0

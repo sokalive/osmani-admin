@@ -122,12 +122,10 @@ function DashboardPage() {
         : null
 
       setOverview((prev) => ({ ...prev, ...nextOverview }))
-      if (nextChannels.length > 0 || nextTopFive.length > 0) {
-        setChannels(nextChannels)
-        setTopFiveChannels(nextTopFive)
-        setChannelLabels(nextLabels)
-      }
-      if (nextLocations.length > 0) setLocations(nextLocations)
+      setChannels(nextChannels)
+      setTopFiveChannels(nextTopFive)
+      setChannelLabels(nextLabels)
+      setLocations(nextLocations)
       if (Array.isArray(nextTrend)) setTrend(nextTrend)
 
       writeAdminSnapshot('dashboard', {
@@ -148,7 +146,7 @@ function DashboardPage() {
     }
   }, [showToast, loaded, initial.fromCache])
 
-  useAnalyticsLiveRefresh(load, { pollMs: 60_000 })
+  useAnalyticsLiveRefresh(load, { pollMs: 120_000 })
 
   const uniqueDevicesFormatted = useMemo(() => {
     const n = Number(overview?.totalUniqueDevices)

@@ -2,16 +2,16 @@ import { useEffect, useRef } from 'react'
 import { syncStreamUrl } from '../lib/api'
 import { createRefreshCoordinator } from '../lib/adminRefreshCoordinator'
 
-const ANALYTICS_SSE_DEBOUNCE_MS = 350
+const ANALYTICS_SSE_DEBOUNCE_MS = 150
 
 /**
- * Poll analytics + debounced SSE refresh (avoids thundering herd on presence_expired).
+ * SSE-driven analytics refresh with optional long-interval safety poll.
  * Dedupes overlapping poll/SSE-triggered loads.
  * @param {() => void | Promise<void>} load
  * @param {{ pollMs?: number, sse?: boolean }} [opts]
  */
 export function useAnalyticsLiveRefresh(load, opts = {}) {
-  const pollMs = Math.max(20_000, Number(opts.pollMs) || 60_000)
+  const pollMs = Math.max(60_000, Number(opts.pollMs) || 120_000)
   const sseEnabled = opts.sse !== false
   const loadRef = useRef(load)
   loadRef.current = load
@@ -19,7 +19,7 @@ export function useAnalyticsLiveRefresh(load, opts = {}) {
   if (!coordinatorRef.current) {
     coordinatorRef.current = createRefreshCoordinator(() => loadRef.current(), {
       debounceMs: ANALYTICS_SSE_DEBOUNCE_MS,
-      minIntervalMs: 900,
+      minIntervalMs: 400,
     })
   }
 

@@ -4,7 +4,7 @@ import { tryRecordAppInstall } from './lib/installAnalytics.js'
 import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
 import { getPool } from './db/pool.js'
-import { normalizeLocationPayload } from './lib/analyticsLocation.js'
+import { setLiveChannelHint } from './lib/liveChannelHint.js'
 import { upsertLiveSession } from './lib/liveSessionStore.js'
 import { invalidateSubscriptionAccessCache } from './lib/subscriptionAccessCache.js'
 import { notifySubscriptionActivated } from './lib/subscriptionActivationNotify.js'
@@ -979,21 +979,33 @@ export async function getDeviceSubscriptionAccessState(deviceId, fingerprint = n
   return null
 }
 
-/** Touch live presence only when a channel is active (avoids idle verify/SSE inflation). */
-export async function touchLivePresence({ deviceId, country = null, channelId = null, channelName = null }) {
+/** Upsert live_sessions for dashboard presence (idle online + optional channel). */
+export async function touchLivePresence({
+  deviceId,
+  country = null,
+  channelId = null,
+  channelName = null,
+  clearChannel = false,
+  installBody = null,
+}) {
   const pool = requirePool()
   const d = String(deviceId ?? '').trim()
   if (!d) return null
   const safeChannelId = sanitizePresenceText(channelId, 128)
   const safeChannelName = sanitizePresenceText(channelName, 128)
-  if (!safeChannelId && !safeChannelName) return null
-  const rawLab = normalizeLocationPayload({ country: country ?? '' })
-  const safeCountry = rawLab ? sanitizePresenceText(rawLab, 120) : null
+  const safeCountry = country ? sanitizePresenceText(String(country), 120) : null
   const out = await upsertLiveSession(pool, {
     deviceId: d,
     channelId: safeChannelId,
     channelName: safeChannelName,
     country: safeCountry,
+    installBody,
+    clearChannel: clearChannel === true,
+  })
+  setLiveChannelHint(d, {
+    channelId: clearChannel ? null : safeChannelId || out.channelId,
+    channelName: clearChannel ? null : safeChannelName,
+    clearChannel: clearChannel === true,
   })
   return { deviceId: d, country: safeCountry, channelId: out.channelId }
 }
