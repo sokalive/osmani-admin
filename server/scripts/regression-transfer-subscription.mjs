@@ -74,6 +74,42 @@ check('verify_resolves_transfer_metadata_from_source', () => {
   assert.match(src, /getTransferSourceCompletedTransaction/)
 })
 
+check('force_transfer_and_hamisha_share_commitSubscriptionTransfer', () => {
+  const src = read('src/routes/deviceSecurity.js')
+  assert.match(src, /from '\.\.\/lib\/transferSubscriptionMove\.js'/)
+  assert.match(src, /commitSubscriptionTransfer/)
+
+  const forceFnStart = src.indexOf('export async function executeAdminForceTransfer')
+  const forceFnEnd = src.indexOf('deviceSecurityRouter.get', forceFnStart)
+  const forceFn = src.slice(forceFnStart, forceFnEnd > forceFnStart ? forceFnEnd : forceFnStart + 3500)
+  assert.match(forceFn, /commitSubscriptionTransfer\(client/)
+
+  const confirmStart = src.indexOf("deviceSecurityRouter.post('/transfer/confirm'")
+  const confirmEnd = src.indexOf("deviceSecurityRouter.post('/transfer/respond'")
+  const confirmFn = src.slice(confirmStart, confirmEnd)
+  assert.match(confirmFn, /commitSubscriptionTransfer\(client/)
+
+  const respondStart = src.indexOf("deviceSecurityRouter.post('/transfer/respond'")
+  const respondEnd = src.indexOf("deviceSecurityRouter.get('/transfer/status'")
+  const respondFn = src.slice(respondStart, respondEnd)
+  assert.match(respondFn, /commitSubscriptionTransfer\(client/)
+
+  const phoneForceStart = src.indexOf("deviceSecurityRouter.post('/transfer/admin-force-phone'")
+  const phoneForceFn = src.slice(phoneForceStart, phoneForceStart + 2500)
+  assert.match(phoneForceFn, /executeAdminForceTransfer/)
+})
+
+check('device_control_page_wires_force_transfer_api', () => {
+  const src = read('../src/pages/DeviceControlPage.jsx')
+  assert.match(src, /postAdminForceTransferPhone/)
+  assert.match(src, /getDeviceControlSettings/)
+  assert.match(src, /putDeviceControlSettings/)
+  assert.match(src, /const \[forceSubmitting, setForceSubmitting\] = useState\(false\)/)
+  assert.match(src, /Settings/)
+  assert.match(src, /Recent Activity/)
+  assert.match(src, /Force Transfer/)
+})
+
 check('target_expiry_is_max_of_source_and_target', () => {
   const now = Date.UTC(2026, 6, 27, 12, 0, 0)
   const srcExp = new Date(Date.UTC(2026, 7, 1, 21, 0, 0))
