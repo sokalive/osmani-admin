@@ -1,0 +1,66 @@
+name: Contabo Deploy Osmani TV Web
+
+# Publishes sokalive/osmani-tv web SPA to https://osmanitv.com
+# Uses the existing Contabo SSH secret (same as Admin/API deploys).
+# Does not rebuild Admin SPA or restart API unless nginx reload requires it.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip when CONTABO_SSH_KEY is not configured
+        id: gate
+        env:
+          CONTABO_SSH_KEY: ${{ secrets.CONTABO_SSH_KEY }}
+        run: |
+          if [ -z "${CONTABO_SSH_KEY}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::CONTABO_SSH_KEY not set — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy web SPA on Contabo VPS
+        if: steps.gate.outputs.skip != 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            cd /var/www/osmani-admin-api
+            git fetch origin main
+            git reset --hard origin/main
+            chmod +x deploy/contabo/deploy-osmanitv-web.sh
+            bash deploy/contabo/deploy-osmanitv-web.sh
+
+      - name: Verify production sites
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          echo "==> osmanitv.com"
+          curl -fsSI "https://osmanitv.com/" | head -5
+          BODY="$(curl -fsS "https://osmanitv.com/")"
+          echo "$BODY" | head -c 400; echo
+          if echo "$BODY" | grep -qi "Get the app on Google Play"; then
+            echo "ERROR: still serving old landing page" >&2
+            exit 1
+          fi
+          if ! echo "$BODY" | grep -Eqi '<div id="root"|/assets/index-'; then
+            echo "ERROR: expected SPA shell (root/#app or Vite assets)" >&2
+            exit 1
+          fi
+          echo "==> SPA deep link (no 404)"
+          CODE="$(curl -fsS -o /dev/null -w '%{http_code}' "https://osmanitv.com/login")"
+          test "$CODE" = "200"
+          echo "==> api health"
+          curl -fsS "https://api.osmanitv.com/api/health" | tee /tmp/vps-health.json
+          node -e "const h=require('/tmp/vps-health.json'); if(!h.ok) process.exit(1)"
+          echo "==> admin"
+          curl -fsSI "https://admin.osmanitv.com/" | head -1 | grep -q "200"
+          echo "OK web + api + admin"
