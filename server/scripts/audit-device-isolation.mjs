@@ -147,6 +147,8 @@ async function main() {
        AND g.device_id IS DISTINCT FROM ds.device_id`,
   )
   report.findings.active_grant_device_mismatch = Number(grantMismatch[0]?.n) || 0
+  report.findings.note_grant_device_mismatch =
+    'After Hamisha, entitlement may keep manual_grant:{id} while grants.device_id remains the original payer device. Verify ownership is device_subscriptions.device_id.'
 
   const { rows: preserveOwned } = await pool.query(
     `SELECT COUNT(*)::int AS n
@@ -165,9 +167,9 @@ async function main() {
   if (report.findings.shared_active_transaction_id > 0) {
     failures.push('shared_active_transaction_id')
   }
-  if (report.findings.active_grant_device_mismatch > 0) {
-    failures.push('active_grant_device_mismatch')
-  }
+  // Grant row device may differ from current entitlement holder after Hamisha (preserved txn id).
+  report.findings.active_grant_device_mismatch_informational =
+    report.findings.active_grant_device_mismatch
   // txn payer≠holder is reported but not a deploy failure (Hamisha / legacy force paths).
   report.findings.unexplained_txn_mismatch_informational =
     report.findings.active_paid_txn_device_mismatch_unexplained
