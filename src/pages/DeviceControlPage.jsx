@@ -100,6 +100,7 @@ function DeviceControlPage() {
   const [forceNewDeviceId, setForceNewDeviceId] = useState('')
   const [forcePinOpen, setForcePinOpen] = useState(false)
   const [forcePinErr, setForcePinErr] = useState('')
+  const [forceSubmitting, setForceSubmitting] = useState(false)
 
   const [pendingSel, setPendingSel] = useState(() => new Set())
   const [pendingBulkPin, setPendingBulkPin] = useState(null)
@@ -687,7 +688,7 @@ function DeviceControlPage() {
                 disabled={forceSubmitting}
                 className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 px-8 py-3.5 text-sm font-bold text-slate-950 shadow-[0_8px_28px_rgba(251,191,36,0.35)] transition-opacity hover:opacity-95 disabled:opacity-50"
               >
-                {forceSubmitting ? 'Transferring?' : 'Force Transfer Device'}
+                {forceSubmitting ? 'Transferring…' : 'Force Transfer Device'}
               </button>
             </form>
           </div>
@@ -696,9 +697,8 @@ function DeviceControlPage() {
       <SecurityPinModal
         open={forcePinOpen}
         title="Thibitisha Force Transfer"
-        description="Weka Security PIN ili kuhamisha kifurushi kwa kifaa kipya."
         busy={forceSubmitting}
-        error={forcePinErr}
+        errorText={forcePinErr}
         onClose={() => {
           if (!forceSubmitting) setForcePinOpen(false)
         }}
