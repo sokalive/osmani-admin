@@ -1,5 +1,8 @@
 /**
- * Final Osmani TV migration audit — Render API, VPS, Vultr DB parity.
+ * Final Osmani TV migration audit — Contabo VPS production.
+ *
+ * When Render is suspended (HTTP 503), runs VPS-only checks (no Render parity).
+ * Set REQUIRE_RENDER_PARITY=1 to fail if Render is down (legacy dual-host mode).
  *
  * Usage:
  *   node deploy/contabo/verify-final-migration-audit.mjs
@@ -12,6 +15,7 @@ const RENDER_ADMIN = String(process.env.RENDER_ADMIN || 'https://osmani-admin-mp
 const RENDER_TV = String(process.env.RENDER_TV || 'https://osmani-tv.onrender.com').replace(/\/$/, '')
 const PROBE_DEVICE = process.env.PROBE_DEVICE || 'migration-audit-probe'
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '3030'
+const REQUIRE_RENDER_PARITY = String(process.env.REQUIRE_RENDER_PARITY || '').trim() === '1'
 
 const ENDPOINTS = [
   '/api/channels',
@@ -35,6 +39,7 @@ const report = {
   blockers: [],
   passed: 0,
   failed: 0,
+  mode: 'dual-host',
 }
 
 function pass(name, detail) {
@@ -48,6 +53,10 @@ function fail(name, detail) {
   report.blockers.push(`${name}: ${detail}`)
   console.error(`✗ ${name}: ${detail}`)
   return false
+}
+
+function info(name, detail) {
+  console.log(`· ${name}: ${detail}`)
 }
 
 async function fetchJson(url, opts = {}) {
@@ -100,18 +109,24 @@ function streamApiHosts(channels) {
   return out
 }
 
-async function probeService(name, base, { isApi = true } = {}) {
-  const entry = { base, ok: false, commit: null, detail: '' }
+function isRenderDownStatus(status) {
+  return status === 502 || status === 503 || status === 504 || status === 0
+}
+
+async function probeService(name, base, { isApi = true, allowDown = false } = {}) {
+  const entry = { base, ok: false, commit: null, detail: '', down: false }
   try {
     if (isApi) {
       const { res, body } = await fetchJson(`${base}/api/health`)
       entry.ok = res.ok && body?.ok === true
       entry.commit = body?.commit || null
+      entry.down = isRenderDownStatus(res.status)
       entry.detail = entry.ok ? `commit=${entry.commit}` : `HTTP ${res.status}`
     } else {
       const { res, text } = await fetchJson(`${base}/`)
       const isSpa = text.includes('id="root"')
       entry.ok = res.ok
+      entry.down = isRenderDownStatus(res.status)
       entry.detail = entry.ok
         ? isSpa
           ? `SPA ${res.status}`
@@ -120,15 +135,47 @@ async function probeService(name, base, { isApi = true } = {}) {
     }
   } catch (e) {
     entry.detail = String(e.message || e)
+    entry.down = true
   }
   report.services[name] = entry
-  return entry.ok ? pass(`service:${name}`, entry.detail) : fail(`service:${name}`, entry.detail)
+  if (entry.ok) return pass(`service:${name}`, entry.detail)
+  if (allowDown && entry.down) {
+    info(`service:${name}`, `expected-down ${entry.detail}`)
+    return true
+  }
+  return fail(`service:${name}`, entry.detail)
 }
 
-async function compareEndpoint(path) {
-  const renderUrl = `${RENDER_API}${path}`
+async function compareEndpoint(path, { vpsOnly = false } = {}) {
   const vpsUrl = `${VPS_API}${path}`
-  const [render, vps] = await Promise.all([fetchJson(renderUrl), fetchJson(vpsUrl)])
+  const vps = await fetchJson(vpsUrl)
+
+  if (vpsOnly) {
+    const row = {
+      path,
+      renderStatus: null,
+      vpsStatus: vps.res.status,
+      match: false,
+      note: '',
+    }
+    if (path.includes('payment-status')) {
+      row.match = vps.res.status < 500
+      row.note = `vps-only status ${vps.res.status}`
+    } else if (path.startsWith('/api/subscription-status')) {
+      row.match = vps.res.ok && typeof vps.body?.active === 'boolean'
+      row.note = `vps-only active=${vps.body?.active}`
+    } else if (path === '/api/update-check') {
+      row.match = vps.res.ok && typeof vps.body?.version_code === 'number'
+      row.note = `vps-only vc=${vps.body?.version_code}`
+    } else {
+      row.match = vps.res.ok
+      row.note = `vps-only ${vps.res.status}`
+    }
+    report.endpointParity.push(row)
+    return row.match ? pass(`vps:${path}`, row.note) : fail(`vps:${path}`, row.note)
+  }
+
+  const render = await fetchJson(`${RENDER_API}${path}`)
 
   const row = {
     path,
@@ -170,12 +217,10 @@ async function compareEndpoint(path) {
   }
 
   report.endpointParity.push(row)
-  return row.match
-    ? pass(`parity:${path}`, row.note)
-    : fail(`parity:${path}`, row.note)
+  return row.match ? pass(`parity:${path}`, row.note) : fail(`parity:${path}`, row.note)
 }
 
-async function legacyApkChecks(base, label) {
+async function legacyApkChecks(base, label, { allowDown = false } = {}) {
   const paths = [
     ['/api/server-health', (b) => b?.ok === true && (b.total_channels === 0 || b.online_channels >= 1)],
     ['/api/settings', (b) => b?.ok === true && b?.app_modes],
@@ -186,6 +231,10 @@ async function legacyApkChecks(base, label) {
   let bad = 0
   for (const [path, expect] of paths) {
     const { res, body } = await fetchJsonWithRetry(`${base}${path}`)
+    if (allowDown && isRenderDownStatus(res.status)) {
+      info(`${label}${path}`, `expected-down HTTP ${res.status}`)
+      continue
+    }
     if (res.status === 401 || res.status === 403) {
       bad += 1
       fail(`${label}${path}`, `HTTP ${res.status}`)
@@ -217,6 +266,10 @@ async function waitForRenderCommitParity(vpsCommit, { maxMs = 600_000, intervalM
       }
       return renderCommit
     }
+    if (isRenderDownStatus(res.status)) {
+      info('render-api', `suspended/unreachable HTTP ${res.status} — skipping commit wait`)
+      return null
+    }
     console.log(`… waiting for Render API commit ${target} (now ${renderCommit.slice(0, 12) || 'unknown'})`)
     await new Promise((r) => setTimeout(r, intervalMs))
   }
@@ -226,8 +279,15 @@ async function waitForRenderCommitParity(vpsCommit, { maxMs = 600_000, intervalM
 async function main() {
   console.log('=== Osmani TV final migration audit ===\n')
 
-  await probeService('render-api', RENDER_API, { isApi: true })
+  await probeService('render-api', RENDER_API, { isApi: true, allowDown: !REQUIRE_RENDER_PARITY })
   await probeService('vps-api', VPS_API, { isApi: true })
+
+  const renderDown = Boolean(report.services['render-api']?.down || !report.services['render-api']?.ok)
+  const vpsOnly = renderDown && !REQUIRE_RENDER_PARITY
+  report.mode = vpsOnly ? 'vps-only' : 'dual-host'
+  if (vpsOnly) {
+    pass('render-suspended-mode', 'Render unreachable — auditing Contabo VPS only')
+  }
 
   const expectCommit = String(process.env.EXPECT_VPS_COMMIT || process.env.GITHUB_SHA || '').trim()
   const vpsCommit = report.services['vps-api']?.commit
@@ -237,87 +297,134 @@ async function main() {
   } else if (expectCommit && vpsCommit) {
     pass('vps-commit', String(vpsCommit).slice(0, 12))
   }
-  if (vpsCommit && renderCommit && vpsCommit !== renderCommit) {
-    console.log('Render API behind VPS — waiting for auto-deploy parity window')
-    renderCommit = await waitForRenderCommitParity(vpsCommit)
-  }
-  if (vpsCommit && renderCommit && vpsCommit !== renderCommit) {
-    fail('api-commit-parity', `${String(renderCommit).slice(0, 12)} vs ${String(vpsCommit).slice(0, 12)}`)
-  } else if (vpsCommit && renderCommit) {
-    pass('api-commit-parity', String(vpsCommit).slice(0, 12))
+  if (!vpsOnly) {
+    if (vpsCommit && renderCommit && vpsCommit !== renderCommit) {
+      console.log('Render API behind VPS — waiting for auto-deploy parity window')
+      renderCommit = await waitForRenderCommitParity(vpsCommit)
+    }
+    if (vpsCommit && renderCommit && vpsCommit !== renderCommit) {
+      fail('api-commit-parity', `${String(renderCommit).slice(0, 12)} vs ${String(vpsCommit).slice(0, 12)}`)
+    } else if (vpsCommit && renderCommit) {
+      pass('api-commit-parity', String(vpsCommit).slice(0, 12))
+    }
   }
 
-  await probeService('render-admin-mpya', RENDER_ADMIN, { isApi: false })
+  await probeService('render-admin-mpya', RENDER_ADMIN, { isApi: false, allowDown: vpsOnly })
   await probeService('vps-admin', VPS_ADMIN, { isApi: false })
-  await probeService('render-tv', RENDER_TV, { isApi: false })
+  await probeService('render-tv', RENDER_TV, { isApi: false, allowDown: vpsOnly })
 
-  const [renderCut, vpsCut] = await Promise.all([
-    fetchJson(`${RENDER_API}/api/runtime/cutover-status`),
-    fetchJson(`${VPS_API}/api/runtime/cutover-status`),
-  ])
-
-  if (renderCut.res.ok && vpsCut.res.ok) {
-    const r = renderCut.body
-    const v = vpsCut.body
-    report.db = {
-      renderHost: r.database?.host,
-      vpsHost: v.database?.host,
-      renderActiveSubs: r.active_device_subscriptions,
-      vpsActiveSubs: v.active_device_subscriptions,
-      renderPlans: r.plan_count,
-      vpsPlans: v.plan_count,
-      sameDb: r.database?.host === v.database?.host && r.database?.database === v.database?.database,
-    }
-    if (report.db.sameDb && r.active_device_subscriptions === v.active_device_subscriptions) {
-      pass('db:vultr-parity', `${r.active_device_subscriptions} active subs, host ${r.database?.host}`)
+  const vpsCut = await fetchJson(`${VPS_API}/api/runtime/cutover-status`)
+  if (vpsOnly) {
+    if (vpsCut.res.ok && vpsCut.body) {
+      const v = vpsCut.body
+      report.db = {
+        vpsHost: v.database?.host,
+        vpsActiveSubs: v.active_device_subscriptions,
+        vpsPlans: v.plan_count,
+        baseUrl: v.base_url,
+      }
+      if (String(v.base_url || '').includes('api.osmanitv.com') && v.pool_ready === true) {
+        pass('vps-cutover', `${v.active_device_subscriptions} active subs, host ${v.database?.host}`)
+      } else {
+        fail('vps-cutover', JSON.stringify(report.db))
+      }
+      const vpsPlans = await fetchJson(`${VPS_API}/api/plans`)
+      if (Array.isArray(vpsPlans.body) && vpsPlans.body.length > 0) {
+        pass('vps:plans', plansFingerprint(vpsPlans.body))
+      } else {
+        fail('vps:plans', 'empty or invalid')
+      }
+      const vch = await fetchJson(`${VPS_API}/api/channels`)
+      const vh = streamApiHosts(vch.body)
+      if (vh.proxy_playback_url && String(vh.proxy_playback_url).includes('api.osmanitv.com')) {
+        pass('stream:vps-hosts', JSON.stringify(vh))
+      } else {
+        fail('stream:vps-hosts', `expected api.osmanitv.com — ${JSON.stringify(vh)}`)
+      }
     } else {
-      fail('db:vultr-parity', JSON.stringify(report.db))
-    }
-
-    const [renderPlans, vpsPlans] = await Promise.all([
-      fetchJson(`${RENDER_API}/api/plans`),
-      fetchJson(`${VPS_API}/api/plans`),
-    ])
-    if (plansFingerprint(renderPlans.body) === plansFingerprint(vpsPlans.body)) {
-      pass('db:plan-subscribers', plansFingerprint(renderPlans.body))
-    } else {
-      fail('db:plan-subscribers', 'Render vs VPS plan subscriber counts differ')
-    }
-
-    const [rch, vch] = await Promise.all([
-      fetchJson(`${RENDER_API}/api/channels`),
-      fetchJson(`${VPS_API}/api/channels`),
-    ])
-    const rh = streamApiHosts(rch.body)
-    const vh = streamApiHosts(vch.body)
-    pass('stream:render-hosts', JSON.stringify(rh))
-    if (VPS_API.startsWith('https://') && vh.proxy_playback_url && !String(vh.proxy_playback_url).includes('144.91.117.90')) {
-      pass('stream:vps-hosts', JSON.stringify(vh))
-    } else if (!VPS_API.startsWith('https://')) {
-      pass('stream:vps-hosts', JSON.stringify(vh))
-    } else {
-      fail('stream:vps-hosts', `expected api.osmanitv.com over HTTPS probe — ${JSON.stringify(vh)}`)
+      fail('cutover-status', 'VPS cutover-status unavailable')
     }
   } else {
-    fail('cutover-status', 'unavailable on one or both hosts')
+    const renderCut = await fetchJson(`${RENDER_API}/api/runtime/cutover-status`)
+    if (renderCut.res.ok && vpsCut.res.ok) {
+      const r = renderCut.body
+      const v = vpsCut.body
+      report.db = {
+        renderHost: r.database?.host,
+        vpsHost: v.database?.host,
+        renderActiveSubs: r.active_device_subscriptions,
+        vpsActiveSubs: v.active_device_subscriptions,
+        renderPlans: r.plan_count,
+        vpsPlans: v.plan_count,
+        sameDb: r.database?.host === v.database?.host && r.database?.database === v.database?.database,
+      }
+      if (report.db.sameDb && r.active_device_subscriptions === v.active_device_subscriptions) {
+        pass('db:vultr-parity', `${r.active_device_subscriptions} active subs, host ${r.database?.host}`)
+      } else {
+        fail('db:vultr-parity', JSON.stringify(report.db))
+      }
+
+      const [renderPlans, vpsPlans] = await Promise.all([
+        fetchJson(`${RENDER_API}/api/plans`),
+        fetchJson(`${VPS_API}/api/plans`),
+      ])
+      if (plansFingerprint(renderPlans.body) === plansFingerprint(vpsPlans.body)) {
+        pass('db:plan-subscribers', plansFingerprint(renderPlans.body))
+      } else {
+        fail('db:plan-subscribers', 'Render vs VPS plan subscriber counts differ')
+      }
+
+      const [rch, vch] = await Promise.all([
+        fetchJson(`${RENDER_API}/api/channels`),
+        fetchJson(`${VPS_API}/api/channels`),
+      ])
+      const rh = streamApiHosts(rch.body)
+      const vh = streamApiHosts(vch.body)
+      pass('stream:render-hosts', JSON.stringify(rh))
+      if (
+        VPS_API.startsWith('https://') &&
+        vh.proxy_playback_url &&
+        !String(vh.proxy_playback_url).includes('144.91.117.90')
+      ) {
+        pass('stream:vps-hosts', JSON.stringify(vh))
+      } else if (!VPS_API.startsWith('https://')) {
+        pass('stream:vps-hosts', JSON.stringify(vh))
+      } else {
+        fail('stream:vps-hosts', `expected api.osmanitv.com over HTTPS probe — ${JSON.stringify(vh)}`)
+      }
+    } else {
+      fail('cutover-status', 'unavailable on one or both hosts')
+    }
   }
 
   for (const path of ENDPOINTS) {
-    await compareEndpoint(path)
+    await compareEndpoint(path, { vpsOnly })
   }
 
-  await legacyApkChecks(RENDER_API, 'legacy-render')
+  if (!vpsOnly) await legacyApkChecks(RENDER_API, 'legacy-render')
+  else info('legacy-render', 'skipped — Render suspended')
   await legacyApkChecks(VPS_API, 'legacy-vps')
 
-  const subPaths = [`/api/subscription-status?device_id=${encodeURIComponent(PROBE_DEVICE)}`]
-  const [rs, vs] = await Promise.all([
-    fetchJson(`${RENDER_API}${subPaths[0]}`),
-    fetchJson(`${VPS_API}${subPaths[0]}`),
-  ])
-  if (rs.res.ok && vs.res.ok && rs.body?.active === vs.body?.active) {
-    pass('device-migration-probe', `same active=${rs.body.active} on both hosts (shared DB)`)
+  if (vpsOnly) {
+    const vs = await fetchJson(
+      `${VPS_API}/api/subscription-status?device_id=${encodeURIComponent(PROBE_DEVICE)}`,
+    )
+    if (vs.res.ok && typeof vs.body?.active === 'boolean') {
+      pass('device-migration-probe', `vps-only active=${vs.body.active}`)
+    } else {
+      fail('device-migration-probe', 'VPS subscription-status failed')
+    }
   } else {
-    fail('device-migration-probe', 'subscription-status differs between hosts')
+    const subPath = `/api/subscription-status?device_id=${encodeURIComponent(PROBE_DEVICE)}`
+    const [rs, vs] = await Promise.all([
+      fetchJson(`${RENDER_API}${subPath}`),
+      fetchJson(`${VPS_API}${subPath}`),
+    ])
+    if (rs.res.ok && vs.res.ok && rs.body?.active === vs.body?.active) {
+      pass('device-migration-probe', `same active=${rs.body.active} on both hosts (shared DB)`)
+    } else {
+      fail('device-migration-probe', 'subscription-status differs between hosts')
+    }
   }
 
   const admin = await fetchJson(`${VPS_API}/api/admin/panel-diagnostics`, {
@@ -326,18 +433,42 @@ async function main() {
   if (admin.res.ok) pass('vps:admin-api', `db=${admin.body?.database?.host}`)
   else fail('vps:admin-api', admin.body?.error || String(admin.res.status))
 
+  const apk = await fetch(`${VPS_API}/uploads/apks/osmani-v24-1.8.2.apk`, {
+    method: 'HEAD',
+    cache: 'no-store',
+  })
+  if (apk.ok) pass('vps:ota-apk', `HTTP ${apk.status} bytes=${apk.headers.get('content-length')}`)
+  else fail('vps:ota-apk', `HTTP ${apk.status}`)
+
+  const aurax = await fetchJson(`${VPS_API}/api/settings/auraxpay`, {
+    headers: { 'X-Admin-Token': ADMIN_TOKEN },
+  })
+  const wh = String(aurax.body?.webhookUrl || aurax.body?.webhook_url || '')
+  if (aurax.res.ok && wh.includes('api.osmanitv.com') && !/onrender\.com/i.test(wh)) {
+    pass('vps:aurax-webhook', wh)
+  } else {
+    fail('vps:aurax-webhook', wh || `HTTP ${aurax.res.status}`)
+  }
+
   const pct = Math.round((report.passed / (report.passed + report.failed)) * 100) || 0
   report.statusPercent = pct
 
   console.log('\n=== Summary ===')
-  console.log(JSON.stringify({
-    passed: report.passed,
-    failed: report.failed,
-    statusPercent: `${pct}%`,
-    blockers: report.blockers,
-    db: report.db,
-    services: report.services,
-  }, null, 2))
+  console.log(
+    JSON.stringify(
+      {
+        mode: report.mode,
+        passed: report.passed,
+        failed: report.failed,
+        statusPercent: `${pct}%`,
+        blockers: report.blockers,
+        db: report.db,
+        services: report.services,
+      },
+      null,
+      2,
+    ),
+  )
 
   process.exit(report.failed > 0 ? 1 : 0)
 }
