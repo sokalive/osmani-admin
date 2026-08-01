@@ -20,6 +20,8 @@ process.stdout.write('export UPLOAD_DIR=' + JSON.stringify(upload) + '\n');
 APK_NAME="${APK_NAME:-osmani-v24-1.8.2.apk}"
 EXPECT_SHA256="${EXPECT_SHA256:-b797e59092a87a2fc7a779e02748ff66c854c0820f9d0095cf1148b921407b80}"
 CDN_URL="${CDN_URL:-https://osmanitv.b-cdn.net/uploads/apks/${APK_NAME}}"
+# Fallback when Bunny edge misses Contabo and Render origin is suspended.
+GH_RELEASE_URL="${GH_RELEASE_URL:-https://github.com/sokalive/osmani-admin/releases/download/migration-apk-v24/${APK_NAME}}"
 DEST_DIR="${UPLOAD_DIR%/}/apks"
 DEST="$DEST_DIR/$APK_NAME"
 
@@ -43,8 +45,20 @@ TMP="$(mktemp "$DEST_DIR/.${APK_NAME}.XXXXXX")"
 cleanup() { rm -f "$TMP"; }
 trap cleanup EXIT
 
-echo "==> downloading $CDN_URL"
-curl -fL --retry 3 --retry-delay 2 -o "$TMP" "$CDN_URL"
+download_ok=0
+for url in "$CDN_URL" "$GH_RELEASE_URL"; do
+  echo "==> trying $url"
+  if curl -fL --retry 2 --retry-delay 2 -o "$TMP" "$url"; then
+    download_ok=1
+    break
+  fi
+  echo "WARN: download failed from $url"
+done
+if [[ "$download_ok" -ne 1 ]]; then
+  echo "ERROR: could not download APK from CDN or GitHub release" >&2
+  exit 1
+fi
+
 GOT="$(sha_of "$TMP")"
 if [[ "$GOT" != "$EXPECT_SHA256" ]]; then
   echo "ERROR: sha256 mismatch got=$GOT expected=$EXPECT_SHA256" >&2
