@@ -88,9 +88,12 @@ echo "==> audit-account-plan-consistency.mjs --repair (metadata only)"
   exit 1
 }
 
-echo "==> migrate missing OTA APK from Bunny edge → Contabo disk (idempotent)"
+echo "==> migrate missing OTA APK from Bunny edge → Contabo disk (best-effort)"
 chmod +x "$ROOT/deploy/contabo/migrate-apk-from-cdn.sh"
-bash "$ROOT/deploy/contabo/migrate-apk-from-cdn.sh"
+if ! bash "$ROOT/deploy/contabo/migrate-apk-from-cdn.sh"; then
+  echo "WARN: APK CDN→disk migrate failed (Bunny may 503 from this region while Render origin is suspended)."
+  echo "WARN: Continuing reload — upload APK via Admin or scp when an edge cache HIT is available."
+fi
 
 echo "==> PM2 restart (API only)"
 if ! command -v pm2 >/dev/null 2>&1; then
@@ -121,7 +124,7 @@ APK_PROBE="http://127.0.0.1:10001/uploads/apks/osmani-v24-1.8.2.apk"
 if curl -fsSI "$APK_PROBE" >/dev/null 2>&1; then
   echo "    APK origin probe OK: $APK_PROBE"
 else
-  echo "WARN: APK not yet reachable at $APK_PROBE — check migrate-apk-from-cdn.sh" >&2
+  echo "WARN: APK not yet reachable at $APK_PROBE — run migrate-apk-from-cdn.sh from a region with Bunny HIT, or Admin APK upload"
 fi
 
 HEALTH_JSON="$(curl -fsS "http://127.0.0.1:10001/api/health")"
