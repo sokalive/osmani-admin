@@ -712,6 +712,18 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE auraxpay_settings ADD COLUMN IF NOT EXISTS webhook_secret TEXT NOT NULL DEFAULT '';
   `)
+  /** Render suspended — Aurax callbacks must hit Contabo (same cutover as SonicPesa). */
+  await client.query(`
+    UPDATE auraxpay_settings SET
+      webhook_url = 'https://api.osmanitv.com/api/payments/auraxpay/webhook',
+      updated_at = now()
+    WHERE id = 1
+      AND (
+        webhook_url ILIKE '%onrender.com%'
+        OR webhook_url ILIKE '%osmani-admin-api%'
+        OR trim(webhook_url) = ''
+      );
+  `)
 
   /** Active checkout gateway for mobile app (zenopay | sonicpesa | auraxpay). */
   await client.query(`

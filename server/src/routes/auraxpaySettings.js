@@ -9,6 +9,7 @@ import {
   resolveAuraxpayCredentials,
   testConnection as testAuraxpayConnection,
 } from '../lib/payments/providers/auraxpay.js'
+import { normalizeStoredAuraxpayWebhookUrl } from '../lib/auraxpayWebhookConfig.js'
 import { defaultPublicApiOrigin } from '../lib/deployMeta.js'
 
 export const auraxpaySettingsRouter = Router()
@@ -38,7 +39,9 @@ async function rowToApiResponse(row, req) {
   const isActiveCheckoutProvider = checkout.payment_provider === 'auraxpay'
   const apiEndpoint = String(r.api_endpoint ?? '').trim()
   const accountId = String(r.account_id ?? '').trim()
-  const webhookUrl = String(r.webhook_url ?? '').trim() || defaultWebhookUrl(req)
+  const webhookUrl = normalizeStoredAuraxpayWebhookUrl(
+    String(r.webhook_url ?? '').trim() || defaultWebhookUrl(req),
+  )
   const hasKey = Boolean(String(process.env.AURAXPAY_API_KEY || r.api_key || '').trim())
   const hasSigningSecret = Boolean(cred.signingSecret)
   const apiKeyMasked = hasKey
@@ -156,8 +159,8 @@ auraxpaySettingsRouter.put('/', async (req, res) => {
       environment: normalizeEnvironment(b.environment ?? current.environment ?? 'sandbox'),
       api_endpoint: apiEndpointIn,
       account_id: accountIdNormalized,
-      webhook_url: String(
-        b.webhookUrl ?? b.webhook_url ?? current.webhook_url ?? defaultWebhookUrl(req),
+      webhook_url: normalizeStoredAuraxpayWebhookUrl(
+        String(b.webhookUrl ?? b.webhook_url ?? current.webhook_url ?? defaultWebhookUrl(req)),
       ),
       keep_api_key: keepKey,
       api_key: keepKey ? '' : nextKey,

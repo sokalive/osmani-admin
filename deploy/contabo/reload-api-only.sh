@@ -88,6 +88,10 @@ echo "==> audit-account-plan-consistency.mjs --repair (metadata only)"
   exit 1
 }
 
+echo "==> migrate missing OTA APK from Bunny edge → Contabo disk (idempotent)"
+chmod +x "$ROOT/deploy/contabo/migrate-apk-from-cdn.sh"
+bash "$ROOT/deploy/contabo/migrate-apk-from-cdn.sh"
+
 echo "==> PM2 restart (API only)"
 if ! command -v pm2 >/dev/null 2>&1; then
   echo "ERROR: pm2 not installed" >&2
@@ -110,6 +114,14 @@ if [[ "$api_ready" -ne 1 ]]; then
   echo "ERROR: API did not respond on :10001 within 60s" >&2
   pm2 logs osmani-admin-api --lines 40 --nostream || true
   exit 1
+fi
+
+# Confirm APK is reachable on origin after migration (non-fatal warn if still missing).
+APK_PROBE="http://127.0.0.1:10001/uploads/apks/osmani-v24-1.8.2.apk"
+if curl -fsSI "$APK_PROBE" >/dev/null 2>&1; then
+  echo "    APK origin probe OK: $APK_PROBE"
+else
+  echo "WARN: APK not yet reachable at $APK_PROBE — check migrate-apk-from-cdn.sh" >&2
 fi
 
 HEALTH_JSON="$(curl -fsS "http://127.0.0.1:10001/api/health")"

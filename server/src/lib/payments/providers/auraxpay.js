@@ -9,6 +9,7 @@ import {
   webhookSuccess,
 } from '../../../handlers/zenoPayWebhook.js'
 import { formatPhone } from '../../../zenopayClient.js'
+import { normalizeStoredAuraxpayWebhookUrl } from '../../auraxpayWebhookConfig.js'
 import { notifySubscriptionActivatedFromAct } from '../../subscriptionActivationNotify.js'
 
 const DEFAULT_API_BASE = ''
@@ -68,7 +69,9 @@ export function resolveAuraxpayCredentials(row) {
     signingSecret,
     accountId,
     apiEndpoint,
-    webhookUrl: String(process.env.AURAXPAY_WEBHOOK_URL || r.webhook_url || '').trim(),
+    webhookUrl: normalizeStoredAuraxpayWebhookUrl(
+      String(process.env.AURAXPAY_WEBHOOK_URL || r.webhook_url || '').trim(),
+    ),
     environment: String(r.environment || 'sandbox').trim(),
   }
 }
