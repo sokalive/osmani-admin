@@ -971,6 +971,17 @@ export async function ensureBillingTables(client) {
   await client.query(`
     ALTER TABLE offer_codes ADD COLUMN IF NOT EXISTS plan_id INTEGER;
   `)
+  /** Admin-entered phone for post-redeem subscription SMS (optional; no SMS if null). */
+  await client.query(`
+    ALTER TABLE offer_codes ADD COLUMN IF NOT EXISTS customer_phone TEXT;
+  `)
+  /**
+   * Real subscription end date granted on redeem (device_subscriptions.expires_at).
+   * Distinct from expires_at which is the code shelf-life window.
+   */
+  await client.query(`
+    ALTER TABLE offer_codes ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ;
+  `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS offer_codes_created_at_idx ON offer_codes (created_at DESC);
   `)
