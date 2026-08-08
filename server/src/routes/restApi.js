@@ -57,7 +57,7 @@ import { getPool } from '../db/pool.js'
 import { getApiCacheStats } from '../lib/apiResponseCache.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
 import { getPoolStats } from '../db/pool.js'
-import { isRenderRuntime, isStartupReady, getStartupError } from '../lib/startupReadiness.js'
+import { isStartupReady, getStartupError, isRenderRuntime } from '../lib/startupReadiness.js'
 import { readPgConnectionStats, findSampleActiveDeviceId, findSampleActiveDeviceIds } from '../lib/pgConnectionStats.js'
 import { getVerifyDbStats } from '../lib/verifyDbResilience.js'
 import { readProcessCapacityStats } from '../lib/processCapacityStats.js'
@@ -80,14 +80,30 @@ export const restApi = Router()
 /** Admin + mutable JSON reads must not be served from browser HTTP cache after writes. */
 restApi.use(applySensitiveJsonGetNoStore)
 
+/**
+ * While Contabo ensure/migrations run, do not let app traffic consume the pool
+ * (otherwise startup cannot finish and ready stays false forever).
+ */
+restApi.use((req, res, next) => {
+  if (isStartupReady()) return next()
+  const p = String(req.path || '')
+  if (p === '/health' || p.startsWith('/health/')) return next()
+  res.setHeader('Retry-After', '3')
+  return res.status(503).json({
+    ok: false,
+    error: 'starting',
+    retryable: true,
+    startup: { ready: false, error: getStartupError() },
+  })
+})
+
 /** Record API host + versionCode for VPS migration audit (async, non-blocking). */
 restApi.use((req, res, next) => {
-  if (isTrackedMobilePath(`${req.baseUrl || ''}${req.path || ''}`)) {
+  if (isStartupReady() && isTrackedMobilePath(`${req.baseUrl || ''}${req.path || ''}`)) {
     recordClientApiTelemetry(req)
   }
   next()
 })
-
 restApi.get('/', (_req, res) => {
   res.json({
     message: 'API is working 🚀',
