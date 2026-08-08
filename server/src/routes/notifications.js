@@ -196,20 +196,21 @@ notificationsRouter.delete('/notifications/:id', requireAdminPanelAccess, async 
   }
 })
 
-void flushDueNotifications().catch((e) => {
-  console.error('[notifications] initial flush failed:', e)
-})
+import { isStartupReady } from '../lib/startupReadiness.js'
+
+function runNotificationsWhenReady(label, fn) {
+  if (!isStartupReady()) return
+  void fn().catch((e) => {
+    console.error(`[notifications] ${label} failed:`, e)
+  })
+}
 
 setInterval(() => {
-  void flushDueNotifications().catch((e) => {
-    console.error('[notifications] scheduled flush failed:', e)
-  })
+  runNotificationsWhenReady('scheduled flush', flushDueNotifications)
 }, Math.max(10_000, Number(process.env.NOTIFICATIONS_SCHEDULER_MS) || 30_000))
 
 setInterval(() => {
-  void syncStaleOneSignalStats().catch((e) => {
-    console.error('[notifications] OneSignal stats refresh failed:', e)
-  })
+  runNotificationsWhenReady('OneSignal stats refresh', syncStaleOneSignalStats)
 }, Math.max(15_000, Number(process.env.ONESIGNAL_STATS_REFRESH_MS) || 30_000))
 
 scheduleNotificationImageCleanup()

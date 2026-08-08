@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
 import { getPool } from '../db/pool.js'
+import { isStartupReady } from '../lib/startupReadiness.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { deviceSubscriptionBus } from '../lib/deviceSubscriptionBus.js'
 import { recordSystemNotificationEvent } from '../lib/runtimeNotifications.js'
@@ -2055,6 +2056,7 @@ deviceSecurityRouter.post('/subscription/revoke', async (req, res) => {
 })
 
 setInterval(() => {
+  if (!isStartupReady()) return
   const pool = getPool()
   if (!pool) return
   void cleanupSecurity(pool).catch((e) => console.error('[security-cleanup]', e))

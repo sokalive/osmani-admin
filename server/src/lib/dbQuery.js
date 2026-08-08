@@ -34,6 +34,7 @@ export async function poolQuery(text, params = [], opts = {}) {
   assertPoolCanAcceptWork(getPoolStats, label)
   // pool.connect is patched with acquire timeout + saturation fail-fast.
   const client = await pool.connect()
+  let destroyOnRelease = false
   try {
     await client.query(`SET statement_timeout TO ${Math.trunc(timeoutMs)}`)
     const result = await client.query(text, params)
@@ -58,8 +59,27 @@ export async function poolQuery(text, params = [], opts = {}) {
     }
     throw e
   } finally {
-    await client.query('RESET statement_timeout').catch(() => {})
-    client.release()
+    // Never let RESET hang forever with the client still checked out — that
+    // starved Contabo (idleCount=0 / PG idle+ClientRead) during startup.
+    try {
+      await Promise.race([
+        client.query('RESET statement_timeout'),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('reset_statement_timeout_hung')), 750)
+        }),
+      ])
+    } catch {
+      destroyOnRelease = true
+    }
+    try {
+      client.release(destroyOnRelease)
+    } catch {
+      try {
+        client.release(true)
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 

@@ -275,6 +275,21 @@ restApi.get('/health', (_req, res) => {
 restApi.get('/health/db', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
   const { getPoolSaturationStats } = await import('../lib/poolSaturation.js')
+  const poolStats = getPoolStats()
+  // During startup / saturation, do not checkout more app-pool clients for diagnostics.
+  if (!isStartupReady() || poolStats.waitingCount > 0 || (poolStats.totalCount >= poolStats.max && poolStats.idleCount === 0)) {
+    return res.json({
+      ok: false,
+      reason: !isStartupReady() ? 'starting' : 'pool_pressure',
+      time: new Date().toISOString(),
+      commit: getServerGitCommit(),
+      pg: { ok: false, reason: !isStartupReady() ? 'starting' : 'pool_pressure', pool: poolStats },
+      verify_db: getVerifyDbStats(),
+      pool_saturation: getPoolSaturationStats(getPoolStats),
+      process: readProcessCapacityStats(),
+      skipped_pg_probe: true,
+    })
+  }
   const pg = await readPgConnectionStats()
   const body = {
     ok: pg.ok === true,
@@ -286,7 +301,6 @@ restApi.get('/health/db', async (_req, res) => {
     process: readProcessCapacityStats(),
   }
   if (String(process.env.BENCHMARK_SAMPLE_DEVICE || '').trim() === '1') {
-    const poolStats = getPoolStats()
     const poolPressure =
       poolStats.waitingCount > 0 ||
       (poolStats.max > 0 && poolStats.totalCount >= poolStats.max && poolStats.idleCount === 0)

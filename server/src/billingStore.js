@@ -24,14 +24,21 @@ export async function ensureBillingStorage() {
   await ensureBootstrapAdminPanelUser().catch((err) => {
     console.error('[admin-panel-bootstrap]', err?.message || err)
   })
+  // Intentionally NOT syncing all intelligence blocks here — that bulk repair can run for
+  // minutes and compete with ensure/migrations for the pool, keeping startup.ready=false.
+  // See runPostReadyMaintenance() after markStartupReady().
+}
+
+/** Non-blocking maintenance safe to run only after the API is marked ready. */
+export async function runPostReadyBillingMaintenance() {
   try {
     const { syncAllIntelligenceBlocksToPlayback } = await import('./lib/deviceIntelligenceStore.js')
     const sync = await syncAllIntelligenceBlocksToPlayback()
     if (sync.synced > 0) {
-      console.log('[users-intelligence] startup synced blocks to playback:', sync.synced)
+      console.log('[users-intelligence] post-ready synced blocks to playback:', sync.synced)
     }
   } catch (err) {
-    console.error('[users-intelligence] startup block sync failed:', err?.message || err)
+    console.error('[users-intelligence] post-ready block sync failed:', err?.message || err)
   }
 }
 

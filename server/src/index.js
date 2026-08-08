@@ -308,6 +308,17 @@ async function runDeferredStartup({ background = false } = {}) {
         console.warn('[pg] armPoolSaturationGuard failed:', e?.message || e)
       }
 
+      // Heavy repair / flushes after traffic is allowed — never block ready=true.
+      void import('./billingStore.js')
+        .then((m) => m.runPostReadyBillingMaintenance())
+        .catch((e) => console.error('[startup] post-ready billing maintenance:', e?.message || e))
+      void import('./lib/runtimeNotifications.js')
+        .then((m) => m.flushDueNotifications())
+        .catch((e) => console.error('[startup] post-ready notifications flush:', e?.message || e))
+      void import('./lib/smsExpiryReminders.js')
+        .then((m) => m.runSmsExpiryReminders())
+        .catch((e) => console.error('[startup] post-ready sms reminders:', e?.message || e))
+
       if (deferredStartupBackgroundTimer) {
         clearInterval(deferredStartupBackgroundTimer)
         deferredStartupBackgroundTimer = null
