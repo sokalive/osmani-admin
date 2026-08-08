@@ -1,4 +1,11 @@
 import pg from 'pg'
+import {
+  assertPoolCanAcceptWork,
+  connectWithSaturationGuard,
+  getPoolSaturationStats,
+  isPoolSaturated,
+  maxPoolWaiting,
+} from '../lib/poolSaturation.js'
 
 const { Pool } = pg
 
@@ -21,6 +28,14 @@ export function poolMaxConnections() {
   return isVpsProduction() ? 30 : 8
 }
 
+function defaultStatementTimeoutMs() {
+  return Math.max(1000, Number(process.env.PG_STATEMENT_TIMEOUT_MS) || 8000)
+}
+
+function idleInTxnTimeoutMs() {
+  return Math.max(1000, Number(process.env.PG_IDLE_IN_TXN_TIMEOUT_MS) || 15_000)
+}
+
 function poolOptions() {
   const connectionString = process.env.DATABASE_URL
   if (!connectionString) return null
@@ -32,15 +47,20 @@ function poolOptions() {
     Number(process.env.PG_POOL_IDLE_TIMEOUT_MS) || 30_000,
   )
   const max = poolMaxConnections()
+  const statementTimeoutMs = defaultStatementTimeoutMs()
+  const idleInTxnMs = idleInTxnTimeoutMs()
   return {
     connectionString,
     max,
     idleTimeoutMillis: idleMs,
+    // New TCP connect to Postgres only (not pool-queue wait). Keep short.
     connectionTimeoutMillis: Math.max(
       1000,
       Number(process.env.PG_POOL_CONNECT_TIMEOUT_MS) || 5000,
     ),
     allowExitOnIdle: false,
+    // Bound query + abandon leaked open transactions at the server side.
+    options: `-c statement_timeout=${Math.trunc(statementTimeoutMs)} -c idle_in_transaction_session_timeout=${Math.trunc(idleInTxnMs)}`,
     ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),
   }
 }
@@ -51,14 +71,40 @@ let _poolOpts = null
 
 export function getPoolStats() {
   if (!_pool) {
-    return { totalCount: 0, idleCount: 0, waitingCount: 0, max: 0 }
+    return {
+      totalCount: 0,
+      idleCount: 0,
+      waitingCount: 0,
+      max: 0,
+      saturated: false,
+      maxWaiting: maxPoolWaiting(poolMaxConnections()),
+    }
   }
-  return {
+  const basic = {
     totalCount: _pool.totalCount,
     idleCount: _pool.idleCount,
     waitingCount: _pool.waitingCount,
     max: _poolOpts?.max ?? poolMaxConnections(),
   }
+  return {
+    ...basic,
+    saturated: isPoolSaturated(basic),
+    maxWaiting: maxPoolWaiting(basic.max),
+  }
+}
+
+function patchPoolFailFast(pool) {
+  const origQuery = pool.query.bind(pool)
+  const origConnect = pool.connect.bind(pool)
+
+  pool.query = (...args) => {
+    assertPoolCanAcceptWork(getPoolStats, 'pool.query')
+    return origQuery(...args)
+  }
+
+  // Adapter so connectWithSaturationGuard can call .connect() without recursing into the patch.
+  const rawPool = { connect: () => origConnect() }
+  pool.connect = () => connectWithSaturationGuard(rawPool, getPoolStats, 'pool.connect')
 }
 
 export function getPool() {
@@ -70,23 +116,32 @@ export function getPool() {
     _pool.on('error', (err) => {
       console.error('[pg] idle client error:', err?.message || err)
     })
+    patchPoolFailFast(_pool)
     console.info(
       '[pg] pool ready:',
       JSON.stringify({
         max: opts.max,
         idleTimeoutMillis: opts.idleTimeoutMillis,
         connectionTimeoutMillis: opts.connectionTimeoutMillis,
+        statement_timeout: defaultStatementTimeoutMs(),
+        idle_in_transaction_session_timeout: idleInTxnTimeoutMs(),
+        maxWaiting: maxPoolWaiting(opts.max),
         vps: isVpsProduction(),
       }),
     )
-    if (String(process.env.PG_POOL_STATS || '').trim() === '1') {
-      setInterval(() => {
-        const s = getPoolStats()
-        if (s.waitingCount > 0 || s.totalCount >= s.max) {
-          console.warn('[pg-pool-stats]', s)
-        }
-      }, 30_000).unref()
-    }
+    const statsIntervalMs = Math.max(
+      5_000,
+      Number(process.env.PG_POOL_STATS_INTERVAL_MS) || 15_000,
+    )
+    setInterval(() => {
+      const s = getPoolStats()
+      if (s.waitingCount > 0 || s.totalCount >= s.max || s.saturated) {
+        console.warn('[pg-pool-stats]', {
+          ...s,
+          saturation: getPoolSaturationStats(getPoolStats),
+        })
+      }
+    }, statsIntervalMs).unref()
   }
   return _pool
 }

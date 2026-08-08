@@ -378,6 +378,7 @@ export async function blockDeviceIntelligenceUser(id, { reason, adminEmail }) {
   const r = String(reason ?? '').trim()
   if (!r) throw new Error('block reason is required')
   const client = await pool.connect()
+  let reg = null
   try {
     await client.query('BEGIN')
     const { rows } = await client.query(
@@ -391,7 +392,7 @@ export async function blockDeviceIntelligenceUser(id, { reason, adminEmail }) {
       RETURNING *`,
       [id, r, String(adminEmail ?? 'admin')],
     )
-    const reg = rows[0]
+    reg = rows[0]
     if (!reg) {
       await client.query('ROLLBACK')
       return null
@@ -409,14 +410,17 @@ export async function blockDeviceIntelligenceUser(id, { reason, adminEmail }) {
       [reg.id, reg.device_id, reg.account_id, reg.app_version],
     )
     await client.query('COMMIT')
-    await syncIntelligenceBlockToPlayback(reg.device_id, true)
-    return rowToRegistry(reg)
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally {
     client.release()
   }
+  if (reg) {
+    await syncIntelligenceBlockToPlayback(reg.device_id, true)
+    return rowToRegistry(reg)
+  }
+  return null
 }
 
 /** Clear Users Intelligence block for all registry rows tied to a device_id. */
@@ -425,6 +429,7 @@ export async function unblockDeviceIntelligenceByDeviceId(deviceId, { adminEmail
   const d = String(deviceId ?? '').trim()
   if (!d) return { updated: 0 }
   const client = await pool.connect()
+  let updated = 0
   try {
     await client.query('BEGIN')
     const { rows } = await client.query(
@@ -447,21 +452,24 @@ export async function unblockDeviceIntelligenceByDeviceId(deviceId, { adminEmail
       )
     }
     await client.query('COMMIT')
-    if (rows.length > 0) {
-      await syncIntelligenceBlockToPlayback(d, false)
-    }
-    return { updated: rows.length }
+    updated = rows.length
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally {
     client.release()
   }
+  // Sync playback after release — never hold a pool client across extra pool.query work.
+  if (updated > 0) {
+    await syncIntelligenceBlockToPlayback(d, false)
+  }
+  return { updated }
 }
 
 export async function unblockDeviceIntelligenceUser(id, { adminEmail, note } = {}) {
   const pool = requirePool()
   const client = await pool.connect()
+  let reg = null
   try {
     await client.query('BEGIN')
     const { rows } = await client.query(
@@ -475,7 +483,7 @@ export async function unblockDeviceIntelligenceUser(id, { adminEmail, note } = {
       RETURNING *`,
       [id],
     )
-    const reg = rows[0]
+    reg = rows[0]
     if (!reg) {
       await client.query('ROLLBACK')
       return null
@@ -487,14 +495,17 @@ export async function unblockDeviceIntelligenceUser(id, { adminEmail, note } = {
       [reg.id, reg.device_id, String(note ?? ''), String(adminEmail ?? 'admin')],
     )
     await client.query('COMMIT')
-    await syncIntelligenceBlockToPlayback(reg.device_id, false)
-    return rowToRegistry(reg)
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})
     throw e
   } finally {
     client.release()
   }
+  if (reg) {
+    await syncIntelligenceBlockToPlayback(reg.device_id, false)
+    return rowToRegistry(reg)
+  }
+  return null
 }
 
 export async function getDeviceIntelligenceDetailBundle(id) {

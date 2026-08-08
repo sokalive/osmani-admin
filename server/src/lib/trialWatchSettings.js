@@ -56,26 +56,45 @@ export function trialWatchSettingsToPublicPayload(settings, configVersion = 0) {
   }
 }
 
-async function ensureTable(pool) {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT '',
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `)
-  for (const [key, value] of Object.entries(DEFAULTS)) {
-    await pool.query(
-      `INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
-      [key, value],
-    )
-  }
+let _ensureTablePromise = null
+let _settingsCache = null
+let _settingsCacheAt = 0
+const SETTINGS_CACHE_MS = Math.max(
+  1000,
+  Number(process.env.TRIAL_WATCH_SETTINGS_CACHE_MS) || 15_000,
+)
+
+async function ensureTableOnce(pool) {
+  if (_ensureTablePromise) return _ensureTablePromise
+  _ensureTablePromise = (async () => {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `)
+    for (const [key, value] of Object.entries(DEFAULTS)) {
+      await pool.query(
+        `INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
+        [key, value],
+      )
+    }
+  })().catch((e) => {
+    _ensureTablePromise = null
+    throw e
+  })
+  return _ensureTablePromise
 }
 
 export async function loadTrialWatchSettings() {
   const pool = getPool()
   if (!pool) return normalizeTrialWatchSettings({})
-  await ensureTable(pool)
+  const now = Date.now()
+  if (_settingsCache && now - _settingsCacheAt < SETTINGS_CACHE_MS) {
+    return _settingsCache
+  }
+  await ensureTableOnce(pool)
   const keys = Object.values(TRIAL_SETTING_KEYS)
   const { rows } = await pool.query(
     `SELECT key, value FROM app_settings WHERE key = ANY($1::text[])`,
@@ -83,19 +102,22 @@ export async function loadTrialWatchSettings() {
   )
   const byKey = {}
   for (const row of rows) byKey[String(row.key)] = String(row.value ?? '')
-  return normalizeTrialWatchSettings({
+  const normalized = normalizeTrialWatchSettings({
     enabled: byKey[TRIAL_SETTING_KEYS.enabled],
     trialMinutes: byKey[TRIAL_SETTING_KEYS.trialMinutes],
     previewSeconds: byKey[TRIAL_SETTING_KEYS.previewSeconds],
     previewAfterEnabled: byKey[TRIAL_SETTING_KEYS.previewAfterEnabled],
   })
+  _settingsCache = normalized
+  _settingsCacheAt = now
+  return normalized
 }
 
 export async function saveTrialWatchSettings(body) {
   const pool = getPool()
   if (!pool) throw new Error('Database not configured')
   const next = normalizeTrialWatchSettings(body)
-  await ensureTable(pool)
+  await ensureTableOnce(pool)
   const map = {
     [TRIAL_SETTING_KEYS.enabled]: String(next.enabled),
     [TRIAL_SETTING_KEYS.trialMinutes]: String(next.trialMinutes),
@@ -110,5 +132,7 @@ export async function saveTrialWatchSettings(body) {
       [key, value],
     )
   }
+  _settingsCache = next
+  _settingsCacheAt = Date.now()
   return next
 }

@@ -247,15 +247,18 @@ restApi.get('/health', (_req, res) => {
   ) {
     body.api_cache = getApiCacheStats()
   }
+  // Always expose pool on Contabo/VPS so saturation is visible without env toggles.
+  body.pool = getPoolStats()
+  body.verify_db = getVerifyDbStats()
   if (String(process.env.PG_POOL_STATS || '').trim() === '1' || isRenderRuntime()) {
-    body.pool = getPoolStats()
-    body.verify_db = getVerifyDbStats()
+    // kept for older agents that checked this env; fields already set above
   }
   res.json(body)
 })
 
 restApi.get('/health/db', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
+  const { getPoolSaturationStats } = await import('../lib/poolSaturation.js')
   const pg = await readPgConnectionStats()
   const body = {
     ok: pg.ok === true,
@@ -263,6 +266,7 @@ restApi.get('/health/db', async (_req, res) => {
     commit: getServerGitCommit(),
     pg,
     verify_db: getVerifyDbStats(),
+    pool_saturation: getPoolSaturationStats(getPoolStats),
     process: readProcessCapacityStats(),
   }
   if (String(process.env.BENCHMARK_SAMPLE_DEVICE || '').trim() === '1') {

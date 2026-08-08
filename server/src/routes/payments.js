@@ -24,6 +24,8 @@ import {
   respondCreateOrderAccepted,
   runProviderCreateOrderInBackground,
 } from '../lib/paymentCreateOrderPipeline.js'
+import { getPoolStats } from '../db/pool.js'
+import { isPoolSaturated, isPoolSaturationError } from '../lib/poolSaturation.js'
 
 export const paymentsRouter = Router()
 
@@ -32,6 +34,11 @@ let _checkoutProvidersCacheAt = 0
 const CHECKOUT_PROVIDERS_CACHE_MS = Math.max(
   2000,
   Number(process.env.CHECKOUT_PROVIDERS_CACHE_MS) || 30_000,
+)
+/** Keep a longer stale fallback so App never fail-opens to ZenoPay on pool pressure. */
+const CHECKOUT_PROVIDERS_STALE_MS = Math.max(
+  CHECKOUT_PROVIDERS_CACHE_MS,
+  Number(process.env.CHECKOUT_PROVIDERS_STALE_MS) || 300_000,
 )
 
 async function buildCheckoutProvidersPayload() {
@@ -84,6 +91,21 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
     if (_checkoutProvidersCache && now - _checkoutProvidersCacheAt < CHECKOUT_PROVIDERS_CACHE_MS) {
       return res.json(_checkoutProvidersCache)
     }
+    const pool = getPoolStats()
+    if (isPoolSaturated(pool) && _checkoutProvidersCache) {
+      // Prefer stale SonicPesa-correct cache over failing open to another provider.
+      res.setHeader('X-Osmani-Checkout-Cache', 'stale-pool-pressure')
+      return res.json({ ..._checkoutProvidersCache, cache: 'stale_pool_pressure' })
+    }
+    if (isPoolSaturated(pool) && !_checkoutProvidersCache) {
+      res.setHeader('Retry-After', '2')
+      return res.status(503).json({
+        ok: false,
+        error: 'pool_saturated',
+        retryable: true,
+        payment_provider: 'sonicpesa',
+      })
+    }
     const payload = await buildCheckoutProvidersPayload()
     _checkoutProvidersCache = payload
     _checkoutProvidersCacheAt = now
@@ -95,6 +117,23 @@ paymentsRouter.get('/checkout-providers', async (_req, res) => {
     })
     res.json(payload)
   } catch (e) {
+    if (isPoolSaturationError(e) && _checkoutProvidersCache) {
+      res.setHeader('X-Osmani-Checkout-Cache', 'stale-on-error')
+      return res.json({ ..._checkoutProvidersCache, cache: 'stale_on_error' })
+    }
+    if (isPoolSaturationError(e)) {
+      res.setHeader('Retry-After', '2')
+      return res.status(503).json({
+        ok: false,
+        error: 'pool_saturated',
+        retryable: true,
+        payment_provider: 'sonicpesa',
+      })
+    }
+    if (_checkoutProvidersCache && Date.now() - _checkoutProvidersCacheAt < CHECKOUT_PROVIDERS_STALE_MS) {
+      res.setHeader('X-Osmani-Checkout-Cache', 'stale-on-error')
+      return res.json({ ..._checkoutProvidersCache, cache: 'stale_on_error' })
+    }
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

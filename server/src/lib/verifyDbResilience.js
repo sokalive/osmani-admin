@@ -12,16 +12,20 @@ export class DbPressureError extends Error {
 }
 
 function maxVerifyDbConcurrent() {
-  const configured = Math.max(4, Math.min(40, Number(process.env.VERIFY_DB_MAX_CONCURRENT) || 25))
-  if (isVpsProduction()) return configured
-  // Render starter pool (max 8): cap verify slots so LISTEN relay + routes keep headroom.
   const poolMax = getPoolStats().max || poolMaxConnections()
-  const ceiling = Math.max(2, poolMax - 2)
+  // Leave headroom for checkout-providers, plans, webhooks, admin — never nearly fill the pool.
+  const headroom = isVpsProduction() ? 10 : 2
+  const ceiling = Math.max(2, poolMax - headroom)
+  const configured = Math.max(
+    4,
+    Math.min(ceiling, Number(process.env.VERIFY_DB_MAX_CONCURRENT) || (isVpsProduction() ? 12 : 6)),
+  )
   return Math.min(configured, ceiling)
 }
 
 function verifyDbSlotWaitMs() {
-  return Math.max(200, Math.min(120_000, Number(process.env.VERIFY_DB_SLOT_WAIT_MS) || 30000))
+  // Fail faster under pressure so verify does not hold thousands of waiters.
+  return Math.max(200, Math.min(15_000, Number(process.env.VERIFY_DB_SLOT_WAIT_MS) || 4000))
 }
 
 let verifyDbInFlight = 0
@@ -44,10 +48,13 @@ export function isDbTimeoutOrPressureError(err) {
   const msg = String(err?.message || err || '').toLowerCase()
   return (
     err instanceof DbPressureError ||
+    err?.code === 'POOL_SATURATED' ||
     msg.includes('timeout exceeded when trying to connect') ||
     msg.includes('query_timeout') ||
     msg.includes('db_pressure') ||
     msg.includes('verify_db_slot_wait') ||
+    msg.includes('pool_saturated') ||
+    msg.includes('pool_acquire_timeout') ||
     msg.includes('connection terminated') ||
     msg.includes('too many clients')
   )

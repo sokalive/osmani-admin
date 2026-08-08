@@ -195,12 +195,16 @@ export async function approveSubscriptionRequest({
     if (String(req.status) !== 'PENDING') throw new Error(`Cannot approve request in status ${req.status}`)
 
     const finalPlanId = Number(editedPlanId ?? req.plan_id)
-    const plan = await getPlanRowByIdAny(finalPlanId)
+    // Use the held transaction client — never nested pool.connect while client is checked out.
+    const planRes = await client.query(`SELECT * FROM plans WHERE id = $1`, [finalPlanId])
+    const plan = planRes.rows[0]
     if (!plan) throw new Error('Plan not found')
+    const durationDays = Number(plan.duration_days ?? plan.durationDays)
+    if (!Number.isFinite(durationDays) || durationDays < 1) throw new Error('Plan duration invalid')
 
     // Canonical plan engine: pass the exact approved plan id so the grant records the
     // approved plan's identity/price — never a duration-based re-match to another plan.
-    const grant = await grantManualDeviceSubscription(req.device_id, plan.duration_days, client, {
+    const grant = await grantManualDeviceSubscription(req.device_id, durationDays, client, {
       phone: req.phone,
       planId: finalPlanId,
     })
@@ -228,6 +232,9 @@ export async function approveSubscriptionRequest({
       ],
     )
 
+    const { rows: updated } = await client.query(`SELECT * FROM subscription_requests WHERE id = $1`, [
+      rid,
+    ])
     await client.query('COMMIT')
 
     // Publish SSE only AFTER COMMIT so verify/status see the new entitlement immediately.
@@ -236,7 +243,6 @@ export async function approveSubscriptionRequest({
       publishManualGrantActivationRealtime(grant.deviceId || req.device_id, grant.realtimeMeta)
     }
 
-    const { rows: updated } = await pool.query(`SELECT * FROM subscription_requests WHERE id = $1`, [rid])
     return { ok: true, alreadyApproved: false, grant, request: updated[0] }
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {})

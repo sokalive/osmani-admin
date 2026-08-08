@@ -1,8 +1,12 @@
 /**
  * Lightweight per-request telemetry: which API host + app versionCode hit key mobile endpoints.
  * Shared Postgres lets VPS and Render both write; audit groups by request_host.
+ *
+ * CRITICAL: never run CREATE TABLE / CREATE INDEX on the hot path. DDL here previously
+ * stampeded the Contabo pool (waitingCount thousands) during verify/checkout floods.
  */
-import { getPool } from '../db/pool.js'
+import { getPool, getPoolStats } from '../db/pool.js'
+import { isPoolSaturated } from './poolSaturation.js'
 
 const TRACKED_PREFIXES = [
   '/api/channels',
@@ -93,28 +97,42 @@ export function isTrackedMobilePath(pathname) {
   return TRACKED_PREFIXES.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`))
 }
 
+let _ensureTelemetryTablePromise = null
+let _telemetryInFlight = 0
+const MAX_TELEMETRY_IN_FLIGHT = Math.max(
+  1,
+  Math.min(8, Number(process.env.CLIENT_API_TELEMETRY_MAX_IN_FLIGHT) || 4),
+)
+
 export async function ensureClientApiTelemetryTable(poolOrClient) {
-  const q = (text, params) => poolOrClient.query(text, params)
-  await q(`
-    CREATE TABLE IF NOT EXISTS client_api_telemetry (
-      id BIGSERIAL PRIMARY KEY,
-      request_host TEXT NOT NULL DEFAULT '',
-      host_label TEXT NOT NULL DEFAULT 'unknown',
-      endpoint TEXT NOT NULL DEFAULT '',
-      http_method TEXT NOT NULL DEFAULT 'GET',
-      version_code INT NOT NULL DEFAULT 0,
-      device_id TEXT NOT NULL DEFAULT '',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `)
-  await q(`
-    CREATE INDEX IF NOT EXISTS client_api_telemetry_created_at_idx
-    ON client_api_telemetry (created_at DESC);
-  `)
-  await q(`
-    CREATE INDEX IF NOT EXISTS client_api_telemetry_version_host_idx
-    ON client_api_telemetry (version_code, host_label, created_at DESC);
-  `)
+  if (_ensureTelemetryTablePromise) return _ensureTelemetryTablePromise
+  _ensureTelemetryTablePromise = (async () => {
+    const q = (text, params) => poolOrClient.query(text, params)
+    await q(`
+      CREATE TABLE IF NOT EXISTS client_api_telemetry (
+        id BIGSERIAL PRIMARY KEY,
+        request_host TEXT NOT NULL DEFAULT '',
+        host_label TEXT NOT NULL DEFAULT 'unknown',
+        endpoint TEXT NOT NULL DEFAULT '',
+        http_method TEXT NOT NULL DEFAULT 'GET',
+        version_code INT NOT NULL DEFAULT 0,
+        device_id TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `)
+    await q(`
+      CREATE INDEX IF NOT EXISTS client_api_telemetry_created_at_idx
+      ON client_api_telemetry (created_at DESC);
+    `)
+    await q(`
+      CREATE INDEX IF NOT EXISTS client_api_telemetry_version_host_idx
+      ON client_api_telemetry (version_code, host_label, created_at DESC);
+    `)
+  })().catch((e) => {
+    _ensureTelemetryTablePromise = null
+    throw e
+  })
+  return _ensureTelemetryTablePromise
 }
 
 export function recordClientApiTelemetry(req) {
@@ -122,6 +140,10 @@ export function recordClientApiTelemetry(req) {
   if (!pool) return
   const path = normalizeApiPath(req)
   if (!isTrackedMobilePath(path)) return
+
+  // Never compete with payment/verify for scarce pool slots.
+  if (isPoolSaturated(getPoolStats())) return
+  if (_telemetryInFlight >= MAX_TELEMETRY_IN_FLIGHT) return
 
   const versionCode = extractVersionCodeFromRequest(req)
   const deviceId = extractDeviceIdFromRequest(req)
@@ -133,8 +155,11 @@ export function recordClientApiTelemetry(req) {
     .slice(0, 256)
 
   void (async () => {
+    _telemetryInFlight += 1
     try {
+      if (isPoolSaturated(getPoolStats())) return
       await ensureClientApiTelemetryTable(pool)
+      if (isPoolSaturated(getPoolStats())) return
       await pool.query(
         `INSERT INTO client_api_telemetry
            (request_host, host_label, endpoint, http_method, version_code, device_id)
@@ -150,6 +175,8 @@ export function recordClientApiTelemetry(req) {
       )
     } catch (e) {
       console.warn('[clientApiTelemetry] insert failed:', e?.message || e)
+    } finally {
+      _telemetryInFlight = Math.max(0, _telemetryInFlight - 1)
     }
   })()
 }
