@@ -66,7 +66,27 @@ if [[ "$api_ready" -ne 1 ]]; then
 fi
 
 HEALTH_JSON="$(curl -fsS "http://127.0.0.1:10001/api/health")"
-echo "    API health: $HEALTH_JSON"
+echo "    API health (first probe): $HEALTH_JSON"
+
+echo "    waiting for startup.ready=true..."
+ready_ok=0
+for _ in $(seq 1 45); do
+  HEALTH_JSON="$(curl -fsS "http://127.0.0.1:10001/api/health" 2>/dev/null || true)"
+  READY="$(printf '%s' "$HEALTH_JSON" | node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.startup?.ready===true))}catch{process.stdout.write('false')}})" 2>/dev/null || echo false)"
+  COMMIT_NOW="$(printf '%s' "$HEALTH_JSON" | node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.commit||''))}catch{process.stdout.write('')}})" 2>/dev/null || true)"
+  if [[ "$READY" == "true" && "$COMMIT_NOW" == "$COMMIT" ]]; then
+    ready_ok=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$ready_ok" -ne 1 ]]; then
+  echo "ERROR: startup.ready did not become true with commit $COMMIT within ~90s" >&2
+  echo "    last health: $HEALTH_JSON" >&2
+  pm2 logs osmani-admin-api --lines 40 --nostream || true
+  exit 1
+fi
+
 echo "$HEALTH_JSON" | node -e "
 const fs=require('fs');
 const h=JSON.parse(fs.readFileSync(0,'utf8'));
@@ -79,8 +99,7 @@ if (h.ok !== true) {
   console.error('health.ok is not true', h);
   process.exit(1);
 }
-const ready = h.startup?.ready;
-if (ready !== true && ready !== undefined) {
+if (h.startup?.ready !== true) {
   console.error('startup.ready is not true', h.startup);
   process.exit(1);
 }
@@ -88,6 +107,7 @@ if (h.startup?.render === true || h.render === true) {
   console.error('render must be false on Contabo', h.startup || h);
   process.exit(1);
 }
-console.log('commit match', String(h.commit).slice(0,12), 'startup.ready', ready, 'render', h.startup?.render ?? h.render ?? false);
+console.log('commit match', String(h.commit).slice(0,12), 'startup.ready', h.startup?.ready, 'render', h.startup?.render ?? h.render ?? false);
 "
 echo "==> source-only-reload complete (PostgreSQL not modified by this script)"
+
