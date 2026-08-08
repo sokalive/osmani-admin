@@ -9,6 +9,17 @@ import {
 
 const { Pool } = pg
 
+/** Fail-fast is armed only after startup finishes ensuring tables. */
+let _poolGuardArmed = false
+
+export function armPoolSaturationGuard() {
+  _poolGuardArmed = true
+}
+
+export function isPoolSaturationGuardArmed() {
+  return _poolGuardArmed
+}
+
 if (!process.env.DATABASE_URL) {
   console.warn('⚠️  DATABASE_URL is not set — channel routes will fail until PostgreSQL is configured.')
 }
@@ -98,13 +109,16 @@ function patchPoolFailFast(pool) {
   const origConnect = pool.connect.bind(pool)
 
   pool.query = (...args) => {
-    assertPoolCanAcceptWork(getPoolStats, 'pool.query')
+    if (_poolGuardArmed) assertPoolCanAcceptWork(getPoolStats, 'pool.query')
     return origQuery(...args)
   }
 
   // Adapter so connectWithSaturationGuard can call .connect() without recursing into the patch.
   const rawPool = { connect: () => origConnect() }
-  pool.connect = () => connectWithSaturationGuard(rawPool, getPoolStats, 'pool.connect')
+  pool.connect = () => {
+    if (!_poolGuardArmed) return origConnect()
+    return connectWithSaturationGuard(rawPool, getPoolStats, 'pool.connect')
+  }
 }
 
 export function getPool() {

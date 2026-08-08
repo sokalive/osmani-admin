@@ -300,6 +300,13 @@ async function runDeferredStartup({ background = false } = {}) {
       await wireDeviceSubscriptionRelay()
       await ensureAllApiDataFiles()
       markStartupReady()
+      try {
+        const { armPoolSaturationGuard } = await import('./db/pool.js')
+        armPoolSaturationGuard()
+        console.info('[pg] pool saturation fail-fast armed')
+      } catch (e) {
+        console.warn('[pg] armPoolSaturationGuard failed:', e?.message || e)
+      }
 
       if (deferredStartupBackgroundTimer) {
         clearInterval(deferredStartupBackgroundTimer)
