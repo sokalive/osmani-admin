@@ -70,8 +70,10 @@ function poolOptions() {
       Number(process.env.PG_POOL_CONNECT_TIMEOUT_MS) || 5000,
     ),
     allowExitOnIdle: false,
-    // Bound query + abandon leaked open transactions at the server side.
-    options: `-c statement_timeout=${Math.trunc(statementTimeoutMs)} -c idle_in_transaction_session_timeout=${Math.trunc(idleInTxnMs)}`,
+    // Do NOT set statement_timeout here — Contabo startup runs large ensure/DDL
+    // that can exceed a few seconds. Query helpers set statement_timeout per checkout.
+    // Kill abandoned open transactions only.
+    options: `-c idle_in_transaction_session_timeout=${Math.trunc(idleInTxnMs)}`,
     ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),
   }
 }
@@ -137,7 +139,7 @@ export function getPool() {
         max: opts.max,
         idleTimeoutMillis: opts.idleTimeoutMillis,
         connectionTimeoutMillis: opts.connectionTimeoutMillis,
-        statement_timeout: defaultStatementTimeoutMs(),
+        statementTimeoutDefaultMs: defaultStatementTimeoutMs(),
         idle_in_transaction_session_timeout: idleInTxnTimeoutMs(),
         maxWaiting: maxPoolWaiting(opts.max),
         vps: isVpsProduction(),
