@@ -1,0 +1,93 @@
+name: Contabo Diagnose Pool
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip when CONTABO_SSH_KEY is not configured
+        id: gate
+        env:
+          CONTABO_SSH_KEY: ${{ secrets.CONTABO_SSH_KEY }}
+        run: |
+          if [ -z "${CONTABO_SSH_KEY}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read-only pool / pg_stat_activity forensics
+        if: steps.gate.outputs.skip != 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            echo '=== CURL HEALTH ==='
+            curl -fsS --max-time 20 http://127.0.0.1:10001/api/health || true
+            echo
+            echo '=== CURL HEALTH/DB ==='
+            curl -fsS --max-time 45 http://127.0.0.1:10001/api/health/db || true
+            echo
+            echo '=== PM2 ==='
+            pm2 list || true
+            echo
+            echo '=== PM2 LOGS (pool/db) ==='
+            pm2 logs osmani-admin-api --lines 120 --nostream 2>/dev/null | grep -E 'pg-pool|db-slow|db-query|timeout|checkout-providers|subscription-verify|waitingCount|pool' || true
+            echo
+            echo '=== PG FORENSICS ==='
+            cd /var/www/osmani-admin-api/server
+            node --input-type=module <<'EOF'
+            import { createRequire } from 'node:module'
+            const require = createRequire(import.meta.url)
+            const { loadContaboPm2Env } = require('../deploy/contabo/loadPm2Env.cjs')
+            const e = loadContaboPm2Env('/var/www/osmani-admin-api')
+            if (!e.DATABASE_URL) throw new Error('DATABASE_URL missing')
+            process.env.DATABASE_URL = e.DATABASE_URL
+            const pg = await import('pg')
+            const pool = new pg.default.Pool({
+              connectionString: process.env.DATABASE_URL,
+              max: 2,
+              ssl: { rejectUnauthorized: false },
+              connectionTimeoutMillis: 8000,
+            })
+            const q = async (sql, params=[]) => (await pool.query(sql, params)).rows
+            console.log(JSON.stringify({
+              by_state: await q(`SELECT state, wait_event_type, count(*)::int AS n
+                FROM pg_stat_activity WHERE datname=current_database()
+                GROUP BY 1,2 ORDER BY n DESC`),
+              idle_in_xact: await q(`SELECT count(*)::int AS n FROM pg_stat_activity
+                WHERE datname=current_database() AND state='idle in transaction'`),
+              oldest: await q(`
+                SELECT pid, usename, application_name, state, wait_event_type, wait_event,
+                  EXTRACT(EPOCH FROM (now()-backend_start))::int AS backend_age_sec,
+                  EXTRACT(EPOCH FROM (now()-state_change))::int AS state_age_sec,
+                  EXTRACT(EPOCH FROM (now()-xact_start))::int AS xact_age_sec,
+                  EXTRACT(EPOCH FROM (now()-query_start))::int AS query_age_sec,
+                  left(replace(query, E'\\n', ' '), 200) AS query
+                FROM pg_stat_activity
+                WHERE datname=current_database() AND pid <> pg_backend_pid()
+                ORDER BY COALESCE(xact_start, query_start, state_change) ASC NULLS LAST
+                LIMIT 35
+              `),
+              active_queries: await q(`
+                SELECT pid, state, wait_event_type, wait_event,
+                  EXTRACT(EPOCH FROM (now()-query_start))::int AS query_age_sec,
+                  left(replace(query, E'\\n', ' '), 220) AS query
+                FROM pg_stat_activity
+                WHERE datname=current_database() AND state='active' AND pid <> pg_backend_pid()
+                ORDER BY query_start ASC NULLS LAST
+                LIMIT 20
+              `),
+              locks_blocking: await q(`
+                SELECT count(*)::int AS blocked_lock_rows
+                FROM pg_locks WHERE NOT granted AND database = (SELECT oid FROM pg_database WHERE datname=current_database())
+              `),
+            }, null, 2))
+            await pool.end()
+            EOF
