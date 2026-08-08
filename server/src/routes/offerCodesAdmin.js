@@ -28,7 +28,6 @@ offerCodesAdminRouter.post('/generate', async (req, res) => {
     }
     const planId = Number(body.plan_id ?? body.planId) || null
     const durationDays = Number(body.duration_days ?? body.durationDays)
-    const phone = String(body.phone ?? body.phone_number ?? body.phoneNumber ?? '').trim()
     // Canonical plan engine: exact Admin plan id is required for new offer codes.
     if (!planId) {
       return res.status(400).json({
@@ -36,17 +35,11 @@ offerCodesAdminRouter.post('/generate', async (req, res) => {
         error: 'plan_id is required (select an Admin Plan — duration guessing is disabled)',
       })
     }
-    const row = await billing.insertOfferCodeRow({
-      durationDays,
-      planId,
-      createdBy: 'admin',
-      phone: phone || null,
-    })
+    const row = await billing.insertOfferCodeRow({ durationDays, planId, createdBy: 'admin' })
     billing.offerCodeAudit('generated', {
       code: row.code,
       duration_days: row.duration_days,
       plan_id: row.plan_id != null ? Number(row.plan_id) : null,
-      has_phone: Boolean(phone),
     })
     const exp = row.expires_at
     publishOfferCodesSync('generated', { code: String(row.code) })
@@ -56,7 +49,6 @@ offerCodesAdminRouter.post('/generate', async (req, res) => {
       durationDays: Number(row.duration_days),
       planId: row.plan_id != null ? Number(row.plan_id) : null,
       id: Number(row.id),
-      customerPhone: row.customer_phone ? String(row.customer_phone) : null,
       expiresAt: exp instanceof Date ? exp.toISOString() : exp != null ? String(exp) : null,
     })
   } catch (e) {

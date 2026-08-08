@@ -131,7 +131,6 @@ function ManualSubscriptionPage() {
   const [historyBusyId, setHistoryBusyId] = useState(null)
 
   const [offerSelectedPlanId, setOfferSelectedPlanId] = useState('')
-  const [offerPhone, setOfferPhone] = useState('')
   const [offerPin, setOfferPin] = useState('')
   const [generatedOfferCode, setGeneratedOfferCode] = useState('')
   const [offerBusy, setOfferBusy] = useState(false)
@@ -310,7 +309,6 @@ function ManualSubscriptionPage() {
         durationDays: days,
         planId: offerSelectedPlan.id,
         pin: offerPin.trim(),
-        phone: offerPhone.trim() || undefined,
       })
       setGeneratedOfferCode(String(out.code ?? ''))
       showToast('success', 'Code imetengenezwa')
@@ -339,7 +337,6 @@ function ManualSubscriptionPage() {
         durationDays: days,
         planId: offerSelectedPlan.id,
         pin: offerPin.trim(),
-        phone: offerPhone.trim() || undefined,
       })
       setGeneratedOfferCode(String(out.code ?? ''))
       void loadOfferHistory()
@@ -1306,26 +1303,6 @@ function ManualSubscriptionPage() {
                 </div>
                 <div>
                   <label
-                    htmlFor="oc-phone"
-                    className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400"
-                  >
-                    Phone Number
-                  </label>
-                  <input
-                    id="oc-phone"
-                    type="tel"
-                    className={inputClass()}
-                    value={offerPhone}
-                    onChange={(e) => setOfferPhone(e.target.value)}
-                    placeholder="+2557XXXXXXXX (si lazima)"
-                    autoComplete="tel"
-                  />
-                  <p className="mt-1.5 text-xs text-slate-500">
-                    SMS ya subscription itatumwa tu ikiwa namba imewekwa.
-                  </p>
-                </div>
-                <div>
-                  <label
                     htmlFor="oc-pin"
                     className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400"
                   >
@@ -1562,9 +1539,7 @@ function ManualSubscriptionPage() {
                               {row.usedByDevice || '—'}
                             </td>
                             <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.usedAt)}</td>
-                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">
-                              {formatAdminDateTime(row.subscriptionExpiresAt || row.expiresAt)}
-                            </td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{formatAdminDateTime(row.expiresAt)}</td>
                             <td className="px-3 py-2.5">
                               <span
                                 className={`inline-flex rounded-lg px-2 py-0.5 text-xs font-semibold ring-1 ${offerStatusStyle(st)}`}

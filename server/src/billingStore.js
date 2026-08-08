@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { computeMidnightEatExpiryIso, computeStackedExpiryIso } from './lib/subscriptionStacking.js'
+import { computeStackedExpiryIso } from './lib/subscriptionStacking.js'
 import { tryRecordAppInstall } from './lib/installAnalytics.js'
 import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
@@ -1089,10 +1089,6 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   // Canonical plan engine: when the caller identifies the exact Admin plan, that row is
   // the single source of truth for duration + price + plan identity. The legacy
   // duration-only path (duration → plan match) remains for old callers only.
-  //
-  // Payment parity: paid activation prefers transactions.plan_duration_days (snapshot).
-  // Offer-code redeem passes preferDurationSnapshot so frozen offer_codes.duration_days wins.
-  // Manual grants leave preferDurationSnapshot unset and keep the live plan duration.
   const requestedPlanId = opts.planId != null ? Number(opts.planId) : null
   let plan = null
   let days = Number(durationDays)
@@ -1102,13 +1098,7 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
     }
     plan = await getPlanRowByIdAny(requestedPlanId)
     if (!plan) throw new Error(`Plan ${requestedPlanId} not found`)
-    const liveDays = Math.trunc(Number(plan.duration_days))
-    const snapDays = Math.trunc(Number(durationDays))
-    if (opts.preferDurationSnapshot === true && Number.isFinite(snapDays) && snapDays >= 1) {
-      days = snapDays
-    } else {
-      days = liveDays
-    }
+    days = Math.trunc(Number(plan.duration_days))
     if (!Number.isFinite(days) || days < 1) {
       throw new Error(`Plan ${requestedPlanId} has invalid duration_days (${plan.duration_days})`)
     }
@@ -1124,10 +1114,8 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   const { assertNoActiveSubscriptionForGrant } = await import('./lib/activeSubscriptionPaymentGate.js')
   await assertNoActiveSubscriptionForGrant(d)
 
-  // Default: fallback to device registry/payment phone (manual grants).
-  // Offer codes set allowDevicePhoneFallback:false so SMS only fires when admin entered a phone.
   let smsPhone = phone
-  if (!smsPhone && opts.allowDevicePhoneFallback !== false) {
+  if (!smsPhone) {
     const resolved = await resolvePaymentPhoneForDevice(d)
     smsPhone = String(resolved?.phone ?? '').trim()
   }
@@ -3494,14 +3482,8 @@ export async function resetOfferCodeDeviceAttempts(deviceId) {
   )
 }
 
-export async function insertOfferCodeRow({
-  durationDays,
-  planId = null,
-  createdBy = 'admin',
-  phone = null,
-} = {}) {
-  // Canonical plan engine: prefer the exact Admin plan; duration is frozen onto the code
-  // (same role as transactions.plan_duration_days for paid subscriptions).
+export async function insertOfferCodeRow({ durationDays, planId = null, createdBy = 'admin' }) {
+  // Canonical plan engine: prefer the exact Admin plan; duration follows the plan row.
   const requestedPlanId = planId != null ? Number(planId) : null
   let days = Number(durationDays)
   if (requestedPlanId != null) {
@@ -3523,10 +3505,6 @@ export async function insertOfferCodeRow({
       throw new Error(`Invalid duration_days (allowed: ${list})`)
     }
   }
-  const phoneRaw = String(phone ?? '').trim()
-  const phoneStored = phoneRaw
-    ? String(normalizePhoneDigits(phoneRaw) || phoneRaw).slice(0, 32)
-    : null
   const pool = requirePool()
   const shelfDays = Math.min(
     3650,
@@ -3537,18 +3515,10 @@ export async function insertOfferCodeRow({
     const code = String(n)
     try {
       const { rows } = await pool.query(
-        `INSERT INTO offer_codes
-           (code, duration_days, plan_id, created_by, customer_phone, expires_at, failed_attempts, lock_until)
-         VALUES ($1, $2, $3, $4, $5, now() + ($6::int * interval '1 day'), 0, NULL)
-         RETURNING id, code, duration_days, plan_id, customer_phone, created_at, expires_at`,
-        [
-          code,
-          days,
-          requestedPlanId,
-          String(createdBy || 'admin').slice(0, 120),
-          phoneStored,
-          shelfDays,
-        ],
+        `INSERT INTO offer_codes (code, duration_days, plan_id, created_by, expires_at, failed_attempts, lock_until)
+         VALUES ($1, $2, $3, $4, now() + ($5::int * interval '1 day'), 0, NULL)
+         RETURNING id, code, duration_days, plan_id, created_at, expires_at`,
+        [code, days, requestedPlanId, String(createdBy || 'admin').slice(0, 120), shelfDays],
       )
       if (rows[0]) return rows[0]
     } catch (e) {
@@ -3557,30 +3527,6 @@ export async function insertOfferCodeRow({
     }
   }
   throw new Error('Could not generate a unique offer code')
-}
-
-/**
- * Subscription end shown in Code History "Mwisho wa Code".
- * Used codes: stored grant expiry (or reconstruct from used_at + duration via same engine).
- * Unused codes: expected expiry if redeemed now (same midnight-EAT engine as payments).
- */
-export function resolveOfferCodeSubscriptionExpiresAt(row, nowMs = Date.now()) {
-  if (!row || typeof row !== 'object') return null
-  if (row.subscription_expires_at != null) {
-    const snap =
-      row.subscription_expires_at instanceof Date
-        ? row.subscription_expires_at
-        : new Date(row.subscription_expires_at)
-    if (Number.isFinite(snap.getTime())) return snap.toISOString()
-  }
-  const days = Math.trunc(Number(row.duration_days))
-  if (!Number.isFinite(days) || days < 1) return null
-  let anchorMs = nowMs
-  if (row.used_at != null) {
-    const used = row.used_at instanceof Date ? row.used_at : new Date(row.used_at)
-    if (Number.isFinite(used.getTime())) anchorMs = used.getTime()
-  }
-  return computeMidnightEatExpiryIso(days, anchorMs)
 }
 
 function offerCodeRowStatus(row, nowMs = Date.now()) {
@@ -3597,42 +3543,29 @@ export async function listOfferCodesHistoryAdmin({ limit = 500 } = {}) {
   const lim = Math.min(1000, Math.max(1, Number(limit) || 500))
   const { rows } = await pool.query(
     `SELECT id, code, duration_days, plan_id, created_by, created_at, used_by_device, used_at, expires_at,
-            subscription_expires_at, customer_phone, blocked, deleted_at
+            blocked, deleted_at
      FROM offer_codes
      ORDER BY created_at DESC
      LIMIT $1`,
     [lim],
   )
-  const nowMs = Date.now()
-  return rows.map((r) => {
-    const codeShelfExpiresAt =
-      r.expires_at instanceof Date ? r.expires_at.toISOString() : String(r.expires_at ?? '')
-    const subscriptionExpiresAt = resolveOfferCodeSubscriptionExpiresAt(r, nowMs)
-    return {
-      id: Number(r.id),
-      code: String(r.code ?? ''),
-      durationDays: Number(r.duration_days) || 0,
-      planId: r.plan_id != null ? Number(r.plan_id) : null,
-      createdBy: String(r.created_by ?? ''),
-      createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
-      usedByDevice: r.used_by_device ? String(r.used_by_device) : null,
-      usedAt:
-        r.used_at instanceof Date ? r.used_at.toISOString() : r.used_at != null ? String(r.used_at) : null,
-      // Mwisho wa Code = real/expected subscription end (NOT code shelf-life).
-      expiresAt: subscriptionExpiresAt || codeShelfExpiresAt,
-      subscriptionExpiresAt,
-      codeShelfExpiresAt,
-      customerPhone: r.customer_phone ? String(r.customer_phone) : null,
-      blocked: r.blocked === true,
-      deletedAt:
-        r.deleted_at instanceof Date
-          ? r.deleted_at.toISOString()
-          : r.deleted_at != null
-            ? String(r.deleted_at)
-            : null,
-      status: offerCodeRowStatus(r),
-    }
-  })
+  return rows.map((r) => ({
+    id: Number(r.id),
+    code: String(r.code ?? ''),
+    durationDays: Number(r.duration_days) || 0,
+    planId: r.plan_id != null ? Number(r.plan_id) : null,
+    createdBy: String(r.created_by ?? ''),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+    usedByDevice: r.used_by_device ? String(r.used_by_device) : null,
+    usedAt:
+      r.used_at instanceof Date ? r.used_at.toISOString() : r.used_at != null ? String(r.used_at) : null,
+    expiresAt:
+      r.expires_at instanceof Date ? r.expires_at.toISOString() : String(r.expires_at ?? ''),
+    blocked: r.blocked === true,
+    deletedAt:
+      r.deleted_at instanceof Date ? r.deleted_at.toISOString() : r.deleted_at != null ? String(r.deleted_at) : null,
+    status: offerCodeRowStatus(r),
+  }))
 }
 
 export async function setOfferCodeBlockedByCode(rawCode, blocked) {
@@ -3708,26 +3641,22 @@ export async function redeemOfferCodeForDevice(deviceId, rawCode) {
       return await rollbackAndFail('Code has expired', 'invalid_attempt')
     }
 
-    // Payment parity: freeze duration_days at generate time (like txn.plan_duration_days).
     const durationDays = Number(oc.duration_days)
     const offerPlanId = oc.plan_id != null ? Number(oc.plan_id) : null
-    const customerPhone = String(oc.customer_phone ?? '').trim()
 
-    const grant = await grantManualDeviceSubscription(d, durationDays, client, {
-      ...(offerPlanId ? { planId: offerPlanId } : {}),
-      preferDurationSnapshot: true,
-      phone: customerPhone,
-      // SMS only when admin entered a phone on the Offer Code — never invent one from device history.
-      allowDevicePhoneFallback: false,
-    })
+    // Canonical plan engine: codes generated from an Admin plan carry the exact plan id.
+    const grant = await grantManualDeviceSubscription(
+      d,
+      durationDays,
+      client,
+      offerPlanId ? { planId: offerPlanId } : {},
+    )
 
     const mark = await client.query(
       `UPDATE offer_codes
-       SET used_by_device = $2,
-           used_at = now(),
-           subscription_expires_at = $3::timestamptz
+       SET used_by_device = $2, used_at = now()
        WHERE id = $1 AND used_at IS NULL AND deleted_at IS NULL`,
-      [oc.id, d, grant.expiresAt],
+      [oc.id, d],
     )
     if (Number(mark.rowCount) === 0) {
       await client.query('ROLLBACK')

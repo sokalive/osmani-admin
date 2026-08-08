@@ -37,7 +37,6 @@
     "verify:payment-create-order-latency": "node scripts/verify-payment-create-order-latency.mjs",
     "verify:payment-pipeline-parity": "node scripts/verify-payment-pipeline-parity.mjs",
     "verify:subscription-duration-audit": "node scripts/verify-subscription-duration-audit.mjs",
-    "verify:offer-codes": "node scripts/verify-offer-codes-duration.mjs",
     "verify:subscription-integrity-audit": "node scripts/verify-subscription-integrity-audit.mjs",
     "verify:payment-production": "node scripts/verify-payment-production.mjs",
     "verify:payment-orders-search": "node scripts/verify-payment-orders-search.mjs",

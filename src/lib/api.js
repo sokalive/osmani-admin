@@ -938,8 +938,7 @@ export async function postManualSubscriptionHistoryDeleteAll({ securityPin, conf
   return body
 }
 
-export async function postOfferCodeGenerate({ durationDays, planId, pin, phone }) {
-  const phoneRaw = String(phone ?? '').trim()
+export async function postOfferCodeGenerate({ durationDays, planId, pin }) {
   const res = await fetch(joinPath('/admin/offer-codes/generate'), {
     ...ADMIN_FETCH_DEFAULTS,
     method: 'POST',
@@ -948,7 +947,6 @@ export async function postOfferCodeGenerate({ durationDays, planId, pin, phone }
       duration_days: Number(durationDays),
       // Canonical plan engine: the code carries the exact Admin plan id.
       ...(planId != null ? { plan_id: Number(planId) } : {}),
-      ...(phoneRaw ? { phone: phoneRaw } : {}),
       pin: String(pin ?? ''),
     }),
   })
