@@ -38,6 +38,9 @@ jobs:
             set -euo pipefail
             cd /var/www/osmani-admin-api
             export CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@osmanitv.com}"
+            # Pull first so source-only-reload.sh exists on disk (chicken/egg on first use).
+            git fetch origin main
+            git reset --hard origin/main
             # SOURCE-ONLY rollback deploy: no apply-cutover / --repair / data mutations.
             bash deploy/contabo/source-only-reload.sh
 
