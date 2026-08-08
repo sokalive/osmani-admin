@@ -1,0 +1,57 @@
+name: Contabo PM2 Restart Only
+
+on:
+  workflow_dispatch:
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip when CONTABO_SSH_KEY is not configured
+        id: gate
+        env:
+          CONTABO_SSH_KEY: ${{ secrets.CONTABO_SSH_KEY }}
+        run: |
+          if [ -z "${CONTABO_SSH_KEY}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Minimal git reset + PM2 restart (no regressions, no repairs)
+        if: steps.gate.outputs.skip != 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 8m
+          script: |
+            set -euo pipefail
+            ROOT=/var/www/osmani-admin-api
+            cd "$ROOT"
+            git fetch origin main
+            git reset --hard origin/main
+            COMMIT="$(git rev-parse HEAD)"
+            echo "commit=$COMMIT"
+            export OSMANI_GIT_COMMIT="$COMMIT"
+            export OSMANI_ADMIN_ROOT="$ROOT"
+            node "$ROOT/deploy/contabo/sync-database-url-env.cjs" "$ROOT" >/dev/null
+            pm2 delete osmani-admin-api 2>/dev/null || true
+            pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
+            pm2 save
+            for i in $(seq 1 45); do
+              if curl -fsS "http://127.0.0.1:10001/api/health" >/tmp/h.json 2>/dev/null; then
+                READY="$(node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.startup?.ready===true&&j.commit==='$COMMIT'))}catch{process.stdout.write('false')}})" </tmp/h.json)"
+                echo "probe $i ready=$READY $(cat /tmp/h.json | head -c 300)"
+                if [ "$READY" = "true" ]; then
+                  exit 0
+                fi
+              else
+                echo "probe $i not up"
+              fi
+              sleep 2
+            done
+            echo "ERROR: API not ready" >&2
+            pm2 logs osmani-admin-api --lines 50 --nostream || true
+            exit 1
