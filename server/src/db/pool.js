@@ -7,10 +7,17 @@ import {
   maxPoolWaiting,
 } from '../lib/poolSaturation.js'
 
-const { Pool } = pg
+const { Pool, Client } = pg
 
 /** Fail-fast is armed only after startup finishes ensuring tables. */
 let _poolGuardArmed = false
+
+/**
+ * While true, shared pool checkout is refused (except nested withStartupDbBypass).
+ * Contabo fix: ensure DDL must not share/compete with request traffic on the pool.
+ */
+let _startupPoolLocked = false
+let _startupBypassDepth = 0
 
 export function armPoolSaturationGuard() {
   _poolGuardArmed = true
@@ -18,6 +25,34 @@ export function armPoolSaturationGuard() {
 
 export function isPoolSaturationGuardArmed() {
   return _poolGuardArmed
+}
+
+export function setStartupPoolLocked(locked) {
+  _startupPoolLocked = Boolean(locked)
+}
+
+export function isStartupPoolLocked() {
+  return _startupPoolLocked
+}
+
+/** Allow intentional pool use during locked startup (rare). Prefer withDedicatedClient. */
+export async function withStartupDbBypass(fn) {
+  _startupBypassDepth += 1
+  try {
+    return await fn()
+  } finally {
+    _startupBypassDepth -= 1
+  }
+}
+
+function assertPoolNotStartupLocked(label) {
+  if (_startupPoolLocked && _startupBypassDepth <= 0) {
+    const err = new Error(`startup_pool_locked:${label || 'pool'}`)
+    err.code = 'STARTUP_POOL_LOCKED'
+    err.statusCode = 503
+    err.retryable = true
+    throw err
+  }
 }
 
 if (!process.env.DATABASE_URL) {
@@ -47,18 +82,21 @@ function idleInTxnTimeoutMs() {
   return Math.max(1000, Number(process.env.PG_IDLE_IN_TXN_TIMEOUT_MS) || 15_000)
 }
 
-function poolOptions() {
-  const connectionString = process.env.DATABASE_URL
-  if (!connectionString) return null
+function sslForConnectionString(connectionString) {
   const isLocal =
     /localhost|127\.0\.0\.1/i.test(connectionString) ||
     process.env.PGSSLMODE === 'disable'
+  return isLocal ? {} : { ssl: { rejectUnauthorized: false } }
+}
+
+function poolOptions() {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) return null
   const idleMs = Math.max(
     10_000,
     Number(process.env.PG_POOL_IDLE_TIMEOUT_MS) || 30_000,
   )
   const max = poolMaxConnections()
-  const statementTimeoutMs = defaultStatementTimeoutMs()
   const idleInTxnMs = idleInTxnTimeoutMs()
   return {
     connectionString,
@@ -74,7 +112,39 @@ function poolOptions() {
     // that can exceed a few seconds. Query helpers set statement_timeout per checkout.
     // Kill abandoned open transactions only.
     options: `-c idle_in_transaction_session_timeout=${Math.trunc(idleInTxnMs)}`,
-    ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),
+    ...sslForConnectionString(connectionString),
+  }
+}
+
+/**
+ * Dedicated one-off client outside PG_POOL_MAX — for Contabo ensure/DDL so startup
+ * cannot starve or leak shared pool checkouts.
+ */
+export async function withDedicatedClient(fn, label = 'dedicated') {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is required.')
+  const client = new Client({
+    connectionString,
+    connectionTimeoutMillis: Math.max(
+      3000,
+      Number(process.env.PG_POOL_CONNECT_TIMEOUT_MS) || 5000,
+    ),
+    ...sslForConnectionString(connectionString),
+  })
+  const t0 = Date.now()
+  await client.connect()
+  try {
+    return await fn(client)
+  } finally {
+    try {
+      await client.end()
+    } catch (e) {
+      console.warn(`[pg] dedicated client end (${label}):`, e?.message || e)
+    }
+    const ms = Date.now() - t0
+    if (ms >= 2000) {
+      console.info(`[pg] dedicated client ${label} finished in ${ms}ms`)
+    }
   }
 }
 
@@ -91,6 +161,7 @@ export function getPoolStats() {
       max: 0,
       saturated: false,
       maxWaiting: maxPoolWaiting(poolMaxConnections()),
+      startupLocked: _startupPoolLocked,
     }
   }
   const basic = {
@@ -103,6 +174,7 @@ export function getPoolStats() {
     ...basic,
     saturated: isPoolSaturated(basic),
     maxWaiting: maxPoolWaiting(basic.max),
+    startupLocked: _startupPoolLocked,
   }
 }
 
@@ -111,6 +183,7 @@ function patchPoolFailFast(pool) {
   const origConnect = pool.connect.bind(pool)
 
   pool.query = (...args) => {
+    assertPoolNotStartupLocked('pool.query')
     if (_poolGuardArmed) assertPoolCanAcceptWork(getPoolStats, 'pool.query')
     return origQuery(...args)
   }
@@ -118,6 +191,7 @@ function patchPoolFailFast(pool) {
   // Adapter so connectWithSaturationGuard can call .connect() without recursing into the patch.
   const rawPool = { connect: () => origConnect() }
   pool.connect = () => {
+    assertPoolNotStartupLocked('pool.connect')
     if (!_poolGuardArmed) return origConnect()
     return connectWithSaturationGuard(rawPool, getPoolStats, 'pool.connect')
   }
@@ -151,7 +225,7 @@ export function getPool() {
     )
     setInterval(() => {
       const s = getPoolStats()
-      if (s.waitingCount > 0 || s.totalCount >= s.max || s.saturated) {
+      if (s.waitingCount > 0 || s.totalCount >= s.max || s.saturated || s.startupLocked) {
         console.warn('[pg-pool-stats]', {
           ...s,
           saturation: getPoolSaturationStats(getPoolStats),

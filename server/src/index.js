@@ -289,6 +289,11 @@ async function runDeferredStartup({ background = false } = {}) {
   const maxAttempts = background ? 1 : STARTUP_DEFERRED_RETRIES
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+      const { setStartupPoolLocked } = await import('./db/pool.js')
+      // Refuse shared-pool checkouts until ensure finishes — prevents Contabo
+      // checkout leaks (idleCount=0 / waitingCount growth) while DDL runs.
+      setStartupPoolLocked(true)
+
       const uploadRetry = initUploadStorage()
       if (uploadRetry.ok) {
         logUploadStorageDiagnostics()
@@ -300,6 +305,7 @@ async function runDeferredStartup({ background = false } = {}) {
       await wireDeviceSubscriptionRelay()
       await ensureAllApiDataFiles()
       markStartupReady()
+      setStartupPoolLocked(false)
       try {
         const { armPoolSaturationGuard } = await import('./db/pool.js')
         armPoolSaturationGuard()
@@ -394,6 +400,12 @@ async function runDeferredStartup({ background = false } = {}) {
       console.log('[startup] deferred init complete')
       return
     } catch (err) {
+      try {
+        const { setStartupPoolLocked } = await import('./db/pool.js')
+        setStartupPoolLocked(false)
+      } catch {
+        /* ignore */
+      }
       markStartupFailed(err)
       const label = background ? 'background' : `attempt ${attempt}/${maxAttempts}`
       console.error(`[startup] deferred init ${label} failed:`, err?.message || err)

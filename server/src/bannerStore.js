@@ -1,17 +1,13 @@
 import { ensureBannersTable } from './db/bannersTable.js'
-import { getPool } from './db/pool.js'
+import { getPool, withDedicatedClient } from './db/pool.js'
 
 export async function ensureBannersStorage() {
-  const pool = getPool()
-  if (!pool) {
+  if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL is required for banner storage (PostgreSQL).')
   }
-  const client = await pool.connect()
-  try {
+  await withDedicatedClient(async (client) => {
     await ensureBannersTable(client)
-  } finally {
-    client.release()
-  }
+  }, 'ensureBannersTable')
 }
 
 /** Admin / detail: full row + optional channel name for CMS. */

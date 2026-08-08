@@ -40,7 +40,7 @@ jobs:
             pm2 delete osmani-admin-api 2>/dev/null || true
             pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
             pm2 save
-            for i in $(seq 1 90); do
+            for i in $(seq 1 150); do
               if curl -fsS "http://127.0.0.1:10001/api/health" >/tmp/h.json 2>/dev/null; then
                 READY="$(node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.startup?.ready===true&&String(j.commit||'')==='$COMMIT'))}catch{process.stdout.write('false')}})" </tmp/h.json)"
                 echo "probe $i ready=$READY $(head -c 350 /tmp/h.json)"
@@ -55,5 +55,5 @@ jobs:
               sleep 2
             done
             echo "ERROR: API not ready" >&2
-            pm2 logs osmani-admin-api --lines 80 --nostream || true
+            pm2 logs osmani-admin-api --lines 120 --nostream || true
             exit 1

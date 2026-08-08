@@ -3,7 +3,7 @@ import { computeStackedExpiryIso } from './lib/subscriptionStacking.js'
 import { tryRecordAppInstall } from './lib/installAnalytics.js'
 import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
-import { getPool } from './db/pool.js'
+import { getPool, withDedicatedClient } from './db/pool.js'
 import { setLiveChannelHint } from './lib/liveChannelHint.js'
 import { upsertLiveSession } from './lib/liveSessionStore.js'
 import { invalidateSubscriptionAccessCache } from './lib/subscriptionAccessCache.js'
@@ -11,26 +11,21 @@ import { notifySubscriptionActivated } from './lib/subscriptionActivationNotify.
 import { publishManualGrantActivationRealtime } from './lib/manualGrantRealtime.js'
 
 export async function ensureBillingStorage() {
-  const pool = getPool()
-  if (!pool) {
+  if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL is required for billing (plans, transactions, ZenoPay).')
   }
-  const client = await pool.connect()
-  try {
+  // Dedicated client (outside shared pool) so Contabo ensure DDL cannot leak/starve PG_POOL_MAX.
+  await withDedicatedClient(async (client) => {
     await ensureBillingTables(client)
-  } finally {
-    client.release()
-  }
-  await ensureBootstrapAdminPanelUser().catch((err) => {
-    console.error('[admin-panel-bootstrap]', err?.message || err)
-  })
-  // Intentionally NOT syncing all intelligence blocks here — that bulk repair can run for
-  // minutes and compete with ensure/migrations for the pool, keeping startup.ready=false.
-  // See runPostReadyMaintenance() after markStartupReady().
+  }, 'ensureBillingTables')
+  // Admin bootstrap uses the shared pool — defer until after unlock / ready.
 }
 
 /** Non-blocking maintenance safe to run only after the API is marked ready. */
 export async function runPostReadyBillingMaintenance() {
+  await ensureBootstrapAdminPanelUser().catch((err) => {
+    console.error('[admin-panel-bootstrap]', err?.message || err)
+  })
   try {
     const { syncAllIntelligenceBlocksToPlayback } = await import('./lib/deviceIntelligenceStore.js')
     const sync = await syncAllIntelligenceBlocksToPlayback()

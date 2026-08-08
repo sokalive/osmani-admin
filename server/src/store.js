@@ -5,7 +5,7 @@
 import { normalizePlayerType } from './channelNormalize.js'
 import { invalidateChannelAnalyticsIndex } from './lib/channelAnalyticsNormalize.js'
 import { ensureChannelsTable } from './db/channelsTable.js'
-import { getPool } from './db/pool.js'
+import { getPool, withDedicatedClient } from './db/pool.js'
 
 function rowToChannel(row) {
   if (!row) return null
@@ -84,16 +84,12 @@ function channelToRowParams(c) {
 
 /** Ensures DB pool + channels table exist (replaces legacy channels.json creation). */
 export async function ensureDataFile() {
-  const pool = getPool()
-  if (!pool) {
+  if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL is required for channel storage (PostgreSQL).')
   }
-  const client = await pool.connect()
-  try {
+  await withDedicatedClient(async (client) => {
     await ensureChannelsTable(client)
-  } finally {
-    client.release()
-  }
+  }, 'ensureChannelsTable')
 }
 
 const CHANNEL_SELECT_COLS = `id, name, url, thumbnail, category, bottom_tab, is_live, is_hd, is_active, show_in_app,
