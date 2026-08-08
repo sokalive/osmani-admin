@@ -26,6 +26,12 @@ export async function runPostReadyBillingMaintenance() {
   await ensureBootstrapAdminPanelUser().catch((err) => {
     console.error('[admin-panel-bootstrap]', err?.message || err)
   })
+  // Bulk intelligence sync is opt-in — default OFF on Contabo to avoid re-saturating
+  // the shared pool right after unlock (caused idleCount=0 / checkout timeouts).
+  if (String(process.env.POST_READY_INTELLIGENCE_SYNC || '').trim() !== '1') {
+    console.info('[users-intelligence] post-ready block sync skipped (POST_READY_INTELLIGENCE_SYNC!=1)')
+    return
+  }
   try {
     const { syncAllIntelligenceBlocksToPlayback } = await import('./lib/deviceIntelligenceStore.js')
     const sync = await syncAllIntelligenceBlocksToPlayback()

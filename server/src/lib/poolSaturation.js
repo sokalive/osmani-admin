@@ -38,9 +38,13 @@ export function poolAcquireTimeoutMs() {
 export function isPoolSaturated(stats = {}) {
   const max = Number(stats.max) || envPoolMaxFallback()
   const waiting = Number(stats.waitingCount) || 0
-  // Only the waiting queue is the hard fail-fast signal. A fully checked-out pool with a
-  // short queue is normal during startup / brief bursts and must not trip fail-fast.
+  const idle = Number(stats.idleCount) || 0
+  const total = Number(stats.totalCount) || 0
   if (waiting >= maxPoolWaiting(max)) return true
+  // Fully checked-out with a material queue — fail fast (do not grow toward thousands).
+  if (max > 0 && total >= max && idle === 0 && waiting >= Math.max(3, Math.floor(max / 5))) {
+    return true
+  }
   return false
 }
 

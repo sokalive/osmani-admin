@@ -1,6 +1,10 @@
 /**
  * Pool query helpers with timeout + slow-query logging + saturation fail-fast.
- * Uses an explicit checkout so statement_timeout applies and the client is always released.
+ * Uses an explicit checkout so the client is always released promptly.
+ *
+ * IMPORTANT: do NOT RUN `RESET statement_timeout` in finally. Contabo saturation
+ * showed all 30 clients stuck checked-out with last query RESET / PG idle+ClientRead
+ * while waitingCount climbed — release must be immediate after the user query.
  */
 import { getPool, getPoolStats } from '../db/pool.js'
 import { isPoolSaturationError, assertPoolCanAcceptWork } from './poolSaturation.js'
@@ -32,12 +36,21 @@ export async function poolQuery(text, params = [], opts = {}) {
   const t0 = performance.now()
 
   assertPoolCanAcceptWork(getPoolStats, label)
-  // pool.connect is patched with acquire timeout + saturation fail-fast.
   const client = await pool.connect()
   let destroyOnRelease = false
+  let timer = null
   try {
+    // Session SET is fine; next checkout overwrites. Never RESET before release.
     await client.query(`SET statement_timeout TO ${Math.trunc(timeoutMs)}`)
-    const result = await client.query(text, params)
+    const result = await Promise.race([
+      client.query(text, params),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          destroyOnRelease = true
+          reject(new Error(`query_timeout:${label}:${timeoutMs}ms`))
+        }, timeoutMs)
+      }),
+    ])
     const ms = performance.now() - t0
     if (ms >= SLOW_QUERY_MS) {
       console.warn('[db-slow]', {
@@ -59,18 +72,7 @@ export async function poolQuery(text, params = [], opts = {}) {
     }
     throw e
   } finally {
-    // Never let RESET hang forever with the client still checked out — that
-    // starved Contabo (idleCount=0 / PG idle+ClientRead) during startup.
-    try {
-      await Promise.race([
-        client.query('RESET statement_timeout'),
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('reset_statement_timeout_hung')), 750)
-        }),
-      ])
-    } catch {
-      destroyOnRelease = true
-    }
+    if (timer) clearTimeout(timer)
     try {
       client.release(destroyOnRelease)
     } catch {

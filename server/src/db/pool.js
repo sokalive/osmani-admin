@@ -181,15 +181,23 @@ export function getPoolStats() {
 function patchPoolFailFast(pool) {
   const origQuery = pool.query.bind(pool)
   const origConnect = pool.connect.bind(pool)
+  const rawPool = { connect: () => origConnect() }
 
   pool.query = (...args) => {
     assertPoolNotStartupLocked('pool.query')
-    if (_poolGuardArmed) assertPoolCanAcceptWork(getPoolStats, 'pool.query')
-    return origQuery(...args)
+    if (!_poolGuardArmed) return origQuery(...args)
+    assertPoolCanAcceptWork(getPoolStats, 'pool.query')
+    // Guarded checkout so acquire timeouts apply (bare origQuery waited up to
+    // connectionTimeoutMillis and left Contabo waitingCount stacked).
+    return connectWithSaturationGuard(rawPool, getPoolStats, 'pool.query').then(async (client) => {
+      try {
+        return await client.query(...args)
+      } finally {
+        client.release()
+      }
+    })
   }
 
-  // Adapter so connectWithSaturationGuard can call .connect() without recursing into the patch.
-  const rawPool = { connect: () => origConnect() }
   pool.connect = () => {
     assertPoolNotStartupLocked('pool.connect')
     if (!_poolGuardArmed) return origConnect()
