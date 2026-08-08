@@ -38,7 +38,8 @@ jobs:
             set -euo pipefail
             cd /var/www/osmani-admin-api
             export CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@osmanitv.com}"
-            bash deploy/contabo/pull-and-apply.sh
+            # SOURCE-ONLY rollback deploy: no apply-cutover / --repair / data mutations.
+            bash deploy/contabo/source-only-reload.sh
 
       - name: Checkout for post-deploy verification
         if: steps.gate.outputs.skip != 'true'
