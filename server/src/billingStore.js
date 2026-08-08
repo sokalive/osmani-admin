@@ -609,6 +609,9 @@ export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, dur
     anchorAt: stack.anchorAt,
     purchasedDurationDays: stack.purchasedDurationDays,
     stacked: stack.stacked,
+    // Pass through so grants can refuse preserve_existing_active (payments skip upsert instead).
+    expiry_policy: stack.expiry_policy,
+    stacking_disabled: stack.stacking_disabled === true,
   }
 }
 
@@ -1121,8 +1124,27 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   }
 
   // Permanent: never stack / duplicate while entitlement is already live.
-  const { assertNoActiveSubscriptionForGrant } = await import('./lib/activeSubscriptionPaymentGate.js')
+  const {
+    assertNoActiveSubscriptionForGrant,
+    ActiveSubscriptionExistsError,
+  } = await import('./lib/activeSubscriptionPaymentGate.js')
   await assertNoActiveSubscriptionForGrant(d)
+
+  // Compute expiry BEFORE inserting a grant row. Offer codes / manual grants must NEVER
+  // attach a new package identity onto preserve_existing_active (old future expires_at).
+  // Paid activation keeps its own skip-upsert path in canonicalPaymentActivation.js.
+  const stack = await computeDeviceSubscriptionExpiryAfterPurchase(d, days, client)
+  if (stack.expiry_policy === 'preserve_existing_active') {
+    throw new ActiveSubscriptionExistsError({
+      blocked: true,
+      deviceId: d,
+      expiresAt: stack.expiresAt ?? stack.previousExpiresAt ?? null,
+      remainingDays: 0,
+      status: 'active',
+      transactionId: null,
+      reason: 'preserve_existing_active',
+    })
+  }
 
   // Default: fallback to device registry/payment phone (manual grants).
   // Offer codes set allowDevicePhoneFallback:false so SMS only fires when admin entered a phone.
@@ -1145,7 +1167,6 @@ export async function grantManualDeviceSubscription(deviceId, durationDays, clie
   const nonce = ins.rows[0]?.nonce
   if (!grantId || nonce == null) throw new Error('manual grant insert failed')
 
-  const stack = await computeDeviceSubscriptionExpiryAfterPurchase(d, days, client)
   const expiresAt = stack.expiresAt
   const orderId = `manual_grant:${grantId}`
 

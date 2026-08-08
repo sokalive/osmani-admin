@@ -1137,6 +1137,14 @@ subscriptionRouter.post('/subscription/redeem-offer-code', async (req, res) => {
       manualGiftAckKey,
     })
   } catch (e) {
+    if (e?.name === 'ActiveSubscriptionExistsError' || e?.code === 'ACTIVE_SUBSCRIPTION_EXISTS') {
+      const { activeSubscriptionExistsHttpBody } = await import('../lib/activeSubscriptionPaymentGate.js')
+      return res.status(409).json({
+        ...activeSubscriptionExistsHttpBody(e.block || {}),
+        ok: false,
+        error: e.message,
+      })
+    }
     console.error('[redeem-offer-code]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
