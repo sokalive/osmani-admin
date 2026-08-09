@@ -8,7 +8,7 @@ let _modesCache = null
 let _modesCacheAt = 0
 const MODES_CACHE_MS = Math.max(
   500,
-  Math.min(60_000, Number(process.env.GLOBAL_MODES_CACHE_MS) || 2000),
+  Math.min(60_000, Number(process.env.GLOBAL_MODES_CACHE_MS) || 10_000),
 )
 
 export function invalidateGlobalModesCache() {

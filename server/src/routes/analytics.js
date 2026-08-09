@@ -25,6 +25,7 @@ import {
   schedulePhysicalDeviceCensusRefresh,
 } from '../lib/canonicalPhysicalDeviceCensus.js'
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
+import { shouldPublishSessionHeartbeat } from '../lib/presenceHeartbeatPublish.js'
 import { readChannelIdNameMap } from '../store.js'
 
 export const analyticsRouter = Router()
@@ -243,11 +244,13 @@ analyticsRouter.get('/snapshot', async (_req, res) => {
     ])
     const locationsOnline = sumLocationsOnline(locations)
     const watchingFromChannels = channels.watchingNow ?? sumChannelViewers(channels.mostWatched)
+    // Presence totals come from one SQL (online = watching + idle). Channel sum is a
+    // parallel read of the same table/window — expose both for diagnostics.
     res.json({
       ...overview,
       onlineNow: overview.onlineNow,
-      watchingNow: overview.watchingNow ?? watchingFromChannels,
-      idleNow: overview.idleNow ?? Math.max(0, overview.onlineNow - watchingFromChannels),
+      watchingNow: overview.watchingNow,
+      idleNow: overview.idleNow,
       locationsOnline,
       channelWatchingNow: watchingFromChannels,
       mostWatched: channels.mostWatched,
@@ -451,7 +454,9 @@ export async function handleLiveSessionHeartbeat(req, res) {
       installBody: req.body,
       clearChannel,
     })
-    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
+    if (shouldPublishSessionHeartbeat(deviceId)) {
+      liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
+    }
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/session/heartbeat]', e)
@@ -533,7 +538,9 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       installBody: req.body,
       clearChannel,
     })
-    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
+    if (shouldPublishSessionHeartbeat(deviceId)) {
+      liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
+    }
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/presence/heartbeat]', e)

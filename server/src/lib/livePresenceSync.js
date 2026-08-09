@@ -3,9 +3,11 @@ import { resolveLocationLabel } from './analyticsLocation.js'
 import { parseChannelRefFromRequest, parseChannelClearFromPayload } from './analyticsPresence.js'
 import { getLiveChannelHint } from './liveChannelHint.js'
 import { liveSyncBus } from './liveSyncBus.js'
+import { shouldPublishSessionHeartbeat } from './presenceHeartbeatPublish.js'
 
 /**
  * Upsert live_sessions from an HTTP request, then publish analytics SSE (after DB write).
+ * Heartbeat bus publishes are throttled; DB presence touches are not skipped.
  */
 export async function syncLivePresenceFromRequest(
   req,
@@ -15,7 +17,10 @@ export async function syncLivePresenceFromRequest(
   const d = String(deviceId ?? '').trim()
   if (!d) return null
 
-  const merged = { ...(req?.query && typeof req.query === 'object' ? req.query : {}), ...(req?.body && typeof req.body === 'object' ? req.body : {}) }
+  const merged = {
+    ...(req?.query && typeof req.query === 'object' ? req.query : {}),
+    ...(req?.body && typeof req.body === 'object' ? req.body : {}),
+  }
   const channelRef = parseChannelRefFromRequest(req)
   const hint = getLiveChannelHint(d)
   const clearChannel = parseChannelClearFromPayload(merged) || hint?.clearChannel === true
@@ -29,6 +34,12 @@ export async function syncLivePresenceFromRequest(
     clearChannel,
     installBody: req?.body,
   })
-  liveSyncBus.publish(event, { topics: ['analytics'], deviceId: d })
-  return { deviceId: d }
+
+  const eventName = String(event || 'analytics.session_heartbeat')
+  if (eventName === 'analytics.session_heartbeat' && !shouldPublishSessionHeartbeat(d)) {
+    return { deviceId: d, published: false }
+  }
+
+  liveSyncBus.publish(eventName, { topics: ['analytics'], deviceId: d })
+  return { deviceId: d, published: true }
 }

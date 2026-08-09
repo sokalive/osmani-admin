@@ -5,7 +5,7 @@ export const PHONE_GATE_SETTING_KEY = 'phone_gate_enabled'
 
 let _cache = null
 let _cacheAt = 0
-const CACHE_MS = Math.max(500, Math.min(60_000, Number(process.env.PHONE_GATE_CACHE_MS) || 1500))
+const CACHE_MS = Math.max(500, Math.min(60_000, Number(process.env.PHONE_GATE_CACHE_MS) || 10_000))
 
 export function invalidatePhoneGateCache() {
   _cache = null
