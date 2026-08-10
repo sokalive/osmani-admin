@@ -2,12 +2,12 @@ import * as billing from '../billingStore.js'
 import { resolveLocationLabel } from './analyticsLocation.js'
 import { parseChannelRefFromRequest, parseChannelClearFromPayload } from './analyticsPresence.js'
 import { getLiveChannelHint } from './liveChannelHint.js'
-import { liveSyncBus } from './liveSyncBus.js'
-import { shouldPublishSessionHeartbeat } from './presenceHeartbeatPublish.js'
+import { publishAfterLivePresenceUpsert } from './presenceEventPublish.js'
 
 /**
  * Upsert live_sessions from an HTTP request, then publish analytics SSE (after DB write).
- * Heartbeat bus publishes are throttled; DB presence touches are not skipped.
+ * Ordinary same-state heartbeats are coalesced; meaningful channel/online transitions
+ * publish analytics.presence_changed immediately (bypass ordinary heartbeat gate).
  */
 export async function syncLivePresenceFromRequest(
   req,
@@ -26,7 +26,7 @@ export async function syncLivePresenceFromRequest(
   const clearChannel = parseChannelClearFromPayload(merged) || hint?.clearChannel === true
   const country = await resolveLocationLabel(req?.body, req)
 
-  await billing.touchLivePresence({
+  const touch = await billing.touchLivePresence({
     deviceId: d,
     country,
     channelId: channelRef.channelId || hint?.channelId || null,
@@ -35,11 +35,5 @@ export async function syncLivePresenceFromRequest(
     installBody: req?.body,
   })
 
-  const eventName = String(event || 'analytics.session_heartbeat')
-  if (eventName === 'analytics.session_heartbeat' && !shouldPublishSessionHeartbeat(d)) {
-    return { deviceId: d, published: false }
-  }
-
-  liveSyncBus.publish(eventName, { topics: ['analytics'], deviceId: d })
-  return { deviceId: d, published: true }
+  return publishAfterLivePresenceUpsert(d, touch, { event })
 }

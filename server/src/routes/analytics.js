@@ -25,7 +25,7 @@ import {
   schedulePhysicalDeviceCensusRefresh,
 } from '../lib/canonicalPhysicalDeviceCensus.js'
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
-import { shouldPublishSessionHeartbeat } from '../lib/presenceHeartbeatPublish.js'
+import { publishAfterLivePresenceUpsert } from '../lib/presenceEventPublish.js'
 import { readChannelIdNameMap } from '../store.js'
 
 export const analyticsRouter = Router()
@@ -446,7 +446,7 @@ export async function handleLiveSessionHeartbeat(req, res) {
     const channelRef = parseChannelRefFromBody(req.body)
     const clearChannel = parseChannelClearFromBody(req.body)
     const country = await parseCountryFromBody(req.body, req)
-    await upsertLiveSession(pool, {
+    const touch = await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
       channelName: channelRef.channelName,
@@ -454,9 +454,7 @@ export async function handleLiveSessionHeartbeat(req, res) {
       installBody: req.body,
       clearChannel,
     })
-    if (shouldPublishSessionHeartbeat(deviceId)) {
-      liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
-    }
+    publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/session/heartbeat]', e)
@@ -530,7 +528,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
     const channelRef = parseChannelRefFromBody(req.body)
     const clearChannel = parseChannelClearFromBody(req.body)
     const country = await parseCountryFromBody(req.body, req)
-    await upsertLiveSession(pool, {
+    const touch = await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
       channelName: channelRef.channelName,
@@ -538,9 +536,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       installBody: req.body,
       clearChannel,
     })
-    if (shouldPublishSessionHeartbeat(deviceId)) {
-      liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
-    }
+    publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/presence/heartbeat]', e)

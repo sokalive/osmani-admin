@@ -23,6 +23,19 @@ function pruneHeartbeatPublishMap(now) {
 }
 
 /**
+ * Mark device as recently published so a later ordinary heartbeat stays quiet.
+ * Used after analytics.presence_changed to avoid a near-duplicate heartbeat fan-out.
+ * @param {string} deviceId
+ */
+export function markSessionHeartbeatPublished(deviceId) {
+  const d = String(deviceId ?? '').trim()
+  if (!d) return
+  const now = Date.now()
+  pruneHeartbeatPublishMap(now)
+  lastHeartbeatPublishAt.set(d, now)
+}
+
+/**
  * @param {string} deviceId
  * @returns {boolean} true when a bus publish should proceed
  */
