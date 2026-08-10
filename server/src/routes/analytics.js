@@ -25,7 +25,6 @@ import {
   schedulePhysicalDeviceCensusRefresh,
 } from '../lib/canonicalPhysicalDeviceCensus.js'
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
-import { publishAfterLivePresenceUpsert } from '../lib/presenceEventPublish.js'
 import { readChannelIdNameMap } from '../store.js'
 
 export const analyticsRouter = Router()
@@ -244,13 +243,11 @@ analyticsRouter.get('/snapshot', async (_req, res) => {
     ])
     const locationsOnline = sumLocationsOnline(locations)
     const watchingFromChannels = channels.watchingNow ?? sumChannelViewers(channels.mostWatched)
-    // Presence totals come from one SQL (online = watching + idle). Channel sum is a
-    // parallel read of the same table/window — expose both for diagnostics.
     res.json({
       ...overview,
       onlineNow: overview.onlineNow,
-      watchingNow: overview.watchingNow,
-      idleNow: overview.idleNow,
+      watchingNow: overview.watchingNow ?? watchingFromChannels,
+      idleNow: overview.idleNow ?? Math.max(0, overview.onlineNow - watchingFromChannels),
       locationsOnline,
       channelWatchingNow: watchingFromChannels,
       mostWatched: channels.mostWatched,
@@ -446,7 +443,7 @@ export async function handleLiveSessionHeartbeat(req, res) {
     const channelRef = parseChannelRefFromBody(req.body)
     const clearChannel = parseChannelClearFromBody(req.body)
     const country = await parseCountryFromBody(req.body, req)
-    const touch = await upsertLiveSession(pool, {
+    await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
       channelName: channelRef.channelName,
@@ -454,7 +451,7 @@ export async function handleLiveSessionHeartbeat(req, res) {
       installBody: req.body,
       clearChannel,
     })
-    publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
+    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/session/heartbeat]', e)
@@ -528,7 +525,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
     const channelRef = parseChannelRefFromBody(req.body)
     const clearChannel = parseChannelClearFromBody(req.body)
     const country = await parseCountryFromBody(req.body, req)
-    const touch = await upsertLiveSession(pool, {
+    await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
       channelName: channelRef.channelName,
@@ -536,7 +533,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       installBody: req.body,
       clearChannel,
     })
-    publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
+    liveSyncBus.publish('analytics.session_heartbeat', { topics: ['analytics'], deviceId })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/presence/heartbeat]', e)

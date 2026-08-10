@@ -61,13 +61,8 @@ export async function wireLiveSyncRelay() {
     return
   }
 
-  // High-frequency presence heartbeats stay local: UPSERT already updated Postgres.
-  // Relaying every heartbeat via pg_notify stampeded the shared pool under load.
-  const skipRelayEvents = new Set(['analytics.session_heartbeat'])
-
   liveSyncBus.on('sync', (packet) => {
     if (relaying || packet?.relayed === true) return
-    if (skipRelayEvents.has(String(packet?.event || ''))) return
     void notifyPeers(packet)
   })
 

@@ -2,35 +2,11 @@ import { useEffect, useRef } from 'react'
 import { syncStreamUrl } from '../lib/api'
 import { createRefreshCoordinator } from '../lib/adminRefreshCoordinator'
 
-const ANALYTICS_SSE_DEBOUNCE_MS = 400
-/** Aggregate many presence heartbeats into one snapshot cadence under load. */
-const HEARTBEAT_MIN_INTERVAL_MS = 10_000
-/** Faster refresh for start/end/expiry/install/billing analytics signals. */
-const MEANINGFUL_MIN_INTERVAL_MS = 2_000
-/** Channel open/leave/switch and online transitions — keep burst coalescing, aim ~0.5–1s. */
-const PRESENCE_CHANGED_MIN_INTERVAL_MS = 600
-
-const HEARTBEAT_EVENTS = new Set(['analytics.session_heartbeat'])
-
-const PRESENCE_CHANGED_EVENTS = new Set(['analytics.presence_changed'])
-
-const MEANINGFUL_EVENTS = [
-  'snapshot',
-  'analytics.install',
-  'analytics.install_reset',
-  'analytics.reset',
-  'analytics.session_start',
-  'analytics.session_end',
-  'analytics.presence_expired',
-  'analytics.transaction_updated',
-  'analytics.subscription_updated',
-]
+const ANALYTICS_SSE_DEBOUNCE_MS = 150
 
 /**
  * SSE-driven analytics refresh with optional long-interval safety poll.
  * Dedupes overlapping poll/SSE-triggered loads.
- * Ordinary heartbeats are throttled; presence_changed and other meaningful
- * state changes refresh sooner via the safe coordinator.
  * @param {() => void | Promise<void>} load
  * @param {{ pollMs?: number, sse?: boolean }} [opts]
  */
@@ -43,7 +19,7 @@ export function useAnalyticsLiveRefresh(load, opts = {}) {
   if (!coordinatorRef.current) {
     coordinatorRef.current = createRefreshCoordinator(() => loadRef.current(), {
       debounceMs: ANALYTICS_SSE_DEBOUNCE_MS,
-      minIntervalMs: HEARTBEAT_MIN_INTERVAL_MS,
+      minIntervalMs: 400,
     })
   }
 
@@ -58,13 +34,20 @@ export function useAnalyticsLiveRefresh(load, opts = {}) {
     if (!sseEnabled) return undefined
     const coord = coordinatorRef.current
     const es = new EventSource(syncStreamUrl(['analytics']))
-    const onHeartbeat = () => coord.schedule({ minIntervalMs: HEARTBEAT_MIN_INTERVAL_MS })
-    const onPresenceChanged = () =>
-      coord.schedule({ minIntervalMs: PRESENCE_CHANGED_MIN_INTERVAL_MS })
-    const onMeaningful = () => coord.schedule({ minIntervalMs: MEANINGFUL_MIN_INTERVAL_MS })
-    for (const ev of HEARTBEAT_EVENTS) es.addEventListener(ev, onHeartbeat)
-    for (const ev of PRESENCE_CHANGED_EVENTS) es.addEventListener(ev, onPresenceChanged)
-    for (const ev of MEANINGFUL_EVENTS) es.addEventListener(ev, onMeaningful)
+    const onSync = () => coord.schedule()
+    const events = [
+      'snapshot',
+      'analytics.install',
+      'analytics.install_reset',
+      'analytics.reset',
+      'analytics.session_start',
+      'analytics.session_heartbeat',
+      'analytics.session_end',
+      'analytics.presence_expired',
+      'analytics.transaction_updated',
+      'analytics.subscription_updated',
+    ]
+    for (const ev of events) es.addEventListener(ev, onSync)
     return () => {
       coord.cancel()
       es.close()

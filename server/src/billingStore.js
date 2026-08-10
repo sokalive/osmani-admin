@@ -1015,15 +1015,7 @@ export async function touchLivePresence({
     channelName: clearChannel ? null : safeChannelName,
     clearChannel: clearChannel === true,
   })
-  return {
-    deviceId: d,
-    country: safeCountry,
-    channelId: out.channelId,
-    previousChannelId: out.previousChannelId ?? null,
-    created: out.created === true,
-    channelChanged: out.channelChanged === true,
-    presenceChanged: out.presenceChanged === true,
-  }
+  return { deviceId: d, country: safeCountry, channelId: out.channelId }
 }
 
 /** Legacy durations for older manual grants / offer codes. */
