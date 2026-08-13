@@ -69,9 +69,11 @@ export function isVpsProduction() {
 
 export function poolMaxConnections() {
   const n = Number(process.env.PG_POOL_MAX)
-  if (Number.isFinite(n) && n >= 1) return Math.min(30, Math.trunc(n))
-  // VPS (Contabo): more headroom; Render starter stays conservative.
-  return isVpsProduction() ? 30 : 8
+  if (Number.isFinite(n) && n >= 1) return Math.min(50, Math.trunc(n))
+  // VPS (Contabo): match-peak evidence — PG max_connections=100, single API process,
+  // peak backends ~45 under 1500-user presence load with pool=30. Default 40 leaves
+  // headroom for LISTEN clients / scripts while absorbing kickoff bursts.
+  return isVpsProduction() ? 40 : 8
 }
 
 function defaultStatementTimeoutMs() {

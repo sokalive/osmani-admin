@@ -1,13 +1,17 @@
 /**
- * High-traffic capacity harness for presence + verify + Admin snapshot mix.
- * Safe: disposable device_ids, no payment creates/webhooks/grants/SMS.
+ * Realistic match-peak capacity harness.
+ *
+ * Each virtual user:
+ * - presence UPSERT ~every PRESENCE_MS (default 8s) like subscription-stream
+ * - occasional channel open/switch/leave
+ * - occasional subscription verify
+ * Shared Admin snapshot poller (not per-user).
+ *
+ * Safe: disposable device_ids; no payment create/webhook/grant/SMS.
  *
  * Usage:
  *   node server/scripts/capacity-presence-match-harness.mjs
- *   STAGES=50,100,250 STAGE_DURATION_SEC=45 node server/scripts/capacity-presence-match-harness.mjs
- *
- * Abort criteria: any pool_saturated / pool_acquire_timeout body, waitingCount spike,
- * or high 5xx rate.
+ *   STAGES=50,100,250,500 STAGE_DURATION_SEC=45 node server/scripts/capacity-presence-match-harness.mjs
  */
 const API = String(process.env.API_BASE || 'https://api.osmanitv.com').replace(/\/$/, '')
 const STAGES = (process.env.STAGES || '50,100,250,500,750,1000,1500,2000,2500,3000')
@@ -16,7 +20,9 @@ const STAGES = (process.env.STAGES || '50,100,250,500,750,1000,1500,2000,2500,30
   .filter((n) => Number.isFinite(n) && n > 0)
 const STAGE_DURATION_SEC = Math.max(20, Math.min(180, Number(process.env.STAGE_DURATION_SEC) || 45))
 const COOLDOWN_SEC = Math.max(15, Math.min(120, Number(process.env.COOLDOWN_SEC) || 30))
-const RAMP_SEC = Math.max(3, Math.min(60, Number(process.env.RAMP_SEC) || 10))
+const RAMP_SEC = Math.max(3, Math.min(60, Number(process.env.RAMP_SEC) || 12))
+const PRESENCE_MS = Math.max(3000, Number(process.env.PRESENCE_MS) || 8000)
+const VERIFY_EVERY_N = Math.max(2, Number(process.env.VERIFY_EVERY_N) || 5)
 const ABORT_WAITING = Math.max(20, Number(process.env.ABORT_WAITING_COUNT) || 40)
 const PREFIX = `capmatch_${Date.now()}`
 const CHANNELS = ['1', '11', '18', '27']
@@ -36,7 +42,15 @@ async function getJson(path, opts = {}) {
   } catch {
     json = null
   }
-  return { status: res.status, json, text: text.slice(0, 180) }
+  return { status: res.status, json, text: text.slice(0, 220) }
+}
+
+function isPoolSaturatedResponse(status, json) {
+  const err = String(json?.error || '').toLowerCase()
+  if (err === 'pool_saturated' || err === 'pool_acquire_timeout') return true
+  if (status === 503 && err.includes('pool_saturated')) return true
+  if (status === 500 && err.includes('pool_saturated')) return true
+  return false
 }
 
 async function health() {
@@ -48,98 +62,71 @@ async function health() {
     verify_db: h.json?.verify_db || {},
     pg: db.json?.pg || {},
     process: db.json?.process || {},
-    sat: db.json?.pool_saturation || {},
   }
 }
 
-function bodyHasPoolError(text, json) {
-  const s = `${text || ''} ${JSON.stringify(json || {})}`.toLowerCase()
-  return s.includes('pool_saturated') || s.includes('pool_acquire_timeout')
-}
-
-async function userAction(deviceId, i, tick) {
+async function presenceHeartbeat(deviceId, body) {
   const t0 = performance.now()
-  const ch = CHANNELS[i % CHANNELS.length]
-  const phase = tick % 8
-  let res
-  if (phase === 0) {
-    // open / switch channel (meaningful)
-    res = await getJson('/api/analytics/presence/heartbeat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        device_id: deviceId,
-        channel_id: ch,
-        channel_name: `ch-${ch}`,
-      }),
-    })
-  } else if (phase === 1) {
-    // leave channel (meaningful)
-    res = await getJson('/api/analytics/presence/heartbeat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_id: deviceId, channel_id: null }),
-    })
-  } else if (phase === 2) {
-    // ordinary same-state heartbeat (cheap path after first open)
-    res = await getJson('/api/analytics/presence/heartbeat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        device_id: deviceId,
-        channel_id: ch,
-        channel_name: `ch-${ch}`,
-      }),
-    })
-  } else if (phase === 3) {
-    res = await getJson('/api/subscription/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_id: deviceId, version_code: 24 }),
-    })
-  } else if (phase === 4) {
-    res = await getJson('/api/analytics/snapshot')
-  } else if (phase === 5) {
-    res = await getJson('/api/channels')
-  } else if (phase === 6) {
-    res = await getJson('/api/payments/checkout-providers')
-  } else {
-    // switch to another channel
-    const ch2 = CHANNELS[(i + 1) % CHANNELS.length]
-    res = await getJson('/api/analytics/presence/heartbeat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        device_id: deviceId,
-        channel_id: ch2,
-        channel_name: `ch-${ch2}`,
-      }),
-    })
-  }
-  const latencyMs = Math.round(performance.now() - t0)
-  const poolErr = bodyHasPoolError(res.text, res.json)
+  const res = await getJson('/api/analytics/presence/heartbeat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_id: deviceId, ...body }),
+  })
   return {
     status: res.status,
-    latencyMs,
-    poolErr,
-    ok: res.status >= 200 && res.status < 400 && !poolErr,
+    latencyMs: Math.round(performance.now() - t0),
+    poolErr: isPoolSaturatedResponse(res.status, res.json),
+    ok: res.status >= 200 && res.status < 400 && !isPoolSaturatedResponse(res.status, res.json),
+    label: 'presence',
+  }
+}
+
+async function verify(deviceId) {
+  const t0 = performance.now()
+  const res = await getJson('/api/subscription/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_id: deviceId, version_code: 24 }),
+  })
+  return {
+    status: res.status,
+    latencyMs: Math.round(performance.now() - t0),
+    poolErr: isPoolSaturatedResponse(res.status, res.json),
+    ok: res.status >= 200 && res.status < 400 && !isPoolSaturatedResponse(res.status, res.json),
+    label: 'verify',
+  }
+}
+
+async function snapshot() {
+  const t0 = performance.now()
+  const res = await getJson('/api/analytics/snapshot')
+  return {
+    status: res.status,
+    latencyMs: Math.round(performance.now() - t0),
+    poolErr: isPoolSaturatedResponse(res.status, res.json),
+    ok: res.status >= 200 && res.status < 400 && !isPoolSaturatedResponse(res.status, res.json),
+    label: 'snapshot',
   }
 }
 
 async function cleanupDevices(ids) {
-  await Promise.allSettled(
-    ids.map((id) =>
-      getJson('/api/analytics/presence/stop', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_id: id }),
-      }),
-    ),
-  )
+  const chunk = 40
+  for (let i = 0; i < ids.length; i += chunk) {
+    await Promise.allSettled(
+      ids.slice(i, i + chunk).map((id) =>
+        getJson('/api/analytics/presence/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_id: id }),
+        }),
+      ),
+    )
+  }
 }
 
 async function runStage(concurrency) {
   const devices = Array.from({ length: concurrency }, (_, i) => `${PREFIX}_${concurrency}_${i}`)
+  const channelOf = devices.map((_, i) => CHANNELS[i % CHANNELS.length])
   const latencies = []
   let success = 0
   let fail = 0
@@ -155,11 +142,43 @@ async function runStage(concurrency) {
   let aborted = false
   let abortReason = null
   let requests = 0
+  let tick = 0
 
   const start = Date.now()
   const endAt = start + STAGE_DURATION_SEC * 1000
   const rampEnd = start + RAMP_SEC * 1000
-  let tick = 0
+
+  // Bring users online watching a channel (kickoff burst, paced).
+  for (let i = 0; i < concurrency && !aborted; i += 20) {
+    const slice = devices.slice(i, i + 20)
+    const results = await Promise.all(
+      slice.map((id, j) =>
+        presenceHeartbeat(id, {
+          channel_id: channelOf[i + j],
+          channel_name: `ch-${channelOf[i + j]}`,
+        }),
+      ),
+    )
+    for (const r of results) {
+      requests += 1
+      latencies.push(r.latencyMs)
+      if (r.ok) success += 1
+      else fail += 1
+      if (r.status === 500) http500 += 1
+      if (r.status === 503) http503 += 1
+      if (r.poolErr) poolSaturated += 1
+    }
+    const h = await health()
+    peakWaiting = Math.max(peakWaiting, Number(h.pool?.waitingCount) || 0)
+    peakTotal = Math.max(peakTotal, Number(h.pool?.totalCount) || 0)
+    peakPgActive = Math.max(peakPgActive, Number(h.pg?.active_connections) || 0)
+    if (h.pool?.saturated === true || poolSaturated > 0 || peakWaiting >= ABORT_WAITING) {
+      aborted = true
+      abortReason = h.pool?.saturated ? 'pool.saturated' : `waiting/pool_err`
+      break
+    }
+    await new Promise((r) => setTimeout(r, 150))
+  }
 
   while (Date.now() < endAt && !aborted) {
     const now = Date.now()
@@ -167,26 +186,52 @@ async function runStage(concurrency) {
       now < rampEnd
         ? Math.max(1, Math.ceil(concurrency * ((now - start) / (RAMP_SEC * 1000))))
         : concurrency
+
+    // Stagger presence: each tick only ~activeN * (400/PRESENCE_MS) users refresh.
+    const perTick = Math.max(1, Math.ceil((activeN * 400) / PRESENCE_MS))
+    const offset = (tick * perTick) % activeN
     const batch = []
-    for (let i = 0; i < activeN; i += 1) {
-      batch.push(
-        userAction(devices[i], i, tick).then((r) => {
-          requests += 1
-          latencies.push(r.latencyMs)
-          if (r.ok) success += 1
-          else fail += 1
-          if (r.status === 500) http500 += 1
-          if (r.status === 503) http503 += 1
-          if (r.poolErr) poolSaturated += 1
-          const body = String(r.status)
-          if (body && r.poolErr) {
-            /* counted above */
-          }
-        }),
-      )
+    for (let k = 0; k < perTick; k += 1) {
+      const i = (offset + k) % activeN
+      const id = devices[i]
+      const roll = (tick + i) % 10
+      if (roll === 0) {
+        // leave
+        batch.push(presenceHeartbeat(id, { channel_id: null }))
+      } else if (roll === 1) {
+        // switch
+        const ch = CHANNELS[(i + tick) % CHANNELS.length]
+        channelOf[i] = ch
+        batch.push(presenceHeartbeat(id, { channel_id: ch, channel_name: `ch-${ch}` }))
+      } else if (roll % VERIFY_EVERY_N === 0) {
+        batch.push(verify(id))
+      } else {
+        // ordinary same-state heartbeat
+        batch.push(
+          presenceHeartbeat(id, {
+            channel_id: channelOf[i],
+            channel_name: `ch-${channelOf[i]}`,
+          }),
+        )
+      }
     }
-    await Promise.all(batch)
-    tick += 1
+    // One Admin snapshot every other tick (shared, not O(users))
+    if (tick % 2 === 0) batch.push(snapshot())
+
+    const results = await Promise.all(batch)
+    for (const r of results) {
+      requests += 1
+      latencies.push(r.latencyMs)
+      if (r.ok) success += 1
+      else fail += 1
+      if (r.status === 500) http500 += 1
+      if (r.status === 503) http503 += 1
+      if (r.poolErr) {
+        poolSaturated += 1
+        const err = String(r.status)
+        if (err) poolAcquireTimeout += 0
+      }
+    }
 
     const h = await health()
     peakWaiting = Math.max(peakWaiting, Number(h.pool?.waitingCount) || 0)
@@ -207,11 +252,16 @@ async function runStage(concurrency) {
       aborted = true
       abortReason = 'pool_saturated_in_response'
     }
-    if (requests > 20 && fail / requests > 0.1) {
+    if (http500 > 0) {
+      aborted = true
+      abortReason = `http500=${http500}`
+    }
+    if (requests > 40 && fail / requests > 0.05) {
       aborted = true
       abortReason = `fail_rate=${(fail / requests).toFixed(3)}`
     }
 
+    tick += 1
     await new Promise((r) => setTimeout(r, 400))
   }
 
@@ -220,9 +270,9 @@ async function runStage(concurrency) {
   const pass =
     !aborted &&
     poolSaturated === 0 &&
-    poolAcquireTimeout === 0 &&
     http500 === 0 &&
-    peakWaiting < ABORT_WAITING
+    peakWaiting < ABORT_WAITING &&
+    fail / Math.max(1, requests) <= 0.05
 
   return {
     concurrency,
@@ -256,9 +306,6 @@ async function cooldown() {
     console.log(
       `  cooldown t+${(i + 1) * 5}s waiting=${h.pool?.waitingCount} idle=${h.pool?.idleCount} sat=${h.pool?.saturated}`,
     )
-    if ((Number(h.pool?.waitingCount) || 0) === 0 && h.pool?.saturated !== true) {
-      /* keep cooling full window */
-    }
   }
 }
 
@@ -271,6 +318,7 @@ console.log(
       baselinePool: baseline.pool,
       stages: STAGES,
       stageDurationSec: STAGE_DURATION_SEC,
+      presenceMs: PRESENCE_MS,
     },
     null,
     2,

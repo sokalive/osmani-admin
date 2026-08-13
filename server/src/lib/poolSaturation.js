@@ -15,12 +15,12 @@ export class PoolSaturatedError extends Error {
 
 function envPoolMaxFallback() {
   const n = Number(process.env.PG_POOL_MAX)
-  if (Number.isFinite(n) && n >= 1) return Math.min(30, Math.trunc(n))
+  if (Number.isFinite(n) && n >= 1) return Math.min(50, Math.trunc(n))
   const vps =
     String(process.env.OSMANI_VPS || '').trim() === '1' ||
     /api\.osmanitv\.com/i.test(String(process.env.BASE_URL || '')) ||
     /144\.91\.117\.90/.test(String(process.env.BASE_URL || ''))
-  return vps ? 30 : 8
+  return vps ? 40 : 8
 }
 
 export function maxPoolWaiting(poolMax = envPoolMaxFallback()) {

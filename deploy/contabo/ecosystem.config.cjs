@@ -36,7 +36,7 @@ const pm2Env = {
 
 const VPS_POOL_DEFAULTS = {
   OSMANI_VPS: '1',
-  PG_POOL_MAX: '30',
+  PG_POOL_MAX: '40',
   PG_POOL_CONNECT_TIMEOUT_MS: '5000',
   PG_QUERY_TIMEOUT_MS: '8000',
   APP_SETTINGS_CACHE_MS: '30000',
@@ -64,6 +64,11 @@ const VPS_POOL_DEFAULTS = {
 for (const [key, val] of Object.entries(VPS_POOL_DEFAULTS)) {
   if (!String(pm2Env[key] ?? '').trim()) pm2Env[key] = val
 }
+
+// Match-peak capacity: keep Contabo API pool at 40 even if an older .env pinned 30.
+// PG max_connections=100; leave headroom for LISTEN clients and ad-hoc scripts.
+pm2Env.PG_POOL_MAX = '40'
+if (!String(pm2Env.PG_POOL_MAX_WAITING ?? '').trim()) pm2Env.PG_POOL_MAX_WAITING = '80'
 
 for (const key of SECRET_ENV_KEYS) {
   const val = String(fileEnv[key] ?? '').trim()
