@@ -50,7 +50,7 @@ const VPS_POOL_DEFAULTS = {
   PG_POOL_ACQUIRE_TIMEOUT_MS: '2500',
   BENCHMARK_SAMPLE_DEVICE: '0',
   BENCHMARK_SAMPLE_DEVICE_LIMIT: '200',
-  MODE_SSE_POLL_MS: '1200',
+  MODE_SSE_POLL_MS: '20000',
   PG_POOL_STATS: '1',
   // Instant activation when webhook arrives; polling covers webhook-less SonicPesa
   SONICPESA_WEBHOOK_SYNC_PROCESS: '1',

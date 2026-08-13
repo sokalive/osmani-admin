@@ -61,8 +61,12 @@ export async function wireLiveSyncRelay() {
     return
   }
 
+  // Ordinary TTL heartbeats stay local: UPSERT already wrote Postgres.
+  // Relaying every heartbeat via pg_notify stampedes the shared pool under load.
+  // Meaningful presence_changed / start / end still cross instances.
   liveSyncBus.on('sync', (packet) => {
     if (relaying || packet?.relayed === true) return
+    if (String(packet?.event || '') === 'analytics.session_heartbeat') return
     void notifyPeers(packet)
   })
 

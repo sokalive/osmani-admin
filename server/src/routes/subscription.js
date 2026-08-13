@@ -41,8 +41,15 @@ deviceSubscriptionBus.on('update', ({ deviceId }) => {
   invalidateSubscriptionAccessCache(deviceId)
 })
 
-/** Cross-instance fallback: modes are in Postgres; 1200ms proven stable at ~500 concurrent (ed9541d). */
-const MODE_SSE_POLL_MS = Math.min(60_000, Math.max(750, Number(process.env.MODE_SSE_POLL_MS) || 1200))
+/** Cross-instance fallback: modes are in Postgres; event-driven liveSync is primary.
+ * Default 20s — 1.2s caused O(users) DB stampede under concurrent match load.
+ * Override with MODE_SSE_POLL_MS if needed (min 2s, max 60s). Does not affect
+ * channel open/leave/switch presence UX (presence uses PRESENCE_STREAM_PING_MS).
+ */
+const MODE_SSE_POLL_MS = Math.min(
+  60_000,
+  Math.max(2_000, Number(process.env.MODE_SSE_POLL_MS) || 20_000),
+)
 /** Keep live_sessions fresh while subscription-stream is open (default 8s). */
 const PRESENCE_STREAM_PING_MS = Math.min(
   30_000,
