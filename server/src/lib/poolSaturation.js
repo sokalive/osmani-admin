@@ -20,7 +20,7 @@ function envPoolMaxFallback() {
     String(process.env.OSMANI_VPS || '').trim() === '1' ||
     /api\.osmanitv\.com/i.test(String(process.env.BASE_URL || '')) ||
     /144\.91\.117\.90/.test(String(process.env.BASE_URL || ''))
-  return vps ? 50 : 8
+  return vps ? 60 : 8
 }
 
 export function maxPoolWaiting(poolMax = envPoolMaxFallback()) {

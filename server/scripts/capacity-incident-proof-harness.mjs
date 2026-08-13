@@ -23,7 +23,8 @@ const MATCH_DURATION_SEC = Math.max(90, Math.min(600, Number(process.env.MATCH_D
 const COOLDOWN_SEC = Math.max(20, Math.min(120, Number(process.env.COOLDOWN_SEC) || 35))
 const RAMP_SEC = Math.max(5, Math.min(90, Number(process.env.RAMP_SEC) || 15))
 const PRESENCE_MS = Math.max(4000, Number(process.env.PRESENCE_MS) || 8000)
-const KICKOFF_BATCH = Math.max(10, Math.min(80, Number(process.env.KICKOFF_BATCH) || 40))
+const KICKOFF_BATCH = Math.max(8, Math.min(60, Number(process.env.KICKOFF_BATCH) || 25))
+const KICKOFF_GAP_MS = Math.max(40, Math.min(300, Number(process.env.KICKOFF_GAP_MS) || 100))
 const PAY_PROBE_STAGES = new Set(
   (process.env.PAY_PROBE_STAGES || '1000,1500,2000,2500,3000')
     .split(',')
@@ -284,7 +285,7 @@ async function kickoffBurst(devices, channelOf, c, batchSize = KICKOFF_BATCH) {
     if (c.peakWaiting >= ABORT_WAITING) {
       return { aborted: true, reason: `kickoff_waiting=${c.peakWaiting}` }
     }
-    await new Promise((r) => setTimeout(r, 80))
+    await new Promise((r) => setTimeout(r, KICKOFF_GAP_MS))
   }
   return { aborted: false }
 }

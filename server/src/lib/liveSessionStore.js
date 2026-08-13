@@ -1,5 +1,6 @@
 import { tryRecordAppInstall } from './installAnalytics.js'
 import { resolveAnalyticsChannelRef } from './channelAnalyticsNormalize.js'
+import { canUseBackgroundDb } from './telemetryAdmission.js'
 
 function parseText(v) {
   const s = String(v ?? '').trim()
@@ -87,9 +88,12 @@ export async function upsertLiveSession(
 
   const body = installBody && typeof installBody === 'object' ? installBody : {}
   const iid = parseInstallInstanceIdFromBody(body)
-  void tryRecordAppInstall(pool, d, iid).catch((e) => {
-    console.error('[liveSessionStore] tryRecordAppInstall:', e)
-  })
+  // Install insert is non-critical; never stack extra checkouts during pool pressure / kickoff.
+  if (canUseBackgroundDb()) {
+    void tryRecordAppInstall(pool, d, iid).catch((e) => {
+      console.error('[liveSessionStore] tryRecordAppInstall:', e)
+    })
+  }
 
   return {
     deviceId: d,

@@ -84,6 +84,7 @@ async function testHeartbeatGate() {
 async function testAdmissionAndMeaningful() {
   assert(criticalPoolHeadroom(40) >= 8, 'headroom clamp')
   assert(criticalPoolHeadroom(50) === 12, `expected 12 got ${criticalPoolHeadroom(50)}`)
+  assert(criticalPoolHeadroom(60) === 15, `expected 15 got ${criticalPoolHeadroom(60)}`)
   assert(canUseBackgroundDb() === true, 'no pool => allow background')
 
   const id = `adm-${Date.now()}`

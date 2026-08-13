@@ -9,6 +9,7 @@ import {
   shouldSkipOrdinaryPresenceUpsert,
   markOrdinaryPresenceWritten,
 } from './telemetryAdmission.js'
+import { withPresenceDbSlot } from './presenceDbAdmission.js'
 
 function normId(v) {
   const s = String(v ?? '').trim()
@@ -75,22 +76,36 @@ export async function syncLivePresenceFromRequest(
   }
 
   // Skip expensive geo on routine heartbeats when pool is pressured.
+  // Meaningful transitions also skip geo when free capacity is below headroom —
+  // channel open/leave correctness does not require country on every write.
   let country = null
-  if (meaningful || canPublishOrdinaryTelemetry()) {
+  if (canPublishOrdinaryTelemetry()) {
     country = await resolveLocationLabel(req?.body, req)
   }
 
-  const touch = await billing.touchLivePresence({
-    deviceId: d,
-    country,
-    channelId: channelRef.channelId || hint?.channelId || null,
-    channelName: channelRef.channelName || hint?.channelName || null,
-    clearChannel,
-    installBody: req?.body,
-  })
+  const slotted = await withPresenceDbSlot(async () => {
+    const touch = await billing.touchLivePresence({
+      deviceId: d,
+      country,
+      channelId: channelRef.channelId || hint?.channelId || null,
+      channelName: channelRef.channelName || hint?.channelName || null,
+      clearChannel,
+      installBody: req?.body,
+    })
+    markOrdinaryPresenceWritten(d)
+    return publishAfterLivePresenceUpsert(d, touch, { event })
+  }, { meaningful })
 
-  markOrdinaryPresenceWritten(d)
-  return publishAfterLivePresenceUpsert(d, touch, { event })
+  if (slotted?.skipped === 'presence_admission') {
+    return {
+      deviceId: d,
+      published: false,
+      event: String(event || 'analytics.session_heartbeat'),
+      presenceChanged: false,
+      skippedUpsert: 'presence_admission',
+    }
+  }
+  return slotted
 }
 
 export { canUseBackgroundDb }

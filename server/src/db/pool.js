@@ -73,9 +73,10 @@ export function poolMaxConnections() {
   // dedicated DDL clients, and ad-hoc scripts.
   if (Number.isFinite(n) && n >= 1) return Math.min(80, Math.trunc(n))
   // VPS (Contabo): measured safe default after match-peak proof.
-  // Prior: pool 30 failed kickoff at 2000; pool 40 passed 3000 with peak PG ~58/100.
-  // Default 50 keeps critical headroom (~12 idle reserved) while absorbing bursts.
-  return isVpsProduction() ? 50 : 8
+  // Prior: pool 40 passed paced 3000 but aggressive kickoff at 500 with pool 50
+  // still hit saturation when geo/install stacked. Default 60 leaves ~25–40 PG
+  // backends free (max_connections=100; other consumers ~15).
+  return isVpsProduction() ? 60 : 8
 }
 
 function defaultStatementTimeoutMs() {

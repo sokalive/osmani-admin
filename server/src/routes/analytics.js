@@ -34,6 +34,7 @@ import {
   markOrdinaryPresenceWritten,
   canPublishOrdinaryTelemetry,
 } from '../lib/telemetryAdmission.js'
+import { withPresenceDbSlot } from '../lib/presenceDbAdmission.js'
 import { readChannelIdNameMap } from '../store.js'
 
 export const analyticsRouter = Router()
@@ -461,28 +462,36 @@ export async function handleLiveSessionHeartbeat(req, res) {
     if (shouldSkipOrdinaryPresenceUpsert(deviceId, { meaningful })) {
       return res.json({ ok: true, device_id: deviceId, skipped: 'pool_pressure_ttl_fresh' })
     }
-    const country =
-      meaningful || canPublishOrdinaryTelemetry()
-        ? await parseCountryFromBody(req.body, req)
-        : null
-    const touch = await upsertLiveSession(pool, {
-      deviceId,
-      channelId: channelRef.channelId,
-      channelName: channelRef.channelName,
-      country,
-      installBody: req.body,
-      clearChannel,
-    })
-    setLiveChannelHint(deviceId, {
-      channelId: clearChannel ? null : touch?.channelId ?? channelRef.channelId,
-      channelName: clearChannel ? null : channelRef.channelName,
-      clearChannel,
-    })
-    markOrdinaryPresenceWritten(deviceId)
-    publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
+    const country = canPublishOrdinaryTelemetry()
+      ? await parseCountryFromBody(req.body, req)
+      : null
+    const slotted = await withPresenceDbSlot(async () => {
+      const touch = await upsertLiveSession(pool, {
+        deviceId,
+        channelId: channelRef.channelId,
+        channelName: channelRef.channelName,
+        country,
+        installBody: req.body,
+        clearChannel,
+      })
+      setLiveChannelHint(deviceId, {
+        channelId: clearChannel ? null : touch?.channelId ?? channelRef.channelId,
+        channelName: clearChannel ? null : channelRef.channelName,
+        clearChannel,
+      })
+      markOrdinaryPresenceWritten(deviceId)
+      publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
+      return touch
+    }, { meaningful })
+    if (slotted?.skipped === 'presence_admission') {
+      return res.json({ ok: true, device_id: deviceId, skipped: 'presence_admission' })
+    }
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/session/heartbeat]', e)
+    if (e?.code === 'PRESENCE_ADMISSION_TIMEOUT') {
+      return res.status(503).json({ ok: false, error: 'presence_busy', retryable: true })
+    }
     if (isPoolSaturationError(e)) {
       return res.status(503).json({ ok: false, error: 'pool_saturated', retryable: true })
     }
@@ -565,28 +574,36 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
     if (shouldSkipOrdinaryPresenceUpsert(deviceId, { meaningful })) {
       return res.json({ ok: true, device_id: deviceId, skipped: 'pool_pressure_ttl_fresh' })
     }
-    const country =
-      meaningful || canPublishOrdinaryTelemetry()
-        ? await parseCountryFromBody(req.body, req)
-        : null
-    const touch = await upsertLiveSession(pool, {
-      deviceId,
-      channelId: channelRef.channelId,
-      channelName: channelRef.channelName,
-      country,
-      installBody: req.body,
-      clearChannel,
-    })
-    setLiveChannelHint(deviceId, {
-      channelId: clearChannel ? null : touch?.channelId ?? channelRef.channelId,
-      channelName: clearChannel ? null : channelRef.channelName,
-      clearChannel,
-    })
-    markOrdinaryPresenceWritten(deviceId)
-    publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
+    const country = canPublishOrdinaryTelemetry()
+      ? await parseCountryFromBody(req.body, req)
+      : null
+    const slotted = await withPresenceDbSlot(async () => {
+      const touch = await upsertLiveSession(pool, {
+        deviceId,
+        channelId: channelRef.channelId,
+        channelName: channelRef.channelName,
+        country,
+        installBody: req.body,
+        clearChannel,
+      })
+      setLiveChannelHint(deviceId, {
+        channelId: clearChannel ? null : touch?.channelId ?? channelRef.channelId,
+        channelName: clearChannel ? null : channelRef.channelName,
+        clearChannel,
+      })
+      markOrdinaryPresenceWritten(deviceId)
+      publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
+      return touch
+    }, { meaningful })
+    if (slotted?.skipped === 'presence_admission') {
+      return res.json({ ok: true, device_id: deviceId, skipped: 'presence_admission' })
+    }
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
     console.error('[analytics/presence/heartbeat]', e)
+    if (e?.code === 'PRESENCE_ADMISSION_TIMEOUT') {
+      return res.status(503).json({ ok: false, error: 'presence_busy', retryable: true })
+    }
     if (isPoolSaturationError(e)) {
       return res.status(503).json({ ok: false, error: 'pool_saturated', retryable: true })
     }
