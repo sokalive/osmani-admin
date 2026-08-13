@@ -46,6 +46,10 @@ export function canPublishOrdinaryTelemetry() {
 /**
  * Background DB work allowed only when the pool has spare capacity above
  * the critical headroom reservation.
+ *
+ * Use freeSlots (idle + not-yet-created), not idle alone — otherwise a
+ * healthy pool that has only opened a few of max connections looks "pressured"
+ * and skips leave/heartbeat UPSERTs incorrectly.
  */
 export function canUseBackgroundDb() {
   try {
@@ -53,9 +57,12 @@ export function canUseBackgroundDb() {
     if (!s || !s.max) return true
     if (s.saturated === true || s.startupLocked === true) return false
     if ((Number(s.waitingCount) || 0) > 0) return false
+    const max = Number(s.max) || 40
+    const total = Number(s.totalCount) || 0
     const idle = Number(s.idleCount) || 0
-    const headroom = criticalPoolHeadroom(Number(s.max) || 40)
-    if (idle <= headroom) return false
+    const freeSlots = idle + Math.max(0, max - total)
+    const headroom = criticalPoolHeadroom(max)
+    if (freeSlots <= headroom) return false
     return true
   } catch {
     return true

@@ -98,6 +98,15 @@ async function testAdmissionAndMeaningful() {
   )
   assert(
     isLikelyMeaningfulPresenceRequest(id, {
+      clearChannel: true,
+      channelRef: { channelId: null },
+      hint: null,
+      event: 'analytics.session_heartbeat',
+    }) === true,
+    'explicit clear/leave must be meaningful even without hint',
+  )
+  assert(
+    isLikelyMeaningfulPresenceRequest(id, {
       clearChannel: false,
       channelRef: { channelId: '1' },
       hint: { channelId: '1' },

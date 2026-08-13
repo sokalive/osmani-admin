@@ -27,7 +27,7 @@ import {
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
 import { publishAfterLivePresenceUpsert } from '../lib/presenceEventPublish.js'
 import { isPoolSaturationError } from '../lib/poolSaturation.js'
-import { getLiveChannelHint } from '../lib/liveChannelHint.js'
+import { getLiveChannelHint, setLiveChannelHint } from '../lib/liveChannelHint.js'
 import { isLikelyMeaningfulPresenceRequest } from '../lib/livePresenceSync.js'
 import {
   shouldSkipOrdinaryPresenceUpsert,
@@ -473,6 +473,11 @@ export async function handleLiveSessionHeartbeat(req, res) {
       installBody: req.body,
       clearChannel,
     })
+    setLiveChannelHint(deviceId, {
+      channelId: clearChannel ? null : touch?.channelId ?? channelRef.channelId,
+      channelName: clearChannel ? null : channelRef.channelName,
+      clearChannel,
+    })
     markOrdinaryPresenceWritten(deviceId)
     publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
     return res.json({ ok: true, device_id: deviceId })
@@ -570,6 +575,11 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       channelName: channelRef.channelName,
       country,
       installBody: req.body,
+      clearChannel,
+    })
+    setLiveChannelHint(deviceId, {
+      channelId: clearChannel ? null : touch?.channelId ?? channelRef.channelId,
+      channelName: clearChannel ? null : channelRef.channelName,
       clearChannel,
     })
     markOrdinaryPresenceWritten(deviceId)

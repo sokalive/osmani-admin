@@ -22,8 +22,10 @@ function normId(v) {
 export function isLikelyMeaningfulPresenceRequest(deviceId, { clearChannel, channelRef, hint, event }) {
   const eventName = String(event || 'analytics.session_heartbeat')
   if (eventName !== 'analytics.session_heartbeat') return true
+  // Explicit leave/stop-watching must never be treated as ordinary TTL — skipping
+  // clears under pressure leaves viewers stuck "watching" and can kick Home paths.
+  if (clearChannel) return true
   const prev = normId(hint?.channelId)
-  if (clearChannel) return Boolean(prev)
   const requested = normId(channelRef?.channelId)
   if (requested && prev && requested !== prev) return true // switch
   if (requested && !prev) return true // open (or first watch signal)
