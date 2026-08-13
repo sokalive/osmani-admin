@@ -10,8 +10,9 @@ let presenceInFlight = 0
 export function maxPresenceDbConcurrent() {
   const max = Number(getPoolStats()?.max) || 50
   const headroom = criticalPoolHeadroom(max)
-  // Leave critical headroom free for verify/payment even during open storms.
-  return Math.max(8, max - headroom)
+  // Hard cap ~half the pool so verify/payment retain capacity during open storms.
+  const half = Math.floor(max * 0.5)
+  return Math.max(8, Math.min(half, max - headroom))
 }
 
 export function getPresenceAdmissionStats() {

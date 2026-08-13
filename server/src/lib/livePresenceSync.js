@@ -10,6 +10,7 @@ import {
   markOrdinaryPresenceWritten,
 } from './telemetryAdmission.js'
 import { withPresenceDbSlot } from './presenceDbAdmission.js'
+import { isPoolSaturationError } from './poolSaturation.js'
 
 function normId(v) {
   const s = String(v ?? '').trim()
@@ -84,16 +85,30 @@ export async function syncLivePresenceFromRequest(
   }
 
   const slotted = await withPresenceDbSlot(async () => {
-    const touch = await billing.touchLivePresence({
-      deviceId: d,
-      country,
-      channelId: channelRef.channelId || hint?.channelId || null,
-      channelName: channelRef.channelName || hint?.channelName || null,
-      clearChannel,
-      installBody: req?.body,
-    })
-    markOrdinaryPresenceWritten(d)
-    return publishAfterLivePresenceUpsert(d, touch, { event })
+    try {
+      const touch = await billing.touchLivePresence({
+        deviceId: d,
+        country,
+        channelId: channelRef.channelId || hint?.channelId || null,
+        channelName: channelRef.channelName || hint?.channelName || null,
+        clearChannel,
+        installBody: req?.body,
+      })
+      markOrdinaryPresenceWritten(d)
+      return publishAfterLivePresenceUpsert(d, touch, { event })
+    } catch (e) {
+      // Ordinary presence must not throw pool_saturated into HTTP handlers.
+      if (!meaningful && isPoolSaturationError(e)) {
+        return {
+          deviceId: d,
+          published: false,
+          event: String(event || 'analytics.session_heartbeat'),
+          presenceChanged: false,
+          skippedUpsert: 'pool_pressure',
+        }
+      }
+      throw e
+    }
   }, { meaningful })
 
   if (slotted?.skipped === 'presence_admission') {

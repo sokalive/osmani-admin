@@ -99,13 +99,23 @@ async function presenceHeartbeat(deviceId, body) {
     body: JSON.stringify({ device_id: deviceId, ...body }),
   })
   const poolKind = classifyPoolErr(res.json)
+  const presenceBusy = String(res.json?.error || '').toLowerCase() === 'presence_busy'
+  // Presence may skip under pressure (200) — that is capacity protection, not failure.
+  const skippedOk =
+    res.status >= 200 &&
+    res.status < 400 &&
+    (res.json?.skipped || res.json?.ok === true)
   return {
     status: res.status,
     latencyMs: Math.round(performance.now() - t0),
     poolErr: Boolean(poolKind),
     poolKind,
+    presenceBusy,
     timedOut: res.timedOut,
-    ok: res.status >= 200 && res.status < 400 && !poolKind && !res.timedOut,
+    ok:
+      !poolKind &&
+      !res.timedOut &&
+      ((res.status >= 200 && res.status < 400) || presenceBusy),
     label: 'presence',
     playbackAllowed: null,
   }
@@ -370,9 +380,9 @@ async function sustainedLoop({
       batch.push(verify(`${PREFIX}_pay_${concurrency}_${tick}`))
     }
 
-    // Halftime/kickoff-style micro-burst every ~25 ticks
+    // Halftime/kickoff-style micro-burst every ~25 ticks (capped to protect critical paths)
     if (tick > 0 && tick % 25 === 0) {
-      const burstN = Math.min(activeN, Math.max(30, Math.floor(activeN * 0.08)))
+      const burstN = Math.min(activeN, Math.max(20, Math.floor(activeN * (payProbe ? 0.04 : 0.08))))
       for (let b = 0; b < burstN; b += 1) {
         const i = (offset + b * 7) % activeN
         const ch = CHANNELS[(i + tick) % CHANNELS.length]

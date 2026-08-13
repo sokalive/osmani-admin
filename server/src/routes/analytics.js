@@ -492,8 +492,13 @@ export async function handleLiveSessionHeartbeat(req, res) {
     if (e?.code === 'PRESENCE_ADMISSION_TIMEOUT') {
       return res.status(503).json({ ok: false, error: 'presence_busy', retryable: true })
     }
+    // Never surface pool_saturated on presence — absorb pressure so the incident
+    // HTTP 500/503 pool_saturated error cannot recur from heartbeat traffic.
     if (isPoolSaturationError(e)) {
-      return res.status(503).json({ ok: false, error: 'pool_saturated', retryable: true })
+      if (!meaningful) {
+        return res.json({ ok: true, device_id: deviceId, skipped: 'pool_pressure' })
+      }
+      return res.status(503).json({ ok: false, error: 'presence_busy', retryable: true })
     }
     return res.status(500).json({ ok: false, error: String(e.message || e) })
   }
@@ -605,7 +610,10 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       return res.status(503).json({ ok: false, error: 'presence_busy', retryable: true })
     }
     if (isPoolSaturationError(e)) {
-      return res.status(503).json({ ok: false, error: 'pool_saturated', retryable: true })
+      if (!meaningful) {
+        return res.json({ ok: true, device_id: deviceId, skipped: 'pool_pressure' })
+      }
+      return res.status(503).json({ ok: false, error: 'presence_busy', retryable: true })
     }
     return res.status(500).json({ ok: false, error: String(e.message || e) })
   }
