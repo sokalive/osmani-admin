@@ -27,6 +27,13 @@ import {
 import { upsertLiveSession, removeLiveSession } from '../lib/liveSessionStore.js'
 import { publishAfterLivePresenceUpsert } from '../lib/presenceEventPublish.js'
 import { isPoolSaturationError } from '../lib/poolSaturation.js'
+import { getLiveChannelHint } from '../lib/liveChannelHint.js'
+import { isLikelyMeaningfulPresenceRequest } from '../lib/livePresenceSync.js'
+import {
+  shouldSkipOrdinaryPresenceUpsert,
+  markOrdinaryPresenceWritten,
+  canPublishOrdinaryTelemetry,
+} from '../lib/telemetryAdmission.js'
 import { readChannelIdNameMap } from '../store.js'
 
 export const analyticsRouter = Router()
@@ -444,7 +451,20 @@ export async function handleLiveSessionHeartbeat(req, res) {
     }
     const channelRef = parseChannelRefFromBody(req.body)
     const clearChannel = parseChannelClearFromBody(req.body)
-    const country = await parseCountryFromBody(req.body, req)
+    const hint = getLiveChannelHint(deviceId)
+    const meaningful = isLikelyMeaningfulPresenceRequest(deviceId, {
+      clearChannel,
+      channelRef,
+      hint,
+      event: 'analytics.session_heartbeat',
+    })
+    if (shouldSkipOrdinaryPresenceUpsert(deviceId, { meaningful })) {
+      return res.json({ ok: true, device_id: deviceId, skipped: 'pool_pressure_ttl_fresh' })
+    }
+    const country =
+      meaningful || canPublishOrdinaryTelemetry()
+        ? await parseCountryFromBody(req.body, req)
+        : null
     const touch = await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
@@ -453,6 +473,7 @@ export async function handleLiveSessionHeartbeat(req, res) {
       installBody: req.body,
       clearChannel,
     })
+    markOrdinaryPresenceWritten(deviceId)
     publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {
@@ -529,7 +550,20 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
     }
     const channelRef = parseChannelRefFromBody(req.body)
     const clearChannel = parseChannelClearFromBody(req.body)
-    const country = await parseCountryFromBody(req.body, req)
+    const hint = getLiveChannelHint(deviceId)
+    const meaningful = isLikelyMeaningfulPresenceRequest(deviceId, {
+      clearChannel,
+      channelRef,
+      hint,
+      event: 'analytics.session_heartbeat',
+    })
+    if (shouldSkipOrdinaryPresenceUpsert(deviceId, { meaningful })) {
+      return res.json({ ok: true, device_id: deviceId, skipped: 'pool_pressure_ttl_fresh' })
+    }
+    const country =
+      meaningful || canPublishOrdinaryTelemetry()
+        ? await parseCountryFromBody(req.body, req)
+        : null
     const touch = await upsertLiveSession(pool, {
       deviceId,
       channelId: channelRef.channelId,
@@ -538,6 +572,7 @@ analyticsRouter.post('/presence/heartbeat', async (req, res) => {
       installBody: req.body,
       clearChannel,
     })
+    markOrdinaryPresenceWritten(deviceId)
     publishAfterLivePresenceUpsert(deviceId, touch, { event: 'analytics.session_heartbeat' })
     return res.json({ ok: true, device_id: deviceId })
   } catch (e) {

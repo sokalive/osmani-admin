@@ -36,7 +36,7 @@ const pm2Env = {
 
 const VPS_POOL_DEFAULTS = {
   OSMANI_VPS: '1',
-  PG_POOL_MAX: '40',
+  PG_POOL_MAX: '50',
   PG_POOL_CONNECT_TIMEOUT_MS: '5000',
   PG_QUERY_TIMEOUT_MS: '8000',
   APP_SETTINGS_CACHE_MS: '30000',
@@ -44,10 +44,14 @@ const VPS_POOL_DEFAULTS = {
   SUBSCRIPTION_ACCESS_CACHE_MS: '5000',
   SUBSCRIPTION_ACCESS_CACHE_ACTIVE_MS: '30000',
   VERIFY_PLANS_CACHE_MS: '60000',
-  VERIFY_DB_MAX_CONCURRENT: '12',
+  VERIFY_DB_MAX_CONCURRENT: '16',
   VERIFY_DB_SLOT_WAIT_MS: '4000',
-  PG_POOL_MAX_WAITING: '60',
+  PG_POOL_MAX_WAITING: '100',
   PG_POOL_ACQUIRE_TIMEOUT_MS: '2500',
+  // Reserve ~25% of pool idle for verify/payment/meaningful presence under pressure.
+  PG_POOL_CRITICAL_HEADROOM: '12',
+  // Skip redundant same-state presence UPSERTs under pressure when still inside live TTL.
+  PRESENCE_ORDINARY_UPSERT_MIN_MS: '12000',
   BENCHMARK_SAMPLE_DEVICE: '0',
   BENCHMARK_SAMPLE_DEVICE_LIMIT: '200',
   MODE_SSE_POLL_MS: '20000',
@@ -65,10 +69,13 @@ for (const [key, val] of Object.entries(VPS_POOL_DEFAULTS)) {
   if (!String(pm2Env[key] ?? '').trim()) pm2Env[key] = val
 }
 
-// Match-peak capacity: keep Contabo API pool at 40 even if an older .env pinned 30.
-// PG max_connections=100; leave headroom for LISTEN clients and ad-hoc scripts.
-pm2Env.PG_POOL_MAX = '40'
-if (!String(pm2Env.PG_POOL_MAX_WAITING ?? '').trim()) pm2Env.PG_POOL_MAX_WAITING = '80'
+// Measured match-peak capacity: Contabo API pool=50 (was 40).
+// Evidence: pool 40 passed 3000 with peak PG backends ~58/100; +10 checkout slots
+// absorb kickoff + leave critical headroom (12) for verify/payment. Never approach 100.
+pm2Env.PG_POOL_MAX = '50'
+pm2Env.PG_POOL_MAX_WAITING = '100'
+pm2Env.PG_POOL_CRITICAL_HEADROOM = '12'
+pm2Env.VERIFY_DB_MAX_CONCURRENT = '16'
 
 for (const key of SECRET_ENV_KEYS) {
   const val = String(fileEnv[key] ?? '').trim()

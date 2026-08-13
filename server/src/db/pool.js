@@ -69,11 +69,13 @@ export function isVpsProduction() {
 
 export function poolMaxConnections() {
   const n = Number(process.env.PG_POOL_MAX)
-  if (Number.isFinite(n) && n >= 1) return Math.min(50, Math.trunc(n))
-  // VPS (Contabo): match-peak evidence — PG max_connections=100, single API process,
-  // peak backends ~45 under 1500-user presence load with pool=30. Default 40 leaves
-  // headroom for LISTEN clients / scripts while absorbing kickoff bursts.
-  return isVpsProduction() ? 40 : 8
+  // Hard ceiling 80 — never approach PG max_connections=100; leave room for LISTEN,
+  // dedicated DDL clients, and ad-hoc scripts.
+  if (Number.isFinite(n) && n >= 1) return Math.min(80, Math.trunc(n))
+  // VPS (Contabo): measured safe default after match-peak proof.
+  // Prior: pool 30 failed kickoff at 2000; pool 40 passed 3000 with peak PG ~58/100.
+  // Default 50 keeps critical headroom (~12 idle reserved) while absorbing bursts.
+  return isVpsProduction() ? 50 : 8
 }
 
 function defaultStatementTimeoutMs() {

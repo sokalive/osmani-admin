@@ -11,6 +11,13 @@ import {
 } from '../src/lib/presenceHeartbeatPublish.js'
 import { publishAfterLivePresenceUpsert } from '../src/lib/presenceEventPublish.js'
 import { liveSyncBus } from '../src/lib/liveSyncBus.js'
+import {
+  shouldSkipOrdinaryPresenceUpsert,
+  markOrdinaryPresenceWritten,
+  canUseBackgroundDb,
+  criticalPoolHeadroom,
+} from '../src/lib/telemetryAdmission.js'
+import { isLikelyMeaningfulPresenceRequest } from '../src/lib/livePresenceSync.js'
 import { existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,9 +30,12 @@ function assert(cond, msg) {
 
 async function testCoordinator() {
   let runs = 0
-  const coord = createRefreshCoordinator(async () => {
-    runs += 1
-  }, { debounceMs: 40, minIntervalMs: 10_000 })
+  const coord = createRefreshCoordinator(
+    async () => {
+      runs += 1
+    },
+    { debounceMs: 40, minIntervalMs: 10_000 },
+  )
   for (let i = 0; i < 100; i += 1) coord.schedule({ minIntervalMs: 10_000 })
   await new Promise((r) => setTimeout(r, 120))
   assert(runs === 1, `heartbeat coalesce expected 1, got ${runs}`)
@@ -71,10 +81,41 @@ async function testHeartbeatGate() {
   return { ok: true }
 }
 
+async function testAdmissionAndMeaningful() {
+  assert(criticalPoolHeadroom(40) >= 8, 'headroom clamp')
+  assert(criticalPoolHeadroom(50) === 12, `expected 12 got ${criticalPoolHeadroom(50)}`)
+  assert(canUseBackgroundDb() === true, 'no pool => allow background')
+
+  const id = `adm-${Date.now()}`
+  assert(
+    isLikelyMeaningfulPresenceRequest(id, {
+      clearChannel: false,
+      channelRef: { channelId: '1' },
+      hint: null,
+      event: 'analytics.session_heartbeat',
+    }) === true,
+    'open must be meaningful',
+  )
+  assert(
+    isLikelyMeaningfulPresenceRequest(id, {
+      clearChannel: false,
+      channelRef: { channelId: '1' },
+      hint: { channelId: '1' },
+      event: 'analytics.session_heartbeat',
+    }) === false,
+    'same-state must be ordinary',
+  )
+  assert(shouldSkipOrdinaryPresenceUpsert(id, { meaningful: true }) === false, 'meaningful never skips')
+  markOrdinaryPresenceWritten(id)
+  assert(shouldSkipOrdinaryPresenceUpsert(id, { meaningful: false }) === false)
+  return { ok: true, headroom50: criticalPoolHeadroom(50) }
+}
+
 const out = {
   coordinator: await testCoordinator(),
   publishSplit: await testPublishSplit(),
   heartbeatGate: await testHeartbeatGate(),
+  admission: await testAdmissionAndMeaningful(),
 }
 console.log(JSON.stringify(out, null, 2))
 console.log('capacity-hybrid-unit-verify: PASS')

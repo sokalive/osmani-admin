@@ -13,10 +13,10 @@ export class DbPressureError extends Error {
 
 function maxVerifyDbConcurrent() {
   const poolMax = getPoolStats().max || poolMaxConnections()
-  // Leave headroom for checkout-providers, plans, webhooks, admin.
-  const headroom = isVpsProduction() ? 12 : 2
+  // Leave headroom for checkout-providers, plans, webhooks, admin, presence.
+  const headroom = isVpsProduction() ? 14 : 2
   const ceiling = Math.max(2, poolMax - headroom)
-  const configuredDefault = isVpsProduction() ? 12 : 6
+  const configuredDefault = isVpsProduction() ? 16 : 6
   const envCap = Number(process.env.VERIFY_DB_MAX_CONCURRENT)
   const configured = Number.isFinite(envCap) && envCap >= 1 ? Math.trunc(envCap) : configuredDefault
   return Math.max(2, Math.min(ceiling, configured))
