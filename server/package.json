@@ -26,6 +26,7 @@
     "verify:selective-segment-routing": "node scripts/verify-selective-segment-routing.mjs",
     "verify:ycn-upstream-headers": "node scripts/verify-ycn-upstream-headers.mjs",
     "verify:strict-security": "node scripts/verify-strict-security-enforcement.mjs",
+    "verify:security-hardening": "node scripts/verify-security-hardening.mjs",
     "verify:security-phone": "node scripts/verify-security-phone-resolution.mjs",
     "verify:checkout-providers": "node scripts/verify-checkout-providers.mjs",
     "verify:app-update-targeting": "node scripts/verify-app-update-targeting.mjs",

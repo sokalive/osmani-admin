@@ -256,6 +256,8 @@ export default function SecurityRiskDeviceInvestigationPage() {
   const timeline = report?.security_timeline ?? []
   const audit = report?.audit_summary
   const raw = report?.raw_evidence
+  const trust = report?.trust_verification
+  const anomalies = report?.security_anomalies ?? []
 
   return (
     <>
@@ -400,9 +402,56 @@ export default function SecurityRiskDeviceInvestigationPage() {
                   ['Last seen', formatReadableDateTime(info?.last_seen)],
                   ['Current status', info?.current_status],
                   ['Risk score', String(info?.risk_score ?? 0)],
+                  ['Server score (last)', String(info?.server_calculated_score_last ?? info?.risk_score ?? 0)],
+                  ['Client claimed (last)', info?.client_claimed_score_last != null ? String(info.client_claimed_score_last) : '—'],
+                  ['Highest risk ever', String(info?.highest_risk_score ?? 0)],
                 ]}
               />
             </Section>
+
+            {trust ? (
+              <Section title="Trust & Verification">
+                <InfoGrid
+                  rows={[
+                    ['Trust state', trust.trust_state || '—'],
+                    ['Verification fresh', trust.verification_fresh ? 'Yes' : 'No'],
+                    ['Last trusted verification', formatReadableDateTime(trust.last_trusted_verification_at)],
+                    ['Fresh until', formatReadableDateTime(trust.verification_fresh_until)],
+                    ['Ever severe', trust.ever_severe ? 'Yes' : 'No'],
+                    ['First severe detection', formatReadableDateTime(trust.first_severe_at)],
+                    ['Last severe detection', formatReadableDateTime(trust.last_severe_at)],
+                    ['Attestation status', trust.attestation_status || 'none'],
+                    ['Anomaly count', String(trust.anomaly_count ?? 0)],
+                    ['Replay attempts', String(trust.replay_attempt_count ?? 0)],
+                    ['Trusted clean streak', String(trust.trusted_clean_streak ?? 0)],
+                    ['Playback gate reason', trust.playback_gate_reason || '—'],
+                    [
+                      'Playback decision',
+                      trust.playback_denied ? 'Denied' : 'Allowed (subject to subscription)',
+                    ],
+                  ]}
+                />
+              </Section>
+            ) : null}
+
+            {anomalies.length ? (
+              <Section title="Security Anomalies">
+                <ul className="space-y-2">
+                  {anomalies.slice(0, 10).map((a) => (
+                    <li
+                      key={a.id}
+                      className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium text-amber-100">{a.anomaly_type}</span>
+                        <span className="text-xs text-slate-500">{formatReadableDateTime(a.created_at)}</span>
+                      </div>
+                      {a.detail ? <p className="mt-1 text-xs text-slate-400">{a.detail}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            ) : null}
 
             <Section title="B. Detection Summary">
               <InfoGrid

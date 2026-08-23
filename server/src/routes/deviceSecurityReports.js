@@ -22,6 +22,23 @@ import {
   listRiskDevices,
 } from '../lib/deviceSecurityStore.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
+import { createSecurityChallenge, consumeSecurityChallenge, securityClientIp } from '../lib/securityChallengeStore.js'
+import {
+  logSecurityAnomalyEvent,
+  recordSecurityAnomaly,
+} from '../lib/securityAnomalyStore.js'
+import { verifyPlayIntegrityToken } from '../lib/playIntegrityVerifier.js'
+import {
+  securityChallengeRateLimit,
+  securityReportBodySizeLimit,
+  securityReportRateLimit,
+} from '../lib/securityRateLimit.js'
+import {
+  challengeRequiredForReport,
+  isChallengeRequired,
+  securityMaxReportBodyBytes,
+  securityVerificationMode,
+} from '../lib/securityVerificationConfig.js'
 
 export const deviceSecurityReportsRouter = Router()
 
@@ -64,16 +81,46 @@ function buildSecurityReportResponse(result, policy) {
     phone: result.phone_user || '',
     phone_resolved_from: result.phone_resolved_from || null,
     risk_score: result.risk_score,
+    server_calculated_score: result.server_calculated_score ?? result.risk_score,
+    client_claimed_score: result.client_claimed_score ?? null,
+    score_mismatch: result.score_mismatch === true,
     security_level: result.security_level,
+    trust_state: result.trust_state || 'pending_verification',
+    verification_fresh: result.verification_fresh === true,
+    playback_gate_reason: policy?.playback_gate_reason || result.playback_gate_reason || null,
     strict_enforcement: result.strict_enforcement === true,
     security_blocked: denied,
     playbackAllowed,
     playback_allowed: playbackAllowed,
-    playbackGateReason: denied ? 'security_blocked' : null,
-    playback_gate_reason: denied ? 'security_blocked' : null,
+    playbackGateReason: denied ? policy?.playback_gate_reason || 'security_blocked' : null,
     enforcement: denied ? 'block' : 'none',
     limitedPlayback: false,
     limited_playback: false,
+    challenge_valid: result.challenge_valid === true,
+    ever_severe: result.ever_severe === true,
+  }
+}
+
+async function handleSecurityChallenge(req, res) {
+  try {
+    const pool = getPool()
+    if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })
+    await ensureDeviceSecurityTables(pool)
+
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const deviceId = text(b.device_id ?? b.deviceId, 128)
+    if (!deviceId) return res.status(400).json({ ok: false, error: 'device_id required' })
+
+    const challenge = await createSecurityChallenge(deviceId, {
+      install_id: b.install_id ?? b.installId,
+      app_version: b.app_version ?? b.appVersion,
+      ip: securityClientIp(req),
+    })
+
+    res.json({ ok: true, ...challenge })
+  } catch (e) {
+    console.error('[runtime/security-challenge]', e)
+    res.status(400).json({ ok: false, error: String(e.message || e) })
   }
 }
 
@@ -84,7 +131,92 @@ async function handleSecurityReport(req, res) {
     await ensureDeviceSecurityTables(pool)
 
     const b = req.body && typeof req.body === 'object' ? req.body : {}
-    const result = await ingestSecurityReport(b)
+    const deviceId = text(b.device_id ?? b.deviceId, 128)
+    const nonce = text(b.security_nonce ?? b.nonce ?? b.challenge_nonce, 128)
+    const installId = text(b.install_id ?? b.installId, 128)
+    const ip = securityClientIp(req)
+
+    if (!deviceId) return res.status(400).json({ ok: false, error: 'device_id required' })
+
+    let challengeValid = false
+    let challengeMissing = !nonce
+
+    if (nonce) {
+      const consumed = await consumeSecurityChallenge({ nonce, deviceId, installId, req })
+      if (!consumed.ok) {
+        await recordSecurityAnomaly({
+          deviceId,
+          anomalyType: consumed.reason || 'challenge_failed',
+          severity: consumed.reason === 'nonce_replay' ? 'critical' : 'warning',
+          detail: `Security challenge rejected: ${consumed.reason}`,
+          ip,
+          metadata: { nonce: nonce.slice(0, 12) + '…' },
+        })
+        await logSecurityAnomalyEvent(pool, {
+          deviceId,
+          anomalyType: consumed.reason || 'challenge_failed',
+          severity: consumed.reason === 'nonce_replay' ? 'critical' : 'warning',
+          detail: `Challenge rejected: ${consumed.reason}`,
+          metadata: { nonce_prefix: nonce.slice(0, 8) },
+        })
+        emitSync('security_anomaly', { device_id: deviceId, anomaly_type: consumed.reason })
+        return res.status(403).json({
+          ok: false,
+          error: `Security verification failed: ${consumed.reason}`,
+          code: consumed.reason,
+        })
+      }
+      challengeValid = true
+      challengeMissing = false
+    } else if (isChallengeRequired()) {
+      await recordSecurityAnomaly({
+        deviceId,
+        anomalyType: 'missing_nonce',
+        severity: 'warning',
+        detail: 'Security report missing required challenge nonce',
+        ip,
+      })
+      return res.status(403).json({ ok: false, error: 'security_nonce required', code: 'missing_nonce' })
+    }
+
+    let attestationPassed = false
+    let attestationFailed = false
+    let attestationStatus = 'none'
+    let attestationVerdict = {}
+
+    const integrityToken = text(b.integrity_token ?? b.integrityToken ?? b.play_integrity_token, 8192)
+    if (integrityToken) {
+      const att = await verifyPlayIntegrityToken(integrityToken, { expectedNonce: nonce })
+      attestationStatus = att.status || 'failed'
+      attestationVerdict = att.verdict || {}
+      if (att.ok) {
+        attestationPassed = true
+        attestationStatus = 'passed'
+      } else if (att.configured) {
+        attestationFailed = true
+        await recordSecurityAnomaly({
+          deviceId,
+          anomalyType: 'attestation_failed',
+          severity: 'warning',
+          detail: att.error || att.reasons?.join(', ') || 'Play Integrity verification failed',
+          ip,
+          metadata: { reasons: att.reasons || [] },
+        })
+      } else {
+        attestationStatus = 'unavailable'
+      }
+    }
+
+    const result = await ingestSecurityReport(b, {
+      challengeValid,
+      challengeMissing: challengeMissing && challengeRequiredForReport(),
+      attestationPassed,
+      attestationFailed,
+      attestationStatus,
+      attestationVerdict,
+      nonce,
+      ip,
+    })
     const policy = await getPlaybackSecurityPolicy(result.device_id)
     const denied = policy?.deny_playback === true
 
@@ -92,23 +224,30 @@ async function handleSecurityReport(req, res) {
       result.is_new ||
       result.level_changed ||
       result.detected_now ||
-      result.security_level === 'blocked'
+      result.security_level === 'blocked' ||
+      result.score_mismatch ||
+      result.trust_state === 'suspicious'
 
     if (shouldLog) {
       await logSecurityEvent(pool, {
         actor: result.device_id,
         eventType: result.is_new ? 'Security detection' : 'Security level changed',
         status: result.security_level === 'blocked' ? 'blocked' : 'warning',
-        detail: `strict block device:${result.device_id} phone:${result.phone_user || '—'} score:${result.risk_score} level:${result.security_level}`,
+        detail: `device:${result.device_id} phone:${result.phone_user || '—'} score:${result.risk_score} server:${result.server_calculated_score} level:${result.security_level} trust:${result.trust_state}`,
         metadata: {
           kind: 'anti_tamper',
           device_id: result.device_id,
           phone_user: result.phone_user || '',
           risk_score: result.risk_score,
+          server_calculated_score: result.server_calculated_score,
+          client_claimed_score: result.client_claimed_score,
+          score_mismatch: result.score_mismatch,
           security_level: result.security_level,
+          trust_state: result.trust_state,
           security_blocked: denied,
           signals: result.signals,
           strict_enforcement: true,
+          challenge_valid: result.challenge_valid,
         },
       })
       emitSync('security_detection_new', {
@@ -116,6 +255,7 @@ async function handleSecurityReport(req, res) {
         phone_user: result.phone_user || '',
         risk_score: result.risk_score,
         security_level: result.security_level,
+        trust_state: result.trust_state,
         security_blocked: denied,
       })
       emitSync('security_alerts_changed', { device_id: result.device_id })
@@ -134,10 +274,34 @@ async function handleSecurityReport(req, res) {
   }
 }
 
+/** Issue a short-lived verification challenge (nonce). */
+deviceSecurityReportsRouter.post(
+  '/runtime/security-challenge',
+  securityChallengeRateLimit,
+  securityReportBodySizeLimit(4096),
+  handleSecurityChallenge,
+)
+deviceSecurityReportsRouter.post(
+  '/security/verification-challenge',
+  securityChallengeRateLimit,
+  securityReportBodySizeLimit(4096),
+  handleSecurityChallenge,
+)
+
 /** Runtime client anti-tamper report (no admin auth). */
-deviceSecurityReportsRouter.post('/runtime/security-report', handleSecurityReport)
+deviceSecurityReportsRouter.post(
+  '/runtime/security-report',
+  securityReportRateLimit,
+  securityReportBodySizeLimit(securityMaxReportBodyBytes()),
+  handleSecurityReport,
+)
 /** Alias used by OsmaniTvExpo `api/security.js`. */
-deviceSecurityReportsRouter.post('/security/device-report', handleSecurityReport)
+deviceSecurityReportsRouter.post(
+  '/security/device-report',
+  securityReportRateLimit,
+  securityReportBodySizeLimit(securityMaxReportBodyBytes()),
+  handleSecurityReport,
+)
 
 deviceSecurityReportsRouter.use('/security', requireAdminPanelAccess)
 

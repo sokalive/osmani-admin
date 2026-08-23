@@ -1,3 +1,5 @@
+import { ensureSecurityVerificationSchema } from './securityVerificationSchema.js'
+
 /**
  * Idempotent device_security_profiles schema (shared by startup + runtime).
  * Safe to call repeatedly; uses in-process dedupe + constraint definition check.
@@ -116,6 +118,8 @@ async function runDeviceSecuritySchemaMigration(client) {
     `CREATE INDEX IF NOT EXISTS device_security_profiles_last_seen_idx
      ON device_security_profiles (last_seen_at DESC)`,
   )
+
+  await ensureSecurityVerificationSchema(client)
 }
 
 /**

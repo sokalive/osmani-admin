@@ -7,6 +7,7 @@ import {
   RISK_WEIGHTS,
   SMART_MONITOR_REBLOCK_SCORE,
 } from './deviceSecurityStore.js'
+import { listDeviceAnomalies } from './securityAnomalyStore.js'
 
 function text(v, max = 256) {
   return String(v ?? '')
@@ -448,6 +449,7 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
     await fetchDeviceTimeline(pool, deviceId),
   )
   const auditSummary = buildAuditSummary(device, timeline)
+  const anomalies = await listDeviceAnomalies(deviceId, 25)
 
   return {
     read_only: true,
@@ -460,6 +462,9 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
       last_seen: device.last_seen || '',
       current_status: device.status || device.admin_status || 'monitoring',
       risk_score: device.risk_score ?? 0,
+      server_calculated_score_last: device.server_calculated_score_last ?? device.risk_score ?? 0,
+      client_claimed_score_last: device.client_claimed_score_last ?? null,
+      highest_risk_score: device.highest_risk_score ?? 0,
       blocked: device.blocked === true,
       smart_monitor_enabled: device.smart_monitor_enabled === true,
       blocked_at: device.blocked_at ?? null,
@@ -467,6 +472,23 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
       unblocked_at: device.unblocked_at ?? null,
       unblocked_by: device.unblocked_by ?? null,
     },
+    trust_verification: {
+      trust_state: device.trust_state || 'pending_verification',
+      verification_fresh: device.verification_fresh === true,
+      last_trusted_verification_at: device.last_trusted_verification_at || null,
+      verification_fresh_until: device.verification_fresh_until || null,
+      ever_severe: device.ever_severe === true,
+      first_severe_at: device.first_severe_at || null,
+      last_severe_at: device.last_severe_at || null,
+      attestation_status: device.attestation_status || 'none',
+      attestation_verdict: device.attestation_verdict || {},
+      anomaly_count: device.anomaly_count ?? 0,
+      replay_attempt_count: device.replay_attempt_count ?? 0,
+      trusted_clean_streak: device.trusted_clean_streak ?? 0,
+      playback_gate_reason: device.playback_gate_reason || policy?.playback_gate_reason || '',
+      playback_denied: playbackDenied,
+    },
+    security_anomalies: anomalies,
     detection_summary: {
       risk_level: device.security_level || 'warning',
       final_enforcement_action: finalAction,

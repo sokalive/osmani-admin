@@ -4,6 +4,20 @@ import { getPool } from '../db/pool.js'
 import { ensureDeviceSecuritySchema } from '../db/deviceSecuritySchema.js'
 import { unblockDeviceIntelligenceByDeviceId } from './deviceIntelligenceStore.js'
 import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
+import {
+  appendSevereHistory,
+  logSecurityAnomalyEvent,
+  recordSecurityAnomaly,
+} from './securityAnomalyStore.js'
+import {
+  computeAuthoritativeRiskFromSignals,
+  extractBodyClientClaimedScore,
+  isVerificationFresh,
+  mergePersistentFlags,
+  rowEverSevere,
+} from './securityRiskAuthority.js'
+import { buildEverColumnsUpdate, effectiveEnforcementFlags, resolveTrustContext } from './securityTrustEngine.js'
+import { securityMaxSignalsPerReport } from './securityVerificationConfig.js'
 
 /** Display-only weights; strict mode blocks on any signal regardless of score. */
 export const RISK_WEIGHTS = {
@@ -82,14 +96,11 @@ export function computeRiskFromSignals(signals) {
     seen.add(risk_type)
     markFlag(risk_type)
     const weight = RISK_WEIGHTS[risk_type] ?? RISK_WEIGHTS[risk_type.replace(/_detected$/, '')] ?? 1
-    const risk_score =
-      typeof raw?.risk_score === 'number' && Number.isFinite(raw.risk_score)
-        ? Math.max(0, Math.floor(raw.risk_score))
-        : weight
-    score += risk_score
+    score += weight
     merged.push({
       risk_type,
-      risk_score,
+      risk_score: weight,
+      server_authoritative: true,
       ...(raw?.detail != null ? { detail: text(raw.detail, 500) } : {}),
     })
   }
@@ -298,10 +309,49 @@ function rowToDevice(row, adminRow) {
       tempUntil instanceof Date ? tempUntil.toISOString() : tempUntil ? String(tempUntil) : null,
     signals: Array.isArray(row.signals) ? row.signals : [],
     metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+    trust_state: String(row.trust_state || 'pending_verification'),
+    last_trusted_verification_at:
+      row.last_trusted_verification_at instanceof Date
+        ? row.last_trusted_verification_at.toISOString()
+        : row.last_trusted_verification_at
+          ? String(row.last_trusted_verification_at)
+          : null,
+    verification_fresh_until:
+      row.verification_fresh_until instanceof Date
+        ? row.verification_fresh_until.toISOString()
+        : row.verification_fresh_until
+          ? String(row.verification_fresh_until)
+          : null,
+    verification_fresh: isVerificationFresh(row),
+    highest_risk_score: Number(row.highest_risk_score) || 0,
+    client_claimed_score_last:
+      row.client_claimed_score_last != null ? Number(row.client_claimed_score_last) : null,
+    server_calculated_score_last: Number(row.server_calculated_score_last) || 0,
+    ever_severe: row.ever_severe === true,
+    ever_frida: row.ever_frida === true,
+    ever_tampered_apk: row.ever_tampered_apk === true,
+    first_severe_at:
+      row.first_severe_at instanceof Date
+        ? row.first_severe_at.toISOString()
+        : row.first_severe_at
+          ? String(row.first_severe_at)
+          : null,
+    last_severe_at:
+      row.last_severe_at instanceof Date
+        ? row.last_severe_at.toISOString()
+        : row.last_severe_at
+          ? String(row.last_severe_at)
+          : null,
+    anomaly_count: Number(row.anomaly_count) || 0,
+    replay_attempt_count: Number(row.replay_attempt_count) || 0,
+    attestation_status: String(row.attestation_status || 'none'),
+    attestation_verdict: row.attestation_verdict && typeof row.attestation_verdict === 'object' ? row.attestation_verdict : {},
+    playback_gate_reason: String(row.playback_gate_reason || ''),
+    trusted_clean_streak: Number(row.trusted_clean_streak) || 0,
   }
 }
 
-export async function ingestSecurityReport(payload) {
+export async function ingestSecurityReport(payload, verificationCtx = {}) {
   const pool = getPool()
   if (!pool) throw new Error('Database not configured')
   await ensureDeviceSecurityTables(pool)
@@ -310,7 +360,18 @@ export async function ingestSecurityReport(payload) {
   if (!deviceId) throw new Error('device_id required')
 
   const signals = Array.isArray(payload.signals) ? payload.signals : []
-  const { score, signals: merged, risk_type, flags } = computeRiskFromSignals(signals)
+  const auth = computeAuthoritativeRiskFromSignals(signals, {
+    maxSignals: securityMaxSignalsPerReport(),
+  })
+  if (!auth.ok) throw new Error(auth.error)
+
+  const { score: serverScore, signals: merged, risk_type, flags: reportFlags } = auth
+  const bodyClaimed = extractBodyClientClaimedScore(payload)
+  const clientClaimedScore = bodyClaimed ?? auth.client_claimed_score
+  const scoreMismatch =
+    auth.score_mismatch ||
+    (bodyClaimed != null && bodyClaimed !== serverScore) ||
+    (clientClaimedScore != null && clientClaimedScore < serverScore)
 
   let phone = text(payload.phone ?? payload.phone_user ?? payload.user, 64)
   const appVersion = text(
@@ -319,13 +380,86 @@ export async function ingestSecurityReport(payload) {
   )
   const details = payload.details && typeof payload.details === 'object' ? payload.details : {}
 
-  const { rows: existing } = await pool.query(
-    `SELECT device_id, phone_user, admin_status, security_level, temp_block_until,
-            risk_score, rooted, emulator, clone_detected, debugger, frida, tampered_apk
-     FROM device_security_profiles WHERE device_id = $1`,
-    [deviceId],
-  )
+  const { rows: existing } = await pool.query(`SELECT * FROM device_security_profiles WHERE device_id = $1`, [
+    deviceId,
+  ])
   const prev = existing[0]
+
+  const effectiveFlags = effectiveEnforcementFlags(prev, reportFlags)
+  const reportHasSevere = auth.has_severe === true
+  const everUpdate = buildEverColumnsUpdate(prev, reportFlags, serverScore, reportHasSevere)
+  const cleanAfterSevere = rowEverSevere(prev) && serverScore === 0 && !reportHasSevere
+
+  const challengeValid = verificationCtx.challengeValid === true
+  const challengeMissing = verificationCtx.challengeMissing === true
+  const trustCtx = resolveTrustContext(prev, {
+    challengeValid,
+    challengeMissing,
+    attestationPassed: verificationCtx.attestationPassed === true,
+    attestationFailed: verificationCtx.attestationFailed === true,
+    scoreMismatch,
+    cleanAfterSevere,
+    malformed: false,
+    reportScore: serverScore,
+    reportHasSevere,
+    reportFlags,
+  })
+
+  const ip = text(verificationCtx.ip, 64)
+
+  if (scoreMismatch) {
+    const anomaly = await recordSecurityAnomaly({
+      deviceId,
+      anomalyType: 'client_score_mismatch',
+      severity: 'warning',
+      detail: `client claimed ${clientClaimedScore ?? 'n/a'} server calculated ${serverScore}`,
+      ip,
+      metadata: { server_score: serverScore, client_claimed: clientClaimedScore, signals: merged },
+    })
+    await logSecurityAnomalyEvent(pool, {
+      deviceId,
+      anomalyType: 'client_score_mismatch',
+      severity: 'warning',
+      detail: anomaly ? 'Client risk score mismatch' : '',
+      metadata: { server_score: serverScore, client_claimed: clientClaimedScore },
+    })
+  }
+
+  if (cleanAfterSevere) {
+    await recordSecurityAnomaly({
+      deviceId,
+      anomalyType: 'clean_after_severe',
+      severity: 'critical',
+      detail: 'Clean report received for device with prior severe detection',
+      ip,
+      metadata: { highest_risk: everUpdate.highest_risk_score, ever_severe: everUpdate.ever_severe },
+    })
+    await logSecurityAnomalyEvent(pool, {
+      deviceId,
+      anomalyType: 'clean_after_severe',
+      severity: 'critical',
+      detail: 'Clean report after severe history — re-verification required',
+      metadata: { highest_risk: everUpdate.highest_risk_score },
+    })
+  }
+
+  if (reportHasSevere) {
+    await appendSevereHistory({
+      deviceId,
+      riskType: risk_type,
+      riskScore: serverScore,
+      signals: merged,
+      flags: reportFlags,
+      source: challengeValid ? 'verified_report' : 'report',
+      challengeNonce: text(verificationCtx.nonce, 128),
+      metadata: { client_claimed_score: clientClaimedScore, server_score: serverScore },
+    })
+  }
+
+  const storedScore =
+    everUpdate.ever_severe && serverScore === 0
+      ? Math.max(Number(prev?.highest_risk_score) || 0, Number(prev?.risk_score) || 0)
+      : serverScore
 
   let phoneResolvedFrom = null
   if (!phone) {
@@ -345,58 +479,83 @@ export async function ingestSecurityReport(payload) {
 
   const strictEnabled = await isStrictEnforcementEnabled(pool)
   const autoEnforcement =
-    strictEnabled && adminStatus === 'monitoring' && hasDetectionSignals({ score, signals: merged, flags })
-      ? classifyAutomaticThreatEnforcement(flags)
+    strictEnabled && adminStatus === 'monitoring' && hasDetectionSignals({ score: storedScore, signals: merged, flags: effectiveFlags })
+      ? classifyAutomaticThreatEnforcement(effectiveFlags)
       : null
   let securityLevel = 'warning'
   let promoteSmartMonitor = false
   if (adminStatus === 'smart_monitor') {
     securityLevel = resolveSmartMonitorSecurityLevel({
-      score,
+      score: storedScore,
       signals: merged,
-      flags,
+      flags: effectiveFlags,
     })
   } else if (ADMIN_OVERRIDE_STATUSES.includes(adminStatus)) {
     if (adminStatus === 'temp_block' || adminStatus === 'perm_block') securityLevel = 'blocked'
     else if (adminStatus === 'whitelisted') securityLevel = String(prev?.security_level || 'warning')
     else if (adminStatus === 'allowed') securityLevel = 'warning'
     else if (adminStatus === 'smart_monitor') {
-      securityLevel = resolveSmartMonitorSecurityLevel({ score, signals: merged, flags })
+      securityLevel = resolveSmartMonitorSecurityLevel({ score: storedScore, signals: merged, flags: effectiveFlags })
     }
   } else if (strictEnabled) {
     securityLevel = resolveStrictSecurityLevel({
-      score,
+      score: storedScore,
       signals: merged,
-      flags,
+      flags: effectiveFlags,
       prev,
       adminStatus,
     })
     if (autoEnforcement === 'smart_monitor') {
       promoteSmartMonitor = true
       securityLevel = resolveSmartMonitorSecurityLevel({
-        score,
+        score: storedScore,
         signals: merged,
-        flags,
+        flags: effectiveFlags,
       })
     }
   }
 
-  const detectedNow = hasDetectionSignals({ score, signals: merged, flags })
+  if (trustCtx.trust_state === 'blocked' || trustCtx.trust_state === 'suspicious') {
+    if (adminStatus !== 'whitelisted' && adminStatus !== 'allowed' && adminStatus !== 'smart_monitor') {
+      if (everUpdate.ever_severe || reportHasSevere) {
+        securityLevel = securityLevel === 'blocked' ? 'blocked' : everUpdate.ever_severe ? 'blocked' : securityLevel
+      }
+    }
+  }
+
+  const detectedNow = hasDetectionSignals({ score: storedScore, signals: merged, flags: effectiveFlags })
+
+  const attestationStatus = verificationCtx.attestationStatus || String(prev?.attestation_status || 'none')
+  const attestationVerdict =
+    verificationCtx.attestationVerdict ||
+    (prev?.attestation_verdict && typeof prev.attestation_verdict === 'object' ? prev.attestation_verdict : {})
 
   await pool.query(
     `INSERT INTO device_security_profiles (
        device_id, phone_user, app_version, risk_type, risk_score,
        rooted, emulator, clone_detected, debugger, frida, tampered_apk,
-       signals, security_level, last_seen_at, updated_at, metadata
+       signals, security_level, last_seen_at, updated_at, metadata,
+       trust_state, last_trusted_verification_at, verification_fresh_until,
+       highest_risk_score, client_claimed_score_last, server_calculated_score_last,
+       ever_severe, ever_frida, ever_tampered_apk, ever_debugger, ever_clone_detected,
+       ever_rooted, ever_emulator, first_severe_at, last_severe_at,
+       trusted_clean_streak, attestation_status, attestation_verdict, last_attestation_at,
+       playback_gate_reason
      ) VALUES (
        $1, $2, $3, $4, $5,
        $6, $7, $8, $9, $10, $11,
-       $12::jsonb, $13, now(), now(), $14::jsonb
+       $12::jsonb, $13, now(), now(), $14::jsonb,
+       $15, $16::timestamptz, $17::timestamptz,
+       $18, $19, $20,
+       $21, $22, $23, $24, $25,
+       $26, $27, $28::timestamptz, $29::timestamptz,
+       $30, $31, $32::jsonb, $33::timestamptz,
+       $34
      )
      ON CONFLICT (device_id) DO UPDATE SET
        phone_user = COALESCE(NULLIF(EXCLUDED.phone_user, ''), device_security_profiles.phone_user),
        app_version = COALESCE(NULLIF(EXCLUDED.app_version, ''), device_security_profiles.app_version),
-       risk_type = EXCLUDED.risk_type,
+       risk_type = CASE WHEN EXCLUDED.risk_score > 0 THEN EXCLUDED.risk_type ELSE device_security_profiles.risk_type END,
        risk_score = EXCLUDED.risk_score,
        rooted = EXCLUDED.rooted,
        emulator = EXCLUDED.emulator,
@@ -414,27 +573,70 @@ export async function ingestSecurityReport(payload) {
        END,
        last_seen_at = now(),
        updated_at = now(),
-       metadata = device_security_profiles.metadata || EXCLUDED.metadata`,
+       metadata = device_security_profiles.metadata || EXCLUDED.metadata,
+       trust_state = EXCLUDED.trust_state,
+       last_trusted_verification_at = COALESCE(EXCLUDED.last_trusted_verification_at, device_security_profiles.last_trusted_verification_at),
+       verification_fresh_until = COALESCE(EXCLUDED.verification_fresh_until, device_security_profiles.verification_fresh_until),
+       highest_risk_score = GREATEST(device_security_profiles.highest_risk_score, EXCLUDED.highest_risk_score),
+       client_claimed_score_last = EXCLUDED.client_claimed_score_last,
+       server_calculated_score_last = EXCLUDED.server_calculated_score_last,
+       ever_severe = EXCLUDED.ever_severe,
+       ever_frida = EXCLUDED.ever_frida,
+       ever_tampered_apk = EXCLUDED.ever_tampered_apk,
+       ever_debugger = EXCLUDED.ever_debugger,
+       ever_clone_detected = EXCLUDED.ever_clone_detected,
+       ever_rooted = EXCLUDED.ever_rooted,
+       ever_emulator = EXCLUDED.ever_emulator,
+       first_severe_at = COALESCE(device_security_profiles.first_severe_at, EXCLUDED.first_severe_at),
+       last_severe_at = COALESCE(EXCLUDED.last_severe_at, device_security_profiles.last_severe_at),
+       trusted_clean_streak = EXCLUDED.trusted_clean_streak,
+       attestation_status = EXCLUDED.attestation_status,
+       attestation_verdict = EXCLUDED.attestation_verdict,
+       last_attestation_at = COALESCE(EXCLUDED.last_attestation_at, device_security_profiles.last_attestation_at),
+       playback_gate_reason = EXCLUDED.playback_gate_reason`,
     [
       deviceId,
       phone,
       appVersion,
-      risk_type,
-      score,
-      flags.rooted,
-      flags.emulator,
-      flags.clone_detected,
-      flags.debugger,
-      flags.frida,
-      flags.tampered_apk,
+      risk_type || prev?.risk_type || '',
+      storedScore,
+      effectiveFlags.rooted,
+      effectiveFlags.emulator,
+      effectiveFlags.clone_detected,
+      effectiveFlags.debugger,
+      effectiveFlags.frida,
+      effectiveFlags.tampered_apk,
       JSON.stringify(merged),
       securityLevel,
       JSON.stringify({
         ...details,
         last_report_at: new Date().toISOString(),
+        last_report_signals: merged,
         strict_enforcement: strictEnabled,
+        challenge_valid: challengeValid,
         ...(phoneResolvedFrom ? { phone_resolved_from: phoneResolvedFrom } : {}),
+        ...(scoreMismatch ? { client_score_mismatch: true, client_claimed: clientClaimedScore } : {}),
       }),
+      trustCtx.trust_state,
+      trustCtx.last_trusted_verification_at,
+      trustCtx.verification_fresh_until,
+      everUpdate.highest_risk_score,
+      clientClaimedScore,
+      serverScore,
+      everUpdate.ever_severe,
+      everUpdate.ever_frida,
+      everUpdate.ever_tampered_apk,
+      everUpdate.ever_debugger,
+      everUpdate.ever_clone_detected,
+      everUpdate.ever_rooted,
+      everUpdate.ever_emulator,
+      everUpdate.first_severe_at,
+      everUpdate.last_severe_at,
+      trustCtx.trusted_clean_streak,
+      attestationStatus,
+      JSON.stringify(attestationVerdict),
+      verificationCtx.attestationPassed || verificationCtx.attestationFailed ? new Date().toISOString() : null,
+      trustCtx.playback_gate_reason,
     ],
   )
 
@@ -478,14 +680,22 @@ export async function ingestSecurityReport(payload) {
     device_id: deviceId,
     phone_user: phone,
     phone_resolved_from: phoneResolvedFrom,
-    risk_score: score,
+    risk_score: storedScore,
+    server_calculated_score: serverScore,
+    client_claimed_score: clientClaimedScore,
+    score_mismatch: scoreMismatch,
     security_level: securityLevel,
-    is_new: isNew,
-    level_changed: levelChanged,
+    trust_state: trustCtx.trust_state,
+    verification_fresh: isVerificationFresh({ verification_fresh_until: trustCtx.verification_fresh_until }),
+    playback_gate_reason: trustCtx.playback_gate_reason,
+    is_new: !prev,
+    level_changed: prev && String(prev.security_level) !== securityLevel,
     signals: merged,
     detected_now: detectedNow,
     strict_enforcement: strictEnabled,
     security_blocked: strictEnabled && securityLevel === 'blocked',
+    challenge_valid: challengeValid,
+    ever_severe: everUpdate.ever_severe,
   }
 }
 
@@ -764,6 +974,8 @@ export async function getPlaybackSecurityPolicy(deviceId) {
     `SELECT dsp.security_level, dsp.admin_status, dsp.temp_block_until,
             dsp.risk_score, dsp.rooted, dsp.emulator, dsp.clone_detected,
             dsp.debugger, dsp.frida, dsp.tampered_apk,
+            dsp.trust_state, dsp.verification_fresh_until, dsp.last_trusted_verification_at,
+            dsp.ever_severe, dsp.playback_gate_reason, dsp.highest_risk_score,
             ad.whitelisted, ad.is_blocked
      FROM device_security_profiles dsp
      LEFT JOIN admin_devices ad ON ad.device_id = dsp.device_id
@@ -811,6 +1023,37 @@ export async function getPlaybackSecurityPolicy(deviceId) {
     deny = false
   }
 
+  const trustState = String(r.trust_state || 'pending_verification')
+  const verificationFresh = isVerificationFresh(r)
+  let trustDeny = false
+  let trustReason = String(r.playback_gate_reason || '')
+
+  if (trustState === 'blocked' || trustState === 'suspicious') {
+    trustDeny = true
+    trustReason = trustReason || `trust_${trustState}`
+  } else if (trustState === 'pending_verification') {
+    const mode = String(process.env.SECURITY_VERIFICATION_MODE ?? 'optional').trim().toLowerCase()
+    if (mode === 'required') {
+      trustDeny = true
+      trustReason = trustReason || 'verification_required'
+    }
+  }
+
+  if (!verificationFresh && r.last_trusted_verification_at) {
+    const stalePolicy = String(process.env.SECURITY_STALE_VERIFICATION_DENY ?? 'ever_severe_only').trim().toLowerCase()
+    if (stalePolicy === 'all') {
+      trustDeny = true
+      trustReason = trustReason || 'verification_stale'
+    } else if (stalePolicy === 'ever_severe_only' && (r.ever_severe === true || rowEverSevere(r))) {
+      trustDeny = true
+      trustReason = trustReason || 'verification_stale_severe_device'
+    }
+  }
+
+  if (trustDeny && !whitelisted && adminStatus !== 'allowed') {
+    deny = true
+  }
+
   return {
     whitelisted,
     admin_blocked: adminBlocked,
@@ -818,6 +1061,10 @@ export async function getPlaybackSecurityPolicy(deviceId) {
     limited_playback: false,
     deny_playback: deny,
     smart_monitor_enabled: adminStatus === 'smart_monitor',
+    trust_state: trustState,
+    verification_fresh: verificationFresh,
+    playback_gate_reason: trustDeny ? trustReason : deny ? 'security_blocked' : '',
+    ever_severe: r.ever_severe === true,
   }
 }
 
@@ -983,6 +1230,12 @@ export async function applyDeviceSecurityAction(deviceId, action, opts = {}) {
            signals = '[]'::jsonb, security_level = 'warning', admin_status = 'monitoring',
            temp_block_until = NULL, smart_monitor_enabled = false,
            blocked = false, blocked_at = NULL, blocked_by = '',
+           ever_severe = false, ever_frida = false, ever_tampered_apk = false,
+           ever_debugger = false, ever_clone_detected = false, ever_rooted = false, ever_emulator = false,
+           highest_risk_score = 0, first_severe_at = NULL, last_severe_at = NULL,
+           trust_state = 'pending_verification', trusted_clean_streak = 0,
+           client_claimed_score_last = NULL, server_calculated_score_last = 0,
+           playback_gate_reason = '', attestation_status = 'none', attestation_verdict = '{}'::jsonb,
            updated_at = now()
          WHERE device_id = $1`,
         [d],
