@@ -77,15 +77,18 @@ export function resolveTrustContext(profile, ctx = {}) {
     }
   }
 
-  // Stale verification handling
+  // Stale verification handling (skip when this report just established fresh verification)
   let verification_stale = false
-  if (!fresh && last_trusted_verification_at) {
+  if (!challengeValid && !fresh && last_trusted_verification_at) {
     verification_stale = true
-    const graceEnd =
-      (profile.verification_fresh_until instanceof Date
-        ? profile.verification_fresh_until.getTime()
-        : new Date(profile.verification_fresh_until).getTime()) +
-      graceSec * 1000
+    const freshUntilVal = verification_fresh_until ?? profile?.verification_fresh_until
+    const freshUntilMs =
+      freshUntilVal instanceof Date
+        ? freshUntilVal.getTime()
+        : freshUntilVal
+          ? new Date(freshUntilVal).getTime()
+          : NaN
+    const graceEnd = freshUntilMs + graceSec * 1000
     const inGrace = Number.isFinite(graceEnd) && graceEnd > now
 
     if (!inGrace) {
@@ -101,14 +104,18 @@ export function resolveTrustContext(profile, ctx = {}) {
     verification_stale = true
   }
 
+  const freshAfterUpdate = verification_fresh_until
+    ? new Date(verification_fresh_until).getTime() > now
+    : fresh
+
   const deny_for_trust =
     trust_state === 'blocked' ||
     trust_state === 'suspicious' ||
     (trust_state === 'pending_verification' && mode === 'required') ||
     (verification_stale &&
       stalePolicy === 'all' &&
-      !isVerificationFresh(profile, now) &&
-      !(profile?.verification_fresh_until && graceSec > 0))
+      !freshAfterUpdate &&
+      !(verification_fresh_until && graceSec > 0))
 
   return {
     trust_state,
