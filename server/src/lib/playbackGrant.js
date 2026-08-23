@@ -5,13 +5,16 @@
 import crypto from 'node:crypto'
 
 function signingSecret() {
-  return String(
+  const raw = String(
     process.env.PLAYBACK_GRANT_SIGNING_SECRET ||
       process.env.DIRECT_STREAM_SIGNING_SECRET ||
       process.env.STREAM_SIGNING_SECRET ||
       process.env.ADMIN_API_TOKEN ||
       '',
   ).trim()
+  if (!raw) return ''
+  // Derive a stable 32-byte key so short env tokens still produce valid HMACs.
+  return crypto.createHash('sha256').update(`osmani-playback-grant:v1:${raw}`).digest('hex')
 }
 
 export function playbackGrantTtlSec() {
@@ -32,7 +35,14 @@ function b64urlDecode(str) {
 }
 
 export function isPlaybackGrantConfigured() {
-  return signingSecret().length >= 8
+  const raw = String(
+    process.env.PLAYBACK_GRANT_SIGNING_SECRET ||
+      process.env.DIRECT_STREAM_SIGNING_SECRET ||
+      process.env.STREAM_SIGNING_SECRET ||
+      process.env.ADMIN_API_TOKEN ||
+      '',
+  ).trim()
+  return raw.length > 0
 }
 
 /**
@@ -40,7 +50,7 @@ export function isPlaybackGrantConfigured() {
  */
 export function createPlaybackGrant(input) {
   const secret = signingSecret()
-  if (secret.length < 8) {
+  if (!secret) {
     return { ok: false, error: 'Playback grant signing not configured' }
   }
   const deviceId = String(input?.deviceId || '').trim().slice(0, 128)
@@ -75,7 +85,7 @@ export function createPlaybackGrant(input) {
  */
 export function verifyPlaybackGrant(token, opts = {}) {
   const secret = signingSecret()
-  if (secret.length < 8) {
+  if (!secret) {
     return { ok: false, error: 'Playback grant signing not configured', code: 'grant_unavailable' }
   }
   const raw = String(token || '').trim()
