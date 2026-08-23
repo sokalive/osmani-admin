@@ -16,7 +16,10 @@ import {
   CHALLENGE_TTL_MINUTES,
 } from '../lib/adminOtpChallengeStore.js'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
-import { isAdminPanelAuthRequired } from '../middleware/adminPanelAuthGate.js'
+import {
+  isAdminPanelAuthRequired,
+  requireAdminPanelAccess,
+} from '../middleware/adminPanelAuthGate.js'
 import {
   adminSecurityPinFromBody,
   verifyAdminSecurityPin,
@@ -511,16 +514,23 @@ adminAuthRouter.post('/refresh', attachAdminReq, async (req, res) => {
   }
 })
 
-adminAuthRouter.post('/verify-security-pin', attachAdminReq, (req, res) => {
+/** Security Center page gate — same admin auth as other panel routes (legacy token or JWT). */
+adminAuthRouter.post('/verify-security-pin', requireAdminPanelAccess, (req, res) => {
   const pin = adminSecurityPinFromBody(req)
   if (!pin) {
     return res.status(400).json({ ok: false, error: 'security_pin required' })
   }
   if (!verifyAdminSecurityPin(pin)) {
-    adminAuthAudit('security_pin_denied', { email: req.adminEmail, gate: 'admin_security_page' })
+    adminAuthAudit('security_pin_denied', {
+      email: req.adminAuth?.email ?? req.adminEmail ?? 'legacy',
+      gate: 'security_center',
+    })
     return res.status(403).json({ ok: false, error: 'Security PIN si sahihi' })
   }
-  adminAuthAudit('security_pin_gate_ok', { email: req.adminEmail })
+  adminAuthAudit('security_pin_gate_ok', {
+    email: req.adminAuth?.email ?? req.adminEmail ?? 'legacy',
+    gate: 'security_center',
+  })
   res.json({ ok: true })
 })
 
