@@ -469,7 +469,7 @@ function SecurityDashboardPage() {
                     <th className="p-3">Device ID</th>
                     <th className="p-3">Phone number</th>
                     <th className="p-3">Risk reason</th>
-                    <th className="p-3">Detection time</th>
+                    <th className="p-3">First detected</th>
                     <th className="p-3">App</th>
                     <th className="p-3">Score</th>
                     <th className="p-3">Root</th>
@@ -507,7 +507,9 @@ function SecurityDashboardPage() {
                       <td className="max-w-[120px] p-3 text-sm text-white">{d.phone_user || d.phone || '—'}</td>
                       <td className="max-w-[140px] p-3 text-slate-300">{d.risk_reason || d.risk_type || '—'}</td>
                       <td className="p-3 text-xs text-slate-400">
-                        {formatReadableDateTime(d.detection_time || d.first_seen || d.last_seen)}
+                        {formatReadableDateTime(
+                          d.first_seen || (Number(d.risk_score) > 0 ? d.detection_time : null),
+                        )}
                       </td>
                       <td className="p-3 text-slate-400">{d.app_version || '—'}</td>
                       <td className="p-3 font-semibold text-white">{d.risk_score}</td>
@@ -528,6 +530,9 @@ function SecurityDashboardPage() {
                       </td>
                       <td className="p-3">
                         <FlagCell value={d.tampered_apk} />
+                      </td>
+                      <td className="p-3 text-xs text-slate-400">
+                        {formatReadableDateTime(d.last_seen)}
                       </td>
                       <td className="p-3">
                         <LevelBadge level={d.security_level} />
