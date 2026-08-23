@@ -124,6 +124,11 @@ function stableOrigin(req) {
 
 export function buildApiCacheKey(namespace, req) {
   const url = String(req.originalUrl || req.url || '/')
+  // Entitlement-gated catalogs must not share anonymous cache entries across devices.
+  if (namespace === 'channels') {
+    const did = deviceIdFrom(req) || 'anon'
+    return `${namespace}|${stableOrigin(req)}|${url}|did:${did}`
+  }
   return `${namespace}|${stableOrigin(req)}|${url}`
 }
 

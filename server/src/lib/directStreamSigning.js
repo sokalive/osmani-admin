@@ -154,6 +154,7 @@ export function createDirectStreamToken(input) {
     o: hdr.origin,
     ua: hdr.userAgent,
     cid: input?.channelId != null ? String(input.channelId) : '',
+    did: input?.deviceId != null ? String(input.deviceId).trim().slice(0, 128) : '',
     exp,
   }
   const body = base64UrlEncode(JSON.stringify(payload))
@@ -253,6 +254,7 @@ function verifySignedTokenBody(raw, expectedType) {
       origin: hdr.origin,
       userAgent: hdr.userAgent,
       channelId: String(payload.cid || ''),
+      deviceId: String(payload.did || ''),
       sessionId: String(payload.sid || ''),
       exp,
       tokenType,
@@ -293,6 +295,7 @@ export function createStreamSegmentToken(input) {
     o: hdr.origin,
     ua: hdr.userAgent,
     cid: input?.channelId != null ? String(input.channelId) : '',
+    did: input?.deviceId != null ? String(input.deviceId).trim().slice(0, 128) : '',
     sid: String(input?.sessionId || '').trim(),
     exp,
   }
@@ -312,6 +315,7 @@ export function buildSignedDirectStreamPlaybackUrl(req, upstreamUrl, hdr = {}, m
     origin: hdr.origin,
     userAgent: hdr.userAgent,
     channelId: meta.channelId,
+    deviceId: meta.deviceId,
   })
   if (!signed.ok) return ''
   const base = resolveStreamDirectBaseUrl(req)

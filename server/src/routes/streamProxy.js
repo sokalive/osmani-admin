@@ -13,6 +13,7 @@ import {
   normalizeUpstreamHeaders,
 } from '../lib/streamUpstreamHeaders.js'
 import { injectMpingoHtmlBaseHref, isMpingoPlayerPageUrl } from '../lib/streamMpingoHtmlBase.js'
+import { enforcePremiumStreamAccess } from '../lib/streamEntitlementEnforce.js'
 
 export { PROXY_MOUNT_STREAM, buildPublicStreamProxyUrl } from '../lib/streamManifestRewrite.js'
 
@@ -121,6 +122,17 @@ export async function runStreamProxyRequest(req, res, opts) {
   const parsed = parseMaybeUrl(sourceUrl)
   if (!parsed || !['http:', 'https:'].includes(parsed.protocol)) {
     return res.status(400).json({ error: 'url must be absolute http(s)' })
+  }
+
+  if (!opts?.entitlementAlreadyChecked && !isDirectEntry) {
+    const gate = await enforcePremiumStreamAccess(req, {
+      upstreamUrl: sourceUrl,
+      channelId: opts?.channelId,
+      path: `/${mountPath}`,
+    })
+    if (!gate.ok) {
+      return res.status(gate.status).json({ ok: false, error: gate.error, code: gate.code })
+    }
   }
 
   try {
