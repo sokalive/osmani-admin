@@ -8,7 +8,6 @@ import {
   SMART_MONITOR_REBLOCK_SCORE,
 } from './deviceSecurityStore.js'
 import { listDeviceAnomalies } from './securityAnomalyStore.js'
-import { listPremiumPlaybackAudits } from './premiumPlaybackAudit.js'
 
 function text(v, max = 256) {
   return String(v ?? '')
@@ -451,7 +450,6 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
   )
   const auditSummary = buildAuditSummary(device, timeline)
   const anomalies = await listDeviceAnomalies(deviceId, 25)
-  const premiumAccessAudits = await listPremiumPlaybackAudits(deviceId, 25).catch(() => [])
 
   return {
     read_only: true,
@@ -491,7 +489,6 @@ export async function getDeviceSecurityInvestigationReport(deviceId) {
       playback_denied: playbackDenied,
     },
     security_anomalies: anomalies,
-    premium_playback_audits: premiumAccessAudits,
     detection_summary: {
       risk_level: device.security_level || 'warning',
       final_enforcement_action: finalAction,

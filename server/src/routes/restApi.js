@@ -2,7 +2,6 @@ import { Router } from 'express'
 import { applySensitiveJsonGetNoStore } from '../middleware/sensitiveApiCacheControl.js'
 import { bannersRouter } from './banners.js'
 import { channelsRouter } from './channels.js'
-import { playbackAuthorizeRouter } from './playbackAuthorize.js'
 import { analyticsRouter, handleLiveSessionHeartbeat } from './analytics.js'
 import { analyticsAdminRouter } from './analyticsAdmin.js'
 import { systemHealthAdminRouter } from './systemHealthAdmin.js'
@@ -410,7 +409,6 @@ restApi.get('/payment-status/:order_id', async (req, res) => {
 
 restApi.use('/users', usersRouter)
 restApi.use('/channels', channelsRouter)
-restApi.use(playbackAuthorizeRouter)
 restApi.use('/banners', bannersRouter)
 restApi.use('/settings/zenopay', zenopaySettingsRouter)
 restApi.use('/settings/sonicpesa', sonicpesaSettingsRouter)

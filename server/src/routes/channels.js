@@ -59,7 +59,6 @@ import { applyChannelsRoutingHeaders } from '../lib/mpingoRoutingSync.js'
 import { triggerServerHealthBroadcast } from './realtimeSettings.js'
 import { extractVersionCodeFromRequest } from '../lib/clientApiTelemetry.js'
 import { instructionChannelVisibleForClient } from '../lib/instructionVideoChannel.js'
-import { applyPremiumEntitlementToChannelList } from './playbackAuthorize.js'
 
 export const channelsRouter = Router()
 
@@ -152,15 +151,14 @@ channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
       })
       return api
     })
-    const gated = await applyPremiumEntitlementToChannelList(req, payload, visibleList)
-    logChannelStreamDiagList(gated, {
+    logChannelStreamDiagList(payload, {
       handler_total_ms: Date.now() - t0,
     })
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.setHeader('Pragma', 'no-cache')
     res.setHeader('Expires', '0')
     applyChannelsRoutingHeaders(res)
-    res.json(gated)
+    res.json(payload)
   } catch (e) {
     console.error('[channels] GET / failed:', e)
     res.status(500).json({ error: String(e.message || e) })

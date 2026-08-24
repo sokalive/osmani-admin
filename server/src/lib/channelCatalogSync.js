@@ -4,7 +4,6 @@ import { loadGlobalAppModesPayload } from '../routes/globalAppSettings.js'
 import { invalidateChannelIdNameMapCache, getChannelById } from '../store.js'
 import { notifyApiCacheBust } from './apiCacheBustRelay.js'
 import { notifyLiveSyncPeers } from './liveSyncRelay.js'
-import { invalidatePremiumUpstreamRegistry } from './premiumUpstreamRegistry.js'
 
 const CHANNEL_CACHE_NAMESPACES = ['channels', 'runtime-app-modes']
 
@@ -14,7 +13,6 @@ export function invalidateChannelCatalogCaches() {
     invalidateApiCacheNamespace(ns)
   }
   invalidateChannelIdNameMapCache()
-  invalidatePremiumUpstreamRegistry()
 }
 
 /**
