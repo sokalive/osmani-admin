@@ -278,9 +278,27 @@ function isPotentiallyOnlineStatus(status) {
   return status === 200 || status === 206 || status === 301 || status === 302
 }
 
+/**
+ * Only emit Origin when the channel stores a real http(s) origin.
+ * Some Direct HLS rows store a MIME type in `origin` (e.g. application/vnd.apple.mpegurl)
+ * for player Accept wiring — sending that as an Origin header makes CDNs (okcdn) return 403
+ * while the same URL plays fine without Origin (Exo / direct_hls).
+ * Do not invent Origin from Referer; that also 403s on those providers.
+ */
+function probeOriginHeader(value) {
+  const s = asText(value, 4000)
+  if (!s.startsWith('http://') && !s.startsWith('https://')) return ''
+  try {
+    const u = new URL(s)
+    return u.hostname ? `${u.protocol}//${u.host}` : ''
+  } catch {
+    return ''
+  }
+}
+
 function buildProbeHeaders(channel, extra = {}) {
   const referer = asText(channel?.referer, 4000)
-  const origin = asText(channel?.origin, 4000)
+  const origin = probeOriginHeader(channel?.origin)
   const ua = asText(channel?.userAgent, 500) || MEDIA_USER_AGENT
   return {
     'User-Agent': ua,
