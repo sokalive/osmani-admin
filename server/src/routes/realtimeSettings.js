@@ -296,13 +296,47 @@ function probeOriginHeader(value) {
   }
 }
 
+/** When `origin` holds a MIME type (player Accept wiring), use it as Accept — never as Origin. */
+function probeAcceptHeader(channel, httpOrigin) {
+  if (httpOrigin) return '*/*'
+  const raw = asText(channel?.origin, 4000).toLowerCase()
+  if (raw.includes('mpegurl') || raw.includes('octet-stream')) {
+    return `${asText(channel?.origin, 4000)},*/*`
+  }
+  return '*/*'
+}
+
+function isDirectHlsChannel(channel) {
+  const pt = asText(channel?.playerType ?? channel?.player_type, 40).toLowerCase().replace(/-/g, '_')
+  return pt === 'direct_hls' || pt === 'directhls'
+}
+
+/**
+ * IP-bound Direct HLS (okcdn `/srcIp/...`) is playable on the bound client IP but Contabo
+ * egress always receives empty HTTP 403. Treat 401/403 as online only when the signed
+ * expires window is still valid — 404 / timeout / expired signature stay offline.
+ */
+function isUnexpiredIpBoundDirectHls(url) {
+  const s = String(url || '')
+  if (!/\.m3u8($|\?)/i.test(s)) return false
+  if (!/\/srcIp\//i.test(s)) return false
+  const m =
+    s.match(/\/expires\/(\d{10,16})(?:\/|$|\?)/i) ||
+    s.match(/[?&](?:e|expires)=(\d{10,16})(?:&|$)/i)
+  if (!m) return false
+  let exp = Number(m[1])
+  if (!Number.isFinite(exp) || exp <= 0) return false
+  if (exp < 1e12) exp *= 1000
+  return exp > Date.now() + 30_000
+}
+
 function buildProbeHeaders(channel, extra = {}) {
   const referer = asText(channel?.referer, 4000)
   const origin = probeOriginHeader(channel?.origin)
   const ua = asText(channel?.userAgent, 500) || MEDIA_USER_AGENT
   return {
     'User-Agent': ua,
-    Accept: '*/*',
+    Accept: probeAcceptHeader(channel, origin),
     Connection: 'keep-alive',
     ...(referer ? { Referer: referer } : {}),
     ...(origin ? { Origin: origin } : {}),
@@ -453,6 +487,26 @@ async function probeSingleChannel(channel) {
 
   const fallbackMs = ranged.ms || head.ms || 0
   const statusHint = ranged.status || head.status || 0
+
+  if (
+    isDirectHlsChannel(channel) &&
+    (statusHint === 403 || statusHint === 401) &&
+    isUnexpiredIpBoundDirectHls(streamUrl)
+  ) {
+    console.info(
+      '[SERVER_HEALTH]',
+      JSON.stringify({
+        channel: name,
+        method: 'DIRECT_HLS_IP_BOUND',
+        decision: 'online',
+        status: statusHint,
+        fallback: 'ip_bound_signed_hls_unexpired',
+        attempted,
+      }),
+    )
+    return { name, status: 'online', response_ms: fallbackMs }
+  }
+
   console.info(
     '[SERVER_HEALTH]',
     JSON.stringify({
