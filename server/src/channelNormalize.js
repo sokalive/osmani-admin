@@ -4,7 +4,7 @@ import {
   parseVisibleTabsFromBottomTabField,
   serializeVisibleTabs,
 } from './lib/channelTabs.js'
-import { resolvePublicAssetUrl } from './lib/cdnAssets.js'
+import { resolvePublicAssetUrl, appendPublicAssetCacheRevision } from './lib/cdnAssets.js'
 import { buildChannelStreamDelivery } from './lib/streamDelivery.js'
 import {
   getCachedMpingoPlayerMetadata,
@@ -293,9 +293,11 @@ export function mergeChannelRecord(existing, parsed, id, nowIso) {
 /**
  * Absolute thumbnail/banner image URL for API clients (DB stores `/uploads/...`).
  * When `BUNNY_CDN_BASE_URL` is set, static images are served from Bunny; legacy Render URLs are rewritten.
+ * Pass `revision` (updatedAt) so clients bust Expo/CDN image caches after admin replaces media.
  */
-export function resolveThumbnailForApi(thumbnail, req) {
-  return resolvePublicAssetUrl(thumbnail, req)
+export function resolveThumbnailForApi(thumbnail, req, revision = null) {
+  const absolute = resolvePublicAssetUrl(thumbnail, req)
+  return appendPublicAssetCacheRevision(absolute, revision)
 }
 
 /**
@@ -342,7 +344,7 @@ export function channelToResponse(c, req, clientVersion = 0) {
   const visibleTabs = parseVisibleTabsFromBottomTabField(m.bottomTab, category)
   const bottomTabCsv = serializeVisibleTabs(visibleTabs)
   const rel = m.thumbnail || null
-  const thumbFull = resolveThumbnailForApi(rel, req)
+  const thumbFull = resolveThumbnailForApi(rel, req, m.updatedAt ?? m.updated_at ?? m.createdAt)
 
   const isActive = Boolean(m.isActive)
   let showInApp = Boolean(m.showInApp)

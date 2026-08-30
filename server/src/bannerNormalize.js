@@ -25,7 +25,7 @@ function formatTsForApi(v) {
 
 function fullImageUrl(row, req) {
   const imageRel = row.image ?? null
-  return resolveThumbnailForApi(imageRel, req)
+  return resolveThumbnailForApi(imageRel, req, row.updated_at ?? row.updatedAt ?? row.created_at)
 }
 
 /**

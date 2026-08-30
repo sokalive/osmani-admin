@@ -5,7 +5,9 @@ import {
 
 const TTL = {
   channels: Math.max(1000, Number(process.env.API_CACHE_CHANNELS_TTL_MS) || 3000),
-  banners: Math.max(5000, Number(process.env.API_CACHE_BANNERS_TTL_MS) || 20_000),
+  // Keep banners near channels TTL so missed SSE invalidations cannot leave
+  // admin banner/image edits invisible for a long default window.
+  banners: Math.max(1000, Number(process.env.API_CACHE_BANNERS_TTL_MS) || 3000),
   plans: Math.max(5000, Number(process.env.API_CACHE_PLANS_TTL_MS) || 15_000),
   'payment-providers': Math.max(5000, Number(process.env.API_CACHE_PAYMENT_PROVIDERS_TTL_MS) || 15_000),
   'whatsapp-settings': Math.max(5000, Number(process.env.API_CACHE_WHATSAPP_TTL_MS) || 30_000),

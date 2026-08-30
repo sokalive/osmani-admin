@@ -259,6 +259,43 @@ export function resolvePublicAssetUrl(value, req, opts = {}) {
   return `${originBase}/${rel.replace(/^\/+/, '')}`
 }
 
+/**
+ * Append a stable `v=` cache-buster from row updatedAt so Expo/CDN clients
+ * refetch when admin replaces an image even if the /uploads path is reused.
+ * Does not alter the stored DB path — only the public API absolute URL.
+ *
+ * @param {string|null|undefined} absoluteUrl
+ * @param {string|Date|number|null|undefined} revision
+ */
+export function appendPublicAssetCacheRevision(absoluteUrl, revision) {
+  const base = String(absoluteUrl ?? '').trim()
+  if (!base || base.startsWith('data:')) return base || null
+  let token = ''
+  if (revision instanceof Date && !Number.isNaN(revision.getTime())) {
+    token = String(revision.getTime())
+  } else if (typeof revision === 'number' && Number.isFinite(revision)) {
+    token = String(Math.trunc(revision))
+  } else {
+    const raw = String(revision ?? '').trim()
+    if (!raw) return base
+    if (/^\d+$/.test(raw)) token = raw
+    else {
+      const parsed = Date.parse(raw)
+      if (!Number.isFinite(parsed)) return base
+      token = String(parsed)
+    }
+  }
+  if (!token) return base
+  try {
+    const u = new URL(base)
+    if (!u.searchParams.has('v')) u.searchParams.set('v', token)
+    return u.toString()
+  } catch {
+    if (/[?&]v=/.test(base)) return base
+    return `${base}${base.includes('?') ? '&' : '?'}v=${encodeURIComponent(token)}`
+  }
+}
+
 export function getCdnHealthSnapshot() {
   const cdnBase = getCdnBaseUrl()
   const originBase = getOriginBaseUrl(null)

@@ -21,8 +21,10 @@ function parseTopics(raw) {
 liveSyncRouter.get('/sync/stream', (req, res) => {
   const topics = parseTopics(req.query.topics)
   res.setHeader('Content-Type', 'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
   res.setHeader('Connection', 'keep-alive')
+  // Prevent nginx (and similar proxies) from buffering SSE frames.
+  res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders?.()
 
   const send = (event, data) => {
