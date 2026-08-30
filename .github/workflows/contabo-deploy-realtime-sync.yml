@@ -1,0 +1,82 @@
+name: Contabo Deploy Realtime Sync Fix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip when CONTABO_SSH_KEY is not configured
+        id: gate
+        env:
+          CONTABO_SSH_KEY: ${{ secrets.CONTABO_SSH_KEY }}
+        run: |
+          if [ -z "${CONTABO_SSH_KEY}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pull, reload nginx SSE + restart API only
+        if: steps.gate.outputs.skip != 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 8m
+          script: |
+            set -euo pipefail
+            ROOT=/var/www/osmani-admin-api
+            cd "$ROOT"
+            git fetch origin main
+            git reset --hard origin/main
+            COMMIT="$(git rev-parse HEAD)"
+            echo "commit=$COMMIT"
+            mkdir -p /etc/nginx/snippets
+            cp "$ROOT/deploy/contabo/nginx/snippets/ssl-params.conf" /etc/nginx/snippets/osmani-ssl-params.conf
+            cp "$ROOT/deploy/contabo/nginx/snippets/osmani-node-api.conf" /etc/nginx/snippets/osmani-node-api.conf
+            cp "$ROOT/deploy/contabo/nginx/osmanitv-domains.conf" /etc/nginx/sites-available/osmanitv-domains
+            ln -sf /etc/nginx/sites-available/osmanitv-domains /etc/nginx/sites-enabled/osmanitv-domains
+            nginx -t
+            systemctl reload nginx
+            echo "==> nginx reloaded"
+            grep -n "sync/stream" /etc/nginx/snippets/osmani-node-api.conf | head -5
+            export OSMANI_GIT_COMMIT="$COMMIT"
+            cd "$ROOT/server"
+            pm2 restart osmani-admin-api --update-env
+            sleep 4
+            curl -fsS https://api.osmanitv.com/api/health
+            echo
+            curl -fsSI https://api.osmanitv.com/api/sync/stream | tr -d '\r' | head -20
+            echo
+            curl -fsS https://api.osmanitv.com/api/banners | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const a=JSON.parse(d); const b=Array.isArray(a)?a[0]:null; console.log(JSON.stringify({count:Array.isArray(a)?a.length:0,sampleImage:b?.image_url||b?.imageUrl||null,updated:b?.updated_at||b?.updatedAt||null},null,2))})"
+
+      - name: Verify production commit + SSE headers
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          EXPECT="${{ github.sha }}"
+          ok=0
+          for attempt in $(seq 1 20); do
+            curl -fsS "https://api.osmanitv.com/api/health" | tee /tmp/vps-health.json
+            COMMIT="$(node -e "console.log(String(require('/tmp/vps-health.json').commit||''))")"
+            echo "attempt $attempt commit=${COMMIT:0:12} expect=${EXPECT:0:12}"
+            if [[ "${COMMIT:0:12}" == "${EXPECT:0:12}" ]]; then
+              ok=1
+              break
+            fi
+            sleep 5
+          done
+          test "$ok" = "1"
+          # Confirm banner image URLs now carry v= cache revision
+          curl -fsS "https://api.osmanitv.com/api/banners" | tee /tmp/banners.json
+          node -e "
+            const a=require('/tmp/banners.json');
+            const list=Array.isArray(a)?a:[];
+            if(!list.length) throw new Error('no banners');
+            const img=String(list[0].image_url||list[0].imageUrl||'');
+            if(!/[?&]v=/.test(img)) throw new Error('missing v= on '+img);
+            console.log('banner image cache revision ok', img.slice(0,120));
+          "
