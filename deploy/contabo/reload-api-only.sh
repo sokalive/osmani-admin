@@ -15,8 +15,11 @@ fi
 
 echo "==> git pull (hard reset to origin/main)"
 cd "$ROOT"
-git fetch origin main
-git reset --hard origin/main
+if [[ "${SKIP_GIT_PULL:-}" != "1" ]]; then
+  # shellcheck source=deploy/contabo/git-fetch-main.sh
+  source "$ROOT/deploy/contabo/git-fetch-main.sh"
+  git_fetch_and_reset "$ROOT" "${DEPLOY_GIT_REF:-main}"
+fi
 COMMIT="$(git rev-parse HEAD)"
 echo "    commit: $COMMIT"
 export OSMANI_GIT_COMMIT="$COMMIT"

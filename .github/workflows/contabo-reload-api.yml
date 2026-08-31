@@ -2,6 +2,11 @@ name: Contabo Reload API
 
 on:
   workflow_dispatch:
+    inputs:
+      deploy_ref:
+        description: 'Git ref to deploy (commit SHA or branch)'
+        required: false
+        default: 'main'
 
 jobs:
   reload:
@@ -21,30 +26,42 @@ jobs:
 
       - name: Reload API on Contabo VPS
         if: steps.gate.outputs.skip != 'true'
+        env:
+          GITHUB_DEPLOY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_REF: ${{ github.event.inputs.deploy_ref || 'main' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: 144.91.117.90
           username: root
           key: ${{ secrets.CONTABO_SSH_KEY }}
           command_timeout: 10m
+          envs: GITHUB_DEPLOY_TOKEN,DEPLOY_REF
           script: |
             set -euo pipefail
-            cd /var/www/osmani-admin-api
-            git fetch origin main
-            git reset --hard origin/main
-            bash deploy/contabo/reload-api-only.sh
+            ROOT="/var/www/osmani-admin-api"
+            cd "$ROOT"
+            export GITHUB_DEPLOY_TOKEN
+            REF="${DEPLOY_REF:-main}"
+            echo "==> git fetch (authenticated) ref=${REF}"
+            git fetch "https://x-access-token:${GITHUB_DEPLOY_TOKEN}@github.com/sokalive/osmani-admin.git" "$REF"
+            git reset --hard FETCH_HEAD
+            echo "    commit: $(git rev-parse HEAD)"
+            export SKIP_GIT_PULL=1
+            export OSMANI_ADMIN_ROOT="$ROOT"
+            bash "$ROOT/deploy/contabo/reload-api-only.sh"
 
       - name: Verify VPS health commit
         if: steps.gate.outputs.skip != 'true'
+        env:
+          EXPECT: ${{ github.event.inputs.deploy_ref || github.sha }}
         run: |
           set -euo pipefail
-          EXPECT="${{ github.sha }}"
           ok=0
-          for attempt in $(seq 1 20); do
+          for attempt in $(seq 1 24); do
             curl -fsS "https://api.osmanitv.com/api/health" | tee /tmp/vps-health.json
             COMMIT="$(node -e "console.log(String(require('/tmp/vps-health.json').commit||''))")"
             echo "attempt $attempt commit=${COMMIT:0:12} expect=${EXPECT:0:12}"
-            if [[ "${COMMIT:0:12}" == "${EXPECT:0:12}" ]]; then
+            if [[ "${COMMIT:0:12}" == "${EXPECT:0:12}" ]] || [[ "$COMMIT" == "$EXPECT" ]]; then
               ok=1
               break
             fi
