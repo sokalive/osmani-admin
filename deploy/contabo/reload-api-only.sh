@@ -25,6 +25,9 @@ echo "    commit: $COMMIT"
 export OSMANI_GIT_COMMIT="$COMMIT"
 export OSMANI_ADMIN_ROOT="$ROOT"
 
+echo "==> npm ci (server dependencies)"
+(cd "$API_DIR" && npm ci --omit=dev)
+
 echo "==> DATABASE_URL check"
 node "$ROOT/deploy/contabo/sync-database-url-env.cjs" "$ROOT" >/dev/null
 node -e "
