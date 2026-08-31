@@ -9,6 +9,7 @@
     "migrate:transfer-status-checks": "node src/db/migrateTransferStatusChecks.js",
     "migrate-uploads": "node scripts/migrate-uploads.mjs",
     "test:subscription-stacking": "node scripts/test-subscription-stacking.mjs",
+    "test:subscription-verify-unavailable": "node scripts/test-subscription-verify-unavailable.mjs",
     "verify:app-update-v24": "node scripts/verify-app-update-v24.mjs",
     "verify:app-update-matrix": "node scripts/audit-update-check-matrix.mjs",
     "audit:vps-migration": "node scripts/audit-vps-migration-by-version.mjs",

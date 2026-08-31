@@ -22,8 +22,8 @@ import {
 } from '../lib/subscriptionAccessCache.js'
 import { validateVerifyResponse } from '../lib/subscriptionCanonicalValidator.js'
 import {
-  canUseInactiveVerifyFallback,
   isDbTimeoutOrPressureError,
+  resolveVerifyErrorHttpOutcome,
   withVerifyDbSlot,
 } from '../lib/verifyDbResilience.js'
 import { coalesceVerifyAccessLoad } from '../lib/verifyAccessSingleflight.js'
@@ -501,39 +501,23 @@ const trialDisabledPublicPayload = {
 }
 
 /**
- * Safe HTTP 200 inactive verify when DB is saturated — never used for paid/migration/payment hints.
+ * Respond after verify error: preserve fresh active cache / fast DB when safe;
+ * otherwise return retryable 503 — never HTTP 200 active:false without DB proof.
  */
-async function buildInactiveVerifyFallbackResponse(req, deviceId) {
-  const pub = rowToPublicStatus(null)
-  const modesPayload = await loadGlobalAppModesPayload().catch(() => modesFallbackPayload())
-  const plansRows = await billing.listActivePlansForVerify().catch(() => [])
-  const normalized = normalizeVerifyResponse(pub, null)
-  const runtimeModes = appModesForVerify(modesPayload)
-  const playbackGate = derivePlaybackGate(pub, modesPayload, null, null)
-  const trialWatchPublic = trialWatchSettingsToPublicPayload(
-    trialSettingsFallbackPayload,
-    modesPayload?.v ?? liveSyncBus.snapshot().configVersion,
-  )
-  const withGift = {
-    ...normalized,
-    ...runtimeModes,
-    manualGift: null,
-    trial_watch: null,
-    trialWatch: null,
-    trial_watch_settings: trialWatchPublic,
-    trialWatchSettings: trialWatchPublic,
-    playbackAllowed: playbackGate.playbackAllowed,
-    playbackGateReason: playbackGate.playbackGateReason,
-    limitedPlayback: playbackGate.limitedPlayback === true,
-    securityLevel: playbackGate.securityLevel ?? null,
-    securityBypass: playbackGate.securityBypass === true,
-    plans: mapVerifyPlans(plansRows),
+async function respondVerifyErrorAfterFallback(req, res, deviceId, fingerprint, label, err) {
+  const activeFb = await tryLastResortActiveVerifyFallback(req, deviceId, fingerprint)
+  const outcome = resolveVerifyErrorHttpOutcome(err, activeFb)
+  if (activeFb) {
+    console.warn(`[${label}] last-resort active fallback after error:`, err?.message || err)
+  } else if (outcome.retryable) {
+    console.warn(`[${label}] verification unavailable (retryable):`, err?.message || err)
+  } else {
+    console.error(`[${label}] verify error:`, err)
   }
-  console.warn('[subscription-verify-fallback]', {
-    deviceId: shortRef(deviceId),
-    path: req.path || req.url || '',
-  })
-  return withGift
+  if (outcome.retryAfterSec) {
+    res.setHeader('Retry-After', String(outcome.retryAfterSec))
+  }
+  return res.status(outcome.status).json(outcome.body)
 }
 
 /** Preserve known-active subscription from cache when DB is saturated (never upgrades unpaid). */
@@ -567,19 +551,6 @@ async function buildActiveVerifyFallbackFromCache(req, deviceId, row) {
     limitedPlayback: false,
     securityLevel: playbackGate.securityLevel ?? null,
     securityBypass: playbackGate.securityBypass === true,
-  }
-}
-
-/** Fresh in-TTL cache only — never restore entitlement from stale (TTL-expired) cache. */
-async function maybeActiveVerifyFallback(req, deviceId, fingerprint, err) {
-  if (!isDbTimeoutOrPressureError(err)) return null
-  const fresh = getCachedSubscriptionAccess(deviceId, fingerprint)
-  if (!isAccessRowActive(fresh)) return null
-  try {
-    return await buildActiveVerifyFallbackFromCache(req, deviceId, fresh)
-  } catch (fallbackErr) {
-    console.error('[subscription-verify-active-fallback] failed:', fallbackErr)
-    return null
   }
 }
 
@@ -620,45 +591,6 @@ function isAccessRowActive(row) {
   return row.active_now === true && status === 'active'
 }
 
-function verifyFallbackContext({ deviceId, orderIdHint, fingerprint, phone, legacyDeviceId, accountId }) {
-  const cached = getCachedSubscriptionAccess(deviceId, fingerprint)
-  return {
-    orderIdHint,
-    fingerprint,
-    legacyDeviceId,
-    accountId,
-    paymentPhone: phone,
-    cachedAccessRow: cached !== undefined ? cached : null,
-  }
-}
-
-async function respondSafeInactiveAfterVerifyError(req, res, deviceId, fingerprint, label, err) {
-  const activeFb = await tryLastResortActiveVerifyFallback(req, deviceId, fingerprint)
-  if (activeFb) {
-    console.warn(`[${label}] last-resort active fallback after error:`, err?.message || err)
-    return res.json(activeFb)
-  }
-  try {
-    const body = await buildInactiveVerifyFallbackResponse(req, deviceId)
-    console.warn(`[${label}] safe inactive HTTP 200 after error:`, err?.message || err)
-    return res.json(body)
-  } catch (buildErr) {
-    console.error(`[${label}] safe inactive build failed:`, buildErr)
-    return res.status(500).json({ error: String(err?.message || err) })
-  }
-}
-
-async function maybeInactiveVerifyFallback(req, ctx, err) {
-  if (!canUseInactiveVerifyFallback(ctx)) return null
-  if (!isDbTimeoutOrPressureError(err)) return null
-  try {
-    return await buildInactiveVerifyFallbackResponse(req, ctx.deviceId || '')
-  } catch (fallbackErr) {
-    console.error('[subscription-verify-fallback] failed:', fallbackErr)
-    return null
-  }
-}
-
 /**
  * Shared path for GET /subscription-status and POST /subscription/verify:
  * presence touch, reconcile + activate, then access state + plans.
@@ -669,14 +601,6 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
   const hint = String(orderIdHint ?? '').trim()
   const fp = String(fingerprint ?? '').trim()
   const paymentPhone = String(phone ?? '').trim()
-  const fallbackCtx = verifyFallbackContext({
-    deviceId: d,
-    orderIdHint: hint,
-    fingerprint: fp,
-    phone: paymentPhone,
-    legacyDeviceId,
-    accountId,
-  })
   const timing = {
     deviceId: shortRef(d),
     hint: hint ? shortRef(hint) : null,
@@ -713,11 +637,6 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         timing.last_resort_active = true
         return lastResort
       }
-      const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
-      if (fb) {
-        timing.access_pressure_fallback = true
-        return fb
-      }
       throw e
     }
     setCachedSubscriptionAccess(d, fp, row)
@@ -735,11 +654,6 @@ async function executeSubscriptionVerify(req, { deviceId, orderIdHint, fingerpri
         billing.resolveVerifyPollDecision(d, hint, accessSnapshot),
       )
     } catch (e) {
-      const fb = await maybeInactiveVerifyFallback(req, { ...fallbackCtx, deviceId: d }, e)
-      if (fb) {
-        timing.access_pressure_fallback = true
-        return fb
-      }
       pollDecision = { poll: false, reason: 'poll_skipped_db_pressure' }
     }
   }
@@ -1186,23 +1100,7 @@ subscriptionRouter.get('/subscription-status', async (req, res) => {
     console.error('[subscription-status]', e)
     const deviceId = String(req.query.device_id ?? '').trim()
     const fp = String(req.query.fingerprint ?? req.headers['x-device-fingerprint'] ?? '').trim()
-    const migration = migrationHintsFromPayload(req.query)
-    const activeFb = await maybeActiveVerifyFallback(req, deviceId, fp, e)
-    if (activeFb) return res.json(activeFb)
-    const fb = await maybeInactiveVerifyFallback(
-      req,
-      verifyFallbackContext({
-        deviceId,
-        orderIdHint: String(req.query.order_id ?? '').trim(),
-        fingerprint: fp,
-        phone: String(req.query.payment_phone ?? req.query.phone ?? '').trim(),
-        legacyDeviceId: migration.legacyDeviceId,
-        accountId: migration.accountId,
-      }),
-      e,
-    )
-    if (fb) return res.json(fb)
-    return respondSafeInactiveAfterVerifyError(req, res, deviceId, fp, 'subscription-status', e)
+    return respondVerifyErrorAfterFallback(req, res, deviceId, fp, 'subscription-status', e)
   }
 })
 
@@ -1253,23 +1151,7 @@ subscriptionRouter.post('/subscription/verify', async (req, res) => {
     const fp = String(
       b.device_fingerprint ?? b.fingerprint ?? b.deviceFingerprint ?? req.headers['x-device-fingerprint'] ?? '',
     ).trim()
-    const migration = migrationHintsFromPayload(b)
-    const activeFb = await maybeActiveVerifyFallback(req, deviceId, fp, e)
-    if (activeFb) return res.json(activeFb)
-    const fb = await maybeInactiveVerifyFallback(
-      req,
-      verifyFallbackContext({
-        deviceId,
-        orderIdHint: String(b.order_id ?? b.orderId ?? '').trim(),
-        fingerprint: fp,
-        phone: String(b.payment_phone ?? b.phone ?? b.paymentPhone ?? '').trim(),
-        legacyDeviceId: migration.legacyDeviceId,
-        accountId: migration.accountId,
-      }),
-      e,
-    )
-    if (fb) return res.json(fb)
-    return respondSafeInactiveAfterVerifyError(req, res, deviceId, fp, 'subscription/verify', e)
+    return respondVerifyErrorAfterFallback(req, res, deviceId, fp, 'subscription/verify', e)
   }
 })
 

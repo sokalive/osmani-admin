@@ -1,5 +1,6 @@
 /**
- * Verify-path DB resilience: concurrency slots + safe inactive fallback under pool pressure.
+ * Verify-path DB resilience: concurrency slots + retryable failure under pool pressure.
+ * Temporary verification failure must never be represented as confirmed inactive (active:false).
  */
 import { getPoolStats, isVpsProduction, poolMaxConnections } from '../db/pool.js'
 
@@ -45,9 +46,14 @@ export function isVerifyDbPressure() {
 
 export function isDbTimeoutOrPressureError(err) {
   const msg = String(err?.message || err || '').toLowerCase()
+  const code = String(err?.code ?? '').toLowerCase()
   return (
     err instanceof DbPressureError ||
     err?.code === 'POOL_SATURATED' ||
+    code === 'econnreset' ||
+    code === 'econnrefused' ||
+    code === '57p01' ||
+    code === '53300' ||
     msg.includes('timeout exceeded when trying to connect') ||
     msg.includes('query_timeout') ||
     msg.includes('db_pressure') ||
@@ -55,8 +61,74 @@ export function isDbTimeoutOrPressureError(err) {
     msg.includes('pool_saturated') ||
     msg.includes('pool_acquire_timeout') ||
     msg.includes('connection terminated') ||
-    msg.includes('too many clients')
+    msg.includes('connection reset') ||
+    msg.includes('econnreset') ||
+    msg.includes('econnrefused') ||
+    msg.includes('too many clients') ||
+    msg.includes('remaining connection slots')
   )
+}
+
+/** Machine-readable reason for retryable verify unavailability (never active:false). */
+export function subscriptionVerifyUnavailableReason(err) {
+  const msg = String(err?.message || err || '').toLowerCase()
+  if (err?.code === 'POOL_SATURATED' || msg.includes('pool_saturated')) return 'pool_saturated'
+  if (msg.includes('pool_acquire_timeout')) return 'pool_acquire_timeout'
+  if (msg.includes('verify_db_slot_wait')) return 'verify_db_slot_wait_exceeded'
+  if (msg.includes('query_timeout')) return 'query_timeout'
+  if (msg.includes('too many clients') || msg.includes('remaining connection slots')) {
+    return 'too_many_clients'
+  }
+  if (msg.includes('connection reset') || msg.includes('econnreset') || msg.includes('connection terminated')) {
+    return 'connection_error'
+  }
+  if (msg.includes('timeout exceeded when trying to connect')) return 'connection_timeout'
+  return 'subscription_verification_unavailable'
+}
+
+/**
+ * Retryable verify payload when DB/pool evidence is unavailable.
+ * active is null — never false without authoritative DB confirmation.
+ */
+export function buildSubscriptionVerifyUnavailableBody(err) {
+  const reason = subscriptionVerifyUnavailableReason(err)
+  return {
+    ok: false,
+    active: null,
+    retryable: true,
+    reason,
+    error: reason,
+    verification_unavailable: true,
+  }
+}
+
+/**
+ * Resolve HTTP outcome after last-resort active fallback attempt.
+ * @param {unknown} err
+ * @param {object|null|undefined} lastResortActiveBody
+ */
+export function resolveVerifyErrorHttpOutcome(err, lastResortActiveBody = null) {
+  if (lastResortActiveBody) {
+    return { status: 200, body: lastResortActiveBody, retryable: false, retryAfterSec: null }
+  }
+  if (isDbTimeoutOrPressureError(err)) {
+    return {
+      status: 503,
+      body: buildSubscriptionVerifyUnavailableBody(err),
+      retryable: true,
+      retryAfterSec: 2,
+    }
+  }
+  return {
+    status: 500,
+    body: {
+      ok: false,
+      error: String(err?.message || err || 'verify_error'),
+      retryable: false,
+    },
+    retryable: false,
+    retryAfterSec: null,
+  }
 }
 
 /** Fallback only for slot-queue pressure — not arbitrary query timeouts (may hide paid state). */
@@ -87,30 +159,3 @@ export async function withVerifyDbSlot(fn) {
   }
 }
 
-/**
- * Safe to return inactive fallback (never downgrade paid users, never skip payment/migration).
- */
-export function canUseInactiveVerifyFallback({
-  orderIdHint,
-  fingerprint,
-  legacyDeviceId,
-  accountId,
-  paymentPhone,
-  cachedAccessRow,
-} = {}) {
-  const hint = String(orderIdHint ?? '').trim()
-  if (hint) return false
-
-  const phone = String(paymentPhone ?? '').replace(/\D/g, '')
-  if (phone.length >= 10) return false
-  if (String(legacyDeviceId ?? '').trim()) return false
-  if (String(accountId ?? '').trim()) return false
-  if (String(fingerprint ?? '').trim()) return false
-
-  const row = cachedAccessRow
-  if (row?.active_now === true && row?.blocked_now !== true && String(row?.status ?? '').toLowerCase() === 'active') {
-    return false
-  }
-
-  return true
-}
