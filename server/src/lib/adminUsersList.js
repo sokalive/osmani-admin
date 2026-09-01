@@ -69,6 +69,8 @@ function subscriptionSortSql(sort) {
       return 'COALESCE(pay.amount, 0) DESC NULLS LAST, ds.updated_at DESC, ds.device_id ASC'
     case 'status':
       return 'ds.status ASC, ds.updated_at DESC, ds.device_id ASC'
+    case 'expired_newest':
+      return 'ds.expires_at DESC NULLS LAST, ds.device_id ASC'
     default:
       return 'ds.started_at DESC NULLS LAST, ds.device_id ASC'
   }
@@ -572,6 +574,20 @@ export async function listAdminExpiringSoonUsers(filters = {}) {
   })
 }
 
+/** Naturally expired subscriptions (read-only; authoritative expires_at vs now()). */
+export async function listAdminExpiredSubscriptions(filters = {}) {
+  return listSubscriptions({
+    ...filters,
+    extraWhere: [
+      `ds.status = 'active'`,
+      `ds.expires_at IS NOT NULL`,
+      `ds.expires_at <= now()`,
+      `ds.admin_revoked_at IS NULL`,
+    ],
+    sort: filters.sort ?? 'expired_newest',
+  })
+}
+
 /** All device subscriptions (paginated). */
 export async function listAdminAllSubscriptions(filters = {}) {
   return listSubscriptions({
@@ -728,6 +744,14 @@ export async function getAdminUsersSummary() {
              OR (t.status = 'pending' AND t.created_at < now() - ($1::int * interval '1 minute'))
            )
        ) AS failed_payments,
+       (
+         SELECT COUNT(*)::int
+         FROM device_subscriptions ds
+         WHERE ds.status = 'active'
+           AND ds.expires_at IS NOT NULL
+           AND ds.expires_at <= now()
+           AND ds.admin_revoked_at IS NULL
+       ) AS expired,
        (SELECT COUNT(*)::int FROM device_subscriptions) AS all_subscriptions`,
     [staleMin],
   )
@@ -737,6 +761,7 @@ export async function getAdminUsersSummary() {
     expiring_24h: Number(r.expiring_24h) || 0,
     expiring_3d: Number(r.expiring_3d) || 0,
     expiring_7d: Number(r.expiring_7d) || 0,
+    expired: Number(r.expired) || 0,
     failed_payments: Number(r.failed_payments) || 0,
     all_subscriptions: Number(r.all_subscriptions) || 0,
   }

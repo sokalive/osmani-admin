@@ -65,6 +65,7 @@ export function fingerprintSummary(summary) {
     'expiring_24h',
     'expiring_3d',
     'expiring_7d',
+    'expired',
     'failed_payments',
     'all_subscriptions',
   ]

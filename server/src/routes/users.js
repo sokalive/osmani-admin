@@ -5,6 +5,7 @@ import {
   getAdminUsersSummary,
   listAdminActivePaidUsers,
   listAdminAllSubscriptions,
+  listAdminExpiredSubscriptions,
   listAdminExpiringSoonUsers,
   listAdminFailedPayments,
 } from '../lib/adminUsersList.js'
@@ -162,6 +163,17 @@ usersRouter.get('/expiring', requireAdminPanelAccess, async (req, res) => {
     res.json({ ok: true, ...out })
   } catch (e) {
     console.error('[users] GET /expiring failed:', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+usersRouter.get('/expired', requireAdminPanelAccess, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private, must-revalidate')
+    const out = await listAdminExpiredSubscriptions(parseListQuery(req))
+    res.json({ ok: true, ...out })
+  } catch (e) {
+    console.error('[users] GET /expired failed:', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
 })

@@ -13,6 +13,7 @@ import {
   getUsers,
   getUsersActive,
   getUsersExpiring,
+  getUsersExpired,
   getUsersFailedPayments,
   getUsersSummary,
   getUsersLookup,
@@ -60,6 +61,7 @@ function RemainingCell({ expiresAt }) {
 const TABS = [
   { id: 'active_paid', label: 'Active Paid', countKey: 'active_paid' },
   { id: 'expiring', label: 'Expiring Soon', countKey: 'expiring_7d' },
+  { id: 'expired', label: 'Expired', countKey: 'expired' },
   { id: 'failed', label: 'Failed Payments', countKey: 'failed_payments' },
   { id: 'all', label: 'All Subscriptions', countKey: 'all_subscriptions' },
 ]
@@ -309,9 +311,11 @@ function UsersPageContent() {
         sort:
           tab === 'expiring'
             ? 'expiry_soonest'
-            : tab === 'failed'
-              ? 'newest'
-              : 'started_newest',
+            : tab === 'expired'
+              ? 'expired_newest'
+              : tab === 'failed'
+                ? 'newest'
+                : 'started_newest',
         plan_id: planFilter !== 'all' ? planFilter : undefined,
         provider: providerFilter !== 'all' ? providerFilter : undefined,
         status: tab === 'all' && statusFilter !== 'all' ? statusFilter : undefined,
@@ -321,6 +325,7 @@ function UsersPageContent() {
       let res
       if (tab === 'active_paid') res = await getUsersActive(params, reqOpts)
       else if (tab === 'expiring') res = await getUsersExpiring(params, reqOpts)
+      else if (tab === 'expired') res = await getUsersExpired(params, reqOpts)
       else if (tab === 'failed') res = await getUsersFailedPayments(params, reqOpts)
       else res = await getUsers(params, reqOpts)
       return res
@@ -608,9 +613,11 @@ function UsersPageContent() {
       ? 'No active paid subscriptions.'
       : tab === 'expiring'
         ? 'No subscriptions expiring in this window.'
-        : tab === 'failed'
-          ? 'No failed or abandoned payment attempts.'
-          : 'No subscriptions yet.'
+        : tab === 'expired'
+          ? 'No naturally expired subscriptions.'
+          : tab === 'failed'
+            ? 'No failed or abandoned payment attempts.'
+            : 'No subscriptions yet.'
 
   return (
     <>

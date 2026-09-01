@@ -388,6 +388,10 @@ export const getUsersExpiring = (params = {}, opts = {}) => {
   const qs = usersListQuery(params)
   return adminApiGet(qs ? `/users/expiring?${qs}` : '/users/expiring', opts)
 }
+export const getUsersExpired = (params = {}, opts = {}) => {
+  const qs = usersListQuery(params)
+  return adminApiGet(qs ? `/users/expired?${qs}` : '/users/expired', opts)
+}
 export const getUsersFailedPayments = (params = {}, opts = {}) => {
   const qs = usersListQuery(params)
   return adminApiGet(qs ? `/users/failed-payments?${qs}` : '/users/failed-payments', opts)
