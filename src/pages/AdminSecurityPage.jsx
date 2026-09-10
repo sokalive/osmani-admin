@@ -13,6 +13,7 @@ import {
   getAdminSecurityGateToken,
   postAdminDeviceBlock,
   postAdminDeviceForceOtp,
+  postAdminDeviceRevoke,
   postAdminDeviceUnblock,
   postAdminSecurityDestructiveExecute,
   postAdminSecurityDestructiveResendOtp,
@@ -80,7 +81,7 @@ function deviceIp(row) {
   return pick(row, 'ip', 'ipAddress', 'ip_address') || '—'
 }
 
-function DeviceActions({ row, busy, pinBusy, onBlock, onUnblock, onForceOtp, onRevoke }) {
+function DeviceActions({ row, busy, pinBusy, onBlock, onUnblock, onForceOtp, onRevoke, onDelete }) {
   const st = deviceStatus(row)
   const b = busy
   return (
@@ -119,6 +120,14 @@ function DeviceActions({ row, busy, pinBusy, onBlock, onUnblock, onForceOtp, onR
         className="rounded-md border border-slate-600 px-2 py-1 text-[11px] font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-40"
       >
         REVOKE
+      </button>
+      <button
+        type="button"
+        disabled={b || pinBusy}
+        onClick={onDelete}
+        className="rounded-md border border-rose-500/50 bg-rose-950/50 px-2 py-1 text-[11px] font-bold text-rose-100 hover:bg-rose-900/40 disabled:opacity-40"
+      >
+        DELETE
       </button>
     </div>
   )
@@ -303,11 +312,27 @@ export default function AdminSecurityPage() {
       return
     }
     setPendingDestructive({
+      action: 'revoke_devices',
+      deviceIds: ids,
+      title: `Revoke ${ids.length} selected device(s)?`,
+      message: `Revoke ${ids.length} selected trusted device(s). Sessions and credentials are invalidated. Records stay as REVOKED for audit.`,
+      requireTyped: false,
+    })
+    setConfirmOpen(true)
+  }
+
+  function requestHardDeleteSelected() {
+    const ids = rows.filter((r) => selectedIds.has(r.id)).map((r) => r.id)
+    if (ids.length === 0) {
+      showToast('error', 'Chagua angalau kifaa kimoja')
+      return
+    }
+    setPendingDestructive({
       action: 'delete_devices',
       deviceIds: ids,
-      title: 'Revoke/Delete vifaa vilivyochaguliwa',
-      message: `Unaondoa/revoke vifaa ${ids.length}. Hatua hii haiwezi kutenduliwa kwa urahisi.`,
-      requireTyped: false,
+      title: `Permanently delete ${ids.length} selected device(s)?`,
+      message: `Permanently delete ${ids.length} selected device record(s) from the database after invalidating credentials/sessions. This cannot be undone.`,
+      requireTyped: true,
     })
     setConfirmOpen(true)
   }
@@ -315,9 +340,9 @@ export default function AdminSecurityPage() {
   function requestDeleteAllLogs() {
     setPendingDestructive({
       action: 'delete_all_security_logs',
-      title: 'Futa rekodi zote za usalama',
+      title: 'Delete ALL security sessions/logs permanently?',
       message:
-        'Hii itafuta rekodi zote za security_events (logs/alerts). Haiathiri usajili wala vifaa vinavyoaminiwa.',
+        'Permanently deletes all security_events, admin security audit events, and admin session rows from the database. Trusted devices are not removed. This cannot be undone.',
       requireTyped: true,
     })
     setConfirmOpen(true)
@@ -408,12 +433,20 @@ export default function AdminSecurityPage() {
           throw e
         }
       }
-      showToast(
-        'success',
+      if (!out || out.ok === false) {
+        throw new Error(out?.error || 'Backend did not confirm the action')
+      }
+      const affected = Number(out.affected ?? out.deleted ?? 0)
+      if (affected <= 0) {
+        throw new Error('No records were affected — nothing deleted/revoked')
+      }
+      const successMsg =
         pendingDestructive.action === 'delete_all_security_logs'
-          ? `Imefutwa rekodi ${out.deleted ?? 0}`
-          : `Imeondolewa vifaa ${out.deleted ?? 0}`,
-      )
+          ? `Permanently deleted ${affected} session/log row(s)`
+          : pendingDestructive.action === 'revoke_devices'
+            ? `Revoked ${affected} device(s)`
+            : `Permanently deleted ${affected} device(s)`
+      showToast('success', successMsg)
       setSelectedIds(new Set())
       closeDestructiveFlow()
       await load()
@@ -527,11 +560,24 @@ export default function AdminSecurityPage() {
       },
       onRevoke: () => {
         setBusyId(r.id)
-        confirmThen('Revoke/Delete kifaa hiki? Hakiwezi kutumika tena bila OTP mpya.', (pin, confirmCurrent) =>
-          deleteAdminTrustedDevice(r.id, {
-            securityPin: pin,
-            confirmCurrentDevice: confirmCurrent,
-          }),
+        confirmThen(
+          'Revoke this device? Sessions and credentials are invalidated; status becomes REVOKED.',
+          (pin, confirmCurrent) =>
+            postAdminDeviceRevoke(r.id, {
+              securityPin: pin,
+              confirmCurrentDevice: confirmCurrent,
+            }),
+        )
+      },
+      onDelete: () => {
+        setBusyId(r.id)
+        confirmThen(
+          'Permanently DELETE this device record from the database after invalidating credentials?',
+          (pin, confirmCurrent) =>
+            deleteAdminTrustedDevice(r.id, {
+              securityPin: pin,
+              confirmCurrentDevice: confirmCurrent,
+            }),
         )
       },
     }
@@ -657,6 +703,14 @@ export default function AdminSecurityPage() {
                   className="rounded-xl border border-rose-500/40 bg-rose-950/40 px-4 py-2 text-sm font-semibold text-rose-100 hover:bg-rose-900/40 disabled:opacity-40"
                 >
                   Revoke Selected ({selectedIds.size})
+                </button>
+                <button
+                  type="button"
+                  disabled={loading || selectedIds.size === 0 || destructiveBusy}
+                  onClick={requestHardDeleteSelected}
+                  className="rounded-xl border border-rose-500/50 bg-rose-950/50 px-4 py-2 text-sm font-semibold text-rose-100 hover:bg-rose-900/50 disabled:opacity-40"
+                >
+                  Delete Selected ({selectedIds.size})
                 </button>
                 <button
                   type="button"

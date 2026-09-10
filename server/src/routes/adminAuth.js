@@ -1080,6 +1080,7 @@ adminAuthRouter.post('/admin-security/verify-otp', attachAdminReq, async (req, r
 })
 
 const DESTRUCTIVE_DELETE_DEVICES = 'delete_devices'
+const DESTRUCTIVE_REVOKE_DEVICES = 'revoke_devices'
 const DESTRUCTIVE_DELETE_ALL_LOGS = 'delete_all_security_logs'
 
 function emitSecurityLogsSync(payload) {
@@ -1098,12 +1099,12 @@ function emitSecurityLogsSync(payload) {
 function parseDestructiveAction(body) {
   const b = body && typeof body === 'object' ? body : {}
   const action = String(b.action ?? '').trim()
-  if (action === DESTRUCTIVE_DELETE_DEVICES) {
+  if (action === DESTRUCTIVE_DELETE_DEVICES || action === DESTRUCTIVE_REVOKE_DEVICES) {
     const ids = Array.isArray(b.deviceIds ?? b.device_ids)
       ? (b.deviceIds ?? b.device_ids).map((x) => String(x).trim()).filter(Boolean)
       : []
     if (ids.length === 0) throw new Error('deviceIds required')
-    return { type: DESTRUCTIVE_DELETE_DEVICES, payload: { deviceIds: ids } }
+    return { type: action, payload: { deviceIds: ids } }
   }
   if (action === DESTRUCTIVE_DELETE_ALL_LOGS) {
     return { type: DESTRUCTIVE_DELETE_ALL_LOGS, payload: {} }
@@ -1233,12 +1234,12 @@ adminAuthRouter.post(
       const actionType = verified.actionType
       const payload = verified.actionPayload || {}
 
-      if (actionType === DESTRUCTIVE_DELETE_DEVICES) {
+      if (actionType === DESTRUCTIVE_DELETE_DEVICES || actionType === DESTRUCTIVE_REVOKE_DEVICES) {
         const deviceIds = Array.isArray(payload.deviceIds)
           ? payload.deviceIds.map((x) => String(x).trim()).filter(Boolean)
           : []
         if (deviceIds.length === 0) {
-          return res.status(400).json({ ok: false, error: 'No devices in challenge' })
+          return res.status(400).json({ ok: false, error: 'No devices in challenge', affected: 0 })
         }
         const curHash = currentSessionFingerprintHash(req)
         for (const id of deviceIds) {
@@ -1247,47 +1248,91 @@ adminAuthRouter.post(
             return sendCurrentDeviceConfirm(res)
           }
         }
-        const deleted = await authStore.deleteTrustedDevicesBulk(deviceIds, req.adminUserId)
-        adminAuthAudit('devices_bulk_removed', {
+        const hardDelete = actionType === DESTRUCTIVE_DELETE_DEVICES
+        const affected = hardDelete
+          ? await authStore.deleteTrustedDevicesBulk(deviceIds, req.adminUserId)
+          : await authStore.revokeTrustedDevicesBulk(deviceIds, req.adminUserId)
+        if (affected === 0) {
+          return res.status(409).json({
+            ok: false,
+            error: 'No matching devices were updated (already revoked/removed?)',
+            affected: 0,
+            action: actionType,
+          })
+        }
+        adminAuthAudit(hardDelete ? 'devices_bulk_removed' : 'devices_bulk_revoked', {
           email: req.adminEmail,
-          count: deleted,
+          count: affected,
           device_ids: deviceIds,
         })
-        await logOtpSecurityEvent(pool, {
-          actor: req.adminEmail,
-          eventType: 'Admin Security bulk device delete',
-          status: 'completed',
-          detail: `Removed ${deleted} trusted device(s)`,
-          metadata: { ip: clientIp(req), deleted, device_ids: deviceIds },
+        // Audit to admin_panel_security_events only — do NOT re-seed security_events after a wipe/revoke.
+        await authStore.recordSecurityEvent({
+          adminUserId: req.adminUserId,
+          eventType: hardDelete ? 'devices_bulk_deleted' : 'devices_bulk_revoked',
+          result: 'ok',
+          ip: clientIp(req),
+          userAgent: String(req.headers['user-agent'] ?? ''),
+          metadata: { affected, device_ids: deviceIds },
         })
-        return res.json({ ok: true, deleted, action: actionType })
+        return res.json({
+          ok: true,
+          deleted: affected,
+          affected,
+          action: actionType,
+        })
       }
 
       if (actionType === DESTRUCTIVE_DELETE_ALL_LOGS) {
-        const out = await pool.query(`DELETE FROM security_events`)
-        const deleted = Number(out.rowCount) || 0
-        emitSecurityLogsSync({ action: 'bulk_delete', deleted, mode: 'all', source: 'admin_security' })
-        await logOtpSecurityEvent(pool, {
-          actor: req.adminEmail,
-          eventType: 'Admin Security cleared all security logs',
-          status: 'completed',
-          detail: `Deleted ${deleted} security log row(s)`,
-          metadata: { ip: clientIp(req), deleted },
+        // Permanent hard-delete of Admin security history + revoked session rows.
+        // Do NOT write back into security_events afterward (that made "delete all" look broken).
+        const ev = await pool.query(`DELETE FROM security_events`)
+        let adminEv = { rowCount: 0 }
+        let sess = { rowCount: 0 }
+        try {
+          adminEv = await pool.query(`DELETE FROM admin_panel_security_events`)
+        } catch {
+          /* table may not exist on older DBs */
+        }
+        try {
+          // Remove all server-side admin session rows (JWTs become invalid on next jti check).
+          sess = await pool.query(`DELETE FROM admin_panel_sessions`)
+        } catch {
+          /* table may not exist on older DBs */
+        }
+        const deletedEvents = Number(ev.rowCount) || 0
+        const deletedAdminEvents = Number(adminEv.rowCount) || 0
+        const deletedSessions = Number(sess.rowCount) || 0
+        const deleted = deletedEvents + deletedAdminEvents + deletedSessions
+        emitSecurityLogsSync({
+          action: 'bulk_delete',
+          deleted: deletedEvents,
+          deletedAdminEvents,
+          deletedSessions,
+          mode: 'all',
+          source: 'admin_security',
         })
-        adminAuthAudit('security_logs_cleared', { email: req.adminEmail, deleted })
-        return res.json({ ok: true, deleted, action: actionType })
+        adminAuthAudit('security_logs_cleared', {
+          email: req.adminEmail,
+          deleted,
+          deletedEvents,
+          deletedAdminEvents,
+          deletedSessions,
+        })
+        return res.json({
+          ok: true,
+          deleted,
+          deletedEvents,
+          deletedAdminEvents,
+          deletedSessions,
+          action: actionType,
+        })
       }
 
       return res.status(400).json({ ok: false, error: 'Unknown destructive action' })
     } catch (e) {
       const msg = String(e.message || e)
-      await logOtpSecurityEvent(pool, {
-        actor: req.adminEmail,
-        eventType: 'Admin Security destructive action failed',
-        status: 'failed',
-        detail: msg,
-        metadata: { ip: clientIp(req) },
-      }).catch(() => {})
+      // Avoid re-seeding security_events after a failed wipe either.
+      adminAuthAudit('destructive_action_failed', { email: req.adminEmail, error: msg.slice(0, 200) })
       const status = msg.includes('expired') || msg.includes('Invalid') ? 403 : 400
       res.status(status).json({ ok: false, error: msg })
     }
@@ -1385,7 +1430,7 @@ adminAuthRouter.post(
   },
 )
 
-/** Soft-revoke (store keeps audit row). */
+/** Soft-revoke (keeps REVOKED audit row). Hard-delete is DELETE /devices/:id. */
 adminAuthRouter.delete(
   '/devices/:id',
   attachAdminReq,
@@ -1402,7 +1447,15 @@ adminAuthRouter.delete(
       const ok = await authStore.deleteTrustedDevice(req.params.id, req.adminUserId)
       if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
       adminAuthAudit('device_removed', { device_id: req.params.id })
-      res.json({ ok: true })
+      await authStore.recordSecurityEvent({
+        adminUserId: req.adminUserId,
+        eventType: 'device_hard_deleted',
+        result: 'ok',
+        deviceId: req.params.id,
+        ip: clientIp(req),
+        userAgent: String(req.headers['user-agent'] ?? ''),
+      })
+      res.json({ ok: true, deleted: 1 })
     } catch (e) {
       res.status(500).json({ ok: false, error: String(e.message || e) })
     }

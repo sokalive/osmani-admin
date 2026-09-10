@@ -293,10 +293,23 @@ export async function revokeTrustedDevice(deviceId, userId) {
   return Number(rowCount) > 0
 }
 
+export async function revokeTrustedDevicesBulk(deviceIds, userId) {
+  const ids = Array.isArray(deviceIds) ? deviceIds.map((x) => String(x).trim()).filter(Boolean) : []
+  if (ids.length === 0) return 0
+  let n = 0
+  for (const id of ids) {
+    if (await revokeTrustedDevice(id, userId)) n += 1
+  }
+  return n
+}
+
+/**
+ * Hard-delete device after invalidating credential + sessions.
+ * Row disappears from Security Center permanently.
+ */
 export async function deleteTrustedDevice(deviceId, userId) {
-  // Prefer soft revoke for auditability; hard delete only if already revoked or forced.
-  const revoked = await revokeTrustedDevice(deviceId, userId)
-  if (revoked) return true
+  await revokeTrustedDevice(deviceId, userId)
+  await revokeSessionsForDevice(deviceId)
   const { rowCount } = await pool().query(
     `DELETE FROM admin_panel_trusted_devices WHERE id = $1 AND admin_user_id = $2`,
     [deviceId, userId],
@@ -309,7 +322,7 @@ export async function deleteTrustedDevicesBulk(deviceIds, userId) {
   if (ids.length === 0) return 0
   let n = 0
   for (const id of ids) {
-    if (await revokeTrustedDevice(id, userId)) n += 1
+    if (await deleteTrustedDevice(id, userId)) n += 1
   }
   return n
 }

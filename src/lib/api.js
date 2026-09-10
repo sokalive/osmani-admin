@@ -842,6 +842,18 @@ export async function postAdminDeviceUnblock(id, opts = {}) {
   return body
 }
 
+export async function postAdminDeviceRevoke(id, opts = {}) {
+  const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}/revoke`), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: adminSecurityApiHeaders(),
+    body: adminTrustedDeviceMutationBody(opts),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
 export async function deleteAdminTrustedDevice(id, opts = {}) {
   const res = await fetch(joinPath(`/admin/auth/devices/${encodeURIComponent(id)}`), {
     ...ADMIN_FETCH_DEFAULTS,
@@ -849,7 +861,7 @@ export async function deleteAdminTrustedDevice(id, opts = {}) {
     headers: adminSecurityApiHeaders(),
     body: adminTrustedDeviceMutationBody(opts),
   })
-  const body = res.status === 204 ? null : await parseJsonSafe(res)
+  const body = res.status === 204 ? { ok: true } : await parseJsonSafe(res)
   if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
   return body
 }

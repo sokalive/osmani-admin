@@ -860,13 +860,7 @@ deviceSecurityRouter.delete('/settings/security-suite/alerts/:id', async (req, r
     const { rowCount } = await pool.query(`DELETE FROM security_events WHERE id = $1::uuid`, [id])
     console.log('[security-suite] alert delete result', { id, deleted: Number(rowCount) || 0 })
     if (!rowCount) return res.status(404).json({ error: 'Alert not found' })
-    await logSecurityEvent(pool, {
-      actor: adminActor(req),
-      eventType: 'Security alert deleted',
-      status: 'completed',
-      detail: `Deleted alert ${id}`,
-      metadata: { alert_id: id },
-    })
+    // Do not re-insert into security_events after delete — that made deletes look incomplete.
     emitSync('security_alerts_changed', { action: 'delete_one', alert_id: id })
     emitSync('security_logs_changed', { action: 'delete_one_alert', alert_id: id })
     return res.status(204).send()
@@ -892,17 +886,8 @@ deviceSecurityRouter.post('/settings/security-suite/alerts/bulk-delete', async (
       )
       const deleted = Number(out.rowCount) || 0
       console.log('[security-suite] alert bulk-delete result', { deleted, mode: 'all' })
-      if (deleted > 0) {
-        await logSecurityEvent(pool, {
-          actor: adminActor(req),
-          eventType: 'Security alerts cleared',
-          status: 'completed',
-          detail: `Deleted ${deleted} active security alerts`,
-          metadata: { deleted, mode: 'all' },
-        })
-        emitSync('security_alerts_changed', { action: 'bulk_delete', deleted, mode: 'all' })
-        emitSync('security_logs_changed', { action: 'bulk_delete_alerts', deleted, mode: 'all' })
-      }
+      emitSync('security_alerts_changed', { action: 'bulk_delete', deleted, mode: 'all' })
+      emitSync('security_logs_changed', { action: 'bulk_delete_alerts', deleted, mode: 'all' })
       return res.json({ ok: true, deleted })
     }
     const ids = Array.isArray(b.ids) ? b.ids.map((x) => text(x, 64)).filter(Boolean) : []
@@ -910,17 +895,11 @@ deviceSecurityRouter.post('/settings/security-suite/alerts/bulk-delete', async (
     const out = await pool.query(`DELETE FROM security_events WHERE id = ANY($1::uuid[])`, [ids])
     const deleted = Number(out.rowCount) || 0
     console.log('[security-suite] alert bulk-delete result', { deleted, mode: 'ids' })
-    if (deleted > 0) {
-      await logSecurityEvent(pool, {
-        actor: adminActor(req),
-        eventType: 'Security alerts cleared',
-        status: 'completed',
-        detail: `Deleted ${deleted} selected security alerts`,
-        metadata: { deleted, mode: 'ids' },
-      })
-      emitSync('security_alerts_changed', { action: 'bulk_delete', deleted, mode: 'ids' })
-      emitSync('security_logs_changed', { action: 'bulk_delete_alerts', deleted, mode: 'ids' })
+    if (deleted === 0) {
+      return res.status(404).json({ ok: false, error: 'No matching alerts deleted', deleted: 0 })
     }
+    emitSync('security_alerts_changed', { action: 'bulk_delete', deleted, mode: 'ids' })
+    emitSync('security_logs_changed', { action: 'bulk_delete_alerts', deleted, mode: 'ids' })
     return res.json({ ok: true, deleted })
   } catch (e) {
     console.error('[security-suite] alert bulk-delete', e)
@@ -991,13 +970,17 @@ deviceSecurityRouter.post('/security-logs/bulk-delete', async (req, res) => {
       console.log('[security-logs] bulk-delete result', { deleted, mode: 'all' })
       emitSync('security_logs_changed', { action: 'bulk_delete', deleted, mode: 'all' })
       emitSync('security_alerts_changed', { action: 'bulk_delete_logs', deleted, mode: 'all' })
+      // Intentionally do NOT insert a new security_events row after wipe.
       return res.json({ ok: true, deleted })
     }
     const ids = Array.isArray(b.ids) ? b.ids.map((x) => text(x, 64)).filter(Boolean) : []
     if (ids.length === 0) return res.status(400).json({ error: 'ids or all=true required' })
     const out = await pool.query(`DELETE FROM security_events WHERE id = ANY($1::uuid[])`, [ids])
     const deleted = Number(out.rowCount) || 0
-    console.log('[security-logs] bulk-delete result', { deleted, mode: 'ids' })
+    console.log('[security-logs] bulk-delete result', { deleted, mode: 'ids', requested: ids.length })
+    if (deleted === 0) {
+      return res.status(404).json({ ok: false, error: 'No matching security logs deleted', deleted: 0 })
+    }
     emitSync('security_logs_changed', { action: 'bulk_delete', deleted, mode: 'ids' })
     emitSync('security_alerts_changed', { action: 'bulk_delete_logs', deleted, mode: 'ids' })
     return res.json({ ok: true, deleted })
