@@ -216,16 +216,34 @@ Production secrets are set on the VPS via `deploy/contabo/upsert-admin-auth-env.
 
 ## K. GIT
 
-Filled after commit/push.
+- Commit (auth hardening): `2f8258b3a4152d39e98c5876b03d860d56442e8e`
+- Commit (deploy workflow helper): `78dc9a74a6be779292f4bdc7e3bbf2772ba3fd59`
+- Branch: `main`
+- Push status: pushed to `origin/main`
+- Repository: `https://github.com/sokalive/osmani-admin.git`
 
 ---
 
 ## L. DEPLOYMENT
 
-Target: Contabo VPS `admin.osmanitv.com` / `api.osmanitv.com` (`osmani-admin-api` PM2).  
-Steps: push `main` → Contabo deploy workflow or `pull-and-apply.sh` → upsert auth env → `pm2 restart osmani-admin-api --update-env` → verify `/api/admin/auth/status` shows `panelAuthRequired: true`.
+### OSMANI ADMIN DEPLOYMENT TARGET
+- **VPS:** `144.91.117.90`
+- **User:** `root`
+- **App path:** `/var/www/osmani-admin-api`
+- **Process:** PM2 `osmani-admin-api` only (listens on **10001**)
+- **Nginx:** `osmani-admin` → `dist/` + `/api` → `127.0.0.1:10001`
+- **Domains:** `admin.osmanitv.com` / `api.osmanitv.com`
+- **Not touched:** `osmani-tv-backend` (port 10000), Nassani, Kitonga, Rahimu, or other projects
+- **SSH method used for final verify:** password auth to `144.91.117.90` as `root` (Nassani SSH key was NOT used)
 
----
+### Status
+- Live commit: `78dc9a74a6be779292f4bdc7e3bbf2772ba3fd59`
+- `panelAuthRequired: true`
+- Auth secrets present in `server/.env` (values not logged)
+- Tables/columns verified; block/revoke E2E passed
+
+### Readiness hang root cause
+Health on `http://127.0.0.1:10001/api/health` was already OK. The stuck verifier hung later on full `ensureBillingTables()` / extra PG pool usage, not on an infinite health poll. Bounded verification replaced that path.
 
 ---
 
