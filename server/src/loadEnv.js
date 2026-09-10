@@ -51,17 +51,15 @@ function shouldLoadCutoverEnv() {
 }
 
 /**
- * Trusted internal Admin installs — Contabo VPS (OSMANI_VPS=1) and Render (RENDER=true) —
- * open the dashboard directly with no email/PIN/OTP screen. This only removes the
- * interactive login UI: every admin route still goes through requireAdminPanelAccess,
- * which demands a matching X-Admin-Token. Set ADMIN_TRUSTED_INSTALL=0 to restore login.
+ * Trusted-install mode (open dashboard with shared X-Admin-Token only) is OFF by default.
+ * It must be opted into explicitly via ADMIN_TRUSTED_INSTALL=1 — Contabo/Render no longer
+ * auto-disable interactive email+PIN+OTP login. Production should keep ADMIN_TRUSTED_INSTALL=0
+ * and ADMIN_PANEL_AUTH_REQUIRED=true.
  */
 function isTrustedAdminInstall() {
   const explicit = String(process.env.ADMIN_TRUSTED_INSTALL ?? '').trim().toLowerCase()
-  if (['0', 'false', 'no', 'off'].includes(explicit)) return false
   if (['1', 'true', 'yes', 'on'].includes(explicit)) return true
-  if (String(process.env.OSMANI_VPS || '').trim() === '1') return true
-  return String(process.env.RENDER || '').trim().toLowerCase() === 'true'
+  return false
 }
 
 /**

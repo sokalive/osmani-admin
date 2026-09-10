@@ -1,5 +1,9 @@
 import { getAdminDeviceFingerprintRaw } from './adminDeviceFingerprint'
-import { getAdminSessionToken } from './adminSessionStorage'
+import {
+  clearAdminSession,
+  getAdminDeviceCredential,
+  getAdminSessionToken,
+} from './adminSessionStorage'
 import { bannerSaveBody } from './bannerSaveBody.js'
 
 const API_BASE_ENV = String(
@@ -64,8 +68,8 @@ export function normalizeApiBase(raw) {
 export const API_BASE = normalizeApiBase(API_BASE_ENV)
 export const API_ORIGIN = API_BASE.replace(/\/api$/i, '')
 
-/** Admin UI fetches: bypass HTTP disk/memory cache so reads after writes match PostgreSQL. */
-const ADMIN_FETCH_DEFAULTS = { cache: 'no-store' }
+/** Admin UI fetches: bypass HTTP disk/memory cache; include cookies for panel auth. */
+const ADMIN_FETCH_DEFAULTS = { cache: 'no-store', credentials: 'include' }
 
 async function parseJsonSafe(res) {
   const text = await res.text()
@@ -86,12 +90,41 @@ function msgFromBody(body, status) {
   return `Request failed (${status})`
 }
 
+function apiErrorCode(body) {
+  return body && typeof body === 'object' && body.code != null ? String(body.code) : undefined
+}
+
+/** Dedupe DEVICE_BLOCKED clears so logout → API 403 cannot loop. */
+let lastDeviceBlockedHandledAt = 0
+
+function handleDeviceBlockedSessionClear(_status, body) {
+  const code = apiErrorCode(body)
+  if (code !== 'DEVICE_BLOCKED') return
+  const now = Date.now()
+  if (now - lastDeviceBlockedHandledAt < 1500) return
+  lastDeviceBlockedHandledAt = now
+  try {
+    clearAdminSession()
+  } catch {
+    /* ignore */
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('osmani-admin-auth-blocked', { detail: { code: 'DEVICE_BLOCKED' } }),
+    )
+  }
+}
+
 export class ApiError extends Error {
   constructor(message, status, body) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.body = body
+    this.code = apiErrorCode(body)
+    if (this.code === 'DEVICE_BLOCKED') {
+      handleDeviceBlockedSessionClear(status, body)
+    }
   }
 }
 
@@ -537,17 +570,19 @@ export function clearAdminSecurityGateToken() {
   sessionStorage.removeItem(ADMIN_SECURITY_GATE_KEY)
 }
 
-/** Matches server ADMIN_API_TOKEN + optional Bearer session when ADMIN_PANEL_AUTH_REQUIRED=true. */
+/** Matches optional VITE_ADMIN_API_TOKEN + Bearer session + device identity for cookie/non-cookie clients. */
 export function adminPanelApiHeaders() {
-  const legacyToken = String(import.meta.env.VITE_ADMIN_API_TOKEN ?? '').trim() || '3030'
   const h = {
     'Content-Type': 'application/json',
-    'X-Admin-Token': legacyToken,
     'X-Admin-Device-Fingerprint': getAdminDeviceFingerprintRaw(),
   }
+  const envToken = String(import.meta.env.VITE_ADMIN_API_TOKEN ?? '').trim()
+  if (envToken) h['X-Admin-Token'] = envToken
   if (typeof localStorage !== 'undefined') {
     const jwt = getAdminSessionToken()
     if (jwt) h.Authorization = `Bearer ${jwt}`
+    const deviceCred = getAdminDeviceCredential()
+    if (deviceCred) h['X-Admin-Device-Credential'] = deviceCred
   }
   return h
 }
@@ -617,20 +652,44 @@ export async function getAdminAuthStatus() {
   }
 }
 
+/** Cookie/session restore for panel auth (credentials include). */
+export async function getAdminAuthSession() {
+  const res = await fetch(joinPath('/admin/auth/session'), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'GET',
+    headers: adminPanelApiHeaders(),
+  })
+  const body = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(body, res.status), res.status, body)
+  return body
+}
+
+async function postAdminAuthJson(path, body) {
+  const res = await fetch(joinPath(path), {
+    ...ADMIN_FETCH_DEFAULTS,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? '{}' : JSON.stringify(body),
+  })
+  const parsed = await parseJsonSafe(res)
+  if (!res.ok) throw new ApiError(msgFromBody(parsed, res.status), res.status, parsed)
+  return parsed
+}
+
 export function postAdminLogin(body) {
-  return apiPost('/admin/auth/login', body)
+  return postAdminAuthJson('/admin/auth/login', body)
 }
 
 export function postAdminVerifyOtp(body) {
-  return apiPost('/admin/auth/verify-otp', body)
+  return postAdminAuthJson('/admin/auth/verify-otp', body)
 }
 
 export function postAdminResendOtp(body) {
-  return apiPost('/admin/auth/resend-otp', body)
+  return postAdminAuthJson('/admin/auth/resend-otp', body)
 }
 
 export function postAdminEmergencyPin(body) {
-  return apiPost('/admin/auth/emergency-pin', body)
+  return postAdminAuthJson('/admin/auth/emergency-pin', body)
 }
 
 export function getAdminAuthMe() {

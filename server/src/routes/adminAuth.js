@@ -4,7 +4,11 @@ import { getPool } from '../db/pool.js'
 import * as authStore from '../adminAuthStore.js'
 import { adminAuthAudit } from '../lib/adminAuthAudit.js'
 import { signAdminJwt, verifyAdminJwt } from '../lib/adminJwt.js'
-import { sendAdminOtpEmail, sendAdminSecurityGateOtpEmail } from '../lib/resendOtpMail.js'
+import {
+  sendAdminOtpEmail,
+  sendAdminSecurityGateOtpEmail,
+  sendNewAdminDeviceAlertEmail,
+} from '../lib/resendOtpMail.js'
 import {
   OTP_PURPOSE_ADMIN_SECURITY_DESTRUCTIVE,
   OTP_PURPOSE_ADMIN_SECURITY_GATE,
@@ -24,10 +28,29 @@ import {
   adminSecurityPinFromBody,
   verifyAdminSecurityPin,
 } from '../lib/adminSecurityPin.js'
+import {
+  clearAdminAuthCookies,
+  readAdminDeviceCredential,
+  readAdminSessionToken,
+  setAdminAuthCookies,
+} from '../lib/adminAuthCookies.js'
+import {
+  allowedAdminLoginEmail,
+  verifyAdminLoginCredential,
+} from '../lib/adminLoginPin.js'
+import { defaultDeviceName, parseAdminUserAgent } from '../lib/adminUaParse.js'
+import { lookupIpGeo } from '../lib/ipGeoLookup.js'
+import { hashAdminDeviceCredential } from '../lib/adminDeviceCredential.js'
 
 export const adminAuthRouter = Router()
 
 const OTP_PENDING_TYP = 'otp_pending'
+
+/** Trusted-device session lifetime (~30 days). */
+const SESSION_TTL_SECONDS = Math.min(
+  90 * 86400,
+  Math.max(3600, Number(process.env.ADMIN_SESSION_TTL_SECONDS) || 30 * 86400),
+)
 
 /** --- Simple in-memory rate limits (per process) --- */
 const loginAttempts = new Map()
@@ -58,11 +81,52 @@ function pruneBucket(map, key, windowMs, max) {
   return true
 }
 
-function bearerPayload(req) {
-  const auth = String(req.headers.authorization ?? '')
-  const m = /^Bearer\s+(.+)$/i.exec(auth)
-  if (!m) return null
-  return verifyAdminJwt(m[1].trim())
+function isoDate(v) {
+  if (!v) return null
+  return v instanceof Date ? v.toISOString() : String(v)
+}
+
+/**
+ * Create jti, sign JWT (sub/em/fp/did/sv/jti/emerg), insert session row, set HttpOnly cookies.
+ */
+async function issueSession(res, req, {
+  user,
+  fpHash,
+  deviceRow = null,
+  emergency = false,
+  deviceCredentialPlain = null,
+  ttlSeconds = SESSION_TTL_SECONDS,
+} = {}) {
+  const jti = authStore.newSessionJti()
+  const ttl = Math.max(60, Number(ttlSeconds) || SESSION_TTL_SECONDS)
+  const token = signAdminJwt(
+    {
+      sub: user.id,
+      em: user.email,
+      fp: fpHash,
+      did: deviceRow?.id || undefined,
+      sv: deviceRow != null ? Number(deviceRow.session_version || 1) : undefined,
+      jti,
+      emerg: emergency === true,
+    },
+    { ttlSeconds: ttl },
+  )
+
+  await authStore.createAdminSession({
+    userId: user.id,
+    deviceId: deviceRow?.id || null,
+    jti,
+    expiresAt: new Date(Date.now() + ttl * 1000),
+    ip: clientIp(req),
+    userAgent: String(req.headers['user-agent'] ?? ''),
+  })
+
+  setAdminAuthCookies(res, req, {
+    sessionToken: token,
+    ...(deviceCredentialPlain ? { deviceCredential: deviceCredentialPlain } : {}),
+  })
+
+  return { token, jti }
 }
 
 async function attachAdminReq(req, res, next) {
@@ -70,46 +134,83 @@ async function attachAdminReq(req, res, next) {
     if (!isAdminPanelAuthRequired()) {
       return res.status(503).json({ ok: false, error: 'ADMIN_PANEL_AUTH_REQUIRED is not enabled on the server' })
     }
-    const payload = bearerPayload(req)
+    const token = readAdminSessionToken(req)
+    const payload = token ? verifyAdminJwt(token) : null
     if (!payload?.sub || !payload.fp) {
-      return res.status(401).json({ ok: false, error: 'Invalid session' })
+      return res.status(401).json({ ok: false, error: 'Invalid session', code: 'INVALID_SESSION' })
     }
+    if (payload.typ === OTP_PENDING_TYP || payload.typ === 'admin_security_gate') {
+      return res.status(401).json({ ok: false, error: 'Invalid session type', code: 'INVALID_SESSION' })
+    }
+
     const rawFp = String(req.headers['x-admin-device-fingerprint'] ?? '').trim()
     if (!rawFp || authStore.hashAdminDeviceFingerprint(rawFp) !== payload.fp) {
-      return res.status(401).json({ ok: false, error: 'Device mismatch' })
+      return res.status(401).json({ ok: false, error: 'Device mismatch', code: 'DEVICE_MISMATCH' })
     }
+
+    if (payload.jti) {
+      const sess = await authStore.getActiveSessionByJti(payload.jti)
+      if (!sess) {
+        return res.status(401).json({
+          ok: false,
+          error: 'Session revoked or expired',
+          code: 'SESSION_REVOKED',
+        })
+      }
+      void authStore.touchSession(payload.jti)
+    }
+
     if (payload.emerg === true) {
       req.adminUserId = payload.sub
       req.adminEmail = payload.em
       req.adminEmergency = true
+      req.adminJti = payload.jti
       return next()
     }
+
     const row = await authStore.getTrustedDeviceRow(payload.sub, payload.fp)
-    if (!row || row.blocked) {
-      return res.status(403).json({ ok: false, error: 'Device blocked or removed' })
+    if (!row) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Trusted device removed — sign in again',
+        code: 'DEVICE_REVOKED',
+      })
     }
-    if (row.force_otp_next) {
+    if (row.blocked === true || row.status === 'BLOCKED') {
+      return res.status(403).json({
+        ok: false,
+        error: 'This device is blocked',
+        code: 'DEVICE_BLOCKED',
+      })
+    }
+    if (row.revoked_at || row.status === 'REVOKED') {
+      return res.status(403).json({
+        ok: false,
+        error: 'This device was revoked',
+        code: 'DEVICE_REVOKED',
+      })
+    }
+    if (row.force_otp_next === true) {
       return res.status(403).json({ ok: false, code: 'FORCE_OTP', error: 'Re-verification required' })
     }
+    if (payload.sv != null && Number(payload.sv) !== Number(row.session_version || 1)) {
+      return res.status(401).json({
+        ok: false,
+        error: 'Session invalidated',
+        code: 'SESSION_REVOKED',
+      })
+    }
+
+    void authStore.touchTrustedDeviceLastUsed(row.id)
     req.adminUserId = payload.sub
     req.adminEmail = payload.em
     req.adminEmergency = false
+    req.adminDeviceId = row.id
+    req.adminJti = payload.jti
     return next()
   } catch (e) {
     return next(e)
   }
-}
-
-function sessionJwt(user, fpHash, opts = {}) {
-  return signAdminJwt(
-    {
-      sub: user.id,
-      em: user.email,
-      fp: fpHash,
-      emerg: opts.emergency === true,
-    },
-    { ttlSeconds: opts.ttlSeconds ?? 86400 },
-  )
 }
 
 function pendingJwt(user, fpHash) {
@@ -201,11 +302,166 @@ function sendCurrentDeviceConfirm(res) {
   })
 }
 
+function mapDeviceRow(r, currentHash) {
+  const createdAt = isoDate(r.created_at)
+  const lastUsedAt = isoDate(r.last_used_at)
+  return {
+    id: r.id,
+    deviceFingerprintHash: r.device_fingerprint_hash,
+    deviceName: r.device_name,
+    browser: r.browser,
+    ipAddress: r.ip_address,
+    deviceType: r.device_type || null,
+    osName: r.os_name || null,
+    country: r.country || null,
+    region: r.region || null,
+    city: r.city || null,
+    isp: r.isp || null,
+    trusted: r.trusted === true,
+    blocked: r.blocked === true,
+    forceOtpNext: r.force_otp_next === true,
+    status: r.derived_status || authStore.deriveStatus(r),
+    createdAt,
+    lastUsedAt,
+    lastLoginAt: isoDate(r.last_login_at),
+    firstSeen: createdAt,
+    lastActive: lastUsedAt,
+    isCurrentDevice: r.device_fingerprint_hash === currentHash,
+  }
+}
+
 adminAuthRouter.get('/status', (_req, res) => {
   res.json({
     ok: true,
     panelAuthRequired: isAdminPanelAuthRequired(),
   })
+})
+
+/**
+ * Restore session from HttpOnly session cookie, or re-issue from trusted device credential
+ * (login once per trusted device).
+ */
+adminAuthRouter.get('/session', async (req, res) => {
+  try {
+    if (!isAdminPanelAuthRequired()) {
+      return res.json({ ok: true, authenticated: false, panelAuthRequired: false })
+    }
+
+    const rawFp = String(req.headers['x-admin-device-fingerprint'] ?? '').trim()
+    const fpHash = rawFp ? authStore.hashAdminDeviceFingerprint(rawFp) : ''
+
+    const sessionToken = readAdminSessionToken(req)
+    if (sessionToken) {
+      const payload = verifyAdminJwt(sessionToken)
+      if (
+        payload?.sub &&
+        payload.fp &&
+        payload.typ !== OTP_PENDING_TYP &&
+        payload.typ !== 'admin_security_gate'
+      ) {
+        if (fpHash && fpHash !== payload.fp) {
+          return res.status(401).json({ ok: false, authenticated: false, error: 'Device mismatch' })
+        }
+        if (payload.jti) {
+          const sess = await authStore.getActiveSessionByJti(payload.jti)
+          if (!sess) {
+            /* fall through to device credential */
+          } else if (payload.emerg === true) {
+            void authStore.touchSession(payload.jti)
+            return res.json({
+              ok: true,
+              authenticated: true,
+              email: payload.em,
+              emergency: true,
+              token: sessionToken,
+            })
+          } else {
+            const row = await authStore.getTrustedDeviceRow(payload.sub, payload.fp)
+            if (
+              row &&
+              row.blocked !== true &&
+              row.status !== 'BLOCKED' &&
+              !row.revoked_at &&
+              row.status !== 'REVOKED' &&
+              row.force_otp_next !== true &&
+              (payload.sv == null || Number(payload.sv) === Number(row.session_version || 1))
+            ) {
+              void authStore.touchSession(payload.jti)
+              void authStore.touchTrustedDeviceLastUsed(row.id)
+              return res.json({
+                ok: true,
+                authenticated: true,
+                email: payload.em,
+                emergency: false,
+                deviceId: row.id,
+                token: sessionToken,
+              })
+            }
+          }
+        } else if (payload.emerg === true) {
+          return res.json({
+            ok: true,
+            authenticated: true,
+            email: payload.em,
+            emergency: true,
+            token: sessionToken,
+          })
+        }
+      }
+    }
+
+    const deviceCred = readAdminDeviceCredential(req)
+    if (!deviceCred || !rawFp) {
+      return res.json({ ok: true, authenticated: false })
+    }
+
+    const credHash = hashAdminDeviceCredential(deviceCred)
+    const device = await authStore.getTrustedDeviceByCredentialHash(credHash)
+    if (!device) {
+      return res.json({ ok: true, authenticated: false })
+    }
+    if (device.blocked === true || device.status === 'BLOCKED') {
+      return res.status(403).json({
+        ok: false,
+        authenticated: false,
+        code: 'DEVICE_BLOCKED',
+        error: 'This device is blocked',
+      })
+    }
+    if (device.revoked_at || device.status === 'REVOKED') {
+      return res.json({ ok: true, authenticated: false, code: 'DEVICE_REVOKED' })
+    }
+    if (device.force_otp_next === true || device.trusted !== true) {
+      return res.json({ ok: true, authenticated: false, code: 'FORCE_OTP' })
+    }
+    if (device.device_fingerprint_hash !== fpHash) {
+      return res.status(401).json({ ok: false, authenticated: false, error: 'Device mismatch' })
+    }
+
+    const user = await authStore.findAdminUserById(device.admin_user_id)
+    if (!user) {
+      return res.json({ ok: true, authenticated: false })
+    }
+
+    await authStore.touchTrustedDeviceLastUsed(device.id)
+    const { token } = await issueSession(res, req, {
+      user,
+      fpHash,
+      deviceRow: device,
+    })
+    adminAuthAudit('session_restore_device_cred', { email: user.email, device_id: device.id })
+    return res.json({
+      ok: true,
+      authenticated: true,
+      email: user.email,
+      emergency: false,
+      deviceId: device.id,
+      token,
+    })
+  } catch (e) {
+    console.error('[admin-auth session]', e)
+    res.status(500).json({ ok: false, authenticated: false, error: String(e.message || e) })
+  }
 })
 
 adminAuthRouter.post('/login', async (req, res) => {
@@ -236,38 +492,72 @@ adminAuthRouter.post('/login', async (req, res) => {
 
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const email = String(body.email ?? '').trim().toLowerCase()
-    const password = String(body.password ?? '')
+    const pinOrPassword = String(body.pin ?? body.password ?? '')
     const deviceFingerprint = String(body.device_fingerprint ?? body.deviceFingerprint ?? '').trim()
-    const deviceName = String(body.device_name ?? body.deviceName ?? 'Admin device').slice(0, 200)
-    const browser = String(body.browser ?? req.headers['user-agent'] ?? '').slice(0, 400)
+    const uaRaw = String(body.browser ?? req.headers['user-agent'] ?? '')
+    const ua = parseAdminUserAgent(uaRaw)
+    const deviceName = String(
+      body.device_name ?? body.deviceName ?? defaultDeviceName(ua),
+    ).slice(0, 200)
 
-    if (!email || !password || !deviceFingerprint) {
-      return res.status(400).json({ ok: false, error: 'email, password, and device_fingerprint required' })
+    if (!email || !pinOrPassword || !deviceFingerprint) {
+      return res.status(400).json({ ok: false, error: 'email, pin (or password), and device_fingerprint required' })
+    }
+
+    if (!allowedAdminLoginEmail(email)) {
+      adminAuthAudit('login_failure', { email, ip, reason: 'email_not_allowed' })
+      return res.status(401).json({ ok: false, error: 'Invalid email or PIN' })
     }
 
     const fpHash = authStore.hashAdminDeviceFingerprint(deviceFingerprint)
     const user = await authStore.findAdminUserByEmail(email)
-    if (!user || !(await authStore.verifyAdminPassword(user, password))) {
+    if (!user || !(await verifyAdminLoginCredential(user, pinOrPassword))) {
       adminAuthAudit('login_failure', { email, ip, reason: 'bad_credentials' })
-      return res.status(401).json({ ok: false, error: 'Invalid email or password' })
+      return res.status(401).json({ ok: false, error: 'Invalid email or PIN' })
     }
 
     const existing = await authStore.getTrustedDeviceRow(user.id, fpHash)
-    if (existing?.blocked === true) {
+    if (existing?.blocked === true || existing?.status === 'BLOCKED') {
       adminAuthAudit('login_failure', { email, reason: 'device_blocked' })
-      return res.status(403).json({ ok: false, error: 'This device is blocked' })
+      await authStore.recordSecurityEvent({
+        adminUserId: user.id,
+        eventType: 'login_blocked_device',
+        result: 'denied',
+        deviceId: existing.id,
+        ip,
+        userAgent: ua.userAgent,
+      })
+      return res.status(403).json({
+        ok: false,
+        code: 'DEVICE_BLOCKED',
+        error: 'This device is blocked',
+      })
     }
 
     const trusted =
       existing &&
       existing.trusted === true &&
       existing.blocked !== true &&
-      existing.force_otp_next !== true
+      existing.force_otp_next !== true &&
+      existing.status !== 'REVOKED' &&
+      !existing.revoked_at
 
     if (trusted) {
       await authStore.touchTrustedDeviceLastUsed(existing.id)
-      const token = sessionJwt(user, fpHash)
+      const { token } = await issueSession(res, req, {
+        user,
+        fpHash,
+        deviceRow: existing,
+      })
       adminAuthAudit('login_success', { email, device_id: existing.id })
+      await authStore.recordSecurityEvent({
+        adminUserId: user.id,
+        eventType: 'login_trusted_device',
+        result: 'ok',
+        deviceId: existing.id,
+        ip,
+        userAgent: ua.userAgent,
+      })
       return res.json({
         ok: true,
         step: 'authenticated',
@@ -291,6 +581,15 @@ adminAuthRouter.post('/login', async (req, res) => {
 
     const pendingToken = pendingJwt(user, fpHash)
     adminAuthAudit('otp_sent', { email, ip, resend_skipped: emailed.skipped === true })
+    await authStore.recordSecurityEvent({
+      adminUserId: user.id,
+      eventType: 'login_otp_sent',
+      result: 'ok',
+      deviceId: existing?.id || null,
+      ip,
+      userAgent: ua.userAgent,
+      metadata: { device_name: deviceName },
+    })
     return res.json({
       ok: true,
       step: 'otp_required',
@@ -314,8 +613,11 @@ adminAuthRouter.post('/verify-otp', async (req, res) => {
     const pendingToken = String(body.pending_token ?? body.pendingToken ?? '').trim()
     const code = String(body.code ?? body.otp ?? '').replace(/\D/g, '').slice(0, 6)
     const deviceFingerprint = String(body.device_fingerprint ?? body.deviceFingerprint ?? '').trim()
-    const deviceName = String(body.device_name ?? body.deviceName ?? 'Admin device').slice(0, 200)
-    const browser = String(body.browser ?? req.headers['user-agent'] ?? '').slice(0, 400)
+    const uaRaw = String(body.browser ?? req.headers['user-agent'] ?? '')
+    const ua = parseAdminUserAgent(uaRaw)
+    const deviceName = String(
+      body.device_name ?? body.deviceName ?? defaultDeviceName(ua),
+    ).slice(0, 200)
     const ip = clientIp(req)
 
     if (!pendingToken || code.length !== 6 || !deviceFingerprint) {
@@ -369,18 +671,77 @@ adminAuthRouter.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'User not found' })
     }
 
-    await authStore.upsertTrustedDevice({
+    const geo = await lookupIpGeo(ip)
+    const locationParts = []
+    if (geo.ok) {
+      if (geo.city) locationParts.push(geo.city)
+      if (geo.region) locationParts.push(geo.region)
+      if (geo.country) locationParts.push(geo.country)
+      else if (geo.countryCode) locationParts.push(geo.countryCode)
+    }
+    const location = locationParts.join(', ') || 'Unknown'
+
+    const { row, deviceCredentialPlain, isNewDevice } = await authStore.upsertTrustedDevice({
       userId: user.id,
       fpHash,
       deviceName,
-      browser,
+      browser: ua.browser,
       ip,
+      deviceType: ua.deviceType,
+      osName: ua.osName,
+      userAgent: ua.userAgent,
+      country: geo.ok ? geo.country || geo.countryCode : '',
+      region: geo.ok ? geo.region : '',
+      city: geo.ok ? geo.city : '',
+      isp: geo.ok ? geo.isp : '',
+      rotateCredential: true,
     })
 
-    const token = sessionJwt(user, fpHash)
+    const { token } = await issueSession(res, req, {
+      user,
+      fpHash,
+      deviceRow: row,
+      deviceCredentialPlain,
+    })
+
     adminAuthAudit('otp_verified', { email: user.email })
-    adminAuthAudit('trusted_device_added', { email: user.email, fp_hash: fpHash })
-    return res.json({ ok: true, token, email: user.email })
+    adminAuthAudit('trusted_device_added', { email: user.email, fp_hash: fpHash, new: isNewDevice })
+    await authStore.recordSecurityEvent({
+      adminUserId: user.id,
+      eventType: isNewDevice ? 'new_trusted_device' : 'trusted_device_reverified',
+      result: 'ok',
+      deviceId: row?.id || null,
+      ip,
+      userAgent: ua.userAgent,
+      metadata: {
+        device_name: deviceName,
+        os_name: ua.osName,
+        browser: ua.browser,
+        location,
+      },
+    })
+
+    const alertTo = adminAlertEmail() || user.email
+    if (isNewDevice && alertTo) {
+      void sendNewAdminDeviceAlertEmail({
+        to: alertTo,
+        deviceName,
+        osName: ua.osName,
+        browser: ua.browser,
+        ip,
+        location,
+        time: new Date().toISOString(),
+      }).catch((err) => console.warn('[admin-auth] new device alert failed', err?.message || err))
+    }
+
+    return res.json({
+      ok: true,
+      token,
+      email: user.email,
+      deviceId: row?.id,
+      /** Mobile / non-cookie clients should store this as X-Admin-Device-Credential. */
+      deviceCredential: deviceCredentialPlain || undefined,
+    })
   } catch (e) {
     console.error('[admin-auth verify-otp]', e)
     res.status(500).json({ ok: false, error: String(e.message || e) })
@@ -442,29 +803,51 @@ adminAuthRouter.post('/emergency-pin', async (req, res) => {
 
     const body = req.body && typeof req.body === 'object' ? req.body : {}
     const email = String(body.email ?? '').trim().toLowerCase()
-    const password = String(body.password ?? '')
-    const pin = String(body.pin ?? '').trim()
     const deviceFingerprint = String(body.device_fingerprint ?? body.deviceFingerprint ?? '').trim()
+    // Legacy UI: password=login + pin=emergency. Also accept login_pin / emergency_pin.
+    const credential = String(body.password ?? body.login_pin ?? body.loginPin ?? '').trim()
+    const unlockPin = String(body.emergency_pin ?? body.emergencyPin ?? body.pin ?? '').trim()
 
-    if (!email || !password || !pin || !deviceFingerprint) {
-      return res.status(400).json({ ok: false, error: 'email, password, pin, device_fingerprint required' })
+    if (!email || !credential || !unlockPin || !deviceFingerprint) {
+      return res.status(400).json({
+        ok: false,
+        error: 'email, password (or login pin), emergency pin, device_fingerprint required',
+      })
+    }
+
+    if (!allowedAdminLoginEmail(email)) {
+      adminAuthAudit('login_failure', { email, reason: 'emergency_email_not_allowed' })
+      return res.status(401).json({ ok: false, error: 'Invalid credentials' })
     }
 
     const user = await authStore.findAdminUserByEmail(email)
-    if (!user || !(await authStore.verifyAdminPassword(user, password))) {
+    if (!user || !(await verifyAdminLoginCredential(user, credential))) {
       adminAuthAudit('login_failure', { email, reason: 'emergency_bad_credentials' })
       return res.status(401).json({ ok: false, error: 'Invalid credentials' })
     }
 
-    if (!(await billing.verifyManualSubscriptionGrantPin(pin))) {
+    if (!(await billing.verifyManualSubscriptionGrantPin(unlockPin))) {
       adminAuthAudit('login_failure', { email, reason: 'emergency_bad_pin' })
       return res.status(403).json({ ok: false, error: 'Invalid PIN' })
     }
 
     const fpHash = authStore.hashAdminDeviceFingerprint(deviceFingerprint)
     const ttl = Math.min(86400, Math.max(600, Number(process.env.ADMIN_EMERGENCY_SESSION_SECONDS) || 7200))
-    const token = sessionJwt(user, fpHash, { emergency: true, ttlSeconds: ttl })
+    const { token } = await issueSession(res, req, {
+      user,
+      fpHash,
+      deviceRow: null,
+      emergency: true,
+      ttlSeconds: ttl,
+    })
     adminAuthAudit('emergency_pin_access', { email })
+    await authStore.recordSecurityEvent({
+      adminUserId: user.id,
+      eventType: 'emergency_pin_access',
+      result: 'ok',
+      ip: clientIp(req),
+      userAgent: String(req.headers['user-agent'] ?? ''),
+    })
     return res.json({ ok: true, token, email: user.email, emergency: true })
   } catch (e) {
     console.error('[admin-auth emergency]', e)
@@ -486,6 +869,7 @@ adminAuthRouter.get('/me', attachAdminReq, async (req, res) => {
             id: row.id,
             forceOtpNext: row.force_otp_next === true,
             blocked: row.blocked === true,
+            status: authStore.deriveStatus(row),
           }
         : null,
     })
@@ -502,11 +886,28 @@ adminAuthRouter.post('/refresh', attachAdminReq, async (req, res) => {
     if (!user) {
       return res.status(401).json({ ok: false, error: 'Invalid session' })
     }
-    if (!req.adminEmergency) {
-      const row = await authStore.getTrustedDeviceRow(req.adminUserId, fpHash)
-      if (row?.id) await authStore.touchTrustedDeviceLastUsed(row.id)
+
+    if (req.adminJti) {
+      await authStore.revokeSessionByJti(req.adminJti)
     }
-    const token = sessionJwt(user, fpHash, { emergency: req.adminEmergency === true })
+
+    let deviceRow = null
+    if (!req.adminEmergency) {
+      deviceRow = await authStore.getTrustedDeviceRow(req.adminUserId, fpHash)
+      if (deviceRow?.id) await authStore.touchTrustedDeviceLastUsed(deviceRow.id)
+    }
+
+    const ttl = req.adminEmergency
+      ? Math.min(86400, Math.max(600, Number(process.env.ADMIN_EMERGENCY_SESSION_SECONDS) || 7200))
+      : SESSION_TTL_SECONDS
+
+    const { token } = await issueSession(res, req, {
+      user,
+      fpHash,
+      deviceRow,
+      emergency: req.adminEmergency === true,
+      ttlSeconds: ttl,
+    })
     adminAuthAudit('session_refresh', { email: req.adminEmail })
     res.json({ ok: true, token, email: user.email })
   } catch (e) {
@@ -898,19 +1299,7 @@ adminAuthRouter.get('/devices', attachAdminReq, requireAdminSecurityPageGate, as
     const rows = await authStore.listTrustedDevicesForUser(req.adminUserId)
     const fpRaw = String(req.headers['x-admin-device-fingerprint'] ?? '').trim()
     const currentHash = authStore.hashAdminDeviceFingerprint(fpRaw)
-    const mapped = rows.map((r) => ({
-      id: r.id,
-      deviceFingerprintHash: r.device_fingerprint_hash,
-      deviceName: r.device_name,
-      browser: r.browser,
-      ipAddress: r.ip_address,
-      trusted: r.trusted === true,
-      blocked: r.blocked === true,
-      forceOtpNext: r.force_otp_next === true,
-      createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
-      lastUsedAt: r.last_used_at instanceof Date ? r.last_used_at.toISOString() : r.last_used_at,
-      isCurrentDevice: r.device_fingerprint_hash === currentHash,
-    }))
+    const mapped = rows.map((r) => mapDeviceRow(r, currentHash))
     res.json({ ok: true, devices: mapped })
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) })
@@ -923,21 +1312,30 @@ adminAuthRouter.post(
   requireAdminSecurityPageGate,
   requireAdminSecurityPin,
   async (req, res) => {
-  try {
-    const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
-    if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
-    const curHash = currentSessionFingerprintHash(req)
-    if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
-      return sendCurrentDeviceConfirm(res)
+    try {
+      const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
+      if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
+      const curHash = currentSessionFingerprintHash(req)
+      if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
+        return sendCurrentDeviceConfirm(res)
+      }
+      const ok = await authStore.setDeviceBlocked(req.params.id, req.adminUserId, true)
+      if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
+      adminAuthAudit('device_blocked', { device_id: req.params.id, email: req.adminEmail })
+      await authStore.recordSecurityEvent({
+        adminUserId: req.adminUserId,
+        eventType: 'device_blocked',
+        result: 'ok',
+        deviceId: req.params.id,
+        ip: clientIp(req),
+        userAgent: String(req.headers['user-agent'] ?? ''),
+      })
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) })
     }
-    const ok = await authStore.setDeviceBlocked(req.params.id, req.adminUserId, true)
-    if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
-    adminAuthAudit('device_blocked', { device_id: req.params.id, email: req.adminEmail })
-    res.json({ ok: true })
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) })
-  }
-})
+  },
+)
 
 adminAuthRouter.post(
   '/devices/:id/unblock',
@@ -945,37 +1343,71 @@ adminAuthRouter.post(
   requireAdminSecurityPageGate,
   requireAdminSecurityPin,
   async (req, res) => {
-  try {
-    const ok = await authStore.setDeviceBlocked(req.params.id, req.adminUserId, false)
-    if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
-    adminAuthAudit('device_unblocked', { device_id: req.params.id })
-    res.json({ ok: true })
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) })
-  }
-})
+    try {
+      const ok = await authStore.setDeviceBlocked(req.params.id, req.adminUserId, false)
+      if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
+      adminAuthAudit('device_unblocked', { device_id: req.params.id })
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) })
+    }
+  },
+)
 
+adminAuthRouter.post(
+  '/devices/:id/revoke',
+  attachAdminReq,
+  requireAdminSecurityPageGate,
+  requireAdminSecurityPin,
+  async (req, res) => {
+    try {
+      const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
+      if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
+      const curHash = currentSessionFingerprintHash(req)
+      if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
+        return sendCurrentDeviceConfirm(res)
+      }
+      const ok = await authStore.revokeTrustedDevice(req.params.id, req.adminUserId)
+      if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
+      adminAuthAudit('device_revoked', { device_id: req.params.id })
+      await authStore.recordSecurityEvent({
+        adminUserId: req.adminUserId,
+        eventType: 'device_revoked',
+        result: 'ok',
+        deviceId: req.params.id,
+        ip: clientIp(req),
+        userAgent: String(req.headers['user-agent'] ?? ''),
+      })
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) })
+    }
+  },
+)
+
+/** Soft-revoke (store keeps audit row). */
 adminAuthRouter.delete(
   '/devices/:id',
   attachAdminReq,
   requireAdminSecurityPageGate,
   requireAdminSecurityPin,
   async (req, res) => {
-  try {
-    const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
-    if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
-    const curHash = currentSessionFingerprintHash(req)
-    if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
-      return sendCurrentDeviceConfirm(res)
+    try {
+      const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
+      if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
+      const curHash = currentSessionFingerprintHash(req)
+      if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
+        return sendCurrentDeviceConfirm(res)
+      }
+      const ok = await authStore.deleteTrustedDevice(req.params.id, req.adminUserId)
+      if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
+      adminAuthAudit('device_removed', { device_id: req.params.id })
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) })
     }
-    const ok = await authStore.deleteTrustedDevice(req.params.id, req.adminUserId)
-    if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
-    adminAuthAudit('device_removed', { device_id: req.params.id })
-    res.json({ ok: true })
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) })
-  }
-})
+  },
+)
 
 adminAuthRouter.post(
   '/devices/:id/force-otp',
@@ -983,22 +1415,52 @@ adminAuthRouter.post(
   requireAdminSecurityPageGate,
   requireAdminSecurityPin,
   async (req, res) => {
-  try {
-    const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
-    if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
-    const curHash = currentSessionFingerprintHash(req)
-    if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
-      return sendCurrentDeviceConfirm(res)
+    try {
+      const row = await authStore.getTrustedDeviceRowById(req.params.id, req.adminUserId)
+      if (!row) return res.status(404).json({ ok: false, error: 'Device not found' })
+      const curHash = currentSessionFingerprintHash(req)
+      if (row.device_fingerprint_hash === curHash && !confirmCurrentDeviceOk(req)) {
+        return sendCurrentDeviceConfirm(res)
+      }
+      const ok = await authStore.setDeviceForceOtp(req.params.id, req.adminUserId, true)
+      if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
+      adminAuthAudit('device_force_otp', { device_id: req.params.id })
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e.message || e) })
     }
-    const ok = await authStore.setDeviceForceOtp(req.params.id, req.adminUserId, true)
-    if (!ok) return res.status(404).json({ ok: false, error: 'Device not found' })
-    adminAuthAudit('device_force_otp', { device_id: req.params.id })
+  },
+)
+
+adminAuthRouter.post('/logout', async (req, res) => {
+  try {
+    const token = readAdminSessionToken(req)
+    const payload = token ? verifyAdminJwt(token) : null
+    const body = req.body && typeof req.body === 'object' ? req.body : {}
+
+    if (body.global === true && payload?.sub) {
+      await authStore.revokeAllSessionsForUser(payload.sub)
+    } else if (payload?.jti) {
+      await authStore.revokeSessionByJti(payload.jti)
+    }
+
+    clearAdminAuthCookies(res, req)
+    if (payload?.sub) {
+      await authStore.recordSecurityEvent({
+        adminUserId: payload.sub,
+        eventType: body.global === true ? 'logout_all_sessions' : 'logout',
+        result: 'ok',
+        ip: clientIp(req),
+        userAgent: String(req.headers['user-agent'] ?? ''),
+      })
+    }
     res.json({ ok: true })
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) })
+    try {
+      clearAdminAuthCookies(res, req)
+    } catch {
+      /* ignore */
+    }
+    res.json({ ok: true })
   }
-})
-
-adminAuthRouter.post('/logout', (_req, res) => {
-  res.json({ ok: true })
 })

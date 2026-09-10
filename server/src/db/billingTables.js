@@ -1019,12 +1019,72 @@ export async function ensureBillingTables(client) {
     );
   `)
   await client.query(`
+    ALTER TABLE admin_panel_trusted_devices
+      ADD COLUMN IF NOT EXISTS device_credential_hash TEXT,
+      ADD COLUMN IF NOT EXISTS device_type TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS os_name TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS user_agent TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS country TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS region TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS isp TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ACTIVE',
+      ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ADD COLUMN IF NOT EXISTS session_version INT NOT NULL DEFAULT 1
+  `)
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS admin_panel_trusted_devices_cred_uidx
+    ON admin_panel_trusted_devices (device_credential_hash)
+    WHERE device_credential_hash IS NOT NULL AND revoked_at IS NULL
+  `)
+  await client.query(`
     CREATE INDEX IF NOT EXISTS admin_panel_trusted_devices_user_idx
     ON admin_panel_trusted_devices (admin_user_id);
   `)
   await client.query(`
     CREATE INDEX IF NOT EXISTS admin_panel_trusted_devices_fp_idx
     ON admin_panel_trusted_devices (device_fingerprint_hash);
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_panel_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      admin_user_id UUID NOT NULL REFERENCES admin_panel_users (id) ON DELETE CASCADE,
+      device_id UUID REFERENCES admin_panel_trusted_devices (id) ON DELETE SET NULL,
+      session_jti TEXT NOT NULL UNIQUE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ip_address TEXT NOT NULL DEFAULT '',
+      user_agent TEXT NOT NULL DEFAULT ''
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_sessions_device_idx
+    ON admin_panel_sessions (device_id)
+    WHERE revoked_at IS NULL
+  `)
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_panel_security_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      admin_user_id UUID REFERENCES admin_panel_users (id) ON DELETE SET NULL,
+      event_type TEXT NOT NULL,
+      result TEXT NOT NULL DEFAULT 'ok',
+      device_id UUID,
+      ip_address TEXT NOT NULL DEFAULT '',
+      user_agent TEXT NOT NULL DEFAULT '',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_security_events_created_idx
+    ON admin_panel_security_events (created_at DESC);
   `)
 
   await client.query(`

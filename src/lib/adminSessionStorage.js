@@ -2,6 +2,8 @@ export const ADMIN_TOKEN_KEY = 'osmani_admin_token'
 export const ADMIN_EMAIL_KEY = 'osmani_admin_email'
 export const PENDING_OTP_KEY = 'osmani_admin_pending_otp_token'
 export const PENDING_EMAIL_KEY = 'osmani_admin_pending_email'
+/** Non-cookie clients (mobile/webview); web primarily uses HttpOnly device cookie. */
+export const ADMIN_DEVICE_CREDENTIAL_KEY = 'osmani_admin_device_credential'
 
 function readLegacySessionToken() {
   if (typeof sessionStorage === 'undefined') return null
@@ -56,9 +58,34 @@ export function setAdminSessionEmail(email) {
   }
 }
 
+export function getAdminDeviceCredential() {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    return localStorage.getItem(ADMIN_DEVICE_CREDENTIAL_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setAdminDeviceCredential(credential) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const c = String(credential ?? '').trim()
+    if (c) localStorage.setItem(ADMIN_DEVICE_CREDENTIAL_KEY, c)
+    else localStorage.removeItem(ADMIN_DEVICE_CREDENTIAL_KEY)
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+export function clearAdminDeviceCredential() {
+  setAdminDeviceCredential(null)
+}
+
 export function clearAdminSession() {
   setAdminSessionToken(null)
   setAdminSessionEmail(null)
+  clearAdminDeviceCredential()
   if (typeof sessionStorage !== 'undefined') {
     sessionStorage.removeItem(PENDING_OTP_KEY)
     sessionStorage.removeItem(PENDING_EMAIL_KEY)

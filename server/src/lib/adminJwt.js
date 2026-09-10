@@ -22,6 +22,7 @@ export function signAdminJwt(payload, opts = {}) {
   const ttlSec = Number(opts.ttlSeconds) || 86400
   const body = {
     ...payload,
+    jti: payload.jti || crypto.randomUUID(),
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + ttlSec,
   }

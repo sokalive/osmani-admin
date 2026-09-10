@@ -1,5 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { getAdminAuthMe, getAdminAuthStatus, postAdminLogout, postAdminRefreshSession } from '../lib/api'
+import {
+  getAdminAuthMe,
+  getAdminAuthSession,
+  getAdminAuthStatus,
+  postAdminLogout,
+  postAdminRefreshSession,
+} from '../lib/api'
 import {
   adminJwtNeedsRefresh,
   clearAdminSession,
@@ -10,6 +16,7 @@ import {
   setAdminSessionEmail,
   setAdminSessionToken,
 } from '../lib/adminSessionStorage'
+import { useToast } from './ToastContext.jsx'
 
 const AdminAuthContext = createContext(null)
 
@@ -17,11 +24,13 @@ const AdminAuthContext = createContext(null)
 const PANEL_AUTH_HINT_KEY = 'osmani_admin_panel_auth_required_v1'
 
 function readPanelAuthHint() {
-  if (typeof localStorage === 'undefined') return false
+  if (typeof localStorage === 'undefined') return true
   try {
-    return localStorage.getItem(PANEL_AUTH_HINT_KEY) === 'true'
+    const v = localStorage.getItem(PANEL_AUTH_HINT_KEY)
+    if (v === null) return true
+    return v === 'true'
   } catch {
-    return false
+    return true
   }
 }
 
@@ -35,13 +44,14 @@ function writePanelAuthHint(required) {
 }
 
 export function AdminAuthProvider({ children }) {
-  // Optimistic: Contabo + Render trusted installs keep panelAuthRequired=false.
-  // Paint the shell immediately; reconcile from /admin/auth/status in the background.
+  const { showToast } = useToast()
+  // Keep last-known panelAuth hint; reconcile from /admin/auth/status in the background.
   const [panelAuthRequired, setPanelAuthRequired] = useState(() => readPanelAuthHint())
   const [ready, setReady] = useState(true)
   const [token, setTokenState] = useState(() => getAdminSessionToken())
   const [email, setEmail] = useState(() => getAdminSessionEmail())
   const [sessionChecked, setSessionChecked] = useState(() => !readPanelAuthHint())
+  const [authBlocked, setAuthBlocked] = useState(false)
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -51,8 +61,9 @@ export function AdminAuthProvider({ children }) {
       writePanelAuthHint(required)
       if (!required) setSessionChecked(true)
     } catch {
-      setPanelAuthRequired(false)
-      writePanelAuthHint(false)
+      // Fail closed: keep login required if status probe fails.
+      setPanelAuthRequired(true)
+      writePanelAuthHint(true)
       setSessionChecked(true)
     } finally {
       setReady(true)
@@ -85,6 +96,7 @@ export function AdminAuthProvider({ children }) {
     }
     setTokenState(t ?? null)
     setEmail(em ?? null)
+    setAuthBlocked(false)
     window.dispatchEvent(new Event('osmani-admin-auth'))
   }, [])
 
@@ -96,14 +108,60 @@ export function AdminAuthProvider({ children }) {
     else sessionStorage.removeItem(PENDING_EMAIL_KEY)
   }, [])
 
-  const logout = useCallback(() => {
-    void postAdminLogout().catch(() => {})
+  const clearLocalAuthState = useCallback(() => {
     clearAdminSession()
     setTokenState(null)
     setEmail(null)
     setSessionChecked(true)
     window.dispatchEvent(new Event('osmani-admin-auth'))
   }, [])
+
+  const logout = useCallback(async () => {
+    try {
+      await postAdminLogout()
+    } catch {
+      /* cookie clear may fail offline — still wipe local session */
+    }
+    clearLocalAuthState()
+  }, [clearLocalAuthState])
+
+  useEffect(() => {
+    const onBlocked = () => {
+      setAuthBlocked(true)
+      showToast('error', 'Kifaa hiki kimezuiwa — umetolewa nje')
+      void logout()
+    }
+    window.addEventListener('osmani-admin-auth-blocked', onBlocked)
+    return () => window.removeEventListener('osmani-admin-auth-blocked', onBlocked)
+  }, [logout, showToast])
+
+  // Restore cookie/Bearer session when panel auth is required.
+  useEffect(() => {
+    let cancelled = false
+    if (!ready || !panelAuthRequired) return undefined
+
+    async function restoreSession() {
+      try {
+        const s = await getAdminAuthSession()
+        if (cancelled) return
+        const authenticated =
+          s?.authenticated === true ||
+          (s?.ok === true && (s?.token || s?.email))
+        if (authenticated) {
+          const nextToken = s.token || getAdminSessionToken()
+          const nextEmail = s.email || getAdminSessionEmail() || ''
+          if (nextToken) setSession(nextToken, nextEmail)
+        }
+      } catch {
+        /* keep local token; validateSession / me will reconcile */
+      }
+    }
+
+    void restoreSession()
+    return () => {
+      cancelled = true
+    }
+  }, [ready, panelAuthRequired, setSession])
 
   useEffect(() => {
     let cancelled = false
@@ -125,7 +183,7 @@ export function AdminAuthProvider({ children }) {
         const me = await getAdminAuthMe()
         if (cancelled) return
         if (!me || me.ok !== true) {
-          logout()
+          await logout()
           return
         }
         const nextEmail = String(me.email ?? '').trim()
@@ -134,7 +192,7 @@ export function AdminAuthProvider({ children }) {
           setEmail(nextEmail)
         }
       } catch {
-        if (!cancelled) logout()
+        if (!cancelled) await logout()
       } finally {
         if (!cancelled) setSessionChecked(true)
       }
@@ -153,12 +211,24 @@ export function AdminAuthProvider({ children }) {
       panelAuthRequired,
       token,
       email,
+      authBlocked,
       setSession,
       setPendingOtp,
       logout,
       refreshStatus,
     }),
-    [ready, sessionChecked, panelAuthRequired, token, email, setSession, setPendingOtp, logout, refreshStatus],
+    [
+      ready,
+      sessionChecked,
+      panelAuthRequired,
+      token,
+      email,
+      authBlocked,
+      setSession,
+      setPendingOtp,
+      logout,
+      refreshStatus,
+    ],
   )
 
   return <AdminAuthContext.Provider value={value}>{children}</AdminAuthContext.Provider>

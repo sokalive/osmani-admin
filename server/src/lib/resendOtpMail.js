@@ -138,3 +138,66 @@ export async function sendAdminSecurityGateOtpEmail({ to, otp }) {
   }
   return { ok: true }
 }
+
+/** Alert when a new admin trusted device is registered — never include secrets/PINs/OTPs/credentials. */
+export async function sendNewAdminDeviceAlertEmail({ to, deviceName, osName, browser, ip, location, time }) {
+  const key = String(process.env.RESEND_API_KEY ?? '').trim()
+  const from = String(process.env.RESEND_FROM_EMAIL ?? '').trim()
+  if (!key || !from) {
+    console.warn('[resend] RESEND_API_KEY or RESEND_FROM_EMAIL missing — new device alert skipped')
+    return { ok: false, skipped: true }
+  }
+  if (!to) {
+    return { ok: false, error: 'alert recipient not configured' }
+  }
+
+  const safe = (v) => String(v ?? '—').slice(0, 200)
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/></head>
+<body style="margin:0;background:#0b0f1a;color:#e2e8f0;font-family:system-ui,Segoe UI,Roboto,sans-serif;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#0b0f1a;padding:32px 16px;">
+<tr><td align="center">
+  <table width="560" style="background:#111827;border-radius:16px;border:1px solid #334155;overflow:hidden;max-width:100%;">
+    <tr><td style="padding:28px 28px 12px;">
+      <p style="margin:0;font-size:11px;letter-spacing:0.25em;text-transform:uppercase;color:#fbbf24;">Osmani TV Admin</p>
+      <h1 style="margin:12px 0 8px;font-size:22px;color:#fff;">NEW ADMIN DEVICE LOGIN</h1>
+      <p style="margin:0 0 20px;font-size:14px;color:#94a3b8;line-height:1.6;">
+        A new device was verified for admin panel access. If this was not you, block the device in Admin Security immediately.
+      </p>
+      <table width="100%" style="font-size:14px;color:#e2e8f0;line-height:1.7;">
+        <tr><td style="color:#94a3b8;width:120px;">Device</td><td>${safe(deviceName)}</td></tr>
+        <tr><td style="color:#94a3b8;">OS</td><td>${safe(osName)}</td></tr>
+        <tr><td style="color:#94a3b8;">Browser</td><td>${safe(browser)}</td></tr>
+        <tr><td style="color:#94a3b8;">IP</td><td>${safe(ip)}</td></tr>
+        <tr><td style="color:#94a3b8;">Location</td><td>${safe(location)}</td></tr>
+        <tr><td style="color:#94a3b8;">Time</td><td>${safe(time)}</td></tr>
+      </table>
+    </td></tr>
+    <tr><td style="padding:16px 28px 28px;border-top:1px solid #1e293b;">
+      <p style="margin:0;font-size:11px;color:#64748b;">This is an automated security message from Osmani TV administration. No codes or credentials are included.</p>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>`
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject: 'Osmani Admin — NEW ADMIN DEVICE LOGIN',
+      html,
+    }),
+  })
+
+  const text = await res.text()
+  if (!res.ok) {
+    console.error('[resend] new admin device alert failed', res.status, text)
+    return { ok: false, error: text }
+  }
+  return { ok: true }
+}

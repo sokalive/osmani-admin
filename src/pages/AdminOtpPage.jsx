@@ -4,6 +4,7 @@ import { Shield } from 'lucide-react'
 import { getPendingOtpEmail, getPendingOtpToken, useAdminAuth } from '../context/AdminAuthContext.jsx'
 import { useToast } from '../context/ToastContext.jsx'
 import { getAdminDeviceFingerprintRaw } from '../lib/adminDeviceFingerprint'
+import { setAdminDeviceCredential } from '../lib/adminSessionStorage'
 import { postAdminResendOtp, postAdminVerifyOtp } from '../lib/api'
 
 function inputClass() {
@@ -49,6 +50,9 @@ export default function AdminOtpPage() {
       if (!out?.ok || !out.token) {
         showToast('error', out?.error || 'Nambari si sahihi')
         return
+      }
+      if (out.deviceCredential) {
+        setAdminDeviceCredential(out.deviceCredential)
       }
       setSession(out.token, out.email || pendingEmail || '')
       showToast('success', 'Kifaa kimethibitishwa')

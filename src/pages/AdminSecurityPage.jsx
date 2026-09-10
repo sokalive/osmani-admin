@@ -25,6 +25,105 @@ import {
 } from '../lib/api'
 import { formatAdminDateTime } from '../lib/formatAdminDateTime'
 
+function pick(row, ...keys) {
+  for (const k of keys) {
+    const v = row?.[k]
+    if (v != null && String(v).trim() !== '') return v
+  }
+  return null
+}
+
+function deviceStatus(row) {
+  const raw = String(
+    pick(row, 'status', 'derived_status', 'derivedStatus') || '',
+  )
+    .trim()
+    .toUpperCase()
+  if (raw === 'ACTIVE' || raw === 'TRUSTED') return 'ACTIVE'
+  if (raw === 'NEW' || raw === 'BLOCKED' || raw === 'REVOKED') return raw
+  if (row?.revokedAt || row?.revoked_at || row?.revoked) return 'REVOKED'
+  if (row?.blocked) return 'BLOCKED'
+  if (row?.forceOtpNext || row?.force_otp_next) return 'NEW'
+  if (row?.trusted) return 'ACTIVE'
+  return 'NEW'
+}
+
+function statusBadgeLabel(status) {
+  if (status === 'ACTIVE') return 'ACTIVE / TRUSTED'
+  return status
+}
+
+function statusBadgeClass(status) {
+  switch (status) {
+    case 'ACTIVE':
+      return 'bg-emerald-900/50 text-emerald-200 ring-emerald-500/40'
+    case 'NEW':
+      return 'bg-amber-900/40 text-amber-100 ring-amber-500/40'
+    case 'BLOCKED':
+      return 'bg-rose-900/50 text-rose-100 ring-rose-500/40'
+    case 'REVOKED':
+      return 'bg-slate-800 text-slate-300 ring-slate-600/50'
+    default:
+      return 'bg-slate-800 text-slate-200 ring-slate-600/50'
+  }
+}
+
+function deviceLocation(row) {
+  const city = pick(row, 'city')
+  const region = pick(row, 'region', 'regionName')
+  const country = pick(row, 'country', 'countryCode', 'country_code')
+  const parts = [city, region, country].filter(Boolean).map((x) => String(x).trim())
+  return parts.length ? parts.join(', ') : '—'
+}
+
+function deviceIp(row) {
+  return pick(row, 'ip', 'ipAddress', 'ip_address') || '—'
+}
+
+function DeviceActions({ row, busy, pinBusy, onBlock, onUnblock, onForceOtp, onRevoke }) {
+  const st = deviceStatus(row)
+  const b = busy
+  return (
+    <div className="flex flex-wrap gap-1">
+      {st !== 'BLOCKED' && st !== 'REVOKED' ? (
+        <button
+          type="button"
+          disabled={b || pinBusy}
+          onClick={onBlock}
+          className="rounded-md bg-rose-600/90 px-2 py-1 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-40"
+        >
+          BLOCK
+        </button>
+      ) : st === 'BLOCKED' ? (
+        <button
+          type="button"
+          disabled={b || pinBusy}
+          onClick={onUnblock}
+          className="rounded-md bg-emerald-700/90 px-2 py-1 text-[11px] font-bold text-white hover:bg-emerald-600 disabled:opacity-40"
+        >
+          UNBLOCK
+        </button>
+      ) : null}
+      <button
+        type="button"
+        disabled={b || st === 'BLOCKED' || st === 'REVOKED' || pinBusy}
+        onClick={onForceOtp}
+        className="rounded-md border border-amber-600/60 bg-amber-950/40 px-2 py-1 text-[11px] font-bold text-amber-100 hover:bg-amber-900/40 disabled:opacity-40"
+      >
+        FORCE OTP
+      </button>
+      <button
+        type="button"
+        disabled={b || pinBusy || st === 'REVOKED'}
+        onClick={onRevoke}
+        className="rounded-md border border-slate-600 px-2 py-1 text-[11px] font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+      >
+        REVOKE
+      </button>
+    </div>
+  )
+}
+
 export default function AdminSecurityPage() {
   const { showToast } = useToast()
   const [rows, setRows] = useState([])
@@ -59,6 +158,11 @@ export default function AdminSecurityPage() {
   const allSelected = useMemo(
     () => rows.length > 0 && rows.every((r) => selectedIds.has(r.id)),
     [rows, selectedIds],
+  )
+
+  const trustedCount = useMemo(
+    () => rows.filter((r) => deviceStatus(r) === 'ACTIVE').length,
+    [rows],
   )
 
   const load = useCallback(async () => {
@@ -201,8 +305,8 @@ export default function AdminSecurityPage() {
     setPendingDestructive({
       action: 'delete_devices',
       deviceIds: ids,
-      title: 'Futa vifaa vilivyochaguliwa',
-      message: `Unaondoa vifaa ${ids.length} vinavyoaminiwa. Hatua hii haiwezi kutenduliwa.`,
+      title: 'Revoke/Delete vifaa vilivyochaguliwa',
+      message: `Unaondoa/revoke vifaa ${ids.length}. Hatua hii haiwezi kutenduliwa kwa urahisi.`,
       requireTyped: false,
     })
     setConfirmOpen(true)
@@ -352,8 +456,7 @@ export default function AdminSecurityPage() {
       await run(pin, false)
     } catch (e) {
       if (!(e instanceof ApiError)) throw e
-      const code =
-        e.body && typeof e.body === 'object' ? e.body.code : undefined
+      const code = e.body && typeof e.body === 'object' ? e.body.code : undefined
       if (e.status === 409 && code === 'CONFIRM_CURRENT_DEVICE') {
         const ok = window.confirm(
           'Hatua hii inahusu kifaa unachokitumia sasa kutumia ADMIN. Unaweza kujitenga na akaunti. Endelea?',
@@ -363,6 +466,74 @@ export default function AdminSecurityPage() {
         return
       }
       throw e
+    }
+  }
+
+  function confirmThen(message, run) {
+    if (!window.confirm(message)) {
+      setBusyId(null)
+      return
+    }
+    openActionModal(run)
+  }
+
+  function renderDeviceMeta(r) {
+    const st = deviceStatus(r)
+    const deviceName = pick(r, 'deviceName', 'device_name') || '—'
+    const deviceType = pick(r, 'deviceType', 'device_type') || '—'
+    const osName = pick(r, 'osName', 'os_name') || '—'
+    const browser = pick(r, 'browser') || '—'
+    const firstSeen = formatAdminDateTime(pick(r, 'firstSeen', 'first_seen', 'createdAt', 'created_at'))
+    const lastActive = formatAdminDateTime(
+      pick(r, 'lastActive', 'last_active', 'lastUsedAt', 'last_used_at'),
+    )
+    const lastLogin = formatAdminDateTime(pick(r, 'lastLogin', 'last_login', 'lastLoginAt', 'last_login_at'))
+    return {
+      st,
+      deviceName,
+      deviceType,
+      osName,
+      browser,
+      firstSeen,
+      lastActive,
+      lastLogin,
+      location: deviceLocation(r),
+      ip: deviceIp(r),
+    }
+  }
+
+  function deviceActionHandlers(r) {
+    return {
+      onBlock: () => {
+        setBusyId(r.id)
+        confirmThen('Zuia (block) kifaa hiki?', (pin, confirmCurrent) =>
+          postAdminDeviceBlock(r.id, { securityPin: pin, confirmCurrentDevice: confirmCurrent }),
+        )
+      },
+      onUnblock: () => {
+        setBusyId(r.id)
+        confirmThen('Ondoa kizuizi (unblock) cha kifaa hiki?', (pin) =>
+          postAdminDeviceUnblock(r.id, { securityPin: pin }),
+        )
+      },
+      onForceOtp: () => {
+        setBusyId(r.id)
+        confirmThen('Lazimisha OTP kwenye login ijayo kwa kifaa hiki?', (pin, confirmCurrent) =>
+          postAdminDeviceForceOtp(r.id, {
+            securityPin: pin,
+            confirmCurrentDevice: confirmCurrent,
+          }),
+        )
+      },
+      onRevoke: () => {
+        setBusyId(r.id)
+        confirmThen('Revoke/Delete kifaa hiki? Hakiwezi kutumika tena bila OTP mpya.', (pin, confirmCurrent) =>
+          deleteAdminTrustedDevice(r.id, {
+            securityPin: pin,
+            confirmCurrentDevice: confirmCurrent,
+          }),
+        )
+      },
     }
   }
 
@@ -473,7 +644,9 @@ export default function AdminSecurityPage() {
                     Security
                   </p>
                   <h1 className="text-2xl font-bold text-white sm:text-3xl">ADMIN SECURITY</h1>
-                  <p className="mt-1 text-sm text-slate-400">Vifaa vinavyoaminiwa · vizuiwi · OTP tena</p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Trusted devices · {trustedCount} ACTIVE/TRUSTED · {rows.length} total
+                  </p>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -483,7 +656,7 @@ export default function AdminSecurityPage() {
                   onClick={requestDeleteSelected}
                   className="rounded-xl border border-rose-500/40 bg-rose-950/40 px-4 py-2 text-sm font-semibold text-rose-100 hover:bg-rose-900/40 disabled:opacity-40"
                 >
-                  Delete Selected ({selectedIds.size})
+                  Revoke Selected ({selectedIds.size})
                 </button>
                 <button
                   type="button"
@@ -511,8 +684,93 @@ export default function AdminSecurityPage() {
               </div>
             </header>
 
-            <section className="overflow-x-auto rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04]">
-              <table className="min-w-[980px] w-full border-collapse text-left text-sm">
+            {/* Mobile cards */}
+            <section className="flex flex-col gap-3 lg:hidden">
+              {loading && rows.length === 0 ? (
+                <p className="py-8 text-center text-slate-500">Inapakia…</p>
+              ) : rows.length === 0 ? (
+                <p className="py-8 text-center text-slate-500">Hakuna vifaa bado.</p>
+              ) : (
+                rows.map((r) => {
+                  const m = renderDeviceMeta(r)
+                  const actions = deviceActionHandlers(r)
+                  return (
+                    <article
+                      key={r.id}
+                      className="rounded-2xl border border-slate-700/60 bg-slate-950/50 p-4 ring-1 ring-white/[0.04]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(r.id)}
+                              onChange={() => toggleRowSelected(r.id)}
+                              className="mt-0.5 h-4 w-4 rounded border-slate-500"
+                              aria-label={`Chagua ${m.deviceName}`}
+                            />
+                            <h3 className="truncate font-semibold text-slate-100">{m.deviceName}</h3>
+                            {r.isCurrentDevice ? (
+                              <span className="rounded-md bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-200 ring-1 ring-amber-500/40">
+                                CURRENT
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {m.deviceType} · {m.osName}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-lg px-2 py-0.5 text-[10px] font-bold ring-1 ${statusBadgeClass(m.st)}`}
+                        >
+                          {statusBadgeLabel(m.st)}
+                        </span>
+                      </div>
+                      <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                        <div>
+                          <dt className="text-slate-500">Browser</dt>
+                          <dd className="truncate text-slate-300" title={m.browser}>
+                            {m.browser}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-slate-500">IP</dt>
+                          <dd className="font-mono text-slate-300">{m.ip}</dd>
+                        </div>
+                        <div className="col-span-2">
+                          <dt className="text-slate-500">Location</dt>
+                          <dd className="text-slate-300">{m.location}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-slate-500">First seen</dt>
+                          <dd className="text-slate-300">{m.firstSeen}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-slate-500">Last active</dt>
+                          <dd className="text-slate-300">{m.lastActive}</dd>
+                        </div>
+                        <div className="col-span-2">
+                          <dt className="text-slate-500">Last login</dt>
+                          <dd className="text-slate-300">{m.lastLogin}</dd>
+                        </div>
+                      </dl>
+                      <div className="mt-3">
+                        <DeviceActions
+                          row={r}
+                          busy={busyId === r.id}
+                          pinBusy={pinBusy}
+                          {...actions}
+                        />
+                      </div>
+                    </article>
+                  )
+                })
+              )}
+            </section>
+
+            {/* Desktop table */}
+            <section className="hidden overflow-x-auto rounded-2xl border border-slate-700/60 bg-slate-950/40 ring-1 ring-white/[0.04] lg:block">
+              <table className="min-w-[1180px] w-full border-collapse text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-700/60 bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                     <th className="w-10 px-3 py-3">
@@ -524,32 +782,35 @@ export default function AdminSecurityPage() {
                         className="h-4 w-4 rounded border-slate-500"
                       />
                     </th>
-                    <th className="px-3 py-3 font-semibold">Kifaa</th>
+                    <th className="px-3 py-3 font-semibold">Device</th>
+                    <th className="px-3 py-3 font-semibold">Type / OS</th>
                     <th className="px-3 py-3 font-semibold">Browser</th>
                     <th className="px-3 py-3 font-semibold">IP</th>
-                    <th className="px-3 py-3 font-semibold">Iliundwa</th>
-                    <th className="px-3 py-3 font-semibold">Mwisho tumika</th>
-                    <th className="px-3 py-3 font-semibold">Hali</th>
-                    <th className="px-3 py-3 font-semibold">Vitendo</th>
+                    <th className="px-3 py-3 font-semibold">Location</th>
+                    <th className="px-3 py-3 font-semibold">First seen</th>
+                    <th className="px-3 py-3 font-semibold">Last active</th>
+                    <th className="px-3 py-3 font-semibold">Last login</th>
+                    <th className="px-3 py-3 font-semibold">Status</th>
+                    <th className="px-3 py-3 font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/80">
                   {loading && rows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-3 py-10 text-center text-slate-500">
+                      <td colSpan={11} className="px-3 py-10 text-center text-slate-500">
                         Inapakia…
                       </td>
                     </tr>
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-3 py-10 text-center text-slate-500">
+                      <td colSpan={11} className="px-3 py-10 text-center text-slate-500">
                         Hakuna vifaa bado.
                       </td>
                     </tr>
                   ) : (
                     rows.map((r) => {
-                      const st = r.blocked ? 'BLOCKED' : r.forceOtpNext ? 'OTP REQUIRED' : 'TRUSTED'
-                      const b = busyId === r.id
+                      const m = renderDeviceMeta(r)
+                      const actions = deviceActionHandlers(r)
                       return (
                         <tr key={r.id} className="bg-slate-950/20 hover:bg-slate-900/40">
                           <td className="px-3 py-2.5">
@@ -557,102 +818,53 @@ export default function AdminSecurityPage() {
                               type="checkbox"
                               checked={selectedIds.has(r.id)}
                               onChange={() => toggleRowSelected(r.id)}
-                              aria-label={`Chagua ${r.deviceName || 'kifaa'}`}
+                              aria-label={`Chagua ${m.deviceName}`}
                               className="h-4 w-4 rounded border-slate-500"
                             />
                           </td>
                           <td className="px-3 py-2.5">
-                            <span className="text-slate-200">{r.deviceName || '—'}</span>
+                            <span className="text-slate-200">{m.deviceName}</span>
                             {r.isCurrentDevice ? (
                               <span className="ml-2 rounded-md bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-200 ring-1 ring-amber-500/40">
                                 CURRENT
                               </span>
                             ) : null}
                           </td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-400">
+                            {m.deviceType} / {m.osName}
+                          </td>
                           <td
-                            className="max-w-[200px] truncate px-3 py-2.5 text-xs text-slate-400"
-                            title={r.browser}
+                            className="max-w-[160px] truncate px-3 py-2.5 text-xs text-slate-400"
+                            title={m.browser}
                           >
-                            {r.browser || '—'}
+                            {m.browser}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-slate-400">
-                            {r.ipAddress || '—'}
+                            {m.ip}
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">
-                            {formatAdminDateTime(r.createdAt)}
+                          <td
+                            className="max-w-[140px] truncate px-3 py-2.5 text-xs text-slate-400"
+                            title={m.location}
+                          >
+                            {m.location}
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">
-                            {formatAdminDateTime(r.lastUsedAt)}
-                          </td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{m.firstSeen}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{m.lastActive}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-slate-300">{m.lastLogin}</td>
                           <td className="px-3 py-2.5">
-                            <span className="rounded-lg bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-200 ring-1 ring-slate-600/50">
-                              {st}
+                            <span
+                              className={`rounded-lg px-2 py-0.5 text-[10px] font-bold ring-1 ${statusBadgeClass(m.st)}`}
+                            >
+                              {statusBadgeLabel(m.st)}
                             </span>
                           </td>
                           <td className="px-3 py-2.5">
-                            <div className="flex flex-wrap gap-1">
-                              {!r.blocked ? (
-                                <button
-                                  type="button"
-                                  disabled={b || pinBusy}
-                                  onClick={() => {
-                                    setBusyId(r.id)
-                                    openActionModal((pin, confirmCurrent) =>
-                                      postAdminDeviceBlock(r.id, { securityPin: pin, confirmCurrentDevice: confirmCurrent }),
-                                    )
-                                  }}
-                                  className="rounded-md bg-rose-600/90 px-2 py-1 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-40"
-                                >
-                                  BLOCK
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={b || pinBusy}
-                                  onClick={() => {
-                                    setBusyId(r.id)
-                                    openActionModal((pin) =>
-                                      postAdminDeviceUnblock(r.id, { securityPin: pin }),
-                                    )
-                                  }}
-                                  className="rounded-md bg-emerald-700/90 px-2 py-1 text-[11px] font-bold text-white hover:bg-emerald-600 disabled:opacity-40"
-                                >
-                                  UNBLOCK
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                disabled={b || r.blocked || pinBusy}
-                                onClick={() => {
-                                  setBusyId(r.id)
-                                  openActionModal((pin, confirmCurrent) =>
-                                    postAdminDeviceForceOtp(r.id, {
-                                      securityPin: pin,
-                                      confirmCurrentDevice: confirmCurrent,
-                                    }),
-                                  )
-                                }}
-                                className="rounded-md border border-amber-600/60 bg-amber-950/40 px-2 py-1 text-[11px] font-bold text-amber-100 hover:bg-amber-900/40 disabled:opacity-40"
-                              >
-                                FORCE OTP
-                              </button>
-                              <button
-                                type="button"
-                                disabled={b || pinBusy}
-                                onClick={() => {
-                                  setBusyId(r.id)
-                                  openActionModal((pin, confirmCurrent) =>
-                                    deleteAdminTrustedDevice(r.id, {
-                                      securityPin: pin,
-                                      confirmCurrentDevice: confirmCurrent,
-                                    }),
-                                  )
-                                }}
-                                className="rounded-md border border-slate-600 px-2 py-1 text-[11px] font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-40"
-                              >
-                                REMOVE
-                              </button>
-                            </div>
+                            <DeviceActions
+                              row={r}
+                              busy={busyId === r.id}
+                              pinBusy={pinBusy}
+                              {...actions}
+                            />
                           </td>
                         </tr>
                       )
@@ -667,4 +879,3 @@ export default function AdminSecurityPage() {
     </>
   )
 }
-

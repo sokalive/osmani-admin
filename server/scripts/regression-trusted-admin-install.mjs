@@ -1,6 +1,7 @@
 /**
- * Regression: Contabo and Render must resolve the trusted-admin login gate identically,
- * and disabling the login screen must never disable X-Admin-Token enforcement.
+ * Regression: Contabo and Render keep interactive login by default.
+ * Only ADMIN_TRUSTED_INSTALL=1 opens the dashboard without panel login.
+ * Disabling the login screen must never disable X-Admin-Token enforcement.
  *
  * Usage: node server/scripts/regression-trusted-admin-install.mjs
  */
@@ -36,12 +37,14 @@ function resolvePanelAuth(env) {
   return res.stdout.trim().split('\n').pop().trim()
 }
 
-check('Contabo VPS opens dashboard directly', resolvePanelAuth({ OSMANI_VPS: '1' }), 'false')
-check('Render opens dashboard directly', resolvePanelAuth({ RENDER: 'true' }), 'false')
+check('Contabo VPS keeps login required', resolvePanelAuth({ OSMANI_VPS: '1' }), 'true')
+check('Render keeps login required', resolvePanelAuth({ RENDER: 'true' }), 'true')
 check('Contabo and Render agree', resolvePanelAuth({ OSMANI_VPS: '1' }), resolvePanelAuth({ RENDER: 'true' }))
 check('Untrusted host keeps interactive login', resolvePanelAuth({}), 'true')
-check('ADMIN_TRUSTED_INSTALL=0 restores login on Render', resolvePanelAuth({ RENDER: 'true', ADMIN_TRUSTED_INSTALL: '0' }), 'true')
-check('ADMIN_TRUSTED_INSTALL=0 restores login on Contabo', resolvePanelAuth({ OSMANI_VPS: '1', ADMIN_TRUSTED_INSTALL: '0' }), 'true')
+check('ADMIN_TRUSTED_INSTALL=1 opens dashboard', resolvePanelAuth({ ADMIN_TRUSTED_INSTALL: '1' }), 'false')
+check('ADMIN_TRUSTED_INSTALL=1 on Contabo opens dashboard', resolvePanelAuth({ OSMANI_VPS: '1', ADMIN_TRUSTED_INSTALL: '1' }), 'false')
+check('ADMIN_TRUSTED_INSTALL=0 keeps login on Render', resolvePanelAuth({ RENDER: 'true', ADMIN_TRUSTED_INSTALL: '0' }), 'true')
+check('ADMIN_TRUSTED_INSTALL=0 keeps login on Contabo', resolvePanelAuth({ OSMANI_VPS: '1', ADMIN_TRUSTED_INSTALL: '0' }), 'true')
 
 // Trusted install must still reject requests without a valid X-Admin-Token.
 process.env.ADMIN_PANEL_AUTH_REQUIRED = 'false'

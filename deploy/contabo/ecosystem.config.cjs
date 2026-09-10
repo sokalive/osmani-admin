@@ -15,6 +15,16 @@ const SECRET_ENV_KEYS = [
   'APP_UPDATE_ADMIN_TOKEN',
   'ADMIN_JWT_SECRET',
   'ADMIN_PANEL_AUTH_REQUIRED',
+  'ADMIN_TRUSTED_INSTALL',
+  'ADMIN_LOGIN_PIN',
+  'ADMIN_SECURITY_PIN',
+  'ADMIN_PANEL_BOOTSTRAP_EMAIL',
+  'ADMIN_PANEL_BOOTSTRAP_PASSWORD',
+  'ADMIN_ALERT_EMAIL',
+  'ADMIN_DEVICE_FP_SALT',
+  'ADMIN_DEVICE_CREDENTIAL_SALT',
+  'ADMIN_OTP_HASH_SALT',
+  'RESEND_FROM_EMAIL',
   'DIRECT_STREAM_SIGNING_SECRET',
   'ZENO_API_KEY',
   'SONICPESA_API_KEY',
@@ -84,10 +94,15 @@ for (const key of SECRET_ENV_KEYS) {
   if (val) pm2Env[key] = val
 }
 
-// Trusted Contabo Admin install: open dashboard without interactive login.
-// API routes remain protected by X-Admin-Token (requireAdminPanelAccess).
-// Does NOT expose public endpoints or weaken payment/subscription auth.
-pm2Env.ADMIN_PANEL_AUTH_REQUIRED = 'false'
+// Production Admin requires email + PIN + OTP + trusted device (backend authority).
+// Set ADMIN_TRUSTED_INSTALL=1 only for emergency break-glass (shared X-Admin-Token mode).
+pm2Env.ADMIN_TRUSTED_INSTALL = String(fileEnv.ADMIN_TRUSTED_INSTALL ?? '0').trim() || '0'
+const trustedInstall = ['1', 'true', 'yes', 'on'].includes(
+  String(pm2Env.ADMIN_TRUSTED_INSTALL).toLowerCase(),
+)
+pm2Env.ADMIN_PANEL_AUTH_REQUIRED = trustedInstall ? 'false' : 'true'
+pm2Env.ADMIN_PANEL_LEGACY_TOKEN_FALLBACK =
+  String(fileEnv.ADMIN_PANEL_LEGACY_TOKEN_FALLBACK ?? 'false').trim() || 'false'
 
 if (!String(pm2Env.DATABASE_URL || '').trim()) {
   console.error(

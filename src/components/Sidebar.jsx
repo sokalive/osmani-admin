@@ -100,7 +100,7 @@ function Sidebar() {
   const navItems = [...menuItems, ...panelSecurityItem]
 
   function handleLogout() {
-    logout()
+    void logout()
     if (panelAuthRequired) navigate('/login', { replace: true })
   }
 

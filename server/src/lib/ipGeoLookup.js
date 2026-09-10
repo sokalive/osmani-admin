@@ -51,7 +51,7 @@ function cacheSet(ip, value) {
 
 /**
  * @param {string} ip
- * @returns {Promise<{ ok: true, countryCode: string, city: string, region: string } | { ok: false }>}
+ * @returns {Promise<{ ok: true, country: string, countryCode: string, city: string, region: string, isp: string } | { ok: false }>}
  */
 export async function lookupIpGeo(ip) {
   const normalized = tidy(ip)
@@ -63,7 +63,7 @@ export async function lookupIpGeo(ip) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS)
   try {
-    const url = `http://ip-api.com/json/${encodeURIComponent(normalized)}?fields=status,countryCode,city,regionName`
+    const url = `http://ip-api.com/json/${encodeURIComponent(normalized)}?fields=status,country,countryCode,city,regionName,isp`
     const res = await fetch(url, { signal: controller.signal })
     if (!res.ok) {
       cacheSet(normalized, { ok: false })
@@ -75,13 +75,13 @@ export async function lookupIpGeo(ip) {
       return { ok: false }
     }
     const countryCode = tidy(body.countryCode).slice(0, 2).toUpperCase()
-    const city = tidy(body.city)
-    const region = tidy(body.regionName)
     const value = {
       ok: true,
+      country: tidy(body.country),
       countryCode: /^[A-Z]{2}$/.test(countryCode) ? countryCode : '',
-      city,
-      region,
+      city: tidy(body.city),
+      region: tidy(body.regionName),
+      isp: tidy(body.isp),
     }
     cacheSet(normalized, value)
     return value

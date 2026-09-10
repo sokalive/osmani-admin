@@ -11,6 +11,7 @@ import { adminAuthRouter } from '../src/routes/adminAuth.js'
 process.env.ADMIN_PANEL_AUTH_REQUIRED = 'false'
 process.env.ADMIN_API_TOKEN = 'regression-token'
 delete process.env.ADMIN_SECURITY_PIN
+process.env.ADMIN_SECURITY_PIN_DEV_FALLBACK = '1'
 
 const app = express()
 app.use(express.json())
@@ -52,7 +53,7 @@ try {
 
   const ok = await post('/admin/auth/verify-security-pin', {
     token: 'regression-token',
-    pin: '3030',
+    pin: '1975',
   })
   assert.equal(ok.status, 200, 'correct PIN must unlock')
   assert.equal(ok.body?.ok, true)

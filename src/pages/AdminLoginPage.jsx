@@ -15,7 +15,7 @@ export default function AdminLoginPage() {
   const { showToast } = useToast()
   const { ready, panelAuthRequired, token, setSession, setPendingOtp } = useAdminAuth()
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   const [emergencyOpen, setEmergencyOpen] = useState(false)
   const [emergencyPin, setEmergencyPin] = useState('')
@@ -36,9 +36,11 @@ export default function AdminLoginPage() {
     setBusy(true)
     try {
       const device_fingerprint = getAdminDeviceFingerprintRaw()
+      const pinValue = String(pin ?? '').trim()
       const out = await postAdminLogin({
         email: email.trim(),
-        password,
+        pin: pinValue,
+        password: pinValue,
         device_fingerprint,
         device_name: typeof navigator !== 'undefined' ? navigator.platform || 'Web' : 'Web',
         browser: typeof navigator !== 'undefined' ? navigator.userAgent?.slice(0, 400) : '',
@@ -72,10 +74,11 @@ export default function AdminLoginPage() {
     setBusy(true)
     try {
       const device_fingerprint = getAdminDeviceFingerprintRaw()
+      const pinValue = String(pin ?? '').trim()
       const out = await postAdminEmergencyPin({
         email: email.trim(),
-        password,
         pin: emergencyPin.trim(),
+        password: pinValue,
         device_fingerprint,
       })
       if (!out?.ok || !out.token) {
@@ -143,16 +146,17 @@ export default function AdminLoginPage() {
           />
         </div>
         <div>
-          <label htmlFor="adm-pass" className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
-            Nenosiri
+          <label htmlFor="adm-pin" className="mb-1.5 block text-xs font-semibold uppercase text-slate-400">
+            PIN
           </label>
           <input
-            id="adm-pass"
+            id="adm-pin"
             type="password"
+            inputMode="numeric"
             autoComplete="current-password"
             className={inputClass()}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
             required
           />
         </div>
@@ -175,6 +179,7 @@ export default function AdminLoginPage() {
             <form onSubmit={handleEmergency} className="mt-4 space-y-3">
               <input
                 type="password"
+                inputMode="numeric"
                 placeholder="PIN ya dharura"
                 className={inputClass()}
                 value={emergencyPin}
