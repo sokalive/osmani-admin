@@ -98,8 +98,12 @@ Auth header helpers: cookies preferred; Bearer + `X-Admin-Device-Fingerprint` re
 | GET | `/devices` | session + gate | — | `{ devices: [...] }` | `403 SECURITY_GATE_REQUIRED` |
 | POST | `/devices/:id/block` | session + gate + pin | `{ confirm_current_device? }` | `{ ok }` | `403/409` |
 | POST | `/devices/:id/unblock` | session + gate + pin | — | `{ ok }` | |
-| POST | `/devices/:id/revoke` | session + gate + pin | — | `{ ok }` | soft revoke |
-| DELETE | `/devices/:id` | session + gate + pin | — | `{ ok }` | soft revoke |
+| POST | `/devices/:id/revoke` | session + gate + pin | — | `{ ok }` | soft revoke (`status=REVOKED`, credential cleared, sessions invalidated) |
+| DELETE | `/devices/:id` | session + gate + pin | — | `{ ok }` | **hard delete** after invalidate (row removed) |
+| POST | `/admin-security/destructive/start` | session + gate + pin | `{ action, deviceIds? }` | `{ challengeToken }` | `revoke_devices` / `delete_devices` / `delete_all_security_logs` |
+| POST | `/admin-security/destructive/execute` | session + gate + OTP | `{ challengeToken, otp, confirm_current_device? }` | `{ ok, affected/deleted, ... }` | `409` if zero rows affected |
+
+Also: `POST /api/security-logs/bulk-delete` `{ ids: [...] }` — hard `DELETE FROM security_events` for selected IDs only; returns `{ ok, deleted }`; `404` if zero rows.
 
 Protected admin APIs use `requireAdminPanelAccess` → JWT/cookie + device row checks.
 
@@ -172,7 +176,59 @@ Production secrets are set on the VPS via `deploy/contabo/upsert-admin-auth-env.
 | Regression: security pin gate | ok | pass | PASS |
 | Frontend build | success | success | PASS |
 | Bundle scan for PIN/Resend leaks | none | none | PASS |
-| Live OTP/device block on production | after deploy + env upsert | pending deploy verification | PENDING |
+| Live OTP/device block on production | after deploy + env upsert | production E2E 2026-09-10 | PASS |
+| Delete single security log (DB + list API) | hard delete | production E2E | PASS |
+| Delete multiple (only selected) | keep other rows | production E2E | PASS |
+| Trusted device re-login without OTP | `step: authenticated` | production E2E | PASS |
+| Block device → session invalid | `401 SESSION_REVOKED` | production E2E | PASS |
+| Re-login after block | `403 DEVICE_BLOCKED` | production E2E | PASS |
+| Revoke device → DB REVOKED + session dead | credential null | production E2E | PASS |
+| Hard delete device → row gone | `COUNT=0` | production E2E | PASS |
+| Security gate without gate JWT | `403 SECURITY_GATE_REQUIRED` | production E2E | PASS |
+| Delete all sessions/logs (no reseed) | `security_events` total 0 | production E2E | PASS |
+
+---
+
+## I2. DELETE / REVOKE / BLOCK FUNCTIONALITY AUDIT (2026-09-10)
+
+### BEFORE (root causes)
+1. **Delete AI Sessions/Logs / Delete All:** backend ran `DELETE FROM security_events` then **re-inserted** rows via `logOtpSecurityEvent` / similar audit helpers → UI looked like delete failed after refresh.
+2. **Device Delete:** `DELETE /devices/:id` performed **soft revoke only** → row stayed visible as `REVOKED` (owner expected permanent removal from history for Delete).
+3. **Success UX:** frontend could toast success even when `affected/deleted === 0`.
+4. **Revoke vs Delete:** UI conflated soft revoke and hard delete.
+
+### AFTER (verified implementation)
+| Control | Frontend | API | DB / auth effect |
+|---------|----------|-----|------------------|
+| Delete selected logs | Security logs / Security Center | `POST /api/security-logs/bulk-delete` `{ ids }` | Hard `DELETE FROM security_events WHERE id = ANY(...)`; no reseed |
+| Delete all sessions/logs | destructive OTP flow | `destructive/start` → `execute` action `delete_all_security_logs` | Hard delete `security_events` + `admin_panel_security_events` + `admin_panel_sessions`; **no** write-back into `security_events` |
+| Revoke Selected | destructive `revoke_devices` | soft revoke bulk | `status=REVOKED`, clear credential, bump `session_version`, revoke sessions; row kept for audit |
+| Delete Selected (devices) | destructive `delete_devices` | hard delete bulk | invalidate then `DELETE` device rows; `409` if 0 affected |
+| Block | per-row BLOCK | `POST .../devices/:id/block` | `BLOCKED`; sessions invalidated; login returns `DEVICE_BLOCKED` |
+| Revoke (per-row) | REVOKE | `POST .../devices/:id/revoke` | soft revoke as above |
+| Delete (per-row) | DELETE | `DELETE .../devices/:id` | invalidate then hard delete row |
+
+### Production E2E matrix (VPS `144.91.117.90`, commit `a61e7c8`)
+
+| Test | Result | Evidence |
+|------|--------|----------|
+| Delete single | PASS | id `7240b654-…` deleted=`1`; DB count 0; list API absent |
+| Delete multiple | PASS | only selected dropped; keep-id remained then cleaned |
+| Revoke selected / revoke device | PASS | DB `REVOKED` + `no_cred`; `/me` → `401 SESSION_REVOKED` |
+| Block device | PASS | block HTTP 200; `/me` → `SESSION_REVOKED` |
+| Existing session after block | PASS | `ME_AFTER_BLOCK_HTTP=401` |
+| Re-login after block | PASS | `RELOGIN_CODE=DEVICE_BLOCKED` |
+| Revoke/Delete device | PASS | hard delete → row `COUNT=0`; old session 401 |
+| Trusted device (no OTP) | PASS | `TRUST_LOGIN step=authenticated` |
+| Security Gate | PASS | `GET /devices` without gate → `403` / `SECURITY_GATE_REQUIRED` |
+| Direct API enforcement | PASS | gate required server-side; session checks after block/revoke |
+| Refresh persistence | PASS | DB source of truth after delete/wipe; marker gone; total events 0 after wipe |
+| Delete all logs no reseed | PASS | API `deletedEvents` confirmed; post-wipe `security_events` total 0 |
+
+**Verdict:** DELETE = VERIFIED · REVOKE = VERIFIED · BLOCK = VERIFIED
+
+### Safety notes for wipe test
+Controlled E2E used identifiable test devices/logs only. `delete_all_security_logs` intentionally clears Admin security history + admin session rows (not Osmani TV / Nassani / other DBs). After wipe, admins must log in again.
 
 ---
 
@@ -218,8 +274,10 @@ Production secrets are set on the VPS via `deploy/contabo/upsert-admin-auth-env.
 
 - Commit (auth hardening): `2f8258b3a4152d39e98c5876b03d860d56442e8e`
 - Commit (deploy workflow helper): `78dc9a74a6be779292f4bdc7e3bbf2772ba3fd59`
+- Commit (report VPS + bounded verify): `984b15d`
+- Commit (Delete/Revoke/Block functional fix): `a61e7c8cebfdfbd589f252440371d1862d0160bc`
 - Branch: `main`
-- Push status: pushed to `origin/main`
+- Push status: pushed to `origin/main` (functional fix `a61e7c8`; this audit report append)
 - Repository: `https://github.com/sokalive/osmani-admin.git`
 
 ---
@@ -237,13 +295,13 @@ Production secrets are set on the VPS via `deploy/contabo/upsert-admin-auth-env.
 - **SSH method used for final verify:** password auth to `144.91.117.90` as `root` (Nassani SSH key was NOT used)
 
 ### Status
-- Live commit: `78dc9a74a6be779292f4bdc7e3bbf2772ba3fd59`
-- `panelAuthRequired: true`
+- Live commit: `a61e7c8cebfdfbd589f252440371d1862d0160bc`
+- Health: `startup.ready: true`, `panelAuthRequired: true`
+- Delete/Revoke/Block production E2E: **ALL_DELETE_REVOKE_BLOCK_TESTS_PASS** (2026-09-10)
 - Auth secrets present in `server/.env` (values not logged)
-- Tables/columns verified; block/revoke E2E passed
 
 ### Readiness hang root cause
-Health on `http://127.0.0.1:10001/api/health` was already OK. The stuck verifier hung later on full `ensureBillingTables()` / extra PG pool usage, not on an infinite health poll. Bounded verification replaced that path.
+Health on `http://127.0.0.1:10001/api/health` was already OK. The stuck verifier hung later on full `ensureBillingTables()` / extra PG pool usage, not on an infinite health poll. Bounded verification replaced that path. After PM2 reload, wait until `startup.ready=true` (~60–90s) before auth E2E.
 
 ---
 
@@ -268,27 +326,41 @@ Implement device-aware Admin authentication against the Osmani Admin API (`https
    - `code: DEVICE_BLOCKED` → wipe secrets, show blocked screen
    - else → Login
 2. Login → `POST /api/admin/auth/login` with `{ email, pin, device_fingerprint, device_name, browser }`
-   - `step: authenticated` → save token, home
+   - `step: authenticated` → save token, home (trusted ACTIVE device; **verified in production**)
    - `step: otp_required` → OTP screen with `pendingToken`
+   - `code: DEVICE_BLOCKED` → wipe secrets; do not retry with old credential (**verified**)
 3. OTP → `POST /api/admin/auth/verify-otp`
    - save `deviceCredential` + `token`
    - if `isNewDevice`, optional UI notice (server also emails admin)
-4. Any API `403` with `DEVICE_BLOCKED` / `DEVICE_REVOKED` or `401 SESSION_REVOKED` → wipe and re-login
+4. Any API `403` with `DEVICE_BLOCKED` / `DEVICE_REVOKED` or `401 SESSION_REVOKED` → wipe and re-login (**verified after block/revoke/hard-delete**)
 5. Logout → `POST /api/admin/auth/logout` then wipe local credential + token
+
+### Device lifecycle (production-verified)
+| Action | Endpoint | App must do |
+|--------|----------|-------------|
+| Block | `POST /devices/:id/block` | Treat as permanent deny until admin unblocks; old JWT/credential fail |
+| Soft revoke | `POST /devices/:id/revoke` or destructive `revoke_devices` | Wipe local secrets; device row may still exist as `REVOKED` |
+| Hard delete | `DELETE /devices/:id` or destructive `delete_devices` | Wipe local secrets; device row is **gone**; next login is a new device + OTP |
+| Session after any of the above | `/me`, `/session`, protected APIs | Expect `401 SESSION_REVOKED` or `403 DEVICE_*` |
 
 ### Admin Security (if App exposes it)
 - Requires existing session.
 - `POST .../admin-security/verify-pin` with `security_pin` (user-entered; never hardcode).
-- Then OTP to `ADMIN_ALERT_EMAIL`, then `gateToken` as `X-Admin-Security-Gate` for device list/block/revoke.
+- Then OTP to `ADMIN_ALERT_EMAIL`, then `gateToken` as `X-Admin-Security-Gate` for device list/block/revoke/delete.
+- Without gate JWT, device APIs return `403` with `SECURITY_GATE_REQUIRED` (**verified**).
+- Destructive bulk actions require a second OTP via `/admin-security/destructive/start` → `/execute`.
+- Success responses include `affected` / `deleted` counts — treat `0` as failure, not success.
 
 ### Absolute prohibitions
 - No hardcoded login PIN / security PIN / Resend key.
 - No local `loggedIn=true` as proof of auth.
 - No trusting fingerprint/IP/UA alone.
 - No logging credentials.
+- No assuming Delete is soft-revoke; **Delete removes the trusted-device row after invalidation**.
 
 ### Config the App needs (non-secret)
 - API base URL for Osmani Admin backend.
 - Knowledge that panel auth is required (`panelAuthRequired: true` from `/status`).
 - OTP is 6 digits, short TTL, single-use; respect `429` lockouts.
+- Contract verified on production commit `a61e7c8` (2026-09-10).
 
