@@ -470,7 +470,11 @@ Bunny CDN, Resend, OneSignal, Beem, SonicPesa/ZenoPay/Aurax SaaS.
 
 ## 24. Git
 
-To be filled after commit/push of this documentation-only change.
+- **Commit:** `2a148df7808686f03bb1e43a2e66dbd38b8077f2`
+- **Branch:** `main`
+- **Push:** pushed to `origin/main` (`https://github.com/sokalive/osmani-admin.git`)
+- **Contents:** documentation only (`docs/OSMANI_PRODUCTION_INFRASTRUCTURE_INVENTORY.md`)
+- **Production runtime:** unchanged (no deploy)
 
 ---
 
