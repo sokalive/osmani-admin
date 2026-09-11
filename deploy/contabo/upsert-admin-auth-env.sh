@@ -70,6 +70,11 @@ upsert ADMIN_ALERT_EMAIL "${ADMIN_ALERT_EMAIL:-}"
 upsert ADMIN_LOGIN_EMAILS "${ADMIN_LOGIN_EMAILS:-${ADMIN_PANEL_BOOTSTRAP_EMAIL:-}}"
 upsert RESEND_API_KEY "${RESEND_API_KEY:-}"
 upsert RESEND_FROM_EMAIL "${RESEND_FROM_EMAIL:-}"
+# Fixed 14-day trusted-device window (non-sliding). Override only if intentionally changing policy.
+upsert ADMIN_TRUSTED_DEVICE_DAYS "${ADMIN_TRUSTED_DEVICE_DAYS:-14}"
+upsert ADMIN_SESSION_TTL_SECONDS "${ADMIN_SESSION_TTL_SECONDS:-1209600}"
+upsert ADMIN_SESSION_COOKIE_DAYS "${ADMIN_SESSION_COOKIE_DAYS:-14}"
+upsert ADMIN_DEVICE_COOKIE_DAYS "${ADMIN_DEVICE_COOKIE_DAYS:-14}"
 
 chmod 600 "$ENV_FILE" || true
 echo "==> Done. Restart PM2 (pm2 restart osmani-admin-api --update-env) after deploy."

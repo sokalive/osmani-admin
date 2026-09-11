@@ -82,14 +82,19 @@ export function clearAdminDeviceCredential() {
   setAdminDeviceCredential(null)
 }
 
-export function clearAdminSession() {
+export function clearAdminSession({ keepDeviceCredential = false } = {}) {
   setAdminSessionToken(null)
   setAdminSessionEmail(null)
-  clearAdminDeviceCredential()
+  if (!keepDeviceCredential) clearAdminDeviceCredential()
   if (typeof sessionStorage !== 'undefined') {
     sessionStorage.removeItem(PENDING_OTP_KEY)
     sessionStorage.removeItem(PENDING_EMAIL_KEY)
   }
+}
+
+/** Clear JWT/email only — preserve trusted-device credential for 14-day restore. */
+export function clearAdminSessionTokenOnly() {
+  clearAdminSession({ keepDeviceCredential: true })
 }
 
 export function adminJwtExpiresAtMs(token) {

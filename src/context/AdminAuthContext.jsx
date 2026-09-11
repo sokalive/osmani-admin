@@ -8,7 +8,10 @@ import {
 } from '../lib/api'
 import {
   adminJwtNeedsRefresh,
+  clearAdminDeviceCredential,
   clearAdminSession,
+  clearAdminSessionTokenOnly,
+  getAdminDeviceCredential,
   getAdminSessionEmail,
   getAdminSessionToken,
   PENDING_EMAIL_KEY,
@@ -41,6 +44,16 @@ function writePanelAuthHint(required) {
   } catch {
     /* ignore */
   }
+}
+
+function isHardAuthFailure(err) {
+  const code = String(err?.code || err?.body?.code || '').toUpperCase()
+  return (
+    code === 'DEVICE_BLOCKED' ||
+    code === 'DEVICE_REVOKED' ||
+    code === 'TRUST_EXPIRED' ||
+    code === 'FORCE_OTP'
+  )
 }
 
 export function AdminAuthProvider({ children }) {
@@ -108,8 +121,9 @@ export function AdminAuthProvider({ children }) {
     else sessionStorage.removeItem(PENDING_EMAIL_KEY)
   }, [])
 
-  const clearLocalAuthState = useCallback(() => {
-    clearAdminSession()
+  const clearLocalAuthState = useCallback(({ keepDeviceCredential = false } = {}) => {
+    if (keepDeviceCredential) clearAdminSessionTokenOnly()
+    else clearAdminSession()
     setTokenState(null)
     setEmail(null)
     setSessionChecked(true)
@@ -118,91 +132,121 @@ export function AdminAuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     try {
+      // Session logout only — trusted-device credential remains for 14-day restore.
       await postAdminLogout()
     } catch {
       /* cookie clear may fail offline — still wipe local session */
     }
-    clearLocalAuthState()
+    clearLocalAuthState({ keepDeviceCredential: true })
   }, [clearLocalAuthState])
 
   useEffect(() => {
     const onBlocked = () => {
       setAuthBlocked(true)
       showToast('error', 'Kifaa hiki kimezuiwa — umetolewa nje')
-      void logout()
+      clearAdminSession()
+      clearLocalAuthState({ keepDeviceCredential: false })
     }
     window.addEventListener('osmani-admin-auth-blocked', onBlocked)
     return () => window.removeEventListener('osmani-admin-auth-blocked', onBlocked)
-  }, [logout, showToast])
+  }, [clearLocalAuthState, showToast])
 
-  // Restore cookie/Bearer session when panel auth is required.
+  // Single boot path: prefer GET /session (device credential restore) BEFORE wiping anything.
   useEffect(() => {
     let cancelled = false
-    if (!ready || !panelAuthRequired) return undefined
+    if (!ready) return undefined
+    if (!panelAuthRequired) {
+      setSessionChecked(true)
+      return undefined
+    }
 
-    async function restoreSession() {
+    setSessionChecked(false)
+
+    async function bootSession() {
       try {
         const s = await getAdminAuthSession()
         if (cancelled) return
+
+        if (s?.code === 'DEVICE_BLOCKED') {
+          clearLocalAuthState({ keepDeviceCredential: false })
+          setAuthBlocked(true)
+          return
+        }
+        if (
+          s?.code === 'DEVICE_REVOKED' ||
+          s?.code === 'TRUST_EXPIRED' ||
+          s?.code === 'FORCE_OTP'
+        ) {
+          // Trust invalid — drop credential so login/OTP can re-enroll.
+          clearAdminDeviceCredential()
+          clearLocalAuthState({ keepDeviceCredential: false })
+          return
+        }
+
         const authenticated =
-          s?.authenticated === true ||
-          (s?.ok === true && (s?.token || s?.email))
+          s?.authenticated === true || (s?.ok === true && (s?.token || s?.email))
         if (authenticated) {
           const nextToken = s.token || getAdminSessionToken()
           const nextEmail = s.email || getAdminSessionEmail() || ''
           if (nextToken) setSession(nextToken, nextEmail)
-        }
-      } catch {
-        /* keep local token; validateSession / me will reconcile */
-      }
-    }
 
-    void restoreSession()
-    return () => {
-      cancelled = true
-    }
-  }, [ready, panelAuthRequired, setSession])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!ready) return undefined
-    if (!panelAuthRequired || !token) {
-      setSessionChecked(true)
-      return undefined
-    }
-    setSessionChecked(false)
-
-    async function validateSession() {
-      try {
-        if (adminJwtNeedsRefresh(token)) {
-          const refreshed = await postAdminRefreshSession()
-          if (refreshed?.ok === true && refreshed.token) {
-            setSession(refreshed.token, refreshed.email || getAdminSessionEmail())
+          // Soft validate; never clear device credential on transient /me failure.
+          try {
+            if (nextToken && adminJwtNeedsRefresh(nextToken)) {
+              const refreshed = await postAdminRefreshSession()
+              if (refreshed?.ok === true && refreshed.token) {
+                setSession(refreshed.token, refreshed.email || nextEmail)
+              }
+            }
+            const me = await getAdminAuthMe()
+            if (cancelled) return
+            if (me?.ok === true) {
+              const em = String(me.email ?? '').trim()
+              if (em) {
+                setAdminSessionEmail(em)
+                setEmail(em)
+              }
+            }
+          } catch (err) {
+            if (cancelled) return
+            if (isHardAuthFailure(err)) {
+              clearAdminDeviceCredential()
+              clearLocalAuthState({ keepDeviceCredential: false })
+              if (String(err?.code || '') === 'DEVICE_BLOCKED') setAuthBlocked(true)
+            }
+            // Soft failure: keep restored session / device credential.
           }
-        }
-        const me = await getAdminAuthMe()
-        if (cancelled) return
-        if (!me || me.ok !== true) {
-          await logout()
           return
         }
-        const nextEmail = String(me.email ?? '').trim()
-        if (nextEmail) {
-          setAdminSessionEmail(nextEmail)
-          setEmail(nextEmail)
+
+        // No restore — drop stale JWT only; keep device credential for next attempt
+        // unless we have nothing useful to restore with.
+        if (getAdminSessionToken() && !getAdminDeviceCredential()) {
+          clearLocalAuthState({ keepDeviceCredential: true })
+        } else if (getAdminSessionToken() && getAdminDeviceCredential()) {
+          // Stale JWT with still-present device cred: clear JWT; next boot restores via /session.
+          clearLocalAuthState({ keepDeviceCredential: true })
         }
-      } catch {
-        if (!cancelled) await logout()
+      } catch (err) {
+        if (cancelled) return
+        if (isHardAuthFailure(err)) {
+          clearAdminDeviceCredential()
+          clearLocalAuthState({ keepDeviceCredential: false })
+          if (String(err?.code || '') === 'DEVICE_BLOCKED') setAuthBlocked(true)
+        } else {
+          // Network / transient — do not wipe trusted-device credential.
+          clearLocalAuthState({ keepDeviceCredential: true })
+        }
       } finally {
         if (!cancelled) setSessionChecked(true)
       }
     }
 
-    void validateSession()
+    void bootSession()
     return () => {
       cancelled = true
     }
-  }, [ready, panelAuthRequired, token, logout, setSession])
+  }, [ready, panelAuthRequired, setSession, clearLocalAuthState])
 
   const value = useMemo(
     () => ({

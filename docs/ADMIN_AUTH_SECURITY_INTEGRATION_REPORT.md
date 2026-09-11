@@ -1,6 +1,6 @@
 # Osmani Admin — Authentication & Device Security Integration Report
 
-Date: 2026-09-10  
+Date: 2026-09-11 (14-day trust fix); prior auth hardening 2026-09-10  
 Scope: Osmani Admin SPA + Contabo `osmani-admin-api` only.
 
 ---
@@ -324,6 +324,8 @@ Implement device-aware Admin authentication against the Osmani Admin API (`https
 1. App start → `GET /api/admin/auth/session`
    - `authenticated: true` → Admin home
    - `code: DEVICE_BLOCKED` → wipe secrets, show blocked screen
+   - `code: TRUST_EXPIRED` → wipe device credential + session; show login
+   - `code: DEVICE_REVOKED` / `FORCE_OTP` → wipe credential; show login
    - else → Login
 2. Login → `POST /api/admin/auth/login` with `{ email, pin, device_fingerprint, device_name, browser }`
    - `step: authenticated` → save token, home (trusted ACTIVE device; **verified in production**)
@@ -333,7 +335,8 @@ Implement device-aware Admin authentication against the Osmani Admin API (`https
    - save `deviceCredential` + `token`
    - if `isNewDevice`, optional UI notice (server also emails admin)
 4. Any API `403` with `DEVICE_BLOCKED` / `DEVICE_REVOKED` or `401 SESSION_REVOKED` → wipe and re-login (**verified after block/revoke/hard-delete**)
-5. Logout → `POST /api/admin/auth/logout` then wipe local credential + token
+5. Logout → `POST /api/admin/auth/logout` then clear **session JWT only**; **keep** `deviceCredential` for silent `/session` restore within the 14-day trust window. Wipe credential only on block/revoke/delete/`TRUST_EXPIRED`/`FORCE_OTP`, or when calling logout with `revoke_device: true` / `global: true`.
+6. Trust window → server sets `trustedExpiresAt` at OTP enrollment (**exactly 14 days**, non-sliding). After expiry, `/session` returns `TRUST_EXPIRED` and login requires OTP again.
 
 ### Device lifecycle (production-verified)
 | Action | Endpoint | App must do |
@@ -362,5 +365,79 @@ Implement device-aware Admin authentication against the Osmani Admin API (`https
 - API base URL for Osmani Admin backend.
 - Knowledge that panel auth is required (`panelAuthRequired: true` from `/status`).
 - OTP is 6 digits, short TTL, single-use; respect `429` lockouts.
-- Contract verified on production commit `a61e7c8` (2026-09-10).
+- Trusted-device window is **exactly 14 days (336 hours)** from OTP enrollment (`trusted_expires_at`); non-sliding.
+- Contract verified on production commit `a61e7c8` (2026-09-10); 14-day trust fix updated below.
+
+---
+
+## M. TRUSTED-DEVICE 14-DAY WINDOW FIX (2026-09-11)
+
+### BEFORE — why Chrome asked for login repeatedly
+1. **No server-side trust expiration column.** Trusted devices stayed “forever” until block/revoke, but product expectation was 14 days — never implemented.
+2. **Primary UX bug:** On Admin boot, if `localStorage` still held an **expired session JWT**, `AdminAuthContext` called `/refresh` → `/me` → **`logout()`**, which wiped **both** the session JWT **and** the trusted-device credential (`osmani_admin_device_credential` + cookies), racing ahead of `GET /session` restore that would have re-issued a session from the still-valid device secret.
+3. **Logout destroyed trust storage:** `POST /logout` cleared **both** `osmani_admin_session` and `osmani_admin_device` cookies; frontend `clearAdminSession()` also removed the device credential. Session logout was confused with trusted-device revocation.
+4. **Cross-origin SPA note:** Render host → `api.osmanitv.com` means `SameSite=Lax` cookies often do not participate in XHR; silent restore depends on the device credential header from localStorage — wiping it forced full Email+PIN+OTP again.
+
+### AFTER — exact fix
+| Concern | Behavior |
+|---------|----------|
+| Trusted-device lifetime | **Exactly 14 days = 336 hours** from OTP enrollment / re-verification (`trusted_expires_at = now() + 14 days`). **Non-sliding** (opening Admin does not extend). |
+| Session lifetime | Default `ADMIN_SESSION_TTL_SECONDS=1209600` (14d), capped by remaining trust time. |
+| Session restore | `GET /api/admin/auth/session` re-issues JWT while device credential + fingerprint match an ACTIVE, non-expired trusted device. |
+| Cookies | HttpOnly, Secure (HTTPS), SameSite=Lax, Path=/; Max-Age defaults **14 days** for session + device cookies. |
+| Logout vs revoke | Normal logout clears **session cookie/JWT only**; device credential survives until trust expiry, block, revoke, or delete. |
+| Boot | SPA always calls `/session` first; never clears device credential on soft session failure; clears credential on `DEVICE_BLOCKED` / `DEVICE_REVOKED` / `TRUST_EXPIRED` / `FORCE_OTP`. |
+| Block / revoke / delete | Unchanged authority — immediately clear credential hash, bump `session_version`, revoke sessions; 14-day window never overrides Security Center. |
+
+### Database
+- Column: `admin_panel_trusted_devices.trusted_expires_at TIMESTAMPTZ`
+- Backfill: `COALESCE(last_login_at, created_at) + interval '14 days'` for non-revoked, non-blocked rows
+- Index: `admin_panel_trusted_devices_expires_idx`
+
+### API additions (verified)
+- `trustedExpiresAt` on `/verify-otp`, `/login` (trusted), `/session`, `/refresh`, device list
+- `/session` / attach gate: `code: TRUST_EXPIRED` when past `trusted_expires_at`
+- `/logout`: optional `revoke_device` / `clear_device_credential` / `global` to also clear device cookie; default keeps device credential
+
+### Files changed (this fix)
+- `server/src/db/billingTables.js`
+- `server/src/adminAuthStore.js`
+- `server/src/routes/adminAuth.js`
+- `server/src/lib/adminAuthCookies.js`
+- `server/.env.example`
+- `deploy/contabo/upsert-admin-auth-env.sh`
+- `src/context/AdminAuthContext.jsx`
+- `src/lib/adminSessionStorage.js`
+- `src/pages/AdminSecurityPage.jsx`
+- `server/scripts/test-admin-auth-hardening-unit.mjs`
+- `server/scripts/verify-trusted-device-14d.mjs`
+- `server/scripts/verify-trusted-device-14d-live.mjs`
+- `server/scripts/verify-chrome-trusted-device-e2e.mjs`
+- `docs/ADMIN_AUTH_SECURITY_INTEGRATION_REPORT.md`
+
+### Test results (fill after production verify)
+
+| Test | Result | Evidence |
+|------|--------|----------|
+| New Chrome device login | PENDING | |
+| OTP verification | PENDING | |
+| Trusted device created | PENDING | |
+| Chrome restart | PENDING | |
+| Session restoration | PENDING | |
+| 14-day trust window | PENDING | |
+| Expiration after 14 days | PENDING | |
+| New device requires OTP | PENDING | |
+| Block invalidates access | PENDING | |
+| Revoke invalidates trust | PENDING | |
+| Security Center still protected | PENDING | |
+
+### OSMANI APP AI HANDOFF updates (verified contract deltas)
+1. App start → `GET /session`
+   - `authenticated: true` (+ optional `trustedExpiresAt`) → home
+   - `code: TRUST_EXPIRED` → wipe device credential + session; show login (OTP will be required again after PIN)
+   - `code: DEVICE_BLOCKED` → wipe secrets; blocked screen
+   - `code: DEVICE_REVOKED` / `FORCE_OTP` → wipe credential; login
+2. OTP success → store `deviceCredential`, `token`, and honor `trustedExpiresAt` (14-day fixed window; do not invent sliding renewal)
+3. Logout → `POST /logout` then clear **session JWT only**; **keep** `deviceCredential` for silent restore until expiry/block/revoke
+4. Do not treat fingerprint/IP/UA as the trust secret; backend credential hash + `trusted_expires_at` are authoritative
 

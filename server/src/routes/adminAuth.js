@@ -30,6 +30,7 @@ import {
 } from '../lib/adminSecurityPin.js'
 import {
   clearAdminAuthCookies,
+  clearAdminSessionCookie,
   readAdminDeviceCredential,
   readAdminSessionToken,
   setAdminAuthCookies,
@@ -46,11 +47,26 @@ export const adminAuthRouter = Router()
 
 const OTP_PENDING_TYP = 'otp_pending'
 
-/** Trusted-device session lifetime (~30 days). */
+/**
+ * Session JWT lifetime. Default matches fixed trusted-device window (14 days = 336 hours).
+ * Sessions may be shorter; GET /session re-issues while trusted_expires_at is still valid.
+ */
 const SESSION_TTL_SECONDS = Math.min(
   90 * 86400,
-  Math.max(3600, Number(process.env.ADMIN_SESSION_TTL_SECONDS) || 30 * 86400),
+  Math.max(
+    3600,
+    Number(process.env.ADMIN_SESSION_TTL_SECONDS) || authStore.TRUSTED_DEVICE_TTL_SECONDS,
+  ),
 )
+
+function sessionTtlSecondsForDevice(deviceRow, { emergency = false } = {}) {
+  if (emergency) {
+    return Math.min(86400, Math.max(600, Number(process.env.ADMIN_EMERGENCY_SESSION_SECONDS) || 7200))
+  }
+  const remaining = authStore.trustedDeviceRemainingSeconds(deviceRow)
+  if (remaining > 0) return Math.min(SESSION_TTL_SECONDS, remaining)
+  return SESSION_TTL_SECONDS
+}
 
 /** --- Simple in-memory rate limits (per process) --- */
 const loginAttempts = new Map()
@@ -95,10 +111,13 @@ async function issueSession(res, req, {
   deviceRow = null,
   emergency = false,
   deviceCredentialPlain = null,
-  ttlSeconds = SESSION_TTL_SECONDS,
+  ttlSeconds = null,
 } = {}) {
   const jti = authStore.newSessionJti()
-  const ttl = Math.max(60, Number(ttlSeconds) || SESSION_TTL_SECONDS)
+  const ttl = Math.max(
+    60,
+    Number(ttlSeconds) || sessionTtlSecondsForDevice(deviceRow, { emergency }),
+  )
   const token = signAdminJwt(
     {
       sub: user.id,
@@ -123,6 +142,7 @@ async function issueSession(res, req, {
 
   setAdminAuthCookies(res, req, {
     sessionToken: token,
+    maxAgeSec: ttl,
     ...(deviceCredentialPlain ? { deviceCredential: deviceCredentialPlain } : {}),
   })
 
@@ -192,6 +212,13 @@ async function attachAdminReq(req, res, next) {
     }
     if (row.force_otp_next === true) {
       return res.status(403).json({ ok: false, code: 'FORCE_OTP', error: 'Re-verification required' })
+    }
+    if (authStore.isTrustedDeviceExpired(row)) {
+      return res.status(401).json({
+        ok: false,
+        error: 'Trusted device expired — sign in again',
+        code: 'TRUST_EXPIRED',
+      })
     }
     if (payload.sv != null && Number(payload.sv) !== Number(row.session_version || 1)) {
       return res.status(401).json({
@@ -324,6 +351,7 @@ function mapDeviceRow(r, currentHash) {
     createdAt,
     lastUsedAt,
     lastLoginAt: isoDate(r.last_login_at),
+    trustedExpiresAt: isoDate(r.trusted_expires_at),
     firstSeen: createdAt,
     lastActive: lastUsedAt,
     isCurrentDevice: r.device_fingerprint_hash === currentHash,
@@ -379,11 +407,7 @@ adminAuthRouter.get('/session', async (req, res) => {
             const row = await authStore.getTrustedDeviceRow(payload.sub, payload.fp)
             if (
               row &&
-              row.blocked !== true &&
-              row.status !== 'BLOCKED' &&
-              !row.revoked_at &&
-              row.status !== 'REVOKED' &&
-              row.force_otp_next !== true &&
+              authStore.isTrustedDeviceActive(row) &&
               (payload.sv == null || Number(payload.sv) === Number(row.session_version || 1))
             ) {
               void authStore.touchSession(payload.jti)
@@ -394,6 +418,7 @@ adminAuthRouter.get('/session', async (req, res) => {
                 email: payload.em,
                 emergency: false,
                 deviceId: row.id,
+                trustedExpiresAt: isoDate(row.trusted_expires_at),
                 token: sessionToken,
               })
             }
@@ -434,6 +459,14 @@ adminAuthRouter.get('/session', async (req, res) => {
     if (device.force_otp_next === true || device.trusted !== true) {
       return res.json({ ok: true, authenticated: false, code: 'FORCE_OTP' })
     }
+    if (authStore.isTrustedDeviceExpired(device)) {
+      return res.json({
+        ok: true,
+        authenticated: false,
+        code: 'TRUST_EXPIRED',
+        error: 'Trusted device expired — sign in again',
+      })
+    }
     if (device.device_fingerprint_hash !== fpHash) {
       return res.status(401).json({ ok: false, authenticated: false, error: 'Device mismatch' })
     }
@@ -456,6 +489,7 @@ adminAuthRouter.get('/session', async (req, res) => {
       email: user.email,
       emergency: false,
       deviceId: device.id,
+      trustedExpiresAt: isoDate(device.trusted_expires_at),
       token,
     })
   } catch (e) {
@@ -534,13 +568,7 @@ adminAuthRouter.post('/login', async (req, res) => {
       })
     }
 
-    const trusted =
-      existing &&
-      existing.trusted === true &&
-      existing.blocked !== true &&
-      existing.force_otp_next !== true &&
-      existing.status !== 'REVOKED' &&
-      !existing.revoked_at
+    const trusted = authStore.isTrustedDeviceActive(existing)
 
     if (trusted) {
       await authStore.touchTrustedDeviceLastUsed(existing.id)
@@ -564,6 +592,7 @@ adminAuthRouter.post('/login', async (req, res) => {
         token,
         email: user.email,
         deviceId: existing.id,
+        trustedExpiresAt: isoDate(existing.trusted_expires_at),
       })
     }
 
@@ -739,6 +768,8 @@ adminAuthRouter.post('/verify-otp', async (req, res) => {
       token,
       email: user.email,
       deviceId: row?.id,
+      isNewDevice: isNewDevice === true,
+      trustedExpiresAt: isoDate(row?.trusted_expires_at),
       /** Mobile / non-cookie clients should store this as X-Admin-Device-Credential. */
       deviceCredential: deviceCredentialPlain || undefined,
     })
@@ -897,9 +928,7 @@ adminAuthRouter.post('/refresh', attachAdminReq, async (req, res) => {
       if (deviceRow?.id) await authStore.touchTrustedDeviceLastUsed(deviceRow.id)
     }
 
-    const ttl = req.adminEmergency
-      ? Math.min(86400, Math.max(600, Number(process.env.ADMIN_EMERGENCY_SESSION_SECONDS) || 7200))
-      : SESSION_TTL_SECONDS
+    const ttl = sessionTtlSecondsForDevice(deviceRow, { emergency: req.adminEmergency === true })
 
     const { token } = await issueSession(res, req, {
       user,
@@ -909,7 +938,12 @@ adminAuthRouter.post('/refresh', attachAdminReq, async (req, res) => {
       ttlSeconds: ttl,
     })
     adminAuthAudit('session_refresh', { email: req.adminEmail })
-    res.json({ ok: true, token, email: user.email })
+    res.json({
+      ok: true,
+      token,
+      email: user.email,
+      trustedExpiresAt: deviceRow ? isoDate(deviceRow.trusted_expires_at) : null,
+    })
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) })
   }
@@ -1490,6 +1524,12 @@ adminAuthRouter.post('/logout', async (req, res) => {
     const token = readAdminSessionToken(req)
     const payload = token ? verifyAdminJwt(token) : null
     const body = req.body && typeof req.body === 'object' ? req.body : {}
+    // Normal logout ends the session only. Trusted-device credential survives for the
+    // fixed 14-day window unless revoke_device / clear_device_credential is requested.
+    const clearDevice =
+      body.revoke_device === true ||
+      body.clear_device_credential === true ||
+      body.global === true
 
     if (body.global === true && payload?.sub) {
       await authStore.revokeAllSessionsForUser(payload.sub)
@@ -1497,7 +1537,11 @@ adminAuthRouter.post('/logout', async (req, res) => {
       await authStore.revokeSessionByJti(payload.jti)
     }
 
-    clearAdminAuthCookies(res, req)
+    if (clearDevice) {
+      clearAdminAuthCookies(res, req)
+    } else {
+      clearAdminSessionCookie(res, req)
+    }
     if (payload?.sub) {
       await authStore.recordSecurityEvent({
         adminUserId: payload.sub,
@@ -1505,12 +1549,13 @@ adminAuthRouter.post('/logout', async (req, res) => {
         result: 'ok',
         ip: clientIp(req),
         userAgent: String(req.headers['user-agent'] ?? ''),
+        metadata: { cleared_device_credential: clearDevice === true },
       })
     }
-    res.json({ ok: true })
+    res.json({ ok: true, clearedDeviceCredential: clearDevice === true })
   } catch (e) {
     try {
-      clearAdminAuthCookies(res, req)
+      clearAdminSessionCookie(res, req)
     } catch {
       /* ignore */
     }

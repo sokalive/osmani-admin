@@ -41,7 +41,7 @@ function deviceStatus(row) {
     .trim()
     .toUpperCase()
   if (raw === 'ACTIVE' || raw === 'TRUSTED') return 'ACTIVE'
-  if (raw === 'NEW' || raw === 'BLOCKED' || raw === 'REVOKED') return raw
+  if (raw === 'NEW' || raw === 'BLOCKED' || raw === 'REVOKED' || raw === 'EXPIRED') return raw
   if (row?.revokedAt || row?.revoked_at || row?.revoked) return 'REVOKED'
   if (row?.blocked) return 'BLOCKED'
   if (row?.forceOtpNext || row?.force_otp_next) return 'NEW'
@@ -51,6 +51,7 @@ function deviceStatus(row) {
 
 function statusBadgeLabel(status) {
   if (status === 'ACTIVE') return 'ACTIVE / TRUSTED'
+  if (status === 'EXPIRED') return 'EXPIRED (14d)'
   return status
 }
 
@@ -58,6 +59,8 @@ function statusBadgeClass(status) {
   switch (status) {
     case 'ACTIVE':
       return 'bg-emerald-900/50 text-emerald-200 ring-emerald-500/40'
+    case 'EXPIRED':
+      return 'bg-orange-900/45 text-orange-100 ring-orange-500/40'
     case 'NEW':
       return 'bg-amber-900/40 text-amber-100 ring-amber-500/40'
     case 'BLOCKED':

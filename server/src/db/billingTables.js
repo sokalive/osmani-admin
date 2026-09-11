@@ -1033,7 +1033,16 @@ export async function ensureBillingTables(client) {
       ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      ADD COLUMN IF NOT EXISTS session_version INT NOT NULL DEFAULT 1
+      ADD COLUMN IF NOT EXISTS session_version INT NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS trusted_expires_at TIMESTAMPTZ
+  `)
+  // Fixed 14-day trust window (server-authoritative). Backfill from last trust event; do not slide.
+  await client.query(`
+    UPDATE admin_panel_trusted_devices
+       SET trusted_expires_at = COALESCE(last_login_at, created_at) + interval '14 days'
+     WHERE trusted_expires_at IS NULL
+       AND revoked_at IS NULL
+       AND blocked = false
   `)
   await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS admin_panel_trusted_devices_cred_uidx
@@ -1047,6 +1056,11 @@ export async function ensureBillingTables(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS admin_panel_trusted_devices_fp_idx
     ON admin_panel_trusted_devices (device_fingerprint_hash);
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_panel_trusted_devices_expires_idx
+    ON admin_panel_trusted_devices (trusted_expires_at)
+    WHERE revoked_at IS NULL AND blocked = false
   `)
 
   await client.query(`

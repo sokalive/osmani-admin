@@ -1,10 +1,31 @@
 /**
  * HttpOnly Secure SameSite cookies for admin session + trusted-device credential.
  * Cookie parsing is intentional (no cookie-parser dependency).
+ *
+ * Defaults align with the fixed 14-day trusted-device window (336 hours).
  */
 
 export const ADMIN_SESSION_COOKIE = 'osmani_admin_session'
 export const ADMIN_DEVICE_COOKIE = 'osmani_admin_device'
+
+/** Exact trust window: 14 days = 336 hours (overridable via ADMIN_TRUSTED_DEVICE_DAYS). */
+export function adminTrustedDeviceDays() {
+  return Math.min(90, Math.max(1, Number(process.env.ADMIN_TRUSTED_DEVICE_DAYS) || 14))
+}
+
+export function adminSessionCookieDays() {
+  return Math.min(
+    90,
+    Math.max(1, Number(process.env.ADMIN_SESSION_COOKIE_DAYS) || adminTrustedDeviceDays()),
+  )
+}
+
+export function adminDeviceCookieDays() {
+  return Math.min(
+    730,
+    Math.max(1, Number(process.env.ADMIN_DEVICE_COOKIE_DAYS) || adminTrustedDeviceDays()),
+  )
+}
 
 export function parseCookieHeader(req) {
   const raw = String(req?.headers?.cookie ?? '')
@@ -78,15 +99,17 @@ function buildCookie(name, value, { maxAgeSec, secure, clear = false } = {}) {
   return parts.join('; ')
 }
 
-export function setAdminAuthCookies(res, req, { sessionToken, deviceCredential } = {}) {
+export function setAdminAuthCookies(res, req, { sessionToken, deviceCredential, maxAgeSec } = {}) {
   const secure = cookieSecure(req)
-  const sessionDays = Math.min(90, Math.max(1, Number(process.env.ADMIN_SESSION_COOKIE_DAYS) || 30))
-  const deviceDays = Math.min(730, Math.max(7, Number(process.env.ADMIN_DEVICE_COOKIE_DAYS) || 365))
+  const sessionDays = adminSessionCookieDays()
+  const deviceDays = adminDeviceCookieDays()
+  const sessionMax =
+    maxAgeSec != null ? Math.max(60, Number(maxAgeSec) || 60) : sessionDays * 86400
   if (sessionToken) {
     appendSetCookie(
       res,
       buildCookie(ADMIN_SESSION_COOKIE, sessionToken, {
-        maxAgeSec: sessionDays * 86400,
+        maxAgeSec: sessionMax,
         secure,
       }),
     )
@@ -95,6 +118,7 @@ export function setAdminAuthCookies(res, req, { sessionToken, deviceCredential }
     appendSetCookie(
       res,
       buildCookie(ADMIN_DEVICE_COOKIE, deviceCredential, {
+        // Device cookie Max-Age matches fixed trust window (not slid on session refresh).
         maxAgeSec: deviceDays * 86400,
         secure,
       }),
@@ -102,8 +126,18 @@ export function setAdminAuthCookies(res, req, { sessionToken, deviceCredential }
   }
 }
 
-export function clearAdminAuthCookies(res, req) {
+/** Clear session JWT cookie only — preserves trusted-device credential cookie. */
+export function clearAdminSessionCookie(res, req) {
   const secure = cookieSecure(req)
   appendSetCookie(res, buildCookie(ADMIN_SESSION_COOKIE, '', { clear: true, secure }))
+}
+
+export function clearAdminDeviceCookie(res, req) {
+  const secure = cookieSecure(req)
   appendSetCookie(res, buildCookie(ADMIN_DEVICE_COOKIE, '', { clear: true, secure }))
+}
+
+export function clearAdminAuthCookies(res, req) {
+  clearAdminSessionCookie(res, req)
+  clearAdminDeviceCookie(res, req)
 }

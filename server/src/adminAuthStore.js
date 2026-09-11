@@ -16,10 +16,55 @@ function pool() {
 
 export { hashAdminDeviceFingerprint, generateAdminDeviceCredential, hashAdminDeviceCredential }
 
+/** Exact trusted-device lifetime: 14 days = 336 hours (server-authoritative, non-sliding). */
+export const TRUSTED_DEVICE_TTL_DAYS = Math.min(
+  90,
+  Math.max(1, Number(process.env.ADMIN_TRUSTED_DEVICE_DAYS) || 14),
+)
+export const TRUSTED_DEVICE_TTL_SECONDS = TRUSTED_DEVICE_TTL_DAYS * 86400
+
+export function trustedExpiresAtFrom(now = new Date()) {
+  const base = now instanceof Date ? now.getTime() : Date.now()
+  return new Date(base + TRUSTED_DEVICE_TTL_SECONDS * 1000)
+}
+
+export function isTrustedDeviceExpired(row) {
+  if (!row) return true
+  if (row.trusted_expires_at == null) return true
+  const expMs =
+    row.trusted_expires_at instanceof Date
+      ? row.trusted_expires_at.getTime()
+      : new Date(row.trusted_expires_at).getTime()
+  return !Number.isFinite(expMs) || Date.now() >= expMs
+}
+
+/** ACTIVE trusted device within the fixed 14-day window (not blocked/revoked/force-otp/expired). */
+export function isTrustedDeviceActive(row) {
+  if (!row) return false
+  if (row.blocked === true || row.status === 'BLOCKED') return false
+  if (row.revoked_at || row.status === 'REVOKED') return false
+  if (row.force_otp_next === true) return false
+  if (row.trusted !== true) return false
+  if (isTrustedDeviceExpired(row)) return false
+  return true
+}
+
+/** Remaining trust seconds (0 if expired/missing). */
+export function trustedDeviceRemainingSeconds(row) {
+  if (!row?.trusted_expires_at) return 0
+  const expMs =
+    row.trusted_expires_at instanceof Date
+      ? row.trusted_expires_at.getTime()
+      : new Date(row.trusted_expires_at).getTime()
+  if (!Number.isFinite(expMs)) return 0
+  return Math.max(0, Math.floor((expMs - Date.now()) / 1000))
+}
+
 function deriveStatus(row) {
   if (!row) return 'UNKNOWN'
   if (row.revoked_at || row.status === 'REVOKED') return 'REVOKED'
   if (row.blocked === true || row.status === 'BLOCKED') return 'BLOCKED'
+  if (isTrustedDeviceExpired(row) && row.trusted === true) return 'EXPIRED'
   if (row.trusted === true && row.force_otp_next !== true) return 'ACTIVE'
   if (row.force_otp_next === true) return 'NEW'
   return row.trusted ? 'ACTIVE' : 'NEW'
@@ -158,13 +203,17 @@ export async function upsertTrustedDevice({
     credentialHash = hashAdminDeviceCredential(deviceCredentialPlain)
   }
 
+  // Fixed trust window starts at OTP enrollment / re-verification — not slid on every visit.
+  const trustedExpiresAt = trustedExpiresAtFrom()
+
   const { rows } = await pool().query(
     `INSERT INTO admin_panel_trusted_devices
        (admin_user_id, device_fingerprint_hash, device_credential_hash, device_name, browser,
         ip_address, device_type, os_name, user_agent, country, region, city, isp,
-        trusted, blocked, force_otp_next, status, last_used_at, last_login_at, updated_at)
+        trusted, blocked, force_otp_next, status, last_used_at, last_login_at, updated_at,
+        trusted_expires_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-             true, false, false, 'ACTIVE', now(), now(), now())
+             true, false, false, 'ACTIVE', now(), now(), now(), $14)
      ON CONFLICT (admin_user_id, device_fingerprint_hash)
      DO UPDATE SET
        device_credential_hash = COALESCE(EXCLUDED.device_credential_hash, admin_panel_trusted_devices.device_credential_hash),
@@ -186,6 +235,7 @@ export async function upsertTrustedDevice({
        blocked_at = NULL,
        last_used_at = now(),
        last_login_at = now(),
+       trusted_expires_at = EXCLUDED.trusted_expires_at,
        updated_at = now(),
        session_version = admin_panel_trusted_devices.session_version + CASE
          WHEN EXCLUDED.device_credential_hash IS DISTINCT FROM admin_panel_trusted_devices.device_credential_hash
@@ -205,9 +255,25 @@ export async function upsertTrustedDevice({
       String(region ?? '').slice(0, 120),
       String(city ?? '').slice(0, 120),
       String(isp ?? '').slice(0, 160),
+      trustedExpiresAt,
     ],
   )
   return { row: rows[0] ?? null, deviceCredentialPlain, isNewDevice }
+}
+
+/**
+ * Test/ops helper: set trusted_expires_at for a device without touching production clock.
+ * Does not print credentials. Used by controlled expiration verification only.
+ */
+export async function setTrustedDeviceExpiresAtForTest(deviceId, userId, expiresAt) {
+  const { rows } = await pool().query(
+    `UPDATE admin_panel_trusted_devices
+        SET trusted_expires_at = $3::timestamptz, updated_at = now()
+      WHERE id = $1 AND admin_user_id = $2
+      RETURNING id, trusted_expires_at, status, blocked, revoked_at`,
+    [deviceId, userId, expiresAt],
+  )
+  return rows[0] ?? null
 }
 
 export async function invalidateActiveOtps(userId, fpHash) {
@@ -250,7 +316,8 @@ export async function listTrustedDevicesForUser(userId) {
   const { rows } = await pool().query(
     `SELECT id, device_fingerprint_hash, device_name, browser, ip_address, device_type, os_name,
             user_agent, country, region, city, isp, trusted, blocked, force_otp_next, status,
-            created_at, last_used_at, last_login_at, blocked_at, revoked_at, updated_at
+            created_at, last_used_at, last_login_at, blocked_at, revoked_at, updated_at,
+            trusted_expires_at, session_version
      FROM admin_panel_trusted_devices
      WHERE admin_user_id = $1
      ORDER BY COALESCE(last_used_at, created_at) DESC`,
