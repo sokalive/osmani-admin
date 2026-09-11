@@ -9,10 +9,10 @@
  */
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
-import './src/loadEnv.js'
-import { getPool } from './src/db/pool.js'
-import * as authStore from './src/adminAuthStore.js'
-import { hashAdminDeviceCredential, generateAdminDeviceCredential } from './src/lib/adminDeviceCredential.js'
+import '../src/loadEnv.js'
+import { getPool } from '../src/db/pool.js'
+import * as authStore from '../src/adminAuthStore.js'
+import { hashAdminDeviceCredential, generateAdminDeviceCredential } from '../src/lib/adminDeviceCredential.js'
 
 const API = String(process.env.VERIFY_API_BASE || 'http://127.0.0.1:10001/api').replace(/\/$/, '')
 const CHROME_UA =
