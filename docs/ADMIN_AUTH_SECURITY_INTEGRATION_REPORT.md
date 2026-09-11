@@ -295,8 +295,9 @@ Controlled E2E used identifiable test devices/logs only. `delete_all_security_lo
 - **SSH method used for final verify:** password auth to `144.91.117.90` as `root` (Nassani SSH key was NOT used)
 
 ### Status
-- Live commit: `a61e7c8cebfdfbd589f252440371d1862d0160bc`
+- Live commit: `e8eb372ccb5f8b9045470b7d7f515dc7371bae54` (14-day trust fix `63c16b0` + verifier follow-ups)
 - Health: `startup.ready: true`, `panelAuthRequired: true`
+- Trusted-device 14-day live verify: **ALL_14D_TRUST_TESTS_PASS** (2026-09-11)
 - Delete/Revoke/Block production E2E: **ALL_DELETE_REVOKE_BLOCK_TESTS_PASS** (2026-09-10)
 - Auth secrets present in `server/.env` (values not logged)
 
@@ -415,21 +416,27 @@ Implement device-aware Admin authentication against the Osmani Admin API (`https
 - `server/scripts/verify-chrome-trusted-device-e2e.mjs`
 - `docs/ADMIN_AUTH_SECURITY_INTEGRATION_REPORT.md`
 
-### Test results (fill after production verify)
+### Test results (production VPS `144.91.117.90`, commits `63c16b0` + `e8eb372`)
 
 | Test | Result | Evidence |
 |------|--------|----------|
-| New Chrome device login | PENDING | |
-| OTP verification | PENDING | |
-| Trusted device created | PENDING | |
-| Chrome restart | PENDING | |
-| Session restoration | PENDING | |
-| 14-day trust window | PENDING | |
-| Expiration after 14 days | PENDING | |
-| New device requires OTP | PENDING | |
-| Block invalidates access | PENDING | |
-| Revoke invalidates trust | PENDING | |
-| Security Center still protected | PENDING | |
+| New Chrome device login | PASS | New fingerprint → `step: otp_required` (live verify) |
+| OTP verification | PASS | `upsertTrustedDevice` after OTP sets `trusted_expires_at = now()+14d` (code + live insert path) |
+| Trusted device created | PASS | Live insert `id=d8d661af…`; column + backfill present |
+| Chrome restart | PASS | Chrome UA + device credential only → `GET /session` `authenticated:true` (no email/PIN/OTP) |
+| Session restoration | PASS | New JWT issued; `GET /me` ok |
+| 14-day trust window | PASS | `trusted_expires_at ≈ +14.000d`; TTL constants `14d = 336h = 1209600s` |
+| Expiration after 14 days | PASS | Controlled `trusted_expires_at` past → `TRUST_EXPIRED` |
+| New device requires OTP | PASS | Different fingerprint → `otp_required` |
+| Block invalidates access | PASS | After block, credential restore fails (credential hash cleared / access denied) |
+| Revoke invalidates trust | PASS | After revoke, `/session` `authenticated:false` |
+| Security Center still protected | PASS | Block/revoke still invalidate; gate unchanged |
+
+**Root cause:** Frontend boot wiped trusted-device credentials on expired JWT/`logout`, and there was no server-side `trusted_expires_at` (14-day window never implemented).
+
+**Git:** `63c16b0` (fix) · `63bf713` / `e8eb372` (verifier hardening) — pushed to `origin/main`
+
+**Deploy:** `144.91.117.90` `/var/www/osmani-admin-api` · PM2 `osmani-admin-api` only · `osmani-tv-backend` untouched · health `startup.ready=true` · `panelAuthRequired=true`
 
 ### OSMANI APP AI HANDOFF updates (verified contract deltas)
 1. App start → `GET /session`
