@@ -197,7 +197,7 @@ Cold-path evidence instead:
 
 ## 18. GIT COMMIT HASH
 
-_(filled after commit)_
+`eb9de0a0259a295fecd371e0e6952ba8e81d2a7a` (pushed to `origin/main`)
 
 ---
 
