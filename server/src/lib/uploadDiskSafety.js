@@ -3,6 +3,11 @@ import fsPromises from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { UPLOADS_DIR, ensureUploadsDir } from './uploadPaths.js'
+import {
+  displayOptimizeKindFromField,
+  optimizeDisplayImageBuffer,
+  preserveOriginalImageBuffer,
+} from './displayImageOptimize.js'
 
 /** Minimum free bytes required before accepting a disk-backed upload (default 50 MiB). */
 const DEFAULT_MIN_FREE_BYTES = Math.max(
@@ -108,19 +113,87 @@ export function buildSafeImageFilename(originalname, mimetype) {
 
 /**
  * Persist an in-memory upload to UPLOADS_DIR with a pre-write disk check.
+ * When displayOptimizeKind is set (or inferred from fieldname), stores the
+ * original under MEDIA_ORIGINALS_DIR and writes an optimized display derivative
+ * to the public /uploads path so mobile Home never downloads multi-MB sources.
+ *
  * @param {Buffer} buffer
- * @param {{ originalname?: string, mimetype?: string, filename?: string, skipMirror?: boolean }} [opts]
+ * @param {{
+ *   originalname?: string,
+ *   mimetype?: string,
+ *   filename?: string,
+ *   skipMirror?: boolean,
+ *   fieldname?: string,
+ *   displayOptimizeKind?: 'channel_thumbnail'|'banner'|'logo'|null,
+ *   skipDisplayOptimize?: boolean,
+ * }} [opts]
  */
 export async function persistImageBufferToUploads(buffer, opts = {}) {
   if (!buffer?.length) {
     throw new UploadDiskError(UPLOAD_STORAGE_UNAVAILABLE_CODE, 'Empty image upload')
   }
   ensureUploadsDir()
-  const filename = String(opts.filename || buildSafeImageFilename(opts.originalname, opts.mimetype))
+
+  const kind =
+    opts.displayOptimizeKind ||
+    displayOptimizeKindFromField(opts.fieldname) ||
+    null
+  const shouldOptimize = Boolean(kind) && opts.skipDisplayOptimize !== true
+
+  let writeBuffer = buffer
+  let writeMime = opts.mimetype || 'application/octet-stream'
+  let optimizeMeta = null
+  let originalPreserve = null
+
+  if (shouldOptimize) {
+    try {
+      optimizeMeta = await optimizeDisplayImageBuffer(buffer, {
+        kind,
+        mime: opts.mimetype,
+        originalname: opts.originalname,
+      })
+      if (!optimizeMeta.skipped) {
+        writeBuffer = optimizeMeta.buffer
+        writeMime =
+          optimizeMeta.format === 'jpeg'
+            ? 'image/jpeg'
+            : optimizeMeta.format === 'png'
+              ? 'image/png'
+              : optimizeMeta.format === 'webp'
+                ? 'image/webp'
+                : writeMime
+      }
+    } catch (optErr) {
+      console.warn('[uploads] display optimize failed — storing original bytes', optErr?.message || optErr)
+      optimizeMeta = { error: String(optErr?.message || optErr), skipped: true }
+    }
+  }
+
+  let filename = String(opts.filename || '')
+  if (!filename) {
+    if (optimizeMeta && !optimizeMeta.skipped && optimizeMeta.ext) {
+      filename = `${Date.now()}-${randomBytes(8).toString('hex')}.${optimizeMeta.ext}`
+    } else {
+      filename = buildSafeImageFilename(opts.originalname, writeMime)
+    }
+  } else if (optimizeMeta && !optimizeMeta.skipped && optimizeMeta.ext) {
+    // Align extension with actual encoded format when caller supplied a name.
+    const base = path.basename(filename, path.extname(filename))
+    filename = `${base}.${optimizeMeta.ext}`
+  }
+
+  if (shouldOptimize) {
+    try {
+      originalPreserve = await preserveOriginalImageBuffer(buffer, filename)
+    } catch (presErr) {
+      console.warn('[uploads] original preserve failed', presErr?.message || presErr)
+    }
+  }
+
   const fullPath = path.join(UPLOADS_DIR, filename)
-  assertDiskSpaceForWrite(fullPath, buffer.length)
+  assertDiskSpaceForWrite(fullPath, writeBuffer.length)
   try {
-    await fsPromises.writeFile(fullPath, buffer)
+    await fsPromises.writeFile(fullPath, writeBuffer)
   } catch (e) {
     if (isEnospcError(e)) {
       await fsPromises.unlink(fullPath).catch(() => {})
@@ -142,8 +215,8 @@ export async function persistImageBufferToUploads(buffer, opts = {}) {
       const { mirrorAdminMediaToVps } = await import('./adminMediaMirror.js')
       await mirrorAdminMediaToVps({
         filename,
-        buffer,
-        contentType: opts.mimetype || 'application/octet-stream',
+        buffer: writeBuffer,
+        contentType: writeMime,
       })
     } catch (mirrorErr) {
       // Roll back local orphan so Contabo/apps never reference a Render-only file.
@@ -157,7 +230,19 @@ export async function persistImageBufferToUploads(buffer, opts = {}) {
     }
   }
 
-  return { filename, fullPath, relativePath: `/uploads/${filename}` }
+  if (optimizeMeta && !optimizeMeta.skipped) {
+    console.info(
+      `[uploads] display optimize kind=${kind} ${optimizeMeta.originalBytes}→${optimizeMeta.compressedBytes}B (-${optimizeMeta.savedPercent}%) ${optimizeMeta.width}x${optimizeMeta.height}`,
+    )
+  }
+
+  return {
+    filename,
+    fullPath,
+    relativePath: `/uploads/${filename}`,
+    optimize: optimizeMeta,
+    originalPreserve,
+  }
 }
 
 /**
@@ -201,9 +286,12 @@ export async function materializeMemoryUploadFile(req) {
   const persisted = await persistImageBufferToUploads(file.buffer, {
     originalname: file.originalname,
     mimetype: file.mimetype,
+    fieldname: file.fieldname,
+    displayOptimizeKind: displayOptimizeKindFromField(file.fieldname),
   })
   file.filename = persisted.filename
   file.path = persisted.fullPath
+  file.optimize = persisted.optimize || null
   delete file.buffer
   return file
 }

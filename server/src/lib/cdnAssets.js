@@ -133,17 +133,21 @@ export function uploadsStoredOnVpsDisk() {
 }
 
 /**
- * Channel/banner/logo/APK on VPS must use API origin URLs while Bunny pull origin
- * still points at suspended Render (x-render-routing: suspend). Once Bunny origin
- * is switched to api.osmanitv.com, CDN can be re-enabled via UPLOADS_SERVE_FROM_ORIGIN=0
- * after verifying edge pulls succeed.
+ * Prefer Bunny CDN public URLs when configured. VPS disk at api.osmanitv.com is the
+ * Bunny pull-zone origin (verified CDN HIT). Force origin only via explicit env:
+ *   UPLOADS_SERVE_FROM_ORIGIN=1
+ * Historical note: origin was forced while Bunny still pointed at suspended Render.
  */
 export function shouldDeliverUploadViaOrigin(uploadPath = '') {
-  if (String(process.env.UPLOADS_SERVE_FROM_ORIGIN || '').trim() === '1') return true
-  // Contabo disk is authoritative after Render suspension — including OTA APKs.
-  if (uploadsStoredOnVpsDisk()) return true
+  const flag = String(process.env.UPLOADS_SERVE_FROM_ORIGIN ?? '')
+    .trim()
+    .toLowerCase()
+  if (flag === '1' || flag === 'true' || flag === 'yes' || flag === 'on') return true
+  if (flag === '0' || flag === 'false' || flag === 'no' || flag === 'off') return false
+  // Default: CDN when base URL is configured (VPS serves origin-pull bytes).
+  if (getCdnBaseUrl()) return false
   if (isHostedApkPath(uploadPath)) return false
-  return false
+  return uploadsStoredOnVpsDisk()
 }
 
 /**
@@ -214,8 +218,8 @@ export function resolvePublicAssetUrl(value, req, opts = {}) {
     try {
       const parsed = new URL(rel)
       if (isBunnyCdnHost(parsed.hostname)) {
-        // Bunny pull origin still points at suspended Render — rewrite to VPS origin
-        // when Contabo disk is authoritative (or forceOrigin for probes).
+        // Keep Bunny URLs when CDN delivery is enabled; rewrite to API origin only
+        // when forceOrigin / UPLOADS_SERVE_FROM_ORIGIN requires it.
         if (uploadPath && (forceOrigin || shouldDeliverUploadViaOrigin(uploadPath))) {
           return buildAbsoluteUrl(getOriginBaseUrl(req), uploadPath)
         }

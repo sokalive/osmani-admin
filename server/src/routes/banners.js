@@ -191,6 +191,10 @@ async function resolveImagePath({ body, file, existingImage }) {
     const buffer = Buffer.from(m[2], 'base64')
     const persisted = await persistImageBufferToUploads(buffer, {
       filename: `${Date.now()}-${randomBytes(8).toString('hex')}.${ext}`,
+      fieldname: 'image',
+      displayOptimizeKind: 'banner',
+      mimetype: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+      originalname: `banner.${ext}`,
     })
     return persisted.relativePath
   }

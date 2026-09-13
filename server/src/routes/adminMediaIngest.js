@@ -66,6 +66,8 @@ adminMediaIngestRouter.post(
         originalname: filename,
         mimetype: req.file?.mimetype,
         skipMirror: true,
+        // Exact VPS mirror of already-processed admin bytes — do not re-encode here.
+        skipDisplayOptimize: true,
       })
 
       console.log('[admin-media-ingest] stored', {

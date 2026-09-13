@@ -16,6 +16,7 @@
     "verify:app-update-v17": "node scripts/verify-app-update-playstore-v17.mjs",
     "verify:banner-payload": "node scripts/verify-banner-admin-payload.mjs",
     "verify:cdn-assets": "node scripts/verify-cdn-asset-urls.mjs",
+    "optimize:display-images": "node scripts/optimize-existing-display-images.mjs",
     "verify:apk-update-cdn": "node scripts/verify-apk-update-cdn.mjs",
     "verify:apk-backward-compat": "node scripts/verify-apk-backward-compatibility.mjs",
     "audit:subscriptions": "node scripts/audit-subscription-restoration.mjs",
