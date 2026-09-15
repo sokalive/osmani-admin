@@ -706,6 +706,47 @@ runtimePublicRouter.post('/historical-entitlement-correction-apply', requireLega
   }
 })
 
+/** Second-stage forensic reconciliation for NEEDS_MANUAL_REVIEW subscriptions (read-only). */
+runtimePublicRouter.get('/forensic-ambiguous-reconciliation-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { auditForensicAmbiguousReconciliation } = await import(
+      '../lib/forensicAmbiguousReconciliation.js'
+    )
+    const deviceId = String(req.query.device_id ?? '').trim() || null
+    const report = await auditForensicAmbiguousReconciliation({ deviceId })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/forensic-ambiguous-reconciliation-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/** Apply forensic corrections for ambiguous rows with proven evidence. dry_run=1 default. */
+runtimePublicRouter.post('/forensic-ambiguous-reconciliation-apply', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { applyForensicAmbiguousReconciliation } = await import(
+      '../lib/forensicAmbiguousReconciliation.js'
+    )
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const confirm = String(req.query.confirm ?? b.confirm ?? '0').trim() === '1'
+    const maxRepairs = Number(req.query.max_repairs ?? b.max_repairs ?? 200)
+    const appliedBy = String(b.applied_by ?? 'admin_ai_forensic_reconciliation').trim()
+    const report = await applyForensicAmbiguousReconciliation({
+      dryRun,
+      confirm,
+      maxRepairs,
+      appliedBy,
+    })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/forensic-ambiguous-reconciliation-apply]', e)
+    res.status(500).json({ ok: false, applied: false, error: String(e.message || e) })
+  }
+})
+
 /** Permanent read-only integrity audit (manual trigger). Never modifies expiry. */
 runtimePublicRouter.get('/subscription-integrity-audit', requireLegacyAdminToken, async (req, res) => {
   try {
