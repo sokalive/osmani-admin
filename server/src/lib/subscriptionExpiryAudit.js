@@ -97,7 +97,7 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
             t.amount,
             t.currency,
             t.plan_id,
-            COALESCE(t.updated_at, t.created_at) AS credited_at,
+            COALESCE(t.completed_at, t.created_at) AS credited_at,
             COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days,
             p.name AS plan_name,
             p.price AS plan_price
@@ -106,7 +106,7 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
      WHERE t.device_id = $1
        AND t.status = 'completed'
        AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL
-     ORDER BY COALESCE(t.updated_at, t.created_at) ASC`,
+     ORDER BY COALESCE(t.completed_at, t.created_at) ASC`,
     [d],
   )
   for (const row of txns) {
@@ -171,14 +171,14 @@ export async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByD
   const { rows: txns } = await pool.query(
     `SELECT t.device_id::text AS device_id,
             t.order_id,
-            COALESCE(t.updated_at, t.created_at) AS credited_at,
+            COALESCE(t.completed_at, t.created_at) AS credited_at,
             COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days
      FROM transactions t
      LEFT JOIN plans p ON p.id = t.plan_id
      WHERE t.device_id = ANY($1::text[])
        AND t.status = 'completed'
        AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL
-     ORDER BY COALESCE(t.updated_at, t.created_at) ASC`,
+     ORDER BY COALESCE(t.completed_at, t.created_at) ASC`,
     [ids],
   )
   for (const row of txns) {

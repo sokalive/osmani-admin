@@ -119,13 +119,19 @@ function classifySubscription(sub, canonicalMs, actualMs, events, auditMs) {
   return CLASSIFICATION.AMBIGUOUS
 }
 
-function proposedMutation(classification, canonicalIso, sub) {
+/** Migration batch touched many txn.updated_at values at once — never use for upward repair. */
+const BULK_BACKFILL_AT_MS = Date.parse('2026-07-26T19:53:34.846Z')
+
+function proposedMutation(classification, canonicalIso, sub, activationAtMs = null) {
   if (
     classification === CLASSIFICATION.REVOKED ||
     classification === CLASSIFICATION.TRANSFERRED ||
     classification === CLASSIFICATION.AMBIGUOUS ||
     classification === CLASSIFICATION.CORRECT
   ) {
+    return null
+  }
+  if (classification === CLASSIFICATION.UNDER_CREDITED && activationAtMs === BULK_BACKFILL_AT_MS) {
     return null
   }
   const actualIso = iso(sub.expires_at)
@@ -150,7 +156,8 @@ function buildAuditRow(sub, events, auditMs) {
   const canonicalMs = toMs(expectedExpiresAt)
   const actualMs = toMs(sub.expires_at)
   const classification = classifySubscription(sub, canonicalMs, actualMs, deduped, auditMs)
-  const mutation = proposedMutation(classification, expectedExpiresAt, sub)
+  const activationAtMs = deduped.length ? deduped[deduped.length - 1].atMs : null
+  const mutation = proposedMutation(classification, expectedExpiresAt, sub, activationAtMs)
   const lastEvent = deduped.at(-1) ?? null
   const deltaMs = actualMs != null && canonicalMs != null ? actualMs - canonicalMs : null
 
