@@ -92,6 +92,16 @@ function classifySubscription(sub, canonicalMs, actualMs, events, auditMs) {
     return CLASSIFICATION.TRANSFERRED
   }
   if (!events.length) {
+    const txnId = text(sub.transaction_id)
+    const status = text(sub.status).toLowerCase()
+    // Admin-manual placeholders and pending rows with past expiry have no entitlement.
+    if (
+      (txnId.toLowerCase().startsWith('admin_manual:') || status === 'pending' || status === 'active') &&
+      actualMs != null &&
+      actualMs <= auditMs
+    ) {
+      return CLASSIFICATION.EXPIRED
+    }
     return CLASSIFICATION.AMBIGUOUS
   }
   if (canonicalMs == null) {
