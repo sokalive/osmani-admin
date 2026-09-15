@@ -663,7 +663,11 @@ export async function auditForensicAmbiguousReconciliation({
       allSubs.map((s) => s.device_id),
       linked,
     )
-    candidates = allSubs.filter((s) => (eventsBy.get(text(s.device_id)) ?? []).length === 0)
+    candidates = allSubs.filter((s) => {
+      if (isSpecialTxn(s.transaction_id)) return false
+      if (s.admin_revoked_at != null) return false
+      return (eventsBy.get(text(s.device_id)) ?? []).length === 0
+    })
   }
 
   const bundle = await loadForensicEvidenceBundle(pool, candidates)
