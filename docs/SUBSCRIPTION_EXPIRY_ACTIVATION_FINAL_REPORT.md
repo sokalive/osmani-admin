@@ -144,19 +144,25 @@ Callers: SonicPesa webhook, order status poll, app verify reconcile, admin recov
 
 ## GITHUB COMMIT
 
-(See deploy section — hash recorded after push)
+`7a3217e532510a711b6c15d50f6f50141726b3af`
 
 ---
 
 ## VPS DEPLOYMENT
 
-Target: 144.91.117.90 via `deploy/contabo/pull-and-apply.sh`
+144.91.117.90 — deployed via GitHub Actions `contabo-deploy.yml` (push to main). Health confirms commit `7a3217e`.
 
 ---
 
 ## PM2/API HEALTH
 
-Post-deploy verification required on health endpoint + expiry audit policy text.
+Post-deploy (2026-09-15T06:44Z):
+
+```json
+{"ok":true,"commit":"7a3217e532510a711b6c15d50f6f50141726b3af","pool":{"totalCount":3,"idleCount":2,"waitingCount":0,"max":60,"saturated":false}}
+```
+
+Expiry audit policy text updated on production. Replay steps show `preserved_existing: true`, `stacked: false`.
 
 ---
 
