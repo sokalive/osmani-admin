@@ -660,6 +660,52 @@ runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken,
   }
 })
 
+/** Full historical entitlement audit (2026-09-15 EAT reference, all packages). Read-only. */
+runtimePublicRouter.get('/historical-entitlement-correction-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { auditHistoricalEntitlementCorrection } = await import(
+      '../lib/historicalEntitlementCorrection.js'
+    )
+    const deviceId = String(req.query.device_id ?? '').trim() || null
+    const report = await auditHistoricalEntitlementCorrection({ deviceId })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/historical-entitlement-correction-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/**
+ * Apply historical entitlement corrections (authorized production repair).
+ * dry_run=1 default; apply requires dry_run=0&confirm=1.
+ */
+runtimePublicRouter.post('/historical-entitlement-correction-apply', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { applyHistoricalEntitlementCorrection } = await import(
+      '../lib/historicalEntitlementCorrection.js'
+    )
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const confirm = String(req.query.confirm ?? b.confirm ?? '0').trim() === '1'
+    const maxRepairs = Number(req.query.max_repairs ?? b.max_repairs ?? 500)
+    const deviceId = String(req.query.device_id ?? b.device_id ?? '').trim() || null
+    const appliedBy = String(b.applied_by ?? 'admin_ai_historical_correction').trim()
+    const report = await applyHistoricalEntitlementCorrection({
+      dryRun,
+      confirm,
+      maxRepairs,
+      deviceId,
+      appliedBy,
+    })
+    res.status(report.applied ? 200 : 200).json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/historical-entitlement-correction-apply]', e)
+    res.status(500).json({ ok: false, applied: false, error: String(e.message || e) })
+  }
+})
+
 /** Permanent read-only integrity audit (manual trigger). Never modifies expiry. */
 runtimePublicRouter.get('/subscription-integrity-audit', requireLegacyAdminToken, async (req, res) => {
   try {

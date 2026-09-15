@@ -163,7 +163,7 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
 }
 
 /** Bulk-load credit events for many devices (2 queries instead of N). */
-async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByDevice = new Map()) {
+export async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByDevice = new Map()) {
   const ids = [...new Set(deviceIds.map((d) => String(d).trim()).filter(Boolean))]
   const byDevice = new Map(ids.map((id) => [id, []]))
   if (!ids.length) return byDevice
