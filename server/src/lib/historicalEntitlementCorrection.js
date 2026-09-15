@@ -141,6 +141,7 @@ function proposedMutation(classification, canonicalIso, sub, activationAtMs = nu
   ) {
     return null
   }
+  if (!canonicalIso) return null
   if (classification === CLASSIFICATION.UNDER_CREDITED && activationAtMs === BULK_BACKFILL_AT_MS) {
     return null
   }
