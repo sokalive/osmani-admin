@@ -112,9 +112,13 @@ Accounts and payment history untouched.
 | Item | Value |
 |------|-------|
 | Forensic tooling | `d90e24bb484e7d3a4b17a63cf4b938bdcabf64ae` |
-| Filter scope fix | `a375e9c19a23…` |
+| Filter scope fix | `a375e9c` |
+| Placeholder EXPIRED classification | `28b24bb` |
+| Final (null-canonical guard + report) | `a8ff82bc2e6ea0722eab688e85790c40fdc57027` |
 | Deploy VPS | 144.91.117.90 (Contabo reload API) |
 | Endpoints | `GET/POST /api/runtime/forensic-ambiguous-reconciliation-*` |
+
+**Post-deploy proof:** historical audit `ambiguous=0`, `repair_candidates=0`; forensic `proven_expired=110`, `mutations_proposed=0`.
 
 ---
 
