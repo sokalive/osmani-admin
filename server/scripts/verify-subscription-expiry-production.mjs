@@ -54,29 +54,26 @@ async function adminPost(path, query = '') {
   return { res, body }
 }
 
-function testStackingMath() {
+function testNoStackPolicy() {
   const now = Date.UTC(2026, 5, 27, 12, 0, 0) // 27 Jun 2026
   const week = computeStackedExpiryIso(null, 7, now)
-  const weekMs = new Date(week.expiresAt).getTime() - now
-  const weekDays = weekMs / 86400000
-  if (Math.abs(weekDays - 7) > 0.01) {
-    fail('stacking', `fresh 7d purchase expected 7 days, got ${weekDays}`)
+  if (week.stacked !== false || week.expiry_policy !== 'midnight_africa_dar_es_salaam') {
+    fail('no_stack', `fresh purchase policy ${week.expiry_policy}`)
     return
   }
 
   const prev = new Date(now + 15 * 86400000).toISOString() // 15 days remaining
-  const stacked = computeStackedExpiryIso(prev, 7, now)
-  const stackedDays = (new Date(stacked.expiresAt).getTime() - now) / 86400000
-  if (Math.abs(stackedDays - 22) > 0.01) {
-    fail('stacking', `15d remaining + 7d package expected 22d, got ${stackedDays}`)
+  const preserved = computeStackedExpiryIso(prev, 7, now)
+  if (preserved.expiry_policy !== 'preserve_existing_active' || preserved.expiresAt !== prev) {
+    fail('no_stack', `active renewal must preserve existing expiry, got ${preserved.expiresAt}`)
     return
   }
   report.stacking = {
-    fresh_week_days: weekDays,
-    stacked_15_plus_7_days: stackedDays,
-    explains_jun27_to_jul18: Math.abs(stackedDays - 22) < 0.01,
+    fresh_policy: week.expiry_policy,
+    active_renewal_policy: preserved.expiry_policy,
+    stacking_disabled: true,
   }
-  pass('stacking', '7d fresh + 15d+7d stack math correct (Jun27 weekly → Jul18 if ~15d remained)')
+  pass('no_stack', 'midnight-EAT fresh purchase + preserve_existing_active (no stacking)')
 }
 
 async function verifyPlans() {
@@ -94,12 +91,15 @@ async function verifyPlans() {
     durationDays: p.durationDays ?? p.duration_days,
     isActive: p.isActive ?? p.is_active,
   }))
-  if (!weekly || Number(weekly.durationDays ?? weekly.duration_days) !== 7) {
-    fail('plans', 'Wiki 1 / TSh 3000 weekly must be durationDays=7')
+  if (!weekly || !Number.isFinite(Number(weekly.durationDays ?? weekly.duration_days))) {
+    fail('plans', 'TSh 3000 entry plan must exist with a valid durationDays')
     return
   }
   report.plans.weekly_3000 = weekly
-  pass('plans', `Wiki 1 weekly: ${weekly.durationDays ?? weekly.duration_days} days @ TSh ${weekly.price}`)
+  pass(
+    'plans',
+    `${weekly.name}: ${weekly.durationDays ?? weekly.duration_days} days @ TSh ${weekly.price}`,
+  )
 }
 
 async function runExpiryAudit() {
@@ -155,7 +155,7 @@ async function main() {
   report.commit = health.commit
   console.log('commit:', String(health.commit || '').slice(0, 12))
 
-  testStackingMath()
+  testNoStackPolicy()
   await verifyPlans()
   await runExpiryAudit()
   await verifySmsConsistency()

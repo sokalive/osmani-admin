@@ -1,9 +1,10 @@
 /**
- * Audit subscription expires_at against replayed payment/grant stacking history.
- * Stacking on active renewals is intentional (see subscriptionStacking.js).
+ * Observational audit: replay subscription expires_at against payment/grant history.
+ * Replay uses the canonical no-stack midnight-EAT policy (preserve_existing_active).
+ * This job is observational only — entitlement enforcement is expires_at vs now() at verify.
  */
 import { getPool } from '../db/pool.js'
-import { computeMidnightEatExpiryIso } from './subscriptionStacking.js'
+import { computeMidnightEatExpiryIso, computeStackedExpiryIso } from './subscriptionStacking.js'
 import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
 
 const MS_TOLERANCE = 2 * 60 * 1000 // 2 minutes clock skew
@@ -40,8 +41,9 @@ function isTransferOrRecoveryTxn(txnId) {
 }
 
 /**
- * Replay stacking from ordered credit events (payments + manual grants).
- * @param {Array<{ atMs: number; durationDays: number; kind: string; ref: string }>} events
+ * Replay entitlement timeline under canonical no-stack midnight-EAT policy.
+ * Active renewals preserve existing expiry; post-expiry purchases start fresh.
+ * @param {Array<{ atMs: number; durationDays: number; kind: string; ref: string; absoluteExpiresAtMs?: number }>} events
  */
 export function replayStackedExpiryFromEvents(events) {
   let current = null
@@ -60,18 +62,17 @@ export function replayStackedExpiryFromEvents(events) {
       })
       continue
     }
-    const currentMs = toMs(current)
-    const stacked = currentMs != null && currentMs > ev.atMs
-    current = stacked
-      ? new Date(currentMs + ev.durationDays * 24 * 60 * 60 * 1000).toISOString()
-      : computeMidnightEatExpiryIso(ev.durationDays, ev.atMs)
+    const stack = computeStackedExpiryIso(current, ev.durationDays, ev.atMs)
+    current = stack.expiresAt
     steps.push({
       ref: ev.ref,
       kind: ev.kind,
       duration_days: ev.durationDays,
       at: new Date(ev.atMs).toISOString(),
       expires_after: current,
-      stacked,
+      stacked: false,
+      expiry_policy: stack.expiry_policy,
+      preserved_existing: stack.expiry_policy === 'preserve_existing_active',
     })
   }
   return { expectedExpiresAt: current, steps }
@@ -97,14 +98,14 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
             t.currency,
             t.plan_id,
             COALESCE(t.updated_at, t.created_at) AS credited_at,
-            p.duration_days,
+            COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days,
             p.name AS plan_name,
             p.price AS plan_price
      FROM transactions t
      LEFT JOIN plans p ON p.id = t.plan_id
      WHERE t.device_id = $1
        AND t.status = 'completed'
-       AND p.duration_days IS NOT NULL
+       AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL
      ORDER BY COALESCE(t.updated_at, t.created_at) ASC`,
     [d],
   )
@@ -171,12 +172,12 @@ async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByDevice =
     `SELECT t.device_id::text AS device_id,
             t.order_id,
             COALESCE(t.updated_at, t.created_at) AS credited_at,
-            p.duration_days
+            COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days
      FROM transactions t
      LEFT JOIN plans p ON p.id = t.plan_id
      WHERE t.device_id = ANY($1::text[])
        AND t.status = 'completed'
-       AND p.duration_days IS NOT NULL
+       AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL
      ORDER BY COALESCE(t.updated_at, t.created_at) ASC`,
     [ids],
   )
@@ -202,12 +203,12 @@ async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByDevice =
       `SELECT t.order_id,
               t.device_id::text AS device_id,
               COALESCE(t.completed_at, t.created_at) AS credited_at,
-              p.duration_days
+              COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days
        FROM transactions t
        LEFT JOIN plans p ON p.id = t.plan_id
        WHERE t.order_id = ANY($1::text[])
          AND t.status = 'completed'
-         AND p.duration_days IS NOT NULL`,
+         AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL`,
       [linkedOrderIds],
     )
     const linkedByOrder = new Map(linkedTxns.map((row) => [String(row.order_id), row]))
@@ -220,12 +221,12 @@ async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByDevice =
         `SELECT t.order_id,
                 t.device_id::text AS device_id,
                 COALESCE(t.completed_at, t.created_at) AS credited_at,
-                p.duration_days
+                COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days
          FROM transactions t
          LEFT JOIN plans p ON p.id = t.plan_id
          WHERE t.device_id = ANY($1::text[])
            AND t.status = 'completed'
-           AND p.duration_days IS NOT NULL
+           AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL
          ORDER BY COALESCE(t.completed_at, t.created_at), t.order_id`,
         [sourceIds],
       )
@@ -472,13 +473,13 @@ export async function runSubscriptionExpiryAudit(opts = {}) {
     }
   }
 
-  const weeklyPlan = plans.find((p) => Number(p.price) === 3000 && Number(p.duration_days) === 7)
+  const weeklyPlan = plans.find((p) => Number(p.price) === 3000 && p.is_active === true)
 
   return {
     audited_at: new Date().toISOString(),
     extension_policy: 'no_stack_midnight_eat',
     extension_policy_detail:
-      'Renewals add package duration_days onto remaining active time. plan_duration_days in verify is the last package length; remaining_days is total entitlement.',
+      'Active devices cannot renew (409 ACTIVE_SUBSCRIPTION_EXISTS). New purchases expire at 00:00 Africa/Dar_es_Salaam after plan_duration_days from purchase date. In-flight duplicate payments preserve existing expiry. plan_duration_days is snapshotted at order creation.',
     plans: plans.map((p) => ({
       id: p.id,
       name: p.name,
