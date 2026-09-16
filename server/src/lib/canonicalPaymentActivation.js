@@ -432,6 +432,15 @@ export async function applySonicpesaPaymentOutcome({
     }
 
     if (txn.status === 'completed') {
+      // Backfill completed_at for legacy rows completed before credit-clock fix.
+      if (txn.completed_at == null) {
+        await client.query(
+          `UPDATE transactions
+           SET completed_at = COALESCE(completed_at, updated_at, now())
+           WHERE order_id = $1 AND status = 'completed' AND completed_at IS NULL`,
+          [oid],
+        )
+      }
       const act = await activateFromCompletedTxn(txn, { source, client })
       await client.query('COMMIT')
       out.txnStatusAfter = 'completed'
@@ -483,11 +492,17 @@ export async function applySonicpesaPaymentOutcome({
       ).trim()
     }
 
+    // Persist authoritative completed_at once on transition to completed.
+    // Idempotent: COALESCE keeps the original stamp on reprocessing.
     const { rows: updatedRows } = await client.query(
       `UPDATE transactions SET
          status = $2,
          external_id = COALESCE($3, external_id),
          raw_payload = $4::jsonb,
+         completed_at = CASE
+           WHEN $2 = 'completed' THEN COALESCE(completed_at, now())
+           ELSE completed_at
+         END,
          updated_at = now()
        WHERE order_id = $1
        RETURNING *`,

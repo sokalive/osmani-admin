@@ -147,6 +147,14 @@ function proposedMutation(classification, canonicalIso, sub, activationAtMs = nu
   }
   const actualIso = iso(sub.expires_at)
   if (actualIso === canonicalIso) return null
+
+  const targetMs = toMs(canonicalIso)
+  const startMs = toMs(sub.started_at)
+  // CRITICAL GUARD: never rewrite a legitimate activation to expires_at < started_at.
+  if (startMs != null && targetMs != null && targetMs < startMs - MS_TOLERANCE) {
+    return null
+  }
+
   return {
     old_status: text(sub.status) || 'active',
     new_status: text(sub.status) || 'active',
@@ -161,8 +169,28 @@ function proposedMutation(classification, canonicalIso, sub, activationAtMs = nu
   }
 }
 
+/**
+ * When subscription.started_at is later than the linked payment credit clock,
+ * align that event to started_at so delayed completions are not treated as
+ * old order-created purchases (the paid-renewal-after-expiry bug).
+ */
+function alignCreditEventsWithActivation(sub, events) {
+  const txnId = text(sub.transaction_id)
+  const startMs = toMs(sub.started_at)
+  if (!txnId || startMs == null || isSpecialTxn(txnId) || !events?.length) return events
+  let changed = false
+  const out = events.map((ev) => {
+    if (text(ev.ref) !== txnId) return ev
+    if (ev.atMs >= startMs - MS_TOLERANCE) return ev
+    changed = true
+    return { ...ev, atMs: startMs, credit_aligned_to_started_at: true }
+  })
+  return changed ? out : events
+}
+
 function buildAuditRow(sub, events, auditMs) {
-  const deduped = dedupeEvents(events)
+  const aligned = alignCreditEventsWithActivation(sub, events)
+  const deduped = dedupeEvents(aligned)
   const { expectedExpiresAt, steps } = replayStackedExpiryFromEvents(deduped)
   const canonicalMs = toMs(expectedExpiresAt)
   const actualMs = toMs(sub.expires_at)
@@ -208,6 +236,7 @@ function buildAuditRow(sub, events, auditMs) {
         kind: e.kind,
         duration_days: e.durationDays,
         at: new Date(e.atMs).toISOString(),
+        credit_aligned_to_started_at: e.credit_aligned_to_started_at === true || undefined,
       })),
     },
   }
@@ -340,9 +369,12 @@ export async function auditHistoricalEntitlementCorrection({
     policy: {
       replay: 'no_stack_midnight_eat',
       duration_source: 'transactions.plan_duration_days snapshot, fallback plans.duration_days',
+      credit_clock:
+        'completed_at → webhookAt/orderStatusPolledAt → safe updated_at → created_at; align to started_at when later',
       no_today_plus_duration: true,
       preserves_revoked: true,
       preserves_transferred: true,
+      rejects_expires_before_started_at: true,
     },
     plans: plans,
     summary,
@@ -438,6 +470,18 @@ export async function applyHistoricalEntitlementCorrection({
       }
       if (Math.abs(toMs(current.expires_at) - toMs(targetIso)) <= MS_TOLERANCE) {
         skipped.push({ device_id: d, reason: 'already_canonical' })
+        continue
+      }
+
+      const targetMs = toMs(targetIso)
+      const startMs = toMs(current.started_at)
+      if (startMs != null && targetMs != null && targetMs < startMs - MS_TOLERANCE) {
+        skipped.push({
+          device_id: d,
+          reason: 'rejected_expires_before_started_at',
+          started_at: iso(current.started_at),
+          proposed: targetIso,
+        })
         continue
       }
 

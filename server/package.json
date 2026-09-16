@@ -9,6 +9,8 @@
     "migrate:transfer-status-checks": "node src/db/migrateTransferStatusChecks.js",
     "migrate-uploads": "node scripts/migrate-uploads.mjs",
     "test:subscription-stacking": "node scripts/test-subscription-stacking.mjs",
+    "test:paid-renewal-after-expiry": "node scripts/test-paid-renewal-after-expiry.mjs",
+    "test:historical-entitlement-correction": "node scripts/test-historical-entitlement-correction.mjs",
     "test:subscription-verify-unavailable": "node scripts/test-subscription-verify-unavailable.mjs",
     "verify:app-update-v24": "node scripts/verify-app-update-v24.mjs",
     "verify:app-update-matrix": "node scripts/audit-update-check-matrix.mjs",

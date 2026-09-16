@@ -6,9 +6,12 @@
 import { getPool } from '../db/pool.js'
 import { computeMidnightEatExpiryIso, computeStackedExpiryIso } from './subscriptionStacking.js'
 import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
+import { transactionCreditAtSql } from './transactionCreditClock.js'
 
 const MS_TOLERANCE = 2 * 60 * 1000 // 2 minutes clock skew
 const REPAIR_MIN_OVER_MS = 24 * 60 * 60 * 1000 // only auto-repair >1 day over-credit
+
+const CREDIT_AT = transactionCreditAtSql('t')
 
 function requirePool() {
   const pool = getPool()
@@ -97,7 +100,7 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
             t.amount,
             t.currency,
             t.plan_id,
-            COALESCE(t.completed_at, t.created_at) AS credited_at,
+            ${CREDIT_AT} AS credited_at,
             COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days,
             p.name AS plan_name,
             p.price AS plan_price
@@ -106,7 +109,7 @@ export async function loadCreditEventsForDevice(pool, deviceId) {
      WHERE t.device_id = $1
        AND t.status = 'completed'
        AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL
-     ORDER BY COALESCE(t.completed_at, t.created_at) ASC`,
+     ORDER BY ${CREDIT_AT} ASC`,
     [d],
   )
   for (const row of txns) {
@@ -171,14 +174,14 @@ export async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByD
   const { rows: txns } = await pool.query(
     `SELECT t.device_id::text AS device_id,
             t.order_id,
-            COALESCE(t.completed_at, t.created_at) AS credited_at,
+            ${CREDIT_AT} AS credited_at,
             COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days
      FROM transactions t
      LEFT JOIN plans p ON p.id = t.plan_id
      WHERE t.device_id = ANY($1::text[])
        AND t.status = 'completed'
        AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL
-     ORDER BY COALESCE(t.completed_at, t.created_at) ASC`,
+     ORDER BY ${CREDIT_AT} ASC`,
     [ids],
   )
   for (const row of txns) {
@@ -202,7 +205,7 @@ export async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByD
     const { rows: linkedTxns } = await pool.query(
       `SELECT t.order_id,
               t.device_id::text AS device_id,
-              COALESCE(t.completed_at, t.created_at) AS credited_at,
+              ${CREDIT_AT} AS credited_at,
               COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days
        FROM transactions t
        LEFT JOIN plans p ON p.id = t.plan_id
@@ -220,14 +223,14 @@ export async function loadCreditEventsForDevices(pool, deviceIds, linkedOrderByD
       const { rows } = await pool.query(
         `SELECT t.order_id,
                 t.device_id::text AS device_id,
-                COALESCE(t.completed_at, t.created_at) AS credited_at,
+                ${CREDIT_AT} AS credited_at,
                 COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days
          FROM transactions t
          LEFT JOIN plans p ON p.id = t.plan_id
          WHERE t.device_id = ANY($1::text[])
            AND t.status = 'completed'
            AND COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) IS NOT NULL
-         ORDER BY COALESCE(t.completed_at, t.created_at), t.order_id`,
+         ORDER BY ${CREDIT_AT}, t.order_id`,
         [sourceIds],
       )
       sourceHistory = rows

@@ -706,6 +706,49 @@ runtimePublicRouter.post('/historical-entitlement-correction-apply', requireLega
   }
 })
 
+/** Read-only audit: paid renewals destroyed by bad credit-clock correction (expires_at < started_at). */
+runtimePublicRouter.get('/paid-renewal-entitlement-restore-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { auditPaidRenewalEntitlementVictims } = await import('../lib/paidRenewalEntitlementRestore.js')
+    const deviceId = String(req.query.device_id ?? '').trim() || null
+    const limit = Number(req.query.limit ?? 500)
+    const report = await auditPaidRenewalEntitlementVictims({ deviceId, limit })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/paid-renewal-entitlement-restore-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/**
+ * Restore paid-renewal victims (expires_at < started_at after ACTIVATED).
+ * dry_run=1 default; apply requires dry_run=0&confirm=1.
+ */
+runtimePublicRouter.post('/paid-renewal-entitlement-restore-apply', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { applyPaidRenewalEntitlementRestore } = await import('../lib/paidRenewalEntitlementRestore.js')
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const confirm = String(req.query.confirm ?? b.confirm ?? '0').trim() === '1'
+    const maxRepairs = Number(req.query.max_repairs ?? b.max_repairs ?? 500)
+    const deviceId = String(req.query.device_id ?? b.device_id ?? '').trim() || null
+    const appliedBy = String(b.applied_by ?? 'admin_ai_paid_renewal_restore').trim()
+    const report = await applyPaidRenewalEntitlementRestore({
+      dryRun,
+      confirm,
+      maxRepairs,
+      deviceId,
+      appliedBy,
+    })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/paid-renewal-entitlement-restore-apply]', e)
+    res.status(500).json({ ok: false, applied: false, error: String(e.message || e) })
+  }
+})
+
 /** Second-stage forensic reconciliation for NEEDS_MANUAL_REVIEW subscriptions (read-only). */
 runtimePublicRouter.get('/forensic-ambiguous-reconciliation-audit', requireLegacyAdminToken, async (req, res) => {
   try {

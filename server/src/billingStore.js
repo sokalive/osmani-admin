@@ -375,11 +375,17 @@ export async function getTransactionByExternalId(externalId) {
 
 export async function updateTransactionByOrderId(orderId, { status, external_id, raw_payload }) {
   const pool = requirePool()
+  // Persist completed_at once when status becomes completed (ZenoPay / AuraxPay / shared paths).
+  // Idempotent: never move an existing authoritative completed_at.
   const { rows } = await pool.query(
     `UPDATE transactions SET
        status = COALESCE($2, status),
        external_id = COALESCE($3, external_id),
        raw_payload = COALESCE($4::jsonb, raw_payload),
+       completed_at = CASE
+         WHEN COALESCE($2, status) = 'completed' THEN COALESCE(completed_at, now())
+         ELSE completed_at
+       END,
        updated_at = now()
      WHERE order_id = $1
      RETURNING *`,
@@ -617,6 +623,9 @@ export async function computeDeviceSubscriptionExpiryAfterPurchase(deviceId, dur
     anchorAt: stack.anchorAt,
     purchasedDurationDays: stack.purchasedDurationDays,
     stacked: stack.stacked,
+    stacking_disabled: stack.stacking_disabled,
+    expiry_policy: stack.expiry_policy,
+    timezone: stack.timezone,
   }
 }
 

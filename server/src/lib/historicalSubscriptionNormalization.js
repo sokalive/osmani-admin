@@ -16,6 +16,7 @@ import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
 import { clearVerifyAccessInflightForDevice } from './verifyAccessSingleflight.js'
 import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
 import { liveSyncBus } from './liveSyncBus.js'
+import { resolveTransactionCreditAtMs } from './transactionCreditClock.js'
 
 const DAY_MS = 86_400_000
 const TOLERANCE_MS = 2 * 60 * 1000
@@ -84,7 +85,13 @@ class UnionFind {
 
 function paymentEvent(row) {
   const duration = Math.trunc(Number(row.duration_days))
-  const at = ms(row.completed_at) ?? ms(row.created_at)
+  const at = resolveTransactionCreditAtMs({
+    completed_at: row.completed_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    status: 'completed',
+    raw_payload: row.raw_payload,
+  })
   if (!text(row.order_id) || !Number.isFinite(duration) || duration < 1 || at == null) return null
   return {
     key: `payment:${text(row.order_id)}`,
@@ -98,7 +105,7 @@ function paymentEvent(row) {
     duration_days: duration,
     purchased_at: new Date(at).toISOString(),
     at_ms: at,
-    completed_at_source: row.completed_at != null ? 'completed_at' : 'created_at',
+    completed_at_source: row.completed_at != null ? 'completed_at' : 'credit_clock_fallback',
   }
 }
 
@@ -179,12 +186,14 @@ async function loadEvidence(client) {
     ),
     client.query(
       `SELECT t.order_id, t.device_id, t.plan_id, t.amount, t.currency,
-              t.created_at, t.completed_at, p.name AS plan_name, p.duration_days
+              t.created_at, t.completed_at, t.updated_at, t.raw_payload,
+              p.name AS plan_name,
+              COALESCE(NULLIF(t.plan_duration_days, 0), p.duration_days) AS duration_days
        FROM transactions t
        LEFT JOIN plans p ON p.id = t.plan_id
        WHERE t.status = 'completed'
          AND COALESCE(t.order_id, '') NOT LIKE 'manual_grant:%'
-       ORDER BY COALESCE(t.completed_at, t.created_at), t.order_id`,
+       ORDER BY COALESCE(t.completed_at, t.updated_at, t.created_at), t.order_id`,
     ),
     client.query(
       `SELECT g.id, g.device_id, g.plan_id, g.duration_days, g.created_at,
