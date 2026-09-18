@@ -10,6 +10,7 @@
     "migrate-uploads": "node scripts/migrate-uploads.mjs",
     "test:subscription-stacking": "node scripts/test-subscription-stacking.mjs",
     "test:paid-renewal-after-expiry": "node scripts/test-paid-renewal-after-expiry.mjs",
+    "test:package-catalog-snapshot-isolation": "node scripts/test-package-catalog-snapshot-isolation.mjs",
     "test:historical-entitlement-correction": "node scripts/test-historical-entitlement-correction.mjs",
     "test:subscription-verify-unavailable": "node scripts/test-subscription-verify-unavailable.mjs",
     "verify:app-update-v24": "node scripts/verify-app-update-v24.mjs",

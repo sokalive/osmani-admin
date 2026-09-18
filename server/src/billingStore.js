@@ -2465,8 +2465,9 @@ async function buildEntitlementVerifyTxnSummary(deviceId) {
       : row.plan_price != null
         ? Number(row.plan_price)
         : null
-  // Linked plan row only — never invent from duration tier or an unrelated latest payment.
-  if ((!planName || amount == null) && planId != null) {
+  // Linked plan row only for missing name / legacy missing amount+duration.
+  // Never overwrite a valid purchase-time duration snapshot with live catalog.
+  if ((!planName || amount == null || planDurationDays == null || planDurationDays < 1) && planId != null) {
     const plan = await getPlanRowByIdAny(planId)
     if (plan?.name && !planName) planName = String(plan.name).trim() || null
     if (amount == null && plan?.price != null) amount = Number(plan.price)
@@ -3118,20 +3119,22 @@ export async function listDeviceUsers() {
        ds.started_at,
        ds.expires_at,
        ds.admin_revoked_at,
-       lt.phone AS phone_number,
-       lt.plan_id,
-       lt.amount,
+       COALESCE(lt.phone, pay.phone) AS phone_number,
+       COALESCE(pay.plan_id, lt.plan_id) AS plan_id,
+       COALESCE(pay.amount, lt.amount) AS amount,
        p.name AS plan_name,
-       p.duration_days AS plan_duration_days
+       COALESCE(NULLIF(pay.plan_duration_days, 0), NULLIF(lt.plan_duration_days, 0), p.duration_days) AS plan_duration_days
      FROM device_subscriptions ds
+     LEFT JOIN transactions pay
+       ON pay.order_id = ds.transaction_id AND pay.status = 'completed'
      LEFT JOIN LATERAL (
-       SELECT t.phone, t.plan_id, t.amount
+       SELECT t.phone, t.plan_id, t.amount, t.plan_duration_days
        FROM transactions t
        WHERE t.device_id = ds.device_id
        ORDER BY t.created_at DESC
        LIMIT 1
      ) lt ON true
-     LEFT JOIN plans p ON p.id = lt.plan_id
+     LEFT JOIN plans p ON p.id = COALESCE(pay.plan_id, lt.plan_id)
      ORDER BY ds.updated_at DESC`,
   )
   return rows

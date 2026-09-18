@@ -5,6 +5,13 @@ import { getPool } from '../db/pool.js'
 import { appendAdminPhoneDeviceSearch } from './phoneSearch.js'
 import { normalizePhoneDigits, tzPhoneCanonicalSql } from '../billingStore.js'
 import { parseMovedTransactionId } from './paymentOrderRecoveryClassifier.js'
+import {
+  historicalPaidAmountSql,
+  historicalPlanDurationSql,
+} from './packagePurchaseSnapshot.js'
+
+const HISTORICAL_AMOUNT_SQL = historicalPaidAmountSql('pay', 'p')
+const HISTORICAL_DURATION_SQL = historicalPlanDurationSql('pay', 'mg', 'p')
 
 const DEFAULT_LIMIT = 25
 const MAX_LIMIT = 100
@@ -359,8 +366,8 @@ export async function getOperationalSubscriptionByDeviceId(deviceId) {
        COALESCE(lt.phone, pay.phone, '') AS phone_number,
        COALESCE(pay.plan_id, mg.plan_id) AS plan_id,
        p.name AS plan_name,
-       COALESCE(pay.amount, p.price) AS amount,
-       COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
+       ${HISTORICAL_AMOUNT_SQL} AS amount,
+       ${HISTORICAL_DURATION_SQL} AS plan_duration_days,
        ${subscriptionSourceSql('ds', 'pay')} AS provider
      ${SUBSCRIPTION_FROM}
      WHERE ds.device_id = $1
@@ -479,8 +486,8 @@ async function listSubscriptions({
          COALESCE(lt.phone, pay.phone, '') AS phone_number,
          COALESCE(pay.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
-         COALESCE(pay.amount, p.price) AS amount,
-         COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
+         ${HISTORICAL_AMOUNT_SQL} AS amount,
+         ${HISTORICAL_DURATION_SQL} AS plan_duration_days,
          ${subscriptionSourceSql('ds', 'pay')} AS provider
        ${SUBSCRIPTION_FROM}
        ${where}
@@ -552,8 +559,8 @@ export async function listAdminExpiringSoonUsers(filters = {}) {
          COALESCE(lt.phone, pay.phone, '') AS phone_number,
          COALESCE(pay.plan_id, mg.plan_id) AS plan_id,
          p.name AS plan_name,
-         COALESCE(pay.amount, p.price) AS amount,
-         COALESCE(mg.duration_days, p.duration_days) AS plan_duration_days,
+         ${HISTORICAL_AMOUNT_SQL} AS amount,
+         ${HISTORICAL_DURATION_SQL} AS plan_duration_days,
          ${subscriptionSourceSql('ds', 'pay')} AS provider
        ${SUBSCRIPTION_FROM}
        ${where}

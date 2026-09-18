@@ -2,6 +2,9 @@ import { getPool } from '../db/pool.js'
 import { normalizePhoneDigits, tzPhoneCanonicalSql } from '../billingStore.js'
 import { ledgerStatusFromTransaction } from './tzMobileNetwork.js'
 import { classifyPaymentOrderRecovery, mapOwnerFacingRecovery } from './paymentOrderRecoveryClassifier.js'
+import { historicalTxnPlanDurationSql } from './packagePurchaseSnapshot.js'
+
+const TXN_PLAN_DURATION_SQL = historicalTxnPlanDurationSql('t', 'p')
 
 function requirePool() {
   const pool = getPool()
@@ -185,7 +188,7 @@ const LIST_SELECT = `SELECT
        t.updated_at,
        t.completed_at,
        p.name AS plan_name,
-       p.duration_days AS plan_duration_days,
+       ${TXN_PLAN_DURATION_SQL} AS plan_duration_days,
        ds.status AS sub_status,
        ds.expires_at AS sub_expires_at,
        ds.transaction_id AS sub_transaction_id,
@@ -333,7 +336,9 @@ export async function getPaymentOrderDetail(orderId) {
   const pool = requirePool()
   const oid = String(orderId ?? '').trim()
   const { rows } = await pool.query(
-    `SELECT t.*, p.name AS plan_name, p.duration_days
+    `SELECT t.*, p.name AS plan_name,
+            ${TXN_PLAN_DURATION_SQL} AS duration_days,
+            ${TXN_PLAN_DURATION_SQL} AS plan_duration_days
      FROM transactions t
      LEFT JOIN plans p ON p.id = t.plan_id
      WHERE t.order_id = $1`,
