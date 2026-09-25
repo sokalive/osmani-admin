@@ -655,19 +655,51 @@ export async function upsertSubscriptionAfterPayment(phone, planId, expiresAt) {
 
 /** --- Device subscriptions (realtime unlock) --- */
 
-/** Idempotent: duplicate webhooks reuse same order_id → skip writes. */
+/**
+ * Idempotent: one completed order produces one entitlement window.
+ * Consumption survives expiry. It is not "currently active".
+ * A different order id is a new payment and is not blocked by this check.
+ */
 export async function deviceSubscriptionOrderAlreadyApplied(orderId, client = null) {
   const q = dbQuery(client)
-  const oid = String(orderId).trim()
+  const oid = String(orderId ?? '').trim()
+  if (!oid) return false
   const { rows } = await q(
-    `SELECT status, expires_at FROM device_subscriptions WHERE transaction_id = $1 LIMIT 1`,
+    `SELECT 1
+     WHERE EXISTS (
+       SELECT 1 FROM device_subscriptions WHERE transaction_id = $1
+     )
+     OR EXISTS (
+       SELECT 1 FROM transactions
+       WHERE order_id = $1
+         AND NULLIF(trim(raw_payload->>'entitlement_consumed_at'), '') IS NOT NULL
+     )
+     LIMIT 1`,
     [oid],
   )
-  const r = rows[0]
-  if (!r) return false
-  if (String(r.status ?? '') !== 'active') return false
-  const exp = r.expires_at instanceof Date ? r.expires_at : new Date(String(r.expires_at ?? ''))
-  return Number.isFinite(exp.getTime()) && exp.getTime() > Date.now()
+  return Boolean(rows[0])
+}
+
+/** Sticky marker. Does not change updated_at, amount, or completed_at. */
+export async function markTransactionEntitlementConsumed(orderId, consumedAtIso = null, client = null) {
+  const q = dbQuery(client)
+  const oid = String(orderId ?? '').trim()
+  if (!oid) return
+  const stamp = consumedAtIso && !Number.isNaN(new Date(consumedAtIso).getTime())
+    ? new Date(consumedAtIso).toISOString()
+    : new Date().toISOString()
+  await q(
+    `UPDATE transactions
+     SET raw_payload = jsonb_set(
+       COALESCE(raw_payload, '{}'::jsonb),
+       '{entitlement_consumed_at}',
+       to_jsonb($2::text),
+       true
+     )
+     WHERE order_id = $1
+       AND NULLIF(trim(COALESCE(raw_payload->>'entitlement_consumed_at', '')), '') IS NULL`,
+    [oid, stamp],
+  )
 }
 
 export async function getDeviceSubscriptionByDeviceId(deviceId) {
@@ -1846,8 +1878,9 @@ export async function upsertDeviceSubscriptionActive(
   const fp = fingerprintHash ? String(fingerprintHash).trim() : null
   if (!d || !oid) throw new Error('deviceId and orderId required')
   if (await deviceSubscriptionOrderAlreadyApplied(oid, client)) {
-    console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
-    return { skipped: true, smsDeferred: false }
+    console.log('[device_subscriptions] idempotent skip — transaction already consumed:', oid)
+    await markTransactionEntitlementConsumed(oid, null, client)
+    return { skipped: true, smsDeferred: false, reason: 'already_consumed' }
   }
   const { getAdminRevocationState, isAdminRevokedOrderBlocked } = await import(
     './lib/adminSubscriptionRevocation.js'
@@ -1949,10 +1982,12 @@ export async function upsertDeviceSubscriptionActive(
     }
     invalidateSubscriptionAccessCache(d)
     void persistDevicePhoneFromTransaction(d, oid)
+    await markTransactionEntitlementConsumed(oid, null, client)
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)
-      return { skipped: true, smsDeferred: false }
+      await markTransactionEntitlementConsumed(oid, null, client)
+      return { skipped: true, smsDeferred: false, reason: 'already_consumed' }
     }
     throw e
   }
@@ -1973,8 +2008,9 @@ export async function upsertDeviceSubscriptionActiveAt(
   const start = parseAdminTimestamptz(startedAt, 'started_at')
   if (!d || !oid) throw new Error('deviceId and orderId required')
   if (await deviceSubscriptionOrderAlreadyApplied(oid, client)) {
-    console.log('[device_subscriptions] idempotent skip — transaction_id already applied:', oid)
-    return { skipped: true }
+    console.log('[device_subscriptions] idempotent skip — transaction already consumed:', oid)
+    await markTransactionEntitlementConsumed(oid, null, client)
+    return { skipped: true, reason: 'already_consumed' }
   }
   const { getAdminRevocationState, isAdminRevokedOrderBlocked } = await import(
     './lib/adminSubscriptionRevocation.js'
@@ -2042,10 +2078,12 @@ export async function upsertDeviceSubscriptionActiveAt(
       ],
     )
     invalidateSubscriptionAccessCache(d)
+    await markTransactionEntitlementConsumed(oid, start.toISOString(), client)
   } catch (e) {
     if (e?.code === '23505') {
       console.log('[device_subscriptions] duplicate transaction_id (race):', oid)
-      return { skipped: true }
+      await markTransactionEntitlementConsumed(oid, null, client)
+      return { skipped: true, reason: 'already_consumed' }
     }
     throw e
   }

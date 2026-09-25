@@ -749,6 +749,51 @@ runtimePublicRouter.post('/paid-renewal-entitlement-restore-apply', requireLegac
   }
 })
 
+/** Read-only: same completed transaction rewritten after its original window. */
+runtimePublicRouter.get('/consumed-transaction-regrant-audit', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { auditConsumedTransactionRegrants } = await import('../lib/consumedTransactionRegrantRestore.js')
+    const deviceId = String(req.query.device_id ?? '').trim() || null
+    const limit = Number(req.query.limit ?? 500)
+    const report = await auditConsumedTransactionRegrants({ deviceId, limit })
+    res.json({ ok: true, ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/consumed-transaction-regrant-audit]', e)
+    res.status(500).json({ ok: false, error: String(e.message || e) })
+  }
+})
+
+/**
+ * Restore proven post-expiry re-grants to the original paid window.
+ * dry_run=1 default; apply requires dry_run=0&confirm=1.
+ */
+runtimePublicRouter.post('/consumed-transaction-regrant-apply', requireLegacyAdminToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store, private')
+    const { applyConsumedTransactionRegrantRestore } = await import(
+      '../lib/consumedTransactionRegrantRestore.js'
+    )
+    const b = req.body && typeof req.body === 'object' ? req.body : {}
+    const dryRun = String(req.query.dry_run ?? b.dry_run ?? '1').trim() !== '0'
+    const confirm = String(req.query.confirm ?? b.confirm ?? '0').trim() === '1'
+    const maxRepairs = Number(req.query.max_repairs ?? b.max_repairs ?? 25)
+    const deviceId = String(req.query.device_id ?? b.device_id ?? '').trim() || null
+    const appliedBy = String(b.applied_by ?? 'admin_ai_consumed_regrant_restore').trim()
+    const report = await applyConsumedTransactionRegrantRestore({
+      dryRun,
+      confirm,
+      maxRepairs,
+      deviceId,
+      appliedBy,
+    })
+    res.json({ ...report, commit: getServerGitCommit() })
+  } catch (e) {
+    console.error('[runtime/consumed-transaction-regrant-apply]', e)
+    res.status(500).json({ ok: false, applied: false, error: String(e.message || e) })
+  }
+})
+
 /** Second-stage forensic reconciliation for NEEDS_MANUAL_REVIEW subscriptions (read-only). */
 runtimePublicRouter.get('/forensic-ambiguous-reconciliation-audit', requireLegacyAdminToken, async (req, res) => {
   try {

@@ -9,7 +9,8 @@ import {
   loadCreditEventsForDevices,
   replayStackedExpiryFromEvents,
 } from './subscriptionExpiryAudit.js'
-import { eatMidnightUtcIso, SUBSCRIPTION_TZ } from './subscriptionStacking.js'
+import { computeMidnightEatExpiryIso, eatMidnightUtcIso, SUBSCRIPTION_TZ } from './subscriptionStacking.js'
+import { shouldRefuseCreditAlignmentToStartedAt } from './consumedTransactionEntitlement.js'
 import { invalidateSubscriptionAccessCache } from './subscriptionAccessCache.js'
 import { clearVerifyAccessInflightForDevice } from './verifyAccessSingleflight.js'
 import { deviceSubscriptionBus } from './deviceSubscriptionBus.js'
@@ -182,6 +183,10 @@ function alignCreditEventsWithActivation(sub, events) {
   const out = events.map((ev) => {
     if (text(ev.ref) !== txnId) return ev
     if (ev.atMs >= startMs - MS_TOLERANCE) return ev
+    const impliedExpiry = computeMidnightEatExpiryIso(ev.durationDays, ev.atMs)
+    if (shouldRefuseCreditAlignmentToStartedAt(ev.atMs, startMs, impliedExpiry)) {
+      return { ...ev, credit_alignment_refused: 'started_after_credit_window' }
+    }
     changed = true
     return { ...ev, atMs: startMs, credit_aligned_to_started_at: true }
   })

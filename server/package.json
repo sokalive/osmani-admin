@@ -12,6 +12,7 @@
     "test:paid-renewal-after-expiry": "node scripts/test-paid-renewal-after-expiry.mjs",
     "test:package-catalog-snapshot-isolation": "node scripts/test-package-catalog-snapshot-isolation.mjs",
     "test:historical-entitlement-correction": "node scripts/test-historical-entitlement-correction.mjs",
+    "test:consumed-transaction-idempotency": "node scripts/test-consumed-transaction-idempotency.mjs",
     "test:subscription-verify-unavailable": "node scripts/test-subscription-verify-unavailable.mjs",
     "verify:app-update-v24": "node scripts/verify-app-update-v24.mjs",
     "verify:app-update-matrix": "node scripts/audit-update-check-matrix.mjs",
