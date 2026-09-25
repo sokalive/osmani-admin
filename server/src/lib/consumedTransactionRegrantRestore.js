@@ -302,8 +302,8 @@ export async function applyConsumedTransactionRegrantRestore({
              updated_at = now()
          WHERE device_id = $1
            AND transaction_id = $4
-           AND started_at = $5::timestamptz
-           AND expires_at = $6::timestamptz
+           AND abs(extract(epoch from (started_at - $5::timestamptz))) < 0.002
+           AND abs(extract(epoch from (expires_at - $6::timestamptz))) < 0.002
            AND admin_revoked_at IS NULL
          RETURNING device_id, status, started_at, expires_at, transaction_id`,
         [
