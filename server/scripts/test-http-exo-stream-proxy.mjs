@@ -169,6 +169,7 @@ const hdr = normalizeUpstreamHeaders({ userAgent: 'ExoPlayerLib/2.19.1', origin:
 assert.equal(hdr.omitOrigin, true)
 assert.equal(hdr.origin, '')
 assert.ok(/Windows NT/i.test(hdr.userAgent))
+assert.ok(/Chrome\/139/i.test(hdr.userAgent), 'cleartext bridge prefers current desktop Chrome UA')
 const built = buildUpstreamFetchHeaders(hdr, { upstreamUrl: BEIN_HTTP, manifest: true })
 assert.equal(built.headers.Origin, undefined)
 assert.ok(built.headers.Referer.includes('bein.mpilalivetv.com'))
