@@ -1,0 +1,41 @@
+name: Contabo Probe Stream Upstream
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe Bein upstream from Contabo egress
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            set -euo pipefail
+            URL='http://bein.mpilalivetv.com/bridge/bein-sports-1.m3u8?key=K2TV-791F'
+            UA139='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
+            UA131='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+            echo '=== PM2 names ==='
+            pm2 jlist | node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{JSON.parse(s).forEach(p=>console.log(p.name,p.pm2_env.status,p.pm2_env.pm_cwd||''))})"
+            echo '=== direct ua-only 139 ==='
+            curl -sS -m 15 -A "$UA139" "$URL" | head -n 12 || true
+            echo '=== direct referer bein no origin 139 ==='
+            curl -sS -m 15 -A "$UA139" -e 'http://bein.mpilalivetv.com/' "$URL" | head -n 12 || true
+            echo '=== direct referer https bein 139 ==='
+            curl -sS -m 15 -A "$UA139" -e 'https://bein.mpilalivetv.com/' "$URL" | head -n 12 || true
+            echo '=== direct ua-only 131 ==='
+            curl -sS -m 15 -A "$UA131" "$URL" | head -n 12 || true
+            echo '=== local proxy playback ==='
+            curl -sS -m 20 'http://127.0.0.1:10001/stream-proxy?url=http%3A%2F%2Fbein.mpilalivetv.com%2Fbridge%2Fbein-sports-1.m3u8%3Fkey%3DK2TV-791F&referer=http%3A%2F%2Fbein.mpilalivetv.com%2F&userAgent=Mozilla%2F5.0%20(Windows%20NT%2010.0%3B%20Win64%3B%20x64)%20AppleWebKit%2F537.36%20(KHTML%2C%20like%20Gecko)%20Chrome%2F139.0.0.0%20Safari%2F537.36' | head -n 15 || true
+            echo '=== public proxy ==='
+            curl -sS -m 20 'https://api.osmanitv.com/stream-proxy?url=http%3A%2F%2Fbein.mpilalivetv.com%2Fbridge%2Fbein-sports-1.m3u8%3Fkey%3DK2TV-791F&referer=http%3A%2F%2Fbein.mpilalivetv.com%2F&userAgent=Mozilla%2F5.0%20(Windows%20NT%2010.0%3B%20Win64%3B%20x64)%20AppleWebKit%2F537.36%20(KHTML%2C%20like%20Gecko)%20Chrome%2F139.0.0.0%20Safari%2F537.36' | head -n 15 || true
+            echo '=== ssrf localhost ==='
+            curl -sS -m 10 -o /tmp/ssrf.json -w 'status=%{http_code}\n' 'http://127.0.0.1:10001/stream-proxy?url=http://127.0.0.1/' || true
+            cat /tmp/ssrf.json || true
+            echo
+            echo '=== health ==='
+            curl -fsS http://127.0.0.1:10001/api/health | head -c 300; echo
