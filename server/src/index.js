@@ -338,6 +338,10 @@ async function runDeferredStartup({ background = false } = {}) {
         console.info('[warm-cache] skipped on Render (WARM_API_CACHE_ON_STARTUP=0)')
       }
 
+      void import('./lib/channelCatalogSync.js')
+        .then((m) => m.refreshStreamProxyCatalogAllowlist())
+        .catch((e) => console.warn('[stream-proxy-allowlist] startup sync:', e?.message || e))
+
       if (shouldDeferMpingoRoutingStartupSync()) {
         ensureMpingoRoutingStartupSync()
       }

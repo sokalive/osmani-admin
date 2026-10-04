@@ -13,6 +13,10 @@ import {
   normalizeUpstreamHeaders,
 } from '../lib/streamUpstreamHeaders.js'
 import { injectMpingoHtmlBaseHref, isMpingoPlayerPageUrl } from '../lib/streamMpingoHtmlBase.js'
+import {
+  assertHostnameResolvesPublic,
+  evaluateStreamProxyUpstreamAccess,
+} from '../lib/streamProxyAllowlist.js'
 
 export { PROXY_MOUNT_STREAM, buildPublicStreamProxyUrl } from '../lib/streamManifestRewrite.js'
 
@@ -123,6 +127,40 @@ export async function runStreamProxyRequest(req, res, opts) {
     return res.status(400).json({ error: 'url must be absolute http(s)' })
   }
 
+  const access = evaluateStreamProxyUpstreamAccess(parsed.toString(), {
+    referer: String(opts?.upstreamHeaders?.referer || req.query.referer || req.query.ref || '').trim(),
+    rootUpstreamUrl: String(opts?.rootUpstreamUrl || '').trim(),
+  })
+  if (!access.allowed) {
+    logProxyDiagnostics({
+      scope: 'ssrf_denied',
+      mount: mountPath,
+      source_url: parsed.toString(),
+      reason: access.reason,
+      host: access.host || parsed.hostname,
+    })
+    return res.status(access.status || 403).json({
+      error: 'upstream host not allowlisted',
+      reason: access.reason,
+    })
+  }
+
+  try {
+    await assertHostnameResolvesPublic(parsed.hostname)
+  } catch (e) {
+    logProxyDiagnostics({
+      scope: 'ssrf_dns_denied',
+      mount: mountPath,
+      source_url: parsed.toString(),
+      error: String(e.message || e),
+      code: e.code || null,
+    })
+    return res.status(403).json({
+      error: 'upstream host not allowlisted',
+      reason: e.code === 'STREAM_PROXY_DNS' ? 'dns_failed' : 'ssrf_blocked',
+    })
+  }
+
   try {
     return await runStreamProxyRequestInner(req, res, opts, {
       startedAt,
@@ -194,6 +232,34 @@ async function runStreamProxyRequestInner(req, res, opts, ctx) {
   }
 
   const finalUrl = String(upstreamRes.url || parsed.toString())
+  const finalParsed = parseMaybeUrl(finalUrl)
+  if (finalParsed) {
+    const finalAccess = evaluateStreamProxyUpstreamAccess(finalParsed.toString(), {
+      referer: upstreamHeaders.referer,
+      rootUpstreamUrl: opts?.rootUpstreamUrl || parsed.toString(),
+    })
+    if (!finalAccess.allowed) {
+      logProxyDiagnostics({
+        scope: 'ssrf_redirect_denied',
+        mount: mountPath,
+        source_url: parsed.toString(),
+        final_url: finalUrl,
+        reason: finalAccess.reason,
+      })
+      return res.status(403).json({
+        error: 'upstream host not allowlisted',
+        reason: 'redirect_host_not_allowlisted',
+      })
+    }
+    try {
+      await assertHostnameResolvesPublic(finalParsed.hostname)
+    } catch (e) {
+      return res.status(403).json({
+        error: 'upstream host not allowlisted',
+        reason: 'redirect_ssrf_blocked',
+      })
+    }
+  }
   const status = Number(upstreamRes.status)
   const contentType = upstreamRes.headers.get('content-type') || 'application/octet-stream'
   logProxyDiagnostics({

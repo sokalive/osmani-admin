@@ -20,6 +20,10 @@ import {
   isDirectStreamCutoverEnabled,
   isStreamPlaybackForceProxy,
 } from './streamDeliveryRollout.js'
+import {
+  getStreamProxyAllowlistSnapshot,
+  noteCatalogHttpBridgeHost,
+} from './streamProxyAllowlist.js'
 
 export const STREAM_DELIVERY_MODES = Object.freeze(['proxy', 'direct', 'hybrid'])
 
@@ -56,8 +60,12 @@ function streamHeaders(channel) {
 }
 
 function buildProxyPlayback(req, upstreamUrl, hdr) {
-  const proxy = buildPublicStreamProxyUrl(req, upstreamUrl, hdr)
-  return proxy || upstreamUrl || ''
+  const upstream = String(upstreamUrl || '').trim()
+  if (upstream.toLowerCase().startsWith('http://')) {
+    noteCatalogHttpBridgeHost(upstream)
+  }
+  const proxy = buildPublicStreamProxyUrl(req, upstream, hdr)
+  return proxy || upstream || ''
 }
 
 /**
@@ -193,6 +201,7 @@ export function getStreamDeliveryHealthSnapshot() {
       direct: `/${STREAM_DIRECT_MOUNT}`,
       bunny_segment_origin: `/${segments.origin_pull_route}`,
     },
+    proxy_allowlist: getStreamProxyAllowlistSnapshot(),
     hls_note: segments.production_segment_offload_active
       ? 'Manifest via stream-direct (token); HLS segments via signed Bunny CDN URLs; Render origin-pull on Bunny cache miss only.'
       : 'Segment offload inactive — set STREAM_SEGMENT_DELIVERY=bunny, BUNNY_STREAM_CDN_BASE_URL, and rollout percent.',

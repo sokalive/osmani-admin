@@ -14,6 +14,7 @@ import {
   isProtectedSegmentTarget,
   isSelectiveSegmentRoutingEnabled,
 } from './streamProtectedProviders.js'
+import { isCleartextHttpBridgeUrl } from './streamProxyAllowlist.js'
 import { getYcnUpstreamHeaderProfile } from './streamUpstreamHeaders.js'
 import {
   recordSegmentDeliveryMode,
@@ -103,6 +104,13 @@ export function resolveSegmentRoute(absoluteTarget, hdr = {}, ctx = {}) {
     channelReferer: ctx.channelReferer || hdr.referer,
   }
   if (isProtectedSegmentTarget(absoluteTarget, hdr, protectedCtx)) return 'proxy'
+  // Cleartext HTTP catalog bridges (and their off-host obfuscated segments) stay on proxy.
+  if (
+    isCleartextHttpBridgeUrl(absoluteTarget) ||
+    isCleartextHttpBridgeUrl(protectedCtx.rootUpstreamUrl || '')
+  ) {
+    return 'proxy'
+  }
   return 'bunny'
 }
 
@@ -172,7 +180,10 @@ export function createManifestSegmentUrlBuilder(req, ctx = {}) {
         recordSegmentUrlIssued('proxy')
         recordSegmentProviderRoute(host, 'proxy')
         stats.proxy += 1
-        const proxyHdr = normalizeUpstreamHeaders(hdr, absoluteTarget)
+        const headerSource = isCleartextHttpBridgeUrl(rootUpstreamUrl)
+          ? rootUpstreamUrl
+          : absoluteTarget
+        const proxyHdr = normalizeUpstreamHeaders(hdr, headerSource)
         return buildProxyUrl(req, absoluteTarget, proxyHdr, PROXY_MOUNT_STREAM)
       }
 
@@ -187,7 +198,10 @@ export function createManifestSegmentUrlBuilder(req, ctx = {}) {
       recordSegmentUrlIssued('proxy_fallback')
       recordSegmentProviderRoute(host, 'proxy')
       stats.proxy += 1
-      const proxyHdr = normalizeUpstreamHeaders(hdr, absoluteTarget)
+      const headerSource = isCleartextHttpBridgeUrl(rootUpstreamUrl)
+        ? rootUpstreamUrl
+        : absoluteTarget
+      const proxyHdr = normalizeUpstreamHeaders(hdr, headerSource)
       return buildProxyUrl(req, absoluteTarget, proxyHdr, PROXY_MOUNT_STREAM)
     },
     getRouteStats: () => ({ ...stats }),

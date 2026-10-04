@@ -1,7 +1,8 @@
 import { liveSyncBus } from './liveSyncBus.js'
 import { invalidateApiCacheNamespace } from './apiResponseCache.js'
 import { loadGlobalAppModesPayload } from '../routes/globalAppSettings.js'
-import { invalidateChannelIdNameMapCache, getChannelById } from '../store.js'
+import { invalidateChannelIdNameMapCache, getChannelById, readChannels } from '../store.js'
+import { syncCatalogHttpBridgeHostsFromChannels } from './streamProxyAllowlist.js'
 import { notifyApiCacheBust } from './apiCacheBustRelay.js'
 import { notifyLiveSyncPeers } from './liveSyncRelay.js'
 
@@ -13,6 +14,18 @@ export function invalidateChannelCatalogCaches() {
     invalidateApiCacheNamespace(ns)
   }
   invalidateChannelIdNameMapCache()
+  // Refresh stream-proxy catalog allowlist in the background (non-blocking).
+  void refreshStreamProxyCatalogAllowlist()
+}
+
+export async function refreshStreamProxyCatalogAllowlist() {
+  try {
+    const channels = await readChannels()
+    return syncCatalogHttpBridgeHostsFromChannels(channels)
+  } catch (e) {
+    console.warn('[stream-proxy-allowlist] catalog sync failed:', String(e?.message || e))
+    return []
+  }
 }
 
 /**

@@ -7,6 +7,7 @@
  * Exo on device talks to our proxy; upstream fetch should mimic desktop browser, not Exo UA.
  */
 import { extractUrlHost, isProtectedSegmentTarget } from './streamProtectedProviders.js'
+import { isCleartextHttpBridgeUrl } from './streamProxyAllowlist.js'
 
 /** Upstream fetch UA for ycn/protected providers (NOT the Exo client UA). */
 const YCN_UPSTREAM_UA =
@@ -91,9 +92,28 @@ export function normalizeUpstreamHeaders(hdr = {}, upstreamUrl = '') {
   let origin = String(hdr.origin || '').trim()
   let userAgent = String(hdr.userAgent || '').trim() || DEFAULT_PROXY_UA
 
+  const cleartextBridge = upstream ? isCleartextHttpBridgeUrl(upstream) : false
   const protectedUpstream = upstream
     ? isProtectedSegmentTarget(upstream, { referer, origin, userAgent }, { rootUpstreamUrl: upstream })
     : false
+
+  if (cleartextBridge) {
+    // mpilali-style HTTP bridges reject Origin / mobile Exo UAs.
+    // Exo talks to our HTTPS proxy; upstream sees desktop Chrome + host referer, no Origin.
+    if (!isHttpOrigin(referer) || isMimeTypeOrigin(referer)) {
+      referer = originFromUrl(upstream) ? `${originFromUrl(upstream)}/` : ''
+    }
+    origin = ''
+    userAgent = pickYcnUpstreamUserAgent(userAgent)
+    return {
+      referer,
+      origin,
+      userAgent,
+      protectedUpstream: true,
+      cleartextBridge: true,
+      omitOrigin: true,
+    }
+  }
 
   if (protectedUpstream) {
     referer = inferYcnReferer(upstream, referer)
@@ -104,7 +124,14 @@ export function normalizeUpstreamHeaders(hdr = {}, upstreamUrl = '') {
     origin = originFromUrl(referer) || originFromUrl(upstream) || ''
   }
 
-  return { referer, origin, userAgent, protectedUpstream }
+  return {
+    referer,
+    origin,
+    userAgent,
+    protectedUpstream,
+    cleartextBridge: false,
+    omitOrigin: false,
+  }
 }
 
 /**
@@ -127,7 +154,7 @@ export function buildUpstreamFetchHeaders(hdr, opts = {}) {
     headers['Accept-Language'] = 'en-US,en;q=0.9'
   }
   if (normalized.referer) headers.Referer = normalized.referer
-  if (normalized.origin && isHttpOrigin(normalized.origin)) {
+  if (!normalized.omitOrigin && normalized.origin && isHttpOrigin(normalized.origin)) {
     headers.Origin = normalized.origin
   }
   if (opts.range) headers.Range = String(opts.range)

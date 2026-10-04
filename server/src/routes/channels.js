@@ -47,6 +47,7 @@ import {
   updateInstructionVideoChannel,
 } from '../store.js'
 import { publishChannelCatalogChange, invalidateChannelCatalogCaches } from '../lib/channelCatalogSync.js'
+import { syncCatalogHttpBridgeHostsFromChannels } from '../lib/streamProxyAllowlist.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import {
   logChannelStreamDiagGet,
@@ -125,6 +126,7 @@ channelsRouter.get('/', apiResponseCacheExact('channels'), async (req, res) => {
   try {
     const clientVersion = extractVersionCodeFromRequest(req)
     const list = await readChannels()
+    syncCatalogHttpBridgeHostsFromChannels(list)
     const visibleList =
       clientVersion > 0
         ? list.filter((c) => {

@@ -25,7 +25,8 @@ export function buildProxyUrl(req, absoluteTarget, hdr, mountPath) {
   const q = new URLSearchParams()
   q.set('url', absoluteTarget)
   if (hdr.referer) q.set('referer', hdr.referer)
-  if (hdr.origin) q.set('origin', hdr.origin)
+  // Cleartext HTTP bridges must not receive Origin (provider rejects embed).
+  if (hdr.origin && !hdr.omitOrigin) q.set('origin', hdr.origin)
   if (hdr.userAgent) q.set('userAgent', hdr.userAgent)
   return `${base}/${path}?${q.toString()}`
 }
