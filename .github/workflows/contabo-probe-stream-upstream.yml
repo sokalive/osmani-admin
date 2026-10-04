@@ -18,24 +18,34 @@ jobs:
             set -euo pipefail
             URL='http://bein.mpilalivetv.com/bridge/bein-sports-1.m3u8?key=K2TV-791F'
             UA139='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
-            UA131='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-            echo '=== PM2 names ==='
-            pm2 jlist | node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{JSON.parse(s).forEach(p=>console.log(p.name,p.pm2_env.status,p.pm2_env.pm_cwd||''))})"
-            echo '=== direct ua-only 139 ==='
-            curl -sS -m 15 -A "$UA139" "$URL" | head -n 12 || true
-            echo '=== direct referer bein no origin 139 ==='
-            curl -sS -m 15 -A "$UA139" -e 'http://bein.mpilalivetv.com/' "$URL" | head -n 12 || true
-            echo '=== direct referer https bein 139 ==='
-            curl -sS -m 15 -A "$UA139" -e 'https://bein.mpilalivetv.com/' "$URL" | head -n 12 || true
-            echo '=== direct ua-only 131 ==='
-            curl -sS -m 15 -A "$UA131" "$URL" | head -n 12 || true
-            echo '=== local proxy playback ==='
-            curl -sS -m 20 'http://127.0.0.1:10001/stream-proxy?url=http%3A%2F%2Fbein.mpilalivetv.com%2Fbridge%2Fbein-sports-1.m3u8%3Fkey%3DK2TV-791F&referer=http%3A%2F%2Fbein.mpilalivetv.com%2F&userAgent=Mozilla%2F5.0%20(Windows%20NT%2010.0%3B%20Win64%3B%20x64)%20AppleWebKit%2F537.36%20(KHTML%2C%20like%20Gecko)%20Chrome%2F139.0.0.0%20Safari%2F537.36' | head -n 15 || true
-            echo '=== public proxy ==='
-            curl -sS -m 20 'https://api.osmanitv.com/stream-proxy?url=http%3A%2F%2Fbein.mpilalivetv.com%2Fbridge%2Fbein-sports-1.m3u8%3Fkey%3DK2TV-791F&referer=http%3A%2F%2Fbein.mpilalivetv.com%2F&userAgent=Mozilla%2F5.0%20(Windows%20NT%2010.0%3B%20Win64%3B%20x64)%20AppleWebKit%2F537.36%20(KHTML%2C%20like%20Gecko)%20Chrome%2F139.0.0.0%20Safari%2F537.36' | head -n 15 || true
-            echo '=== ssrf localhost ==='
-            curl -sS -m 10 -o /tmp/ssrf.json -w 'status=%{http_code}\n' 'http://127.0.0.1:10001/stream-proxy?url=http://127.0.0.1/' || true
-            cat /tmp/ssrf.json || true
-            echo
             echo '=== health ==='
-            curl -fsS http://127.0.0.1:10001/api/health | head -c 300; echo
+            curl -fsS http://127.0.0.1:10001/api/health | head -c 250; echo
+            echo '=== local proxy manifest ==='
+            MANI=$(curl -sS -m 20 "http://127.0.0.1:10001/stream-proxy?url=$(python3 - <<'PY'
+import urllib.parse
+print(urllib.parse.quote('http://bein.mpilalivetv.com/bridge/bein-sports-1.m3u8?key=K2TV-791F', safe=''))
+PY
+)&referer=http%3A%2F%2Fbein.mpilalivetv.com%2F&userAgent=$(python3 - <<'PY'
+import urllib.parse
+print(urllib.parse.quote('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36', safe=''))
+PY
+)")
+            echo "$MANI" | head -n 12
+            SEG=$(echo "$MANI" | awk 'NF && $0 !~ /^#/ {print; exit}')
+            echo "=== first proxied segment ==="
+            echo "$SEG" | head -c 350; echo
+            if [ -n "$SEG" ]; then
+              curl -sS -m 20 -D /tmp/seg.hdr -o /tmp/seg.bin "$SEG" || true
+              head -n 20 /tmp/seg.hdr || true
+              echo "seg_bytes=$(wc -c </tmp/seg.bin)"
+              head -c 16 /tmp/seg.bin | od -An -tx1 || true
+              RAW=$(node -e "const u=process.argv[1]; process.stdout.write(new URL(u).searchParams.get('url')||'')" "$SEG")
+              echo "=== direct RAW segment ==="
+              echo "$RAW"
+              curl -sS -m 15 -D /tmp/seg2.hdr -o /tmp/seg2.bin -A "$UA139" -e 'http://bein.mpilalivetv.com/' "$RAW" || true
+              head -n 15 /tmp/seg2.hdr || true
+              echo "direct_bytes=$(wc -c </tmp/seg2.bin)"
+              head -c 16 /tmp/seg2.bin | od -An -tx1 || true
+            fi
+            echo '=== ssrf ==='
+            curl -sS -m 10 -w 'status=%{http_code}\n' 'http://127.0.0.1:10001/stream-proxy?url=https://example.com/' || true
