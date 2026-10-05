@@ -92,7 +92,7 @@ export function isProtectedSegmentTarget(absoluteUrl, hdr = {}, ctx = {}) {
     }
   }
 
-  if (urlHasAuthQuery(absoluteUrl)) return true
+  // Token query params alone do not make a URL a protected/YCN provider.
   if (urlHasAuthQuery(ctx.rootUpstreamUrl)) {
     if (hostMatchesAnySuffix(host, hostSuffixes()) || host === rootHost) {
       return pathLooksTokenized(absoluteUrl)
@@ -108,8 +108,6 @@ export function isProtectedSegmentTarget(absoluteUrl, hdr = {}, ctx = {}) {
   }
 
   const channelReferer = String(ctx.channelReferer || hdr.referer || '').trim()
-  if (channelReferer && urlHasAuthQuery(absoluteUrl)) return true
-
   if (channelReferer && hostMatchesAnySuffix(extractUrlHost(channelReferer), hostSuffixes())) {
     if (
       pathLooksTokenized(absoluteUrl) &&

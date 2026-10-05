@@ -26,6 +26,9 @@ const BLOCKED_HOSTNAMES = new Set([
 
 /** @type {Set<string>} */
 let catalogHttpHosts = new Set()
+/** Rotating-edge suffixes derived from eligible catalog HTTP hosts (label-boundary safe). */
+/** @type {Set<string>} */
+let catalogProviderSuffixes = new Set()
 let catalogSyncedAt = 0
 
 function parseHostList(raw) {
@@ -39,11 +42,21 @@ export function getEnvCleartextHttpBridgeHosts() {
   return parseHostList(process.env.STREAM_CLEARTEXT_HTTP_BRIDGE_HOSTS)
 }
 
-function hostMatchesSuffix(host, suffix) {
-  const h = String(host || '').toLowerCase()
-  const s = String(suffix || '').toLowerCase()
+/**
+ * DNS-label boundary suffix match.
+ * ALLOW: h42.kavorexacloud.click vs kavorexacloud.click
+ * DENY: kavorexacloud.click.evil.com, notkavorexacloud.click
+ */
+export function hostMatchesDnsLabelSuffix(host, suffix) {
+  const h = String(host || '').toLowerCase().replace(/\.$/, '')
+  const s = String(suffix || '').toLowerCase().replace(/\.$/, '')
   if (!h || !s) return false
-  return h === s || h.endsWith(`.${s}`)
+  if (h === s) return true
+  return h.endsWith(`.${s}`) && h.length > s.length + 1
+}
+
+function hostMatchesSuffix(host, suffix) {
+  return hostMatchesDnsLabelSuffix(host, suffix)
 }
 
 function hostMatchesAny(host, list) {
@@ -94,8 +107,32 @@ export function isHlsMediaPath(pathnameOrUrl) {
   )
 }
 
+/**
+ * Derive a safe provider suffix for rotating subdomains.
+ * h37.kavorexacloud.click → kavorexacloud.click
+ * bein.mpilalivetv.com → mpilalivetv.com
+ * example-provider.test (2 labels) → null (exact host only)
+ */
+export function deriveCatalogProviderSuffix(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/\.$/, '')
+  if (!h || isBlockedHostname(h)) return null
+  const labels = h.split('.').filter(Boolean)
+  if (labels.length < 3) return null
+  const suffix = labels.slice(-2).join('.')
+  if (!suffix || isBlockedHostname(suffix)) return null
+  return suffix
+}
+
+function registerCatalogHttpHost(host) {
+  if (!host || isBlockedHostname(host)) return
+  catalogHttpHosts.add(host)
+  const suffix = deriveCatalogProviderSuffix(host)
+  if (suffix) catalogProviderSuffixes.add(suffix)
+}
+
 export function syncCatalogHttpBridgeHostsFromChannels(channels = []) {
   const next = new Set()
+  const nextSuffixes = new Set()
   for (const ch of channels || []) {
     const player = String(ch.playerType ?? ch.player_type ?? 'exo')
       .trim()
@@ -115,10 +152,14 @@ export function syncCatalogHttpBridgeHostsFromChannels(channels = []) {
       const u = String(raw || '').trim()
       if (!u.toLowerCase().startsWith('http://')) continue
       const host = extractUrlHost(u)
-      if (host && !isBlockedHostname(host)) next.add(host)
+      if (!host || isBlockedHostname(host)) continue
+      next.add(host)
+      const suffix = deriveCatalogProviderSuffix(host)
+      if (suffix) nextSuffixes.add(suffix)
     }
   }
   catalogHttpHosts = next
+  catalogProviderSuffixes = nextSuffixes
   catalogSyncedAt = Date.now()
   return [...catalogHttpHosts]
 }
@@ -127,13 +168,36 @@ export function getCatalogHttpBridgeHosts() {
   return [...catalogHttpHosts]
 }
 
+export function getCatalogProviderSuffixes() {
+  return [...catalogProviderSuffixes]
+}
+
 export function noteCatalogHttpBridgeHost(urlOrHost) {
   const host = String(urlOrHost || '').includes('://')
     ? extractUrlHost(urlOrHost)
     : String(urlOrHost || '').trim().toLowerCase()
   if (!host || isBlockedHostname(host)) return
-  catalogHttpHosts.add(host)
+  registerCatalogHttpHost(host)
   catalogSyncedAt = Date.now()
+}
+
+function hostMatchesCatalogProviderBoundary(host) {
+  if (catalogHttpHosts.has(host)) return true
+  for (const suffix of catalogProviderSuffixes) {
+    if (hostMatchesDnsLabelSuffix(host, suffix)) return true
+  }
+  return false
+}
+
+function providerSuffixesForAuthorizedRoot(rootHost) {
+  const out = new Set()
+  if (!rootHost) return out
+  const derived = deriveCatalogProviderSuffix(rootHost)
+  if (derived) out.add(derived)
+  for (const suffix of catalogProviderSuffixes) {
+    if (hostMatchesDnsLabelSuffix(rootHost, suffix)) out.add(suffix)
+  }
+  return out
 }
 
 function authorizedRootHosts() {
@@ -149,7 +213,8 @@ function authorizedRootHosts() {
 export function isAuthorizedStreamRootHost(host) {
   const h = String(host || '').toLowerCase()
   if (!h || isBlockedHostname(h)) return false
-  return hostMatchesAny(h, authorizedRootHosts())
+  if (hostMatchesAny(h, authorizedRootHosts())) return true
+  return hostMatchesCatalogProviderBoundary(h)
 }
 
 export function isCleartextHttpBridgeUrl(urlStr) {
@@ -161,9 +226,7 @@ export function isCleartextHttpBridgeUrl(urlStr) {
     if (hostMatchesAny(host, [...BUILTIN_CLEARTEXT_BRIDGE_HOSTS, ...getEnvCleartextHttpBridgeHosts()])) {
       return true
     }
-    if (catalogHttpHosts.has(host) || [...catalogHttpHosts].some((c) => hostMatchesSuffix(host, c))) {
-      return true
-    }
+    if (hostMatchesCatalogProviderBoundary(host)) return true
     return false
   } catch {
     return false
@@ -196,7 +259,12 @@ export function evaluateStreamProxyUpstreamAccess(urlStr, ctx = {}) {
   }
 
   if (isAuthorizedStreamRootHost(host)) {
-    return { allowed: true, reason: 'authorized_root', host }
+    const reason = catalogHttpHosts.has(host)
+      ? 'authorized_root'
+      : hostMatchesAny(host, [...catalogProviderSuffixes])
+        ? 'authorized_catalog_provider_suffix'
+        : 'authorized_root'
+    return { allowed: true, reason, host }
   }
 
   // Protected providers (tokenized / known suffixes) even when not in catalog.
@@ -211,6 +279,20 @@ export function evaluateStreamProxyUpstreamAccess(urlStr, ctx = {}) {
     (rootHost && isAuthorizedStreamRootHost(rootHost))
 
   if (authorizedParent && isHlsMediaPath(parsed.pathname + parsed.search)) {
+    // Rotating sibling edge under the same catalog-derived provider boundary.
+    const suffixes = providerSuffixesForAuthorizedRoot(rootHost || refererHost)
+    for (const suffix of suffixes) {
+      if (hostMatchesDnsLabelSuffix(host, suffix)) {
+        return {
+          allowed: true,
+          reason: 'authorized_provider_suffix_segment',
+          host,
+          parent: refererHost || rootHost,
+          provider_suffix: suffix,
+        }
+      }
+    }
+    // Preserve existing off-host HLS segment chain (e.g. obfuscated edges under authorized manifest root).
     return { allowed: true, reason: 'authorized_root_segment', host, parent: refererHost || rootHost }
   }
 
@@ -254,6 +336,7 @@ export async function assertHostnameResolvesPublic(hostname) {
 export function getStreamProxyAllowlistSnapshot() {
   return {
     catalog_http_hosts: getCatalogHttpBridgeHosts(),
+    catalog_provider_suffixes: getCatalogProviderSuffixes(),
     catalog_synced_at: catalogSyncedAt || null,
     env_cleartext_hosts: getEnvCleartextHttpBridgeHosts(),
     builtin_cleartext_hosts: BUILTIN_CLEARTEXT_BRIDGE_HOSTS,
@@ -262,7 +345,14 @@ export function getStreamProxyAllowlistSnapshot() {
 }
 
 /** Test helper */
-export function _resetCatalogHttpBridgeHostsForTests(hosts = []) {
+export function _resetCatalogHttpBridgeHostsForTests(hosts = [], suffixes = null) {
   catalogHttpHosts = new Set((hosts || []).map((h) => String(h).toLowerCase()))
+  if (suffixes === null) {
+    catalogProviderSuffixes = new Set(
+      [...catalogHttpHosts].map((h) => deriveCatalogProviderSuffix(h)).filter(Boolean),
+    )
+  } else {
+    catalogProviderSuffixes = new Set((suffixes || []).map((s) => String(s).toLowerCase()))
+  }
   catalogSyncedAt = Date.now()
 }
