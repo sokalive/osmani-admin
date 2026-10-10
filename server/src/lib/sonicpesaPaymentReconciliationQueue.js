@@ -140,6 +140,14 @@ async function finalizeQueueRow(id, { status, lastError = '', attemptDelta = 0, 
 export async function processReconciliationQueueRow(row) {
   const oid = String(row.order_id ?? '').trim()
   const rec = await reconcileOrderWithZenoPay(oid, { forcePoll: true })
+  if (rec.phase === 'skip_provider_poll_no_reference') {
+    await finalizeQueueRow(row.id, {
+      status: QUEUE_STATUS.TERMINAL_FAILED,
+      lastError: 'no_provider_reference',
+      attemptDelta: 1,
+    })
+    return { orderId: oid, terminal: true, status: 'no_provider_reference', rec }
+  }
   const after = String(rec.txnStatusAfter ?? rec.txnStatusBefore ?? '').trim()
 
   if (after === 'completed' || after === 'failed') {
@@ -168,11 +176,38 @@ export async function processReconciliationQueueRow(row) {
   return { orderId: oid, terminal: false, status: after || 'pending', rec }
 }
 
+/**
+ * Failed checkouts with no provider reference must not stay PENDING.
+ * The claim query only selects pending transactions, so a failed txn used to
+ * leave its queue row orphaned.
+ */
+export async function sweepDefinitiveRejectionQueueRows() {
+  const pool = requirePool()
+  const { rowCount } = await pool.query(
+    `UPDATE sonicpesa_payment_reconciliation_queue q
+     SET status = 'TERMINAL_FAILED',
+         last_error_redacted = 'definitive_provider_rejection',
+         completed_at = COALESCE(q.completed_at, now()),
+         updated_at = now()
+     FROM transactions t
+     WHERE t.order_id = q.order_id
+       AND q.status IN ('PENDING', 'PROCESSING')
+       AND t.status = 'failed'
+       AND COALESCE(t.raw_payload->>'payment_provider', '') = 'sonicpesa'
+       AND COALESCE(t.external_id, '') = ''
+       AND COALESCE(t.raw_payload->>'provider_order_id', '') = ''`,
+  )
+  return Number(rowCount) || 0
+}
+
 export async function runSonicpesaReconciliationQueueOnce() {
   if (workerRunning) return { skipped: true, processed: 0 }
   workerRunning = true
   let processed = 0
   try {
+    await sweepDefinitiveRejectionQueueRows().catch((e) => {
+      console.warn('[sonicpesa-reconcile-queue] sweep failed', e?.message || e)
+    })
     const health = await getSonicpesaWebhookHealthSnapshot()
     const webhookStale =
       health?.last_provider_webhook_at == null ||
@@ -208,6 +243,7 @@ export async function getReconciliationQueueMetrics() {
        COUNT(*) FILTER (WHERE status = 'PENDING')::int AS pending,
        COUNT(*) FILTER (WHERE status = 'PROCESSING')::int AS processing,
        COUNT(*) FILTER (WHERE status = 'COMPLETED')::int AS completed,
+       COUNT(*) FILTER (WHERE status = 'TERMINAL_FAILED')::int AS terminal_failed,
        COUNT(*) FILTER (WHERE status = 'TERMINAL_ABANDONED')::int AS terminal_abandoned,
        MIN(created_at) FILTER (WHERE status = 'PENDING') AS oldest_pending_at
      FROM sonicpesa_payment_reconciliation_queue`,

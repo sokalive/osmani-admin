@@ -27,12 +27,39 @@ export function deriveAppWaitingState({ txn, activation = null, subscriptionActi
   const act = activation ?? activationFromTxn(txn)
   const activationState = String(act?.activation_state ?? '').trim()
 
+  const raw = txn?.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
+  const providerOrderId = String(raw.provider_order_id ?? txn?.external_id ?? '').trim()
+  const initiation = String(raw.provider_initiation ?? '').trim()
+  const phase = String(raw.checkout_phase ?? '').trim()
+  const httpStatus = Number(raw.httpStatus) || 0
+  const retryableRejection =
+    !providerOrderId &&
+    (httpStatus === 429 ||
+      phase === 'retryable_rejection' ||
+      initiation === 'rejected_retryable')
+  const pinWaitAllowed = initiation === 'accepted' && Boolean(providerOrderId)
+
   if (status === 'failed') {
+    if (retryableRejection) {
+      return {
+        app_waiting_state: APP_WAITING_STATE.FAILED,
+        activation_state: ACTIVATION_STATE.TERMINAL_REJECTED,
+        entitlement_active: false,
+        retryable: true,
+        pin_wait_allowed: false,
+        checkout_phase: 'retryable_rejection',
+        provider_initiation: 'rejected_retryable',
+        message: 'Maombi mengi sana. Subiri kidogo kisha ujaribu tena.',
+      }
+    }
     return {
       app_waiting_state: APP_WAITING_STATE.FAILED,
       activation_state: activationState || ACTIVATION_STATE.TERMINAL_REJECTED,
       entitlement_active: false,
       retryable: false,
+      pin_wait_allowed: false,
+      checkout_phase: phase || 'terminal_failure',
+      provider_initiation: initiation || 'failed',
     }
   }
 
@@ -100,6 +127,9 @@ export function deriveAppWaitingState({ txn, activation = null, subscriptionActi
     app_waiting_state: APP_WAITING_STATE.PAYMENT_PENDING,
     activation_state: activationState || ACTIVATION_STATE.PROVIDER_NOT_CONFIRMED,
     entitlement_active: false,
-    retryable: true,
+    retryable: initiation !== 'ambiguous',
+    pin_wait_allowed: pinWaitAllowed,
+    checkout_phase: pinWaitAllowed ? 'awaiting_authorization' : phase || 'provider_pending',
+    provider_initiation: initiation || null,
   }
 }

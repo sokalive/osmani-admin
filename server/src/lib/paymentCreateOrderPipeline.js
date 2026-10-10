@@ -103,7 +103,6 @@ export function runProviderCreateOrderInBackground(opts) {
           orderId,
           httpStatus: result.status,
           ms: Date.now() - t0,
-          body: result.body,
         })
       }
     } catch (e) {

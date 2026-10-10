@@ -1,22 +1,19 @@
 import { randomBytes } from 'node:crypto'
 import { Router } from 'express'
 import * as billing from '../billingStore.js'
-import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { handleSonicPesaWebhook } from '../handlers/sonicPesaWebhook.js'
 import {
-  createOrder,
   resolveSonicpesaCredentials,
   verifyPayment,
 } from '../lib/payments/providers/sonicpesa.js'
 import { formatPhone } from '../zenopayClient.js'
 import { hashDeviceFingerprint } from '../billingStore.js'
-import {
-  respondCreateOrderAccepted,
-  runProviderCreateOrderInBackground,
-} from '../lib/paymentCreateOrderPipeline.js'
 import { reconcileOrderWithZenoPay } from '../paymentReconcile.js'
 import { deriveAppWaitingState } from '../lib/paymentAppWaitingState.js'
 import { invalidateSubscriptionAccessCache } from '../lib/subscriptionAccessCache.js'
+import { runAwaitedSonicpesaCreateOrder } from '../lib/sonicpesaCheckoutFlow.js'
+import { noteCheckoutMetric } from '../lib/sonicpesaCheckoutMetrics.js'
+import { shouldActivelyReconcile } from '../lib/sonicpesaCheckoutPolicy.js'
 
 export const sonicpesaPaymentsRouter = Router()
 
@@ -28,9 +25,21 @@ function normalizeTzPhone(raw) {
   return s
 }
 
-/** POST /payments/sonicpesa/create-order — parallel to ZenoPay create-payment */
+function eventLoopLagMs() {
+  const start = Date.now()
+  return new Promise((resolve) => {
+    setImmediate(() => resolve(Math.max(0, Date.now() - start)))
+  })
+}
+
+/** POST /payments/sonicpesa/create-order — response waits for SonicPesa acceptance. */
 sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
+  const handlerStarted = Date.now()
+  const correlationId = `sp_${Date.now()}_${randomBytes(4).toString('hex')}`
+  const timings = {}
+  noteCheckoutMetric('request')
   try {
+    timings.eventLoopLagMs = await eventLoopLagMs()
     const b = req.body && typeof req.body === 'object' ? req.body : {}
     const planId = Number(b.planId ?? b.plan_id)
     const deviceId = String(b.deviceId ?? b.device_id ?? '').trim()
@@ -56,7 +65,9 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
           fingerprint_hash: hashDeviceFingerprint(fpRaw),
         }
       : {}
+    const tPlan = Date.now()
     const plan = await billing.getPlanById(planId)
+    timings.planMs = Date.now() - tPlan
     if (!plan || !plan.is_active) {
       return res.status(400).json({ error: 'Plan not found or inactive' })
     }
@@ -68,7 +79,9 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       assertNoActiveSubscriptionForPayment,
       activeSubscriptionExistsHttpBody,
     } = await import('../lib/activeSubscriptionPaymentGate.js')
+    const tGate = Date.now()
     const activeGate = await assertNoActiveSubscriptionForPayment(deviceId)
+    timings.subscriptionGateMs = Date.now() - tGate
     if (!activeGate.ok) {
       console.warn('[sonicpesa] create-order blocked — ACTIVE_SUBSCRIPTION_EXISTS', {
         deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
@@ -80,7 +93,9 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
       assertPhoneSubscriptionPaymentAllowed,
       phoneSubscriptionConflictHttpBody,
     } = await import('../lib/phoneSubscriptionGuard.js')
+    const tPhone = Date.now()
     const phoneGate = await assertPhoneSubscriptionPaymentAllowed(deviceId, phoneE164)
+    timings.phoneGateMs = Date.now() - tPhone
     if (!phoneGate.ok) {
       console.warn('[sonicpesa] create-order blocked — phone subscription conflict', {
         deviceId: deviceId.length > 24 ? `${deviceId.slice(0, 22)}…` : deviceId,
@@ -96,59 +111,34 @@ sonicpesaPaymentsRouter.post('/create-order', async (req, res) => {
     if (!cred.apiKey) {
       return res.status(503).json({ error: 'SonicPesa credentials incomplete (admin or env)' })
     }
-    const orderId = `osm_sp_${Date.now()}_${randomBytes(5).toString('hex')}`
-    const amount = Number(plan.price)
-    const tx = await billing.insertTransaction({
-      order_id: orderId,
-      plan_id: planId,
-      phone: phoneE164,
-      amount,
-      currency: 'TZS',
-      status: 'pending',
-      device_id: deviceId,
-      plan_duration_days: plan.duration_days,
-      raw_payload: {
-        step: 'created',
-        payment_provider: 'sonicpesa',
-        phoneNorm: phone,
-        device_id: deviceId,
-        ...fingerprintPayload,
-      },
-    })
-    liveSyncBus.publish('analytics.transaction_updated', {
-      topics: ['analytics'],
-      orderId,
-      status: 'pending',
-      deviceId,
-    })
-    const prevPayload =
-      tx.raw_payload && typeof tx.raw_payload === 'object' ? tx.raw_payload : {}
-    runProviderCreateOrderInBackground({
-      provider: 'sonicpesa',
-      orderId,
-      deviceId,
-      prevPayload,
-      cred,
-      phone,
-      amount,
-      initiate: createOrder,
-      providerBodyKey: 'sonicpesa',
-    })
-    respondCreateOrderAccepted(
+    await runAwaitedSonicpesaCreateOrder({
       res,
-      {
-        ok: true,
-        provider: 'sonicpesa',
-        orderId,
-        deviceId,
-        transactionId: tx.id,
-        amount,
-        currency: 'TZS',
-      },
-      { orderId, deviceId },
-    )
+      deviceId,
+      phone,
+      phoneE164,
+      plan,
+      planId,
+      cred,
+      fingerprintPayload,
+      correlationId,
+      timings,
+    })
+    timings.totalMs = Date.now() - handlerStarted
+    noteCheckoutMetric('handler_done', { handlerMs: timings.totalMs })
+    console.log('[sonicpesa] create-order timing', {
+      correlationId,
+      planMs: timings.planMs ?? null,
+      subscriptionGateMs: timings.subscriptionGateMs ?? null,
+      phoneGateMs: timings.phoneGateMs ?? null,
+      lockMs: timings.lockMs ?? null,
+      insertMs: timings.insertMs ?? null,
+      providerMs: timings.providerMs ?? null,
+      eventLoopLagMs: timings.eventLoopLagMs ?? null,
+      totalMs: timings.totalMs,
+    })
   } catch (e) {
-    res.status(500).json({ error: String(e.message || e) })
+    console.error('[sonicpesa] create-order failed', { correlationId, name: e?.name || 'Error' })
+    if (!res.headersSent) res.status(500).json({ error: 'Imeshindwa kuanzisha malipo. Jaribu tena baadae.' })
   }
 })
 
@@ -230,10 +220,10 @@ sonicpesaPaymentsRouter.get('/verify/:orderId', async (req, res) => {
     if (!txn) return res.status(404).json({ error: 'Unknown order' })
     const row = await billing.getSonicpesaRow()
     const cred = resolveSonicpesaCredentials(row || {})
-    const verifyId = String(
-      txn.raw_payload?.provider_order_id ?? txn.external_id ?? orderId,
-    ).trim()
-    const sp = await verifyPayment(cred, verifyId)
+    const verifyId = String(txn.raw_payload?.provider_order_id ?? txn.external_id ?? '').trim()
+    const sp = shouldActivelyReconcile(txn)
+      ? await verifyPayment(cred, verifyId)
+      : { ok: false, status: 0, body: null, skipped: true }
     const deviceId = String(txn.device_id ?? '').trim()
     let subscriptionActive = false
     if (deviceId) {

@@ -5,6 +5,7 @@ import { getPool } from '../db/pool.js'
 import { getInboxMetrics } from './sonicpesaWebhookInbox.js'
 import { getSonicpesaWebhookHealthSnapshot } from './sonicpesaWebhookHealth.js'
 import { getReconciliationQueueMetrics } from './sonicpesaPaymentReconciliationQueue.js'
+import { getSonicpesaCheckoutMetrics } from './sonicpesaCheckoutMetrics.js'
 
 function requirePool() {
   const pool = getPool()
@@ -139,6 +140,7 @@ export async function runSonicpesaReliabilityMetrics({ days = 30 } = {}) {
     },
     inbox,
     reconciliation_queue: reconcileQueue,
+    checkout: getSonicpesaCheckoutMetrics(),
     critical_unresolved_completed: criticalUnresolved,
     alerts,
   }

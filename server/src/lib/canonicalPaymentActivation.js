@@ -5,6 +5,7 @@
 import { getPool } from '../db/pool.js'
 import * as billing from '../billingStore.js'
 import { isIntentionalMigrationRevokedDevice } from './transferRevocationGuard.js'
+import { checkoutAllowsEntitlement } from './sonicpesaCheckoutPolicy.js'
 
 export const COMPLETION_SOURCE = Object.freeze({
   SONIC_WEBHOOK: 'sonic_webhook',
@@ -432,6 +433,15 @@ export async function applySonicpesaPaymentOutcome({
     }
 
     if (txn.status === 'completed') {
+      if (!checkoutAllowsEntitlement(txn)) {
+        await client.query('COMMIT')
+        out.txnStatusAfter = 'completed'
+        out.activation = buildActivationMeta({
+          activation_state: ACTIVATION_STATE.TERMINAL_REJECTED,
+          completion_source: source,
+        })
+        return out
+      }
       // Backfill completed_at for legacy rows completed before credit-clock fix.
       if (txn.completed_at == null) {
         await client.query(

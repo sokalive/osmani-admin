@@ -136,9 +136,16 @@ async function _reconcileOrderWithZenoPayInner(orderId, opts = {}) {
   }
 
   if (rawPayload.payment_provider === 'sonicpesa') {
+    const { shouldActivelyReconcile } = await import('./lib/sonicpesaCheckoutPolicy.js')
+    if (!shouldActivelyReconcile(txn)) {
+      out.phase = 'skip_provider_poll_no_reference'
+      out.txnStatusAfter = 'pending'
+      log('skip sonicpesa poll without provider reference', { orderId: shortId(oid) })
+      return out
+    }
     const srow = await billing.getSonicpesaRow()
     const scred = resolveSonicpesaCredentials(srow || {})
-    const verifyId = String(rawPayload.provider_order_id ?? txn.external_id ?? oid).trim()
+    const verifyId = String(rawPayload.provider_order_id ?? txn.external_id ?? '').trim()
     const z = await sonicpesaGetOrderStatus(scred, verifyId)
     out.providerHttpOk = z.ok === true
     log('sonicpesa order-status', {

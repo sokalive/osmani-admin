@@ -147,7 +147,12 @@ async function httpJson(url, { method = 'GET', headers = {}, body } = {}) {
     } catch {
       json = { raw: text.slice(0, 4000) }
     }
-    return { ok: res.ok, status: res.status, body: json }
+    return {
+      ok: res.ok,
+      status: res.status,
+      body: json,
+      retryAfter: res.headers.get('retry-after'),
+    }
   } catch (e) {
     clearTimeout(t)
     return { ok: false, status: 0, body: { error: String(e.message || e) } }
@@ -242,7 +247,8 @@ export async function createOrder(cred, { phone, amount, orderId, currency = 'TZ
     httpStatus: res.status,
     httpOk: res.ok,
     accepted,
-    body: res.body,
+    hasProviderOrderId: Boolean(normalized.providerOrderId),
+    retryAfter: res.retryAfter || null,
   })
   return {
     ...res,
