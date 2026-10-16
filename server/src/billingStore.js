@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { computeStackedExpiryIso } from './lib/subscriptionStacking.js'
+import { computeMidnightEatExpiryIso, computeStackedExpiryIso } from './lib/subscriptionStacking.js'
 import { tryRecordAppInstall } from './lib/installAnalytics.js'
 import { ensureBootstrapAdminPanelUser } from './adminAuthStore.js'
 import { ensureBillingTables } from './db/billingTables.js'
@@ -3572,19 +3572,18 @@ export async function insertOfferCodeRow({ durationDays, planId = null, createdB
     }
   }
   const pool = requirePool()
-  const shelfDays = Math.min(
-    3650,
-    Math.max(1, Number(process.env.OFFER_CODE_SHELF_DAYS) || 365),
-  )
+  // Same exclusive calendar rule as package grants: issue day (EAT) + durationDays at 00:00 EAT.
+  // A 7-day code issued 16 Oct 2026 expires 23 Oct 2026 00:00 EAT, not one year later.
+  const expiresAt = computeMidnightEatExpiryIso(days)
   for (let attempt = 0; attempt < 100; attempt++) {
     const n = 100000 + crypto.randomInt(900000)
     const code = String(n)
     try {
       const { rows } = await pool.query(
         `INSERT INTO offer_codes (code, duration_days, plan_id, created_by, expires_at, failed_attempts, lock_until)
-         VALUES ($1, $2, $3, $4, now() + ($5::int * interval '1 day'), 0, NULL)
+         VALUES ($1, $2, $3, $4, $5::timestamptz, 0, NULL)
          RETURNING id, code, duration_days, plan_id, created_at, expires_at`,
-        [code, days, requestedPlanId, String(createdBy || 'admin').slice(0, 120), shelfDays],
+        [code, days, requestedPlanId, String(createdBy || 'admin').slice(0, 120), expiresAt],
       )
       if (rows[0]) return rows[0]
     } catch (e) {
