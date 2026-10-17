@@ -12,7 +12,8 @@ const TTL = {
   'payment-providers': Math.max(5000, Number(process.env.API_CACHE_PAYMENT_PROVIDERS_TTL_MS) || 15_000),
   'whatsapp-settings': Math.max(5000, Number(process.env.API_CACHE_WHATSAPP_TTL_MS) || 30_000),
   'settings-whatsapp': Math.max(5000, Number(process.env.API_CACHE_WHATSAPP_TTL_MS) || 30_000),
-  'settings-popup': Math.max(5000, Number(process.env.API_CACHE_POPUP_TTL_MS) || 30_000),
+  'popup-settings': Math.max(1000, Number(process.env.API_CACHE_POPUP_TTL_MS) || 3000),
+  'settings-popup': Math.max(1000, Number(process.env.API_CACHE_POPUP_TTL_MS) || 3000),
   'settings-public': Math.max(5000, Number(process.env.API_CACHE_SETTINGS_PUBLIC_TTL_MS) || 30_000),
   'runtime-app-modes': Math.max(500, Number(process.env.API_CACHE_APP_MODES_TTL_MS) || 2000),
 }

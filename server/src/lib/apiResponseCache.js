@@ -261,12 +261,8 @@ export function serveFromApiCacheOrContinue(namespace, req, res, next, ttlMs) {
       inflight.delete(key)
     } else if (!settled) {
       settled = true
-      if (isCacheEntry({ body, status })) {
-        settleInflight({ body, status })
-      } else {
-        releaseInflightMiss(settleInflight, key, req, namespace, 'non_cacheable_status')
-      }
       inflight.delete(key)
+      releaseInflightMiss(settleInflight, key, req, namespace, 'invalidated_before_store')
     }
     if (devDiagnosticsEnabled()) {
       res.setHeader('X-Api-Cache', 'MISS')

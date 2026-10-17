@@ -1,0 +1,26 @@
+name: Contabo Apply SSE Nginx Snippet
+
+on:
+  workflow_dispatch:
+
+jobs:
+  nginx:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copy Osmani API snippet and reload nginx
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            set -euo pipefail
+            ROOT=/var/www/osmani-admin-api
+            cp "$ROOT/deploy/contabo/nginx/snippets/osmani-node-api.conf" /etc/nginx/snippets/osmani-node-api.conf
+            nginx -t
+            systemctl reload nginx
+            echo "nginx_reloaded commit=$(git -C "$ROOT" rev-parse HEAD)"
+            curl -fsS --max-time 15 http://127.0.0.1:10001/api/health | head -c 240
+            echo
+            pm2 jlist | node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{for (const p of JSON.parse(s)) console.log(p.name, p.pm2_env.status)})"
