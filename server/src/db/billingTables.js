@@ -665,6 +665,31 @@ export async function ensureBillingTables(client) {
       );
   `)
 
+  /**
+   * SonicPesa customer create-order attempt window (device + phone hash + plan).
+   * Counts and cooldown only. No payment history, entitlements, or phone numbers.
+   * Rollback: DROP TABLE sonicpesa_pay_attempt_windows;
+   */
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS sonicpesa_pay_attempt_windows (
+      identity_key TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      phone_hash TEXT NOT NULL,
+      plan_id INTEGER NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      cooldown_until TIMESTAMPTZ,
+      last_attempt_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT sonicpesa_pay_attempt_windows_count_check
+        CHECK (attempt_count >= 0 AND attempt_count <= 3)
+    );
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS sonicpesa_pay_attempt_windows_device_idx
+    ON sonicpesa_pay_attempt_windows (device_id, plan_id);
+  `)
+
   /** Aurax Pay (additive third gateway — ZenoPay + SonicPesa unchanged). */
   await client.query(`
     CREATE TABLE IF NOT EXISTS auraxpay_settings (

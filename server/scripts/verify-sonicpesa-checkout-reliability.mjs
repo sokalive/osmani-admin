@@ -88,7 +88,7 @@ const dup = decideDuplicateCheckout([
     updated_at: new Date(now - 2000).toISOString(),
   },
 ], now)
-assert('concurrent repeats reuse the accepted checkout', dup.action === 'reuse_accepted' && dup.orderId === 'osm_sp_a')
+assert('an accepted PIN checkout does not suppress the next customer attempt', dup.action === 'create')
 
 const blocked = decideDuplicateCheckout([
   {

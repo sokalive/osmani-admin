@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 /**
  * SonicPesa checkout decisions that do not touch the network.
  *
@@ -6,6 +8,11 @@
  * definitive retryable rejection, not proof a PIN prompt was sent.
  * HTTP 201 before the provider returns must not open the PIN countdown.
  */
+
+/** Customer-initiated SonicPesa create-order attempts, then a fixed cooldown. */
+export const SONICPESA_PAY_ATTEMPT_MAX = 3
+export const SONICPESA_PAY_ATTEMPT_COOLDOWN_MS = 180_000
+export const SONICPESA_PAY_ATTEMPT_COOLDOWN_CODE = 'SONICPESA_PAY_ATTEMPT_COOLDOWN'
 
 export const CHECKOUT_PHASE = Object.freeze({
   LOCAL_CREATED: 'local_created',
@@ -30,6 +37,167 @@ export function sonicpesaCheckoutLimits() {
     dedupMs: intEnv('SONICPESA_CHECKOUT_DEDUP_MS', 180000, 30000, 600000),
     retry429Ms: intEnv('SONICPESA_429_COOLDOWN_MS', 60000, 15000, 300000),
     ambiguousHoldMs: intEnv('SONICPESA_AMBIGUOUS_HOLD_MS', 180000, 60000, 600000),
+    maxPayAttempts: SONICPESA_PAY_ATTEMPT_MAX,
+    attemptCooldownMs: SONICPESA_PAY_ATTEMPT_COOLDOWN_MS,
+  }
+}
+
+/**
+ * Same device, phone, and plan share one attempt window.
+ * The key and phone hash are not reversible to the full phone number.
+ */
+export function sonicpesaPayAttemptIdentity({ deviceId, phone, planId }) {
+  const device = String(deviceId ?? '').trim()
+  const phoneNorm = String(phone ?? '').replace(/\D/g, '')
+  const plan = Number(planId)
+  if (!device || !phoneNorm || !Number.isFinite(plan)) {
+    throw new Error('SonicPesa attempt identity is incomplete')
+  }
+  const identityKey = createHash('sha256')
+    .update(`osmani-sonicpesa-pay-attempt:${device}|${phoneNorm}|${plan}`)
+    .digest('hex')
+  const phoneHash = createHash('sha256').update(`osmani-sonicpesa-phone:${phoneNorm}`).digest('hex')
+  return { identityKey, phoneHash, deviceId: device, planId: plan }
+}
+
+function cooldownSeconds(limits) {
+  const ms = limits?.attemptCooldownMs ?? SONICPESA_PAY_ATTEMPT_COOLDOWN_MS
+  return Math.round(ms / 1000)
+}
+
+/**
+ * Read the persisted window without changing it.
+ * Expired cooldowns stay stored until a later permitted attempt resets them.
+ */
+export function readPayAttemptGate(row, nowMs, limits = {}) {
+  const now = Number(nowMs)
+  if (!Number.isFinite(now)) throw new Error('server time is required')
+  const attemptCount = Number(row?.attemptCount ?? 0)
+  const cooldownUntilMs = row?.cooldownUntilMs == null ? null : Number(row.cooldownUntilMs)
+  if (cooldownUntilMs != null && Number.isFinite(cooldownUntilMs) && now < cooldownUntilMs) {
+    return {
+      action: 'cooldown',
+      attemptCount,
+      cooldownUntilMs,
+      serverNowMs: now,
+      cooldownSeconds: cooldownSeconds(limits),
+    }
+  }
+  return {
+    action: 'open',
+    attemptCount,
+    serverNowMs: now,
+    cooldownSeconds: cooldownSeconds(limits),
+  }
+}
+
+/**
+ * Authoritative transition for one customer create-order.
+ * `nowMs` must be the database clock. The fourth attempt is not permitted.
+ * A live cooldown is not extended or cleared by a rejected request.
+ */
+export function decidePayAttemptTransition(row, nowMs, limits = {}) {
+  const max = limits.maxPayAttempts ?? SONICPESA_PAY_ATTEMPT_MAX
+  const cooldownMs = limits.attemptCooldownMs ?? SONICPESA_PAY_ATTEMPT_COOLDOWN_MS
+  const now = Number(nowMs)
+  if (!Number.isFinite(now)) throw new Error('server time is required')
+  const attemptCount = Number(row?.attemptCount ?? 0)
+  const cooldownUntilMs = row?.cooldownUntilMs == null ? null : Number(row.cooldownUntilMs)
+  const seconds = Math.round(cooldownMs / 1000)
+
+  if (cooldownUntilMs != null && Number.isFinite(cooldownUntilMs) && now < cooldownUntilMs) {
+    return {
+      action: 'cooldown',
+      attemptCount,
+      cooldownUntilMs,
+      serverNowMs: now,
+      armCooldown: false,
+      cooldownSeconds: seconds,
+    }
+  }
+
+  const expired = cooldownUntilMs != null && Number.isFinite(cooldownUntilMs) && now >= cooldownUntilMs
+  const baseCount = expired ? 0 : attemptCount
+  if (baseCount >= max) {
+    return {
+      action: 'cooldown',
+      attemptCount: baseCount,
+      cooldownUntilMs: now + cooldownMs,
+      serverNowMs: now,
+      armCooldown: true,
+      cooldownSeconds: seconds,
+    }
+  }
+
+  const next = baseCount + 1
+  return {
+    action: 'permit',
+    attemptCount: next,
+    cooldownUntilMs: next >= max ? now + cooldownMs : null,
+    serverNowMs: now,
+    armCooldown: false,
+    cooldownSeconds: seconds,
+  }
+}
+
+/**
+ * Decide whether this customer create-order may contact SonicPesa.
+ * An accepted PIN prompt is not reused: a later customer checkout is a new attempt.
+ * The previous order is left unchanged. Ambiguous and provider-429 holds do not
+ * consume another attempt and do not call the provider.
+ */
+export function planSonicpesaCustomerAttempt({ recentRows, attemptRow, nowMs, limits } = {}) {
+  const gate = readPayAttemptGate(attemptRow, nowMs, limits)
+  if (gate.action === 'cooldown') {
+    return {
+      action: 'attempt_cooldown',
+      gate,
+      contactsProvider: false,
+      createsTransaction: false,
+      consumesAttempt: false,
+    }
+  }
+  const dup = decideDuplicateCheckout(recentRows, nowMs, limits)
+  if (dup.action !== 'create') {
+    return {
+      action: dup.action,
+      dup,
+      contactsProvider: false,
+      createsTransaction: false,
+      consumesAttempt: false,
+    }
+  }
+  return {
+    action: 'create',
+    contactsProvider: true,
+    createsTransaction: true,
+    consumesAttempt: true,
+  }
+}
+
+export function sonicpesaPayAttemptCooldownHttpBody(reservation, correlationId) {
+  const untilMs = Number(reservation?.cooldownUntilMs)
+  const nowMs = Number(reservation?.serverNowMs)
+  const cooldownSecondsValue = SONICPESA_PAY_ATTEMPT_COOLDOWN_MS / 1000
+  const remaining =
+    Number.isFinite(untilMs) && Number.isFinite(nowMs)
+      ? Math.max(1, Math.ceil((untilMs - nowMs) / 1000))
+      : cooldownSecondsValue
+  return {
+    status: 429,
+    retryAfterSeconds: remaining,
+    body: {
+      ok: false,
+      code: SONICPESA_PAY_ATTEMPT_COOLDOWN_CODE,
+      error: 'Umefikia majaribio matatu ya malipo. Subiri dakika tatu kisha ujaribu tena.',
+      provider: 'sonicpesa',
+      cooldown_seconds: cooldownSecondsValue,
+      cooldown_until: new Date(untilMs).toISOString(),
+      pin_wait_allowed: false,
+      retryable: false,
+      retry_after_seconds: remaining,
+      correlation_id: correlationId ?? null,
+    },
   }
 }
 
@@ -186,10 +354,14 @@ export function decideDuplicateCheckout(rows, nowMs, limits = sonicpesaCheckoutL
       row.provider_order_id ?? row.external_id ?? row.raw_payload?.provider_order_id ?? '',
     ).trim()
     const status = String(row.status ?? '')
-    if (status === 'pending' && initiation === 'accepted' && providerOrderId && age < limits.dedupMs) {
-      return { action: 'reuse_accepted', orderId: row.order_id, providerOrderId }
-    }
-    if (status === 'pending' && !providerOrderId && age < limits.ambiguousHoldMs) {
+    // An accepted PIN prompt stays recorded. Closing the app does not cancel it.
+    // A later customer create-order is a separate attempt (see the attempt window).
+    // Ambiguous or still-unanswered provider calls must not start another request.
+    const unanswered =
+      status === 'pending' &&
+      age < limits.ambiguousHoldMs &&
+      (!providerOrderId || initiation === 'ambiguous' || initiation === 'provider_pending')
+    if (unanswered) {
       return { action: 'block_ambiguous', orderId: row.order_id }
     }
     if (

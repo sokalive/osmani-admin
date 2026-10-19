@@ -11,10 +11,13 @@ import { enqueueSonicpesaPaymentReconciliation } from './sonicpesaPaymentReconci
 import { createOrder } from './payments/providers/sonicpesa.js'
 import {
   classifySonicpesaCreateResult,
-  decideDuplicateCheckout,
+  planSonicpesaCustomerAttempt,
   redactPaymentBody,
   shouldActivelyReconcile,
+  sonicpesaPayAttemptCooldownHttpBody,
+  sonicpesaPayAttemptIdentity,
 } from './sonicpesaCheckoutPolicy.js'
+import { readSonicpesaPayAttempt, reserveSonicpesaPayAttempt } from './sonicpesaPayAttemptStore.js'
 import { withSonicpesaCreateSlot } from './sonicpesaCreateConcurrency.js'
 import { noteCheckoutMetric } from './sonicpesaCheckoutMetrics.js'
 
@@ -115,21 +118,34 @@ export async function runAwaitedSonicpesaCreateOrder({
   const fingerprintHash = fingerprintPayload.fingerprint_hash
     ? String(fingerprintPayload.fingerprint_hash)
     : ''
+  const attemptIdentity = sonicpesaPayAttemptIdentity({ deviceId, phone, planId })
   const locked = await withDeviceCheckoutLock(deviceId, async ({ lockMs }) => {
     timings.lockMs = lockMs
     const recent = await listRecentCheckouts(deviceId)
     const owned = recent.filter((row) => String(row.device_id) === String(deviceId))
-    const dup = decideDuplicateCheckout(owned, Date.now())
-    if (dup.action === 'reuse_accepted') {
-      const row = owned.find((r) => r.order_id === dup.orderId)
+    const snap = await readSonicpesaPayAttempt(attemptIdentity.identityKey)
+    const plan = planSonicpesaCustomerAttempt({
+      recentRows: owned,
+      attemptRow: snap.row,
+      nowMs: snap.serverNowMs,
+    })
+    if (plan.action === 'attempt_cooldown') {
+      return { action: 'attempt_cooldown', reservation: plan.gate }
+    }
+    if (plan.action === 'reuse_accepted') {
+      const row = owned.find((r) => r.order_id === plan.dup?.orderId)
       if (!row || !identityMatches(row, deviceId, fingerprintHash)) {
         return { action: 'identity_mismatch' }
       }
-      return { action: 'reuse_accepted', row, providerOrderId: dup.providerOrderId }
+      return { action: 'reuse_accepted', row, providerOrderId: plan.dup.providerOrderId }
     }
-    if (dup.action !== 'create') return { action: dup.action, dup }
+    if (plan.action !== 'create') return { action: plan.action, dup: plan.dup }
 
     const slotted = await withSonicpesaCreateSlot(async () => {
+      const reserved = await reserveSonicpesaPayAttempt(attemptIdentity)
+      if (reserved.action !== 'permit') {
+        return { action: 'attempt_cooldown', reservation: reserved }
+      }
       const orderId = `osm_sp_${Date.now()}_${randomBytes(5).toString('hex')}`
       const amount = Number(plan.price)
       const basePayload = {
@@ -141,6 +157,7 @@ export async function runAwaitedSonicpesaCreateOrder({
         provider_initiation: 'provider_pending',
         checkout_phase: 'provider_pending',
         pin_wait_allowed: false,
+        pay_attempt_number: reserved.attemptCount,
         ...fingerprintPayload,
       }
       const tInsert = Date.now()
@@ -207,11 +224,18 @@ export async function runAwaitedSonicpesaCreateOrder({
           console.warn('[sonicpesa] reconcile enqueue failed', orderId, e?.message || e)
         })
       }
-      return { action: 'created', orderId, tx, amount, classified }
+      return { action: 'created', orderId, tx, amount, classified, attemptNumber: reserved.attemptCount }
     })
     if (!slotted.ok) return { action: 'capacity' }
     return slotted.value
   })
+
+  if (locked.action === 'attempt_cooldown') {
+    noteCheckoutMetric('attempt_cooldown')
+    const http = sonicpesaPayAttemptCooldownHttpBody(locked.reservation, correlationId)
+    sendCheckout(res, http.status, http.body)
+    return
+  }
 
   if (locked.action === 'reuse_accepted') {
     noteCheckoutMetric('deduped')
