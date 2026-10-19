@@ -13,8 +13,10 @@ import {
   pinWaitAllowedFromTxn,
   redactPaymentBody,
   shouldActivelyReconcile,
+  sonicpesaCatalogAmount,
   sonicpesaCheckoutLimits,
 } from '../src/lib/sonicpesaCheckoutPolicy.js'
+import { buildCreateOrderPayload } from '../src/lib/payments/providers/sonicpesa.js'
 import { deriveAppWaitingState } from '../src/lib/paymentAppWaitingState.js'
 
 const root = dirname(fileURLToPath(import.meta.url))
@@ -35,6 +37,58 @@ const accepted = classifySonicpesaCreateResult({
   normalized: { providerOrderId: 'sp_ok_1' },
 })
 assert('accepted has provider reference and PIN wait', accepted.kind === 'accepted' && accepted.pinWaitAllowed === true && accepted.providerOrderId === 'sp_ok_1' && accepted.enqueueReconcile === true)
+const acceptedWithoutReference = classifySonicpesaCreateResult({
+  ok: true,
+  status: 200,
+  body: { status: 'success' },
+})
+assert(
+  'acceptance without a provider reference is not reported as accepted',
+  acceptedWithoutReference.kind !== 'accepted' && acceptedWithoutReference.pinWaitAllowed === false && acceptedWithoutReference.providerOrderId == null,
+)
+const providerRejected = classifySonicpesaCreateResult({
+  ok: false,
+  status: 400,
+  body: { message: 'Invalid request' },
+})
+assert(
+  'a genuine provider rejection is not acceptance',
+  providerRejected.kind === 'terminal_rejection' &&
+    providerRejected.pinWaitAllowed === false &&
+    providerRejected.providerOrderId == null &&
+    providerRejected.txnStatus === 'failed' &&
+    providerRejected.retryable === false,
+)
+const localAmount = classifySonicpesaCreateResult({
+  ok: false,
+  status: 0,
+  body: { error: 'amount must be a positive integer' },
+})
+const thrownTransport = classifySonicpesaCreateResult({
+  ok: false,
+  status: 0,
+  body: { error: 'provider_request_failed' },
+})
+assert(
+  'status 0 is not a confirmed provider rejection',
+  localAmount.kind === 'provider_not_contacted' &&
+    localAmount.kind !== 'terminal_rejection' &&
+    localAmount.kind !== 'accepted' &&
+    localAmount.retryable === false &&
+    localAmount.providerOrderId == null &&
+    localAmount.txnStatus === 'failed' &&
+    localAmount.enqueueReconcile === false &&
+    thrownTransport.kind === 'provider_not_contacted' &&
+    thrownTransport.kind !== providerRejected.kind,
+)
+assert(
+  'catalog amount is the plan price, not the attempt planner',
+  sonicpesaCatalogAmount({ price: 4000, duration_days: 7 }) === 4000 &&
+    sonicpesaCatalogAmount({ action: 'create', contactsProvider: true }) == null &&
+    sonicpesaCatalogAmount({ price: 0 }) == null,
+)
+const built = buildCreateOrderPayload({ apiKey: 'test' }, { phone: '255678000111', amount: 4000, orderId: 'osm_sp_test', currency: 'TZS' })
+assert('create-order payload uses the positive catalog amount', built.amountInt === 4000 && built.payload.amount === 4000)
 assert('local pending row is not PIN wait', pinWaitAllowedFromTxn({ status: 'pending', raw_payload: { provider_initiation: 'pending' } }) === false)
 assert('HTTP 201 shape is not implied by a pending initiation', accepted.checkoutPhase === CHECKOUT_PHASE.AWAITING_AUTHORIZATION)
 
@@ -128,6 +182,10 @@ assert('failed checkout cannot grant entitlement', checkoutAllowsEntitlement({
   status: 'failed',
   raw_payload: { checkout_phase: 'retryable_rejection', provider_initiation: 'rejected_retryable' },
 }) === false)
+assert('a status-0 checkout that never reached SonicPesa cannot grant entitlement', checkoutAllowsEntitlement({
+  status: 'failed',
+  raw_payload: { checkout_phase: 'not_sent', provider_initiation: 'not_sent' },
+}) === false)
 assert('historical completed checkout can still grant entitlement', checkoutAllowsEntitlement({
   status: 'completed',
   raw_payload: { payment_provider: 'sonicpesa', provider_initiation: 'accepted' },
@@ -150,6 +208,17 @@ assert('duplicate completion uses the idempotent activation path', activation.in
 
 const route = readFileSync(join(root, '../src/routes/sonicpesaPayments.js'), 'utf8')
 assert('create-order waits for the provider result', route.includes('runAwaitedSonicpesaCreateOrder') && !route.includes('respondCreateOrderAccepted'))
+const flow = readFileSync(join(root, '../src/lib/sonicpesaCheckoutFlow.js'), 'utf8')
+assert(
+  'checkout uses the catalog amount captured before the attempt planner',
+  flow.includes('const catalogAmount = sonicpesaCatalogAmount(plan)') &&
+    flow.includes('const attemptPlan = planSonicpesaCustomerAttempt') &&
+    flow.includes('const amount = catalogAmount') &&
+    flow.includes('createOrder(cred, { phone, amount, orderId, currency: \'TZS\' })') &&
+    !flow.includes('const plan = planSonicpesaCustomerAttempt'),
+)
+const aurax = readFileSync(join(root, '../src/lib/payments/providers/auraxpay.js'), 'utf8')
+assert('AuraxPay create-order amount check is unchanged', aurax.includes("error: 'amount must be a positive integer'"))
 const queue = readFileSync(join(root, '../src/lib/sonicpesaPaymentReconciliationQueue.js'), 'utf8')
 assert('definitive rejections leave the active queue', queue.includes('sweepDefinitiveRejectionQueueRows') && queue.includes("TERMINAL_FAILED"))
 const reconcile = readFileSync(join(root, '../src/paymentReconcile.js'), 'utf8')

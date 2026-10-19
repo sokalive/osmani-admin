@@ -8,6 +8,7 @@ const state = {
   http429: 0,
   ambiguous: 0,
   terminalRejection: 0,
+  notSent: 0,
   deduped: 0,
   attemptCooldown: 0,
   capacityExhausted: 0,
@@ -37,6 +38,7 @@ export function noteCheckoutMetric(name, extra = {}) {
   else if (name === 'http_429') state.http429 += 1
   else if (name === 'ambiguous') state.ambiguous += 1
   else if (name === 'terminal_rejection') state.terminalRejection += 1
+  else if (name === 'not_sent') state.notSent += 1
   else if (name === 'deduped') state.deduped += 1
   else if (name === 'attempt_cooldown') state.attemptCooldown += 1
   else if (name === 'capacity_exhausted') state.capacityExhausted += 1
@@ -52,6 +54,7 @@ export function getSonicpesaCheckoutMetrics() {
     http_429: state.http429,
     ambiguous: state.ambiguous,
     terminal_rejection: state.terminalRejection,
+    not_sent: state.notSent,
     deduped: state.deduped,
     attempt_cooldown: state.attemptCooldown,
     capacity_exhausted: state.capacityExhausted,

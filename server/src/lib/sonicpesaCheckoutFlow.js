@@ -14,6 +14,7 @@ import {
   planSonicpesaCustomerAttempt,
   redactPaymentBody,
   shouldActivelyReconcile,
+  sonicpesaCatalogAmount,
   sonicpesaPayAttemptCooldownHttpBody,
   sonicpesaPayAttemptIdentity,
 } from './sonicpesaCheckoutPolicy.js'
@@ -118,28 +119,42 @@ export async function runAwaitedSonicpesaCreateOrder({
   const fingerprintHash = fingerprintPayload.fingerprint_hash
     ? String(fingerprintPayload.fingerprint_hash)
     : ''
+  const catalogAmount = sonicpesaCatalogAmount(plan)
+  if (catalogAmount == null) {
+    sendCheckout(res, 400, {
+      ok: false,
+      error: 'Plan price is not a positive amount',
+      provider: 'sonicpesa',
+      provider_initiation: 'not_sent',
+      checkout_phase: 'not_sent',
+      pin_wait_allowed: false,
+      retryable: false,
+      correlation_id: correlationId,
+    })
+    return
+  }
   const attemptIdentity = sonicpesaPayAttemptIdentity({ deviceId, phone, planId })
   const locked = await withDeviceCheckoutLock(deviceId, async ({ lockMs }) => {
     timings.lockMs = lockMs
     const recent = await listRecentCheckouts(deviceId)
     const owned = recent.filter((row) => String(row.device_id) === String(deviceId))
     const snap = await readSonicpesaPayAttempt(attemptIdentity.identityKey)
-    const plan = planSonicpesaCustomerAttempt({
+    const attemptPlan = planSonicpesaCustomerAttempt({
       recentRows: owned,
       attemptRow: snap.row,
       nowMs: snap.serverNowMs,
     })
-    if (plan.action === 'attempt_cooldown') {
-      return { action: 'attempt_cooldown', reservation: plan.gate }
+    if (attemptPlan.action === 'attempt_cooldown') {
+      return { action: 'attempt_cooldown', reservation: attemptPlan.gate }
     }
-    if (plan.action === 'reuse_accepted') {
-      const row = owned.find((r) => r.order_id === plan.dup?.orderId)
+    if (attemptPlan.action === 'reuse_accepted') {
+      const row = owned.find((r) => r.order_id === attemptPlan.dup?.orderId)
       if (!row || !identityMatches(row, deviceId, fingerprintHash)) {
         return { action: 'identity_mismatch' }
       }
-      return { action: 'reuse_accepted', row, providerOrderId: plan.dup.providerOrderId }
+      return { action: 'reuse_accepted', row, providerOrderId: attemptPlan.dup.providerOrderId }
     }
-    if (plan.action !== 'create') return { action: plan.action, dup: plan.dup }
+    if (attemptPlan.action !== 'create') return { action: attemptPlan.action, dup: attemptPlan.dup }
 
     const slotted = await withSonicpesaCreateSlot(async () => {
       const reserved = await reserveSonicpesaPayAttempt(attemptIdentity)
@@ -147,7 +162,7 @@ export async function runAwaitedSonicpesaCreateOrder({
         return { action: 'attempt_cooldown', reservation: reserved }
       }
       const orderId = `osm_sp_${Date.now()}_${randomBytes(5).toString('hex')}`
-      const amount = Number(plan.price)
+      const amount = catalogAmount
       const basePayload = {
         step: 'created',
         payment_provider: 'sonicpesa',
@@ -184,7 +199,13 @@ export async function runAwaitedSonicpesaCreateOrder({
       try {
         result = await createOrder(cred, { phone, amount, orderId, currency: 'TZS' })
       } catch (e) {
-        result = { ok: false, status: 0, body: { error: 'provider_request_failed' } }
+        const raw = String(e?.message || e?.name || '')
+        const transport = /abort|timeout|timed out|network|fetch failed/i.test(raw)
+        result = {
+          ok: false,
+          status: 0,
+          body: { error: transport ? raw.slice(0, 120) : 'provider_request_failed' },
+        }
         console.warn('[sonicpesa] createOrder threw', { correlationId, orderId, name: e?.name || 'Error' })
       }
       timings.providerMs = Date.now() - tProvider
@@ -250,7 +271,7 @@ export async function runAwaitedSonicpesaCreateOrder({
       checkout_phase: 'awaiting_authorization',
       pin_wait_allowed: true,
       deviceId,
-      amount: Number(plan.price),
+      amount: catalogAmount,
       currency: 'TZS',
       correlation_id: correlationId,
     })
@@ -319,6 +340,7 @@ export async function runAwaitedSonicpesaCreateOrder({
   if (classified.kind === 'accepted') noteCheckoutMetric('accepted', { providerMs: timings.providerMs })
   else if (classified.kind === 'retryable_rejection') noteCheckoutMetric('http_429', { providerMs: timings.providerMs })
   else if (classified.kind === 'ambiguous') noteCheckoutMetric('ambiguous', { providerMs: timings.providerMs })
+  else if (classified.kind === 'provider_not_contacted') noteCheckoutMetric('not_sent', { providerMs: timings.providerMs })
   else noteCheckoutMetric('terminal_rejection', { providerMs: timings.providerMs })
 
   console.log('[sonicpesa] create-order result', {

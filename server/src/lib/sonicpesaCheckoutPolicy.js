@@ -21,6 +21,7 @@ export const CHECKOUT_PHASE = Object.freeze({
   RETRYABLE_REJECTION: 'retryable_rejection',
   AMBIGUOUS: 'ambiguous',
   TERMINAL_FAILURE: 'terminal_failure',
+  NOT_SENT: 'not_sent',
   CAPACITY_EXHAUSTED: 'capacity_exhausted',
 })
 
@@ -28,6 +29,16 @@ function intEnv(name, fallback, min, max) {
   const n = Number(process.env[name])
   const v = Number.isFinite(n) ? Math.floor(n) : fallback
   return Math.min(max, Math.max(min, v))
+}
+
+/**
+ * Catalog price for a SonicPesa create-order. The attempt planner is a different
+ * object and has no price; using it produces NaN and a local status-0 failure.
+ */
+export function sonicpesaCatalogAmount(plan) {
+  const amount = Number(plan?.price)
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  return Math.round(amount)
 }
 
 export function sonicpesaCheckoutLimits() {
@@ -290,6 +301,22 @@ export function classifySonicpesaCreateResult(result, limits = sonicpesaCheckout
       userMessage: 'Hatujapata jibu la malipo. Subiri kidogo usijaribu mara mbili.',
     }
   }
+  // Status 0 means SonicPesa never returned an HTTP response. That is not a
+  // confirmed provider rejection and must not be reported as acceptance.
+  if (httpStatus === 0) {
+    return {
+      kind: 'provider_not_contacted',
+      httpStatus: 0,
+      providerOrderId: null,
+      txnStatus: 'failed',
+      providerInitiation: 'not_sent',
+      checkoutPhase: CHECKOUT_PHASE.NOT_SENT,
+      pinWaitAllowed: false,
+      retryable: false,
+      enqueueReconcile: false,
+      userMessage: 'Imeshindwa kuanzisha malipo. Jaribu tena baadae.',
+    }
+  }
   return {
     kind: 'terminal_rejection',
     httpStatus,
@@ -333,10 +360,14 @@ export function checkoutAllowsEntitlement(txn) {
   const raw = txn?.raw_payload && typeof txn.raw_payload === 'object' ? txn.raw_payload : {}
   const phase = String(raw.checkout_phase ?? '')
   const initiation = String(raw.provider_initiation ?? '')
-  if (phase === CHECKOUT_PHASE.RETRYABLE_REJECTION || phase === CHECKOUT_PHASE.TERMINAL_FAILURE) {
+  if (
+    phase === CHECKOUT_PHASE.RETRYABLE_REJECTION ||
+    phase === CHECKOUT_PHASE.TERMINAL_FAILURE ||
+    phase === CHECKOUT_PHASE.NOT_SENT
+  ) {
     return false
   }
-  if (initiation === 'rejected_retryable') return false
+  if (initiation === 'rejected_retryable' || initiation === 'not_sent') return false
   return true
 }
 
