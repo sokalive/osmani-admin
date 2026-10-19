@@ -3,6 +3,9 @@ import { EventEmitter } from 'node:events'
 const bus = new EventEmitter()
 bus.setMaxListeners(200)
 
+/** Changes when this process starts. Clients must refetch if bootId changes, even if versions restart at 0. */
+const bootId = `osmani-${process.pid}-${Date.now().toString(36)}`
+
 const state = {
   analyticsVersion: 0,
   configVersion: 0,
@@ -15,6 +18,7 @@ function nowIso() {
 
 function snapshot() {
   return {
+    bootId,
     analyticsVersion: state.analyticsVersion,
     configVersion: state.configVersion,
     lastEventAt: state.lastEventAt,

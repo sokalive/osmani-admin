@@ -2,7 +2,8 @@
  * Prevent browsers and shared caches from serving stale JSON after admin writes.
  * Mount on the `/api` router so paths are matched after the `/api` prefix.
  *
- * Does not cover public catalog (`/plans`, `/channels`, …) — those stay cache-friendly.
+ * Public catalog GETs also use no-store. The process cache still dedupes them and
+ * is invalidated on save; HTTP caches must not keep a copy the app can reuse.
  */
 export function applySensitiveJsonGetNoStore(req, res, next) {
   if (req.method !== 'GET') return next()
@@ -38,7 +39,15 @@ export function applySensitiveJsonGetNoStore(req, res, next) {
     p === '/payment-status' ||
     p === '/payments/checkout-providers' ||
     p === '/update-check' ||
-    p.startsWith('/update-check/')
+    p.startsWith('/update-check/') ||
+    p === '/plans' ||
+    p === '/channels' ||
+    p === '/banners' ||
+    p === '/popup-settings' ||
+    p === '/whatsapp-settings' ||
+    p === '/runtime/app-modes' ||
+    p === '/runtime/trial-watch' ||
+    p === '/runtime/app-update'
 
   if (noStore) {
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')

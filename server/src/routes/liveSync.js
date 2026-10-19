@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { liveSyncBus } from '../lib/liveSyncBus.js'
+import { writeSseComment, writeSseEvent } from '../lib/sseFlush.js'
 import { loadGlobalAppModesPayload } from './globalAppSettings.js'
 import { getWhatsAppSettingsPublicPayload } from './realtimeSettings.js'
 import { loadTrialWatchSettings, trialWatchSettingsToPublicPayload } from '../lib/trialWatchSettings.js'
@@ -28,8 +29,7 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
   res.flushHeaders?.()
 
   const send = (event, data) => {
-    res.write(`event: ${event}\n`)
-    res.write(`data: ${JSON.stringify(data)}\n\n`)
+    writeSseEvent(res, event, data)
   }
 
   send('snapshot', {
@@ -175,7 +175,7 @@ liveSyncRouter.get('/sync/stream', (req, res) => {
   liveSyncBus.on('sync', handler)
 
   const ping = setInterval(() => {
-    res.write(': ping\n\n')
+    writeSseComment(res, 'ping')
   }, 20_000)
 
   req.on('close', () => {

@@ -33,12 +33,38 @@ jobs:
           host: 144.91.117.90
           username: root
           key: ${{ secrets.CONTABO_SSH_KEY }}
-          command_timeout: 30m
+          command_timeout: 8m
           script: |
             set -euo pipefail
-            cd /var/www/osmani-admin-api
-            export CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@osmanitv.com}"
-            bash deploy/contabo/pull-and-apply.sh
+            ROOT=/var/www/osmani-admin-api
+            cd "$ROOT"
+            git fetch origin main
+            git reset --hard origin/main
+            COMMIT="$(git rev-parse HEAD)"
+            echo "commit=$COMMIT"
+            export OSMANI_GIT_COMMIT="$COMMIT"
+            export OSMANI_ADMIN_ROOT="$ROOT"
+            node "$ROOT/deploy/contabo/sync-database-url-env.cjs" "$ROOT" >/dev/null
+            pm2 delete osmani-admin-api 2>/dev/null || true
+            pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
+            pm2 save
+            for i in $(seq 1 150); do
+              if curl -fsS "http://127.0.0.1:10001/api/health" >/tmp/h.json 2>/dev/null; then
+                READY="$(node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(String(j.startup?.ready===true&&String(j.commit||'')==='$COMMIT'))}catch{process.stdout.write('false')}})" </tmp/h.json)"
+                echo "probe $i ready=$READY $(head -c 350 /tmp/h.json)"
+                if [ "$READY" = "true" ]; then
+                  nginx -t && systemctl reload nginx || true
+                  curl -fsSI https://api.osmanitv.com/api/health | head -5 || true
+                  exit 0
+                fi
+              else
+                echo "probe $i not up"
+              fi
+              sleep 2
+            done
+            echo "ERROR: API not ready" >&2
+            pm2 logs osmani-admin-api --lines 80 --nostream || true
+            exit 1
 
       - name: Checkout for post-deploy verification
         if: steps.gate.outputs.skip != 'true'

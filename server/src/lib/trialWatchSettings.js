@@ -113,6 +113,11 @@ export async function loadTrialWatchSettings() {
   return normalized
 }
 
+export function invalidateTrialWatchSettingsCache() {
+  _settingsCache = null
+  _settingsCacheAt = 0
+}
+
 export async function saveTrialWatchSettings(body) {
   const pool = getPool()
   if (!pool) throw new Error('Database not configured')

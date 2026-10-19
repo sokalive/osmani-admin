@@ -15,6 +15,7 @@ import {
 } from './multerUpload.js'
 import { wireApiCacheInvalidation } from './lib/apiCacheInvalidation.js'
 import { wireApiCacheBustRelay } from './lib/apiCacheBustRelay.js'
+import { wireConfigCacheListeners } from './lib/configCacheListeners.js'
 import { wireLiveSyncRelay } from './lib/liveSyncRelay.js'
 import { wireDeviceSubscriptionRelay } from './lib/deviceSubscriptionRelay.js'
 import { ensureMpingoRoutingStartupSync } from './lib/mpingoRoutingSync.js'
@@ -432,6 +433,7 @@ async function main() {
   try {
     wireRenderProcessGuards()
     wireApiCacheInvalidation()
+    wireConfigCacheListeners()
     if (!shouldDeferMpingoRoutingStartupSync()) {
       ensureMpingoRoutingStartupSync()
     }

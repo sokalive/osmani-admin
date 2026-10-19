@@ -339,9 +339,13 @@ function scheduleOneSignalStatsRefresh(notificationId) {
 }
 
 function publishNotificationsChanged(meta = {}) {
+  const action = text(meta.action, 32) || 'updated'
+  // Background OneSignal stat refreshes are not catalog changes. They must not
+  // bump configVersion or flood config SSE clients.
+  const topics = action === 'stats_synced' ? ['analytics'] : ['config']
   liveSyncBus.publish('config.notifications_changed', {
-    topics: ['config'],
-    action: text(meta.action, 32) || 'updated',
+    topics,
+    action,
     synced_at: new Date().toISOString(),
     ...(meta.notificationId ? { notificationId: String(meta.notificationId) } : {}),
     ...(meta.sourceEvent ? { sourceEvent: text(meta.sourceEvent, 128) } : {}),

@@ -1219,6 +1219,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
           sse_events_emitted: ['snapshot'],
         })
         res.write(`event: snapshot\ndata: ${JSON.stringify(payload)}\n\n`)
+        flushSseResponse(res)
       } catch (e) {
         // Never push inactive/revoked-shaped SSE on DB errors — client will keep last verify state.
         console.error('[subscription-stream] snapshot skipped on error:', e)
@@ -1234,6 +1235,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       res.write(`event: app_modes\ndata: ${body}\n\n`)
       // Legacy APK EventSource listeners (same payload as app_modes).
       res.write(`event: app_settings_changed\ndata: ${body}\n\n`)
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] app_modes push failed:', e)
     }
@@ -1245,6 +1247,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       const p = await loadPhoneGatePublicPayload()
       const body = JSON.stringify({ ...p, reason })
       res.write(`event: phone_gate_settings\ndata: ${body}\n\n`)
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] phone_gate_settings push failed:', e)
     }
@@ -1260,6 +1263,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         reason,
       })
       res.write(`event: trial_watch_settings\ndata: ${body}\n\n`)
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] trial_watch_settings push failed:', e)
     }
@@ -1275,6 +1279,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         reason,
       })
       res.write(`event: app_update_settings\ndata: ${body}\n\n`)
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] app_update_settings push failed:', e)
     }
@@ -1297,6 +1302,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
     try {
       res.write(`event: app_modes\ndata: ${body}\n\n`)
       res.write(`event: app_settings_changed\ndata: ${body}\n\n`)
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] immediate modes push failed:', e)
     }
@@ -1310,6 +1316,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         reason: String(packet.event || 'trial_watch'),
       })
       res.write(`event: trial_watch_settings\ndata: ${body}\n\n`)
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] trial_watch immediate push failed:', e)
     }
@@ -1323,6 +1330,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         reason: String(packet.event || 'app_update'),
       })
       res.write(`event: app_update_settings\ndata: ${body}\n\n`)
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] app_update immediate push failed:', e)
     }
@@ -1360,6 +1368,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
       if (event === 'config.plans_changed') {
         res.write(`event: plans_changed\ndata: ${body}\n\n`)
       }
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] catalog refresh push failed:', e)
     }
@@ -1378,6 +1387,7 @@ subscriptionRouter.get('/subscription-stream', (req, res) => {
         server_time_ms: Date.now(),
       })
       res.write(`event: phone_gate_settings\ndata: ${body}\n\n`)
+      flushSseResponse(res)
     } catch (e) {
       console.error('[subscription-stream] phone_gate immediate push failed:', e)
     }

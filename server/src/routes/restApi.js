@@ -55,6 +55,9 @@ import { trialWatchRouter } from './trialWatch.js'
 import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { getPool } from '../db/pool.js'
 import { getApiCacheStats } from '../lib/apiResponseCache.js'
+import { getApiCacheBustRelayStatus } from '../lib/apiCacheBustRelay.js'
+import { getLiveSyncRelayStatus } from '../lib/liveSyncRelay.js'
+import { liveSyncBus } from '../lib/liveSyncBus.js'
 import { getDatabaseUrlFingerprint, getServerGitCommit } from '../lib/deployMeta.js'
 import { getPoolStats } from '../db/pool.js'
 import { isStartupReady, getStartupError, isRenderRuntime } from '../lib/startupReadiness.js'
@@ -266,6 +269,15 @@ restApi.get('/health', (_req, res) => {
   // Always expose pool on Contabo/VPS so saturation is visible without env toggles.
   body.pool = getPoolStats()
   body.verify_db = getVerifyDbStats()
+  const sync = liveSyncBus.snapshot()
+  body.freshness = {
+    boot_id: sync.bootId,
+    config_version: sync.configVersion,
+    analytics_version: sync.analyticsVersion,
+    last_event_at: sync.lastEventAt,
+    live_sync: getLiveSyncRelayStatus(),
+    cache_bust: getApiCacheBustRelayStatus(),
+  }
   if (String(process.env.PG_POOL_STATS || '').trim() === '1' || isRenderRuntime()) {
     // kept for older agents that checked this env; fields already set above
   }
