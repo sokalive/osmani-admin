@@ -1,0 +1,89 @@
+name: Contabo Read SonicPesa Failures
+
+on:
+  workflow_dispatch:
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip when CONTABO_SSH_KEY is not configured
+        id: gate
+        env:
+          CONTABO_SSH_KEY: ${{ secrets.CONTABO_SSH_KEY }}
+        run: |
+          if [ -z "${CONTABO_SSH_KEY}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read recent SonicPesa checkout rows
+        if: steps.gate.outputs.skip != 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 144.91.117.90
+          username: root
+          key: ${{ secrets.CONTABO_SSH_KEY }}
+          command_timeout: 4m
+          script: |
+            set -euo pipefail
+            cd /var/www/osmani-admin-api/server
+            node --input-type=module <<'EOF'
+            import { createRequire } from 'node:module'
+            const require = createRequire(import.meta.url)
+            const { loadContaboPm2Env } = require('../deploy/contabo/loadPm2Env.cjs')
+            const e = loadContaboPm2Env('/var/www/osmani-admin-api')
+            if (!e.DATABASE_URL) throw new Error('DATABASE_URL missing')
+            process.env.DATABASE_URL = e.DATABASE_URL
+            const pg = await import('pg')
+            const pool = new pg.default.Pool({
+              connectionString: process.env.DATABASE_URL,
+              max: 1,
+              connectionTimeoutMillis: 8000,
+            })
+            const redact = (s) => String(s ?? '').replace(/\d{6,}/g, '[redacted]').slice(0, 180)
+            const { rows } = await pool.query(`
+              SELECT order_id, status, created_at, updated_at,
+                raw_payload->>'httpStatus' AS http_status,
+                raw_payload->>'provider_initiation' AS provider_initiation,
+                raw_payload->>'checkout_phase' AS checkout_phase,
+                raw_payload->>'provider_initiation_ms' AS provider_ms,
+                raw_payload->>'correlation_id' AS correlation_id,
+                raw_payload->>'pay_attempt_number' AS pay_attempt_number,
+                CASE
+                  WHEN COALESCE(raw_payload->>'provider_order_id', '') <> '' THEN true
+                  ELSE false
+                END AS has_provider_order,
+                raw_payload->'sonicpesa'->>'message' AS provider_message,
+                raw_payload->'sonicpesa'->>'error' AS provider_error,
+                raw_payload->'sonicpesa'->>'status' AS provider_status,
+                raw_payload->'create_timings'->>'providerMs' AS timing_provider_ms
+              FROM transactions
+              WHERE created_at >= timestamptz '2026-10-19 06:25:00+00'
+                AND COALESCE(raw_payload->>'payment_provider', '') = 'sonicpesa'
+              ORDER BY created_at DESC
+              LIMIT 30
+            `)
+            const safe = rows.map((r) => ({
+              order_id: r.order_id,
+              status: r.status,
+              created_at: r.created_at,
+              updated_at: r.updated_at,
+              http_status: r.http_status,
+              provider_initiation: r.provider_initiation,
+              checkout_phase: r.checkout_phase,
+              provider_ms: r.provider_ms,
+              timing_provider_ms: r.timing_provider_ms,
+              correlation_id: r.correlation_id,
+              pay_attempt_number: r.pay_attempt_number,
+              has_provider_order: r.has_provider_order,
+              provider_message: redact(r.provider_message),
+              provider_error: redact(r.provider_error),
+              provider_status: redact(r.provider_status),
+            }))
+            console.log(JSON.stringify({ count: safe.length, rows: safe }, null, 2))
+            await pool.end()
+            EOF
+            echo '=== CREATE-ORDER LOG LINES ==='
+            pm2 logs osmani-admin-api --lines 400 --nostream 2>/dev/null | grep -E 'create-order result|createOrder response|provider rejected|provider initiation error' | sed -E 's/[0-9]{6,}/[redacted]/g' || true
