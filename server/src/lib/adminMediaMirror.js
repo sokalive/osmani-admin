@@ -17,8 +17,6 @@ function ingestToken() {
   return String(
     process.env.ADMIN_MEDIA_INGEST_TOKEN ||
       process.env.NOTIFICATION_IMAGE_INGEST_TOKEN ||
-      process.env.APP_UPDATE_ADMIN_TOKEN ||
-      process.env.ADMIN_API_TOKEN ||
       '',
   ).trim()
 }
@@ -55,7 +53,6 @@ export async function mirrorAdminMediaToVps(opts) {
     method: 'POST',
     headers: {
       'X-Admin-Media-Ingest-Token': token,
-      'X-Admin-Token': token,
     },
     body: form,
   })

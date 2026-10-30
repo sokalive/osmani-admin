@@ -1127,6 +1127,27 @@ export async function ensureBillingTables(client) {
   `)
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS admin_privileged_audit_log (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      admin_user_id UUID,
+      action TEXT NOT NULL,
+      target TEXT NOT NULL DEFAULT '',
+      changed_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ip_address TEXT NOT NULL DEFAULT '',
+      user_agent TEXT NOT NULL DEFAULT '',
+      session_ref TEXT,
+      result TEXT NOT NULL DEFAULT 'ok',
+      correlation_id TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+    )
+  `)
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS admin_privileged_audit_log_created_idx
+    ON admin_privileged_audit_log (created_at DESC)
+  `)
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS admin_panel_login_otps (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       admin_user_id UUID NOT NULL REFERENCES admin_panel_users (id) ON DELETE CASCADE,

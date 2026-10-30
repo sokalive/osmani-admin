@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
 import { applySensitiveJsonGetNoStore } from '../middleware/sensitiveApiCacheControl.js'
 import { bannersRouter } from './banners.js'
@@ -79,6 +80,13 @@ const FILES = {
 }
 
 export const restApi = Router()
+
+restApi.use((req, res, next) => {
+  const id = randomUUID()
+  req.correlationId = id
+  res.setHeader('X-Correlation-Id', id)
+  next()
+})
 
 /** Admin + mutable JSON reads must not be served from browser HTTP cache after writes. */
 restApi.use(applySensitiveJsonGetNoStore)

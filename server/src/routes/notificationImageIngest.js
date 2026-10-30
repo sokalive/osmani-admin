@@ -23,11 +23,7 @@ function requireIngestToken(req, res, next) {
   if (!expected) {
     return res.status(503).json({ ok: false, error: 'Notification image ingest token not configured' })
   }
-  const provided = String(
-    req.headers['x-notification-ingest-token'] ||
-      req.headers['x-admin-token'] ||
-      '',
-  ).trim()
+  const provided = String(req.headers['x-notification-ingest-token'] || '').trim()
   if (!provided || provided !== expected) {
     return res.status(401).json({ ok: false, error: 'Unauthorized' })
   }

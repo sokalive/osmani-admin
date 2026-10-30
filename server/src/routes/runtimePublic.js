@@ -18,20 +18,16 @@ import {
 } from '../lib/uploadStorageForensics.js'
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { requireAdminPanelAccess } from '../middleware/adminPanelAuthGate.js'
 import { runSubscriptionRestorationAudit } from '../lib/subscriptionRestorationAudit.js'
 import { runVpsMigrationAudit } from '../lib/vpsMigrationAudit.js'
 
-function legacyAdminTokenOk(req) {
-  const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
-  if (!expected) return false
-  const got = String(req.headers['x-admin-token'] ?? '').trim()
-  return got === expected
-}
-
-function requireLegacyAdminToken(req, res, next) {
-  if (legacyAdminTokenOk(req)) return next()
-  return res.status(403).json({ ok: false, error: 'Invalid admin token' })
+function refuseHostOperation(_req, res) {
+  return res.status(403).json({
+    ok: false,
+    error: 'Host operations are not available through the API',
+    code: 'HOST_OPERATION_DISABLED',
+  })
 }
 
 /**
@@ -178,6 +174,9 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
           }
         : { error: uploadDisk.error },
       admin_token_configured: adminTokenConfigured,
+      permanent_token_grants_access: false,
+      legacy_token_fallback: false,
+      panel_auth_required: true,
       base_url: String(process.env.BASE_URL || '').trim() || null,
       stream_api_base_url: String(process.env.STREAM_API_BASE_URL || '').trim() || null,
       admin_public_url: String(process.env.ADMIN_PUBLIC_URL || '').trim() || null,
@@ -189,7 +188,7 @@ runtimePublicRouter.get('/cutover-status', async (_req, res) => {
 })
 
 /** VPS migration audit — versionCode × API host matrix (admin token). */
-runtimePublicRouter.get('/vps-migration-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/vps-migration-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const windowDays = Number(req.query.window_days ?? req.query.days ?? 7)
@@ -202,7 +201,7 @@ runtimePublicRouter.get('/vps-migration-audit', requireLegacyAdminToken, async (
 })
 
 /** Full production device investigation (read-only SQL + access state). */
-runtimePublicRouter.get('/device-production-investigation', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/device-production-investigation', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const deviceId = String(req.query.device_id ?? '').trim()
@@ -217,7 +216,7 @@ runtimePublicRouter.get('/device-production-investigation', requireLegacyAdminTo
 })
 
 /** Repair false-expired for one device if eligible. */
-runtimePublicRouter.post('/device-production-repair', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/device-production-repair', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -233,7 +232,7 @@ runtimePublicRouter.post('/device-production-repair', requireLegacyAdminToken, a
 })
 
 /** Read-only exact SQL subscription incident statistics. */
-runtimePublicRouter.get('/subscription-incident-database-report', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/subscription-incident-database-report', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runSubscriptionIncidentDatabaseReport } = await import('../lib/subscriptionIncidentDatabaseReport.js')
@@ -246,7 +245,7 @@ runtimePublicRouter.get('/subscription-incident-database-report', requireLegacyA
 })
 
 /** Read-only manual gift false-positive audit (SQL evidence). */
-runtimePublicRouter.get('/manual-gift-database-report', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/manual-gift-database-report', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runManualGiftDatabaseReport } = await import('../lib/manualGiftAudit.js')
@@ -259,7 +258,7 @@ runtimePublicRouter.get('/manual-gift-database-report', requireLegacyAdminToken,
 })
 
 /** Production payment audit (90-day SQL evidence). */
-runtimePublicRouter.get('/payment-production-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/payment-production-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const days = Number(req.query.days ?? 90)
@@ -273,7 +272,7 @@ runtimePublicRouter.get('/payment-production-audit', requireLegacyAdminToken, as
 })
 
 /** SonicPesa payment reliability metrics (webhook age, inbox, stale pending, latency). */
-runtimePublicRouter.get('/sonicpesa-reliability-metrics', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/sonicpesa-reliability-metrics', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const days = Number(req.query.days ?? 30)
@@ -297,7 +296,7 @@ runtimePublicRouter.get('/sonicpesa-reliability-metrics', requireLegacyAdminToke
 })
 
 /** Dry-run classify stale SonicPesa pending orders (no mutation unless dry_run=0). */
-runtimePublicRouter.post('/sonicpesa-reconcile-stale-pending', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/sonicpesa-reconcile-stale-pending', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -314,7 +313,7 @@ runtimePublicRouter.post('/sonicpesa-reconcile-stale-pending', requireLegacyAdmi
 })
 
 /** SonicPesa webhook readiness — callback contract for owner dashboard + engineering verification. */
-runtimePublicRouter.get('/sonicpesa-webhook-readiness', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/sonicpesa-webhook-readiness', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { getSonicpesaWebhookHealthSnapshot } = await import('../lib/sonicpesaWebhookHealth.js')
@@ -339,7 +338,7 @@ runtimePublicRouter.get('/sonicpesa-webhook-readiness', requireLegacyAdminToken,
 })
 
 /** Repair critical unresolved completed SonicPesa rows (canonical activation only). */
-runtimePublicRouter.post('/sonicpesa-repair-critical-unresolved', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/sonicpesa-repair-critical-unresolved', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -354,7 +353,7 @@ runtimePublicRouter.post('/sonicpesa-repair-critical-unresolved', requireLegacyA
 })
 
 /** Full read-only manual gift production investigation (exact PostgreSQL). */
-runtimePublicRouter.get('/manual-gift-production-investigation', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/manual-gift-production-investigation', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runManualGiftProductionInvestigation } = await import('../lib/manualGiftAudit.js')
@@ -367,7 +366,7 @@ runtimePublicRouter.get('/manual-gift-production-investigation', requireLegacyAd
 })
 
 /** Acknowledge stale pending manual grants (grants table only — no subscription mutation). */
-runtimePublicRouter.post('/manual-gift-repair', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/manual-gift-repair', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -382,7 +381,7 @@ runtimePublicRouter.post('/manual-gift-repair', requireLegacyAdminToken, async (
 })
 
 /** Acknowledge obsolete testing-device grants only. */
-runtimePublicRouter.post('/manual-gift-repair-testing', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/manual-gift-repair-testing', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -397,7 +396,7 @@ runtimePublicRouter.post('/manual-gift-repair-testing', requireLegacyAdminToken,
 })
 
 /** Read-only subscription restoration audit (admin token). */
-runtimePublicRouter.get('/subscription-restoration-audit', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/subscription-restoration-audit', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const report = await runSubscriptionRestorationAudit({ repair: false })
@@ -409,7 +408,7 @@ runtimePublicRouter.get('/subscription-restoration-audit', requireLegacyAdminTok
 })
 
 /** Safe repair: backfill fingerprints, recover migration shadows, finalize orphan activations. */
-runtimePublicRouter.post('/subscription-restoration-repair', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.post('/subscription-restoration-repair', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const report = await runSubscriptionRestorationAudit({ repair: true })
@@ -421,7 +420,7 @@ runtimePublicRouter.post('/subscription-restoration-repair', requireLegacyAdminT
 })
 
 /** Audit transfer sources that incorrectly remain active; optional repair. */
-runtimePublicRouter.get('/transfer-source-revocation-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/transfer-source-revocation-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { auditTransferSourceRevocation } = await import('../lib/transferRevocationGuard.js')
@@ -434,7 +433,7 @@ runtimePublicRouter.get('/transfer-source-revocation-audit', requireLegacyAdminT
   }
 })
 
-runtimePublicRouter.post('/transfer-source-revocation-repair', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.post('/transfer-source-revocation-repair', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { auditTransferSourceRevocation } = await import('../lib/transferRevocationGuard.js')
@@ -447,7 +446,7 @@ runtimePublicRouter.post('/transfer-source-revocation-repair', requireLegacyAdmi
 })
 
 /** Read-only incident audit (suspended/revoked shadows + restoration counts). */
-runtimePublicRouter.get('/subscription-incident-audit', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/subscription-incident-audit', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runSubscriptionIncidentAudit } = await import('../lib/subscriptionIncidentAudit.js')
@@ -460,7 +459,7 @@ runtimePublicRouter.get('/subscription-incident-audit', requireLegacyAdminToken,
 })
 
 /** Repair wrongly denied paid users + migration shadows. */
-runtimePublicRouter.post('/subscription-incident-repair', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.post('/subscription-incident-repair', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runSubscriptionIncidentAudit } = await import('../lib/subscriptionIncidentAudit.js')
@@ -473,7 +472,7 @@ runtimePublicRouter.post('/subscription-incident-repair', requireLegacyAdminToke
 })
 
 /** Audit future-expiry rows wrongly marked inactive (read-only). */
-runtimePublicRouter.get('/subscription-false-expired-audit', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/subscription-false-expired-audit', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { findFalseExpiredSubscriptions } = await import('../lib/subscriptionFalseExpiredRepair.js')
@@ -486,7 +485,7 @@ runtimePublicRouter.get('/subscription-false-expired-audit', requireLegacyAdminT
 })
 
 /** Restore ACTIVE for future-expiry rows stuck non-active. Never shortens expires_at. */
-runtimePublicRouter.post('/subscription-false-expired-repair', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/subscription-false-expired-repair', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { repairFalseExpiredSubscriptions } = await import('../lib/subscriptionFalseExpiredRepair.js')
@@ -502,7 +501,7 @@ runtimePublicRouter.post('/subscription-false-expired-repair', requireLegacyAdmi
 })
 
 /** Audit moved:* devices that lost active sub to a same-phone sibling (wrong migration direction). */
-runtimePublicRouter.get('/subscription-wrong-direction-audit', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/subscription-wrong-direction-audit', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { findWrongDirectionMigrationVictims, countDeniedFutureEntitlement } = await import(
@@ -524,7 +523,7 @@ runtimePublicRouter.get('/subscription-wrong-direction-audit', requireLegacyAdmi
 })
 
 /** Reclaim subscription onto user's current device_id from same-phone active sibling. */
-runtimePublicRouter.post('/subscription-wrong-direction-repair', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/subscription-wrong-direction-repair', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { repairWrongDirectionMigrations } = await import('../lib/subscriptionWrongDirectionRepair.js')
@@ -541,7 +540,7 @@ runtimePublicRouter.post('/subscription-wrong-direction-repair', requireLegacyAd
 })
 
 /** Full DB vs verify/status/admin parity audit (read-only). */
-runtimePublicRouter.get('/subscription-api-parity-audit', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/subscription-api-parity-audit', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runSubscriptionApiParityAudit } = await import('../lib/subscriptionApiParityAudit.js')
@@ -554,7 +553,7 @@ runtimePublicRouter.get('/subscription-api-parity-audit', requireLegacyAdminToke
 })
 
 /** Same-phone multi-device subscriptions are intentional — consolidation permanently disabled. */
-runtimePublicRouter.post('/subscription-duplicate-phone-repair', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/subscription-duplicate-phone-repair', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { repairDuplicatePhoneClusters } = await import('../lib/subscriptionApiParityAudit.js')
@@ -570,7 +569,7 @@ runtimePublicRouter.post('/subscription-duplicate-phone-repair', requireLegacyAd
 })
 
 /** Run false-expired + wrong-direction + duplicate-phone + shadow repair until clear. */
-runtimePublicRouter.post('/subscription-api-parity-repair', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/subscription-api-parity-repair', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runFullSubscriptionParityRepair } = await import('../lib/subscriptionApiParityAudit.js')
@@ -586,7 +585,7 @@ runtimePublicRouter.post('/subscription-api-parity-repair', requireLegacyAdminTo
 })
 
 /** Bounded batch repair — avoids nginx 504 on full restore (call until remaining=0). */
-runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/subscription-shadow-repair-batch', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runDirectShadowRepairBatch, runDirectShadowRepairUntilZero } = await import(
@@ -606,7 +605,7 @@ runtimePublicRouter.post('/subscription-shadow-repair-batch', requireLegacyAdmin
 })
 
 /** Phone → active subscription ownership audit (read-only). */
-runtimePublicRouter.get('/phone-subscription-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/phone-subscription-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const phone = String(req.query.phone ?? req.query.payment_phone ?? '').trim()
@@ -624,7 +623,7 @@ runtimePublicRouter.get('/phone-subscription-audit', requireLegacyAdminToken, as
 })
 
 /** Package duration + expiry stacking audit (read-only). */
-runtimePublicRouter.get('/subscription-expiry-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/subscription-expiry-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runSubscriptionExpiryAudit } = await import('../lib/subscriptionExpiryAudit.js')
@@ -644,7 +643,7 @@ runtimePublicRouter.get('/subscription-expiry-audit', requireLegacyAdminToken, a
 })
 
 /** Repair over-credited subscriptions (>1 day beyond payment replay). Permanently legacy-locked. */
-runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/subscription-expiry-repair', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { repairSubscriptionExpiryOverCredits } = await import('../lib/subscriptionExpiryAudit.js')
@@ -661,7 +660,7 @@ runtimePublicRouter.post('/subscription-expiry-repair', requireLegacyAdminToken,
 })
 
 /** Full historical entitlement audit (2026-09-15 EAT reference, all packages). Read-only. */
-runtimePublicRouter.get('/historical-entitlement-correction-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/historical-entitlement-correction-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { auditHistoricalEntitlementCorrection } = await import(
@@ -680,7 +679,7 @@ runtimePublicRouter.get('/historical-entitlement-correction-audit', requireLegac
  * Apply historical entitlement corrections (authorized production repair).
  * dry_run=1 default; apply requires dry_run=0&confirm=1.
  */
-runtimePublicRouter.post('/historical-entitlement-correction-apply', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/historical-entitlement-correction-apply', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { applyHistoricalEntitlementCorrection } = await import(
@@ -707,7 +706,7 @@ runtimePublicRouter.post('/historical-entitlement-correction-apply', requireLega
 })
 
 /** Read-only audit: paid renewals destroyed by bad credit-clock correction (expires_at < started_at). */
-runtimePublicRouter.get('/paid-renewal-entitlement-restore-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/paid-renewal-entitlement-restore-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { auditPaidRenewalEntitlementVictims } = await import('../lib/paidRenewalEntitlementRestore.js')
@@ -725,7 +724,7 @@ runtimePublicRouter.get('/paid-renewal-entitlement-restore-audit', requireLegacy
  * Restore paid-renewal victims (expires_at < started_at after ACTIVATED).
  * dry_run=1 default; apply requires dry_run=0&confirm=1.
  */
-runtimePublicRouter.post('/paid-renewal-entitlement-restore-apply', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/paid-renewal-entitlement-restore-apply', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { applyPaidRenewalEntitlementRestore } = await import('../lib/paidRenewalEntitlementRestore.js')
@@ -750,7 +749,7 @@ runtimePublicRouter.post('/paid-renewal-entitlement-restore-apply', requireLegac
 })
 
 /** Read-only: same completed transaction rewritten after its original window. */
-runtimePublicRouter.get('/consumed-transaction-regrant-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/consumed-transaction-regrant-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { auditConsumedTransactionRegrants } = await import('../lib/consumedTransactionRegrantRestore.js')
@@ -768,7 +767,7 @@ runtimePublicRouter.get('/consumed-transaction-regrant-audit', requireLegacyAdmi
  * Restore proven post-expiry re-grants to the original paid window.
  * dry_run=1 default; apply requires dry_run=0&confirm=1.
  */
-runtimePublicRouter.post('/consumed-transaction-regrant-apply', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/consumed-transaction-regrant-apply', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { applyConsumedTransactionRegrantRestore } = await import(
@@ -795,7 +794,7 @@ runtimePublicRouter.post('/consumed-transaction-regrant-apply', requireLegacyAdm
 })
 
 /** Second-stage forensic reconciliation for NEEDS_MANUAL_REVIEW subscriptions (read-only). */
-runtimePublicRouter.get('/forensic-ambiguous-reconciliation-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/forensic-ambiguous-reconciliation-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { auditForensicAmbiguousReconciliation } = await import(
@@ -811,7 +810,7 @@ runtimePublicRouter.get('/forensic-ambiguous-reconciliation-audit', requireLegac
 })
 
 /** Apply forensic corrections for ambiguous rows with proven evidence. dry_run=1 default. */
-runtimePublicRouter.post('/forensic-ambiguous-reconciliation-apply', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/forensic-ambiguous-reconciliation-apply', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { applyForensicAmbiguousReconciliation } = await import(
@@ -836,7 +835,7 @@ runtimePublicRouter.post('/forensic-ambiguous-reconciliation-apply', requireLega
 })
 
 /** Permanent read-only integrity audit (manual trigger). Never modifies expiry. */
-runtimePublicRouter.get('/subscription-integrity-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/subscription-integrity-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runSubscriptionIntegrityAudit, getLatestIntegrityAuditReport } =
@@ -853,7 +852,7 @@ runtimePublicRouter.get('/subscription-integrity-audit', requireLegacyAdminToken
   }
 })
 
-runtimePublicRouter.get('/subscription-hardening-status', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/subscription-hardening-status', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { migrationLockMeta, isSubscriptionMigrationCompleted, isLegacySubscriptionLockEnabled } =
@@ -881,7 +880,7 @@ runtimePublicRouter.get('/subscription-hardening-status', requireLegacyAdminToke
 })
 
 /** Full lineage-aware historical over-credit audit (read-only). */
-runtimePublicRouter.get('/historical-subscription-normalization-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/historical-subscription-normalization-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { auditHistoricalSubscriptionNormalization } = await import(
@@ -900,7 +899,7 @@ runtimePublicRouter.get('/historical-subscription-normalization-audit', requireL
  * Atomic historical over-credit normalization.
  * Requires confirm=1; stops without writing when any candidate has ambiguous evidence.
  */
-runtimePublicRouter.post('/historical-subscription-normalization-apply', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/historical-subscription-normalization-apply', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { applyHistoricalSubscriptionNormalization } = await import(
@@ -917,7 +916,7 @@ runtimePublicRouter.post('/historical-subscription-normalization-apply', require
 })
 
 /** Read-only rollback batch evidence for final verification and reporting. */
-runtimePublicRouter.get('/historical-subscription-normalization-batch', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/historical-subscription-normalization-batch', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { getHistoricalSubscriptionNormalizationBatch } = await import(
@@ -933,7 +932,7 @@ runtimePublicRouter.get('/historical-subscription-normalization-batch', requireL
 })
 
 /** Finalize pre-marker batch removals as authoritative revocations. */
-runtimePublicRouter.post('/historical-subscription-normalization-finalize', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/historical-subscription-normalization-finalize', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { finalizeHistoricalNormalizationInactiveBatch } = await import(
@@ -955,7 +954,7 @@ runtimePublicRouter.post('/historical-subscription-normalization-finalize', requ
 })
 
 /** Audit users wrongly inactive after expiry repair (read-only). */
-runtimePublicRouter.get('/subscription-expiry-restore-audit', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.get('/subscription-expiry-restore-audit', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { findPaymentReplayRestoreCandidates, runSubscriptionExpiryRestore } = await import(
@@ -988,7 +987,7 @@ runtimePublicRouter.get('/subscription-expiry-restore-audit', requireLegacyAdmin
 })
 
 /** Safe restore: replay payments + migration shadows. Never reduces expiry. ?dry_run=0 to apply. */
-runtimePublicRouter.post('/subscription-expiry-restore', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/subscription-expiry-restore', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const { runSubscriptionExpiryRestore } = await import('../lib/subscriptionExpiryRestore.js')
@@ -1011,7 +1010,7 @@ runtimePublicRouter.post('/subscription-expiry-restore', requireLegacyAdminToken
 })
 
 /** Directed single-pair migration (telemetry-aware recovery; avoids install_instance ping-pong). */
-runtimePublicRouter.post('/subscription-shadow-migrate', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/subscription-shadow-migrate', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -1051,7 +1050,7 @@ runtimePublicRouter.post('/subscription-shadow-migrate', requireLegacyAdminToken
 })
 
 /** Backfill empty transactions.phone from raw_payload (admin repair). */
-runtimePublicRouter.post('/backfill-transaction-phones', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/backfill-transaction-phones', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const pool = getPool()
@@ -1104,7 +1103,7 @@ runtimePublicRouter.post('/backfill-transaction-phones', requireLegacyAdminToken
 })
 
 /** Payment activation timing stats from completed transactions (last 7 days). */
-runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/payment-activation-stats', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const pool = getPool()
@@ -1163,7 +1162,7 @@ runtimePublicRouter.get('/payment-activation-stats', requireLegacyAdminToken, as
 })
 
 /** VPS disk / upload storage forensics (admin token). Read-only. */
-runtimePublicRouter.get('/storage-forensics', requireLegacyAdminToken, async (_req, res) => {
+runtimePublicRouter.get('/storage-forensics', requireAdminPanelAccess, async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const report = await collectUploadStorageForensics()
@@ -1175,7 +1174,7 @@ runtimePublicRouter.get('/storage-forensics', requireLegacyAdminToken, async (_r
 })
 
 /** Remove only disposable upload probes/temp files (admin token). ?apply=1 to delete. */
-runtimePublicRouter.post('/storage-cleanup-disposable', requireLegacyAdminToken, async (req, res) => {
+runtimePublicRouter.post('/storage-cleanup-disposable', requireAdminPanelAccess, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, private')
     const b = req.body && typeof req.body === 'object' ? req.body : {}
@@ -1209,62 +1208,6 @@ runtimePublicRouter.post('/storage-cleanup-disposable', requireLegacyAdminToken,
   }
 })
 
-/** Reload nginx from repo snippets (admin token). Applies /uploads routing fixes without full cutover. */
-runtimePublicRouter.post('/reload-nginx', requireLegacyAdminToken, async (_req, res) => {
-  try {
-    res.setHeader('Cache-Control', 'no-store, private')
-    const root = process.env.OSMANI_ADMIN_ROOT || '/var/www/osmani-admin-api'
-    const script = path.join(root, 'deploy/contabo/reload-osmanitv-nginx.sh')
-    const raw =
-      'https://raw.githubusercontent.com/sokalive/osmani-admin/main/deploy/contabo/reload-osmanitv-nginx.sh'
-    const env = { ...process.env, OSMANI_ADMIN_ROOT: root }
-    const result = fs.existsSync(script)
-      ? spawnSync('bash', [script], { cwd: root, env, encoding: 'utf8', timeout: 120_000 })
-      : spawnSync('bash', ['-c', `curl -fsSL "${raw}" | bash`], { env, encoding: 'utf8', timeout: 120_000 })
-    const output = `${result.stdout || ''}${result.stderr || ''}`.trim()
-    if (result.status !== 0) {
-      return res.status(500).json({
-        ok: false,
-        error: 'reload-nginx failed',
-        exit_code: result.status ?? 1,
-        output: output.slice(-8000),
-      })
-    }
-    res.json({ ok: true, commit: getServerGitCommit(), output: output.slice(-8000) })
-  } catch (e) {
-    console.error('[runtime/reload-nginx]', e)
-    res.status(500).json({ ok: false, error: String(e.message || e) })
-  }
-})
-
-/** Provision branded HTTPS on VPS (admin token). Does not affect Render. */
-runtimePublicRouter.post('/provision-https', requireLegacyAdminToken, async (_req, res) => {
-  try {
-    res.setHeader('Cache-Control', 'no-store, private')
-    const root = process.env.OSMANI_ADMIN_ROOT || '/var/www/osmani-admin-api'
-    const script = path.join(root, 'deploy/contabo/fix-osmanitv-https.sh')
-    const raw =
-      'https://raw.githubusercontent.com/sokalive/osmani-admin/main/deploy/contabo/fix-osmanitv-https.sh'
-    const env = {
-      ...process.env,
-      OSMANI_ADMIN_ROOT: root,
-      CERTBOT_EMAIL: String(process.env.CERTBOT_EMAIL || 'admin@osmanitv.com').trim(),
-    }
-    const result = fs.existsSync(script)
-      ? spawnSync('bash', [script], { cwd: root, env, encoding: 'utf8', timeout: 600_000 })
-      : spawnSync('bash', ['-c', `curl -fsSL "${raw}" | bash`], { env, encoding: 'utf8', timeout: 600_000 })
-    const output = `${result.stdout || ''}${result.stderr || ''}`.trim()
-    if (result.status !== 0) {
-      return res.status(500).json({
-        ok: false,
-        error: 'provision-https failed',
-        exit_code: result.status ?? 1,
-        output: output.slice(-8000),
-      })
-    }
-    res.json({ ok: true, commit: getServerGitCommit(), output: output.slice(-8000) })
-  } catch (e) {
-    console.error('[runtime/provision-https]', e)
-    res.status(500).json({ ok: false, error: String(e.message || e) })
-  }
-})
+/** Host shell actions are not exposed on the public API, including to an ordinary admin session. */
+runtimePublicRouter.post('/reload-nginx', refuseHostOperation)
+runtimePublicRouter.post('/provision-https', refuseHostOperation)

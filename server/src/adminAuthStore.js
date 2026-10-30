@@ -466,6 +466,67 @@ export async function revokeSessionsForDevice(deviceId) {
   )
 }
 
+/** Logout: this device must complete email OTP again. Does not delete the device row. */
+export async function invalidateTrustedDeviceCredential(userId, fpHash) {
+  if (!userId || !fpHash) return
+  await pool().query(
+    `UPDATE admin_panel_trusted_devices
+        SET device_credential_hash = NULL,
+            force_otp_next = true,
+            session_version = session_version + 1,
+            updated_at = now()
+      WHERE admin_user_id = $1
+        AND device_fingerprint_hash = $2
+        AND revoked_at IS NULL`,
+    [userId, fpHash],
+  )
+}
+
+export async function invalidateAllTrustedDeviceCredentials(userId) {
+  if (!userId) return
+  await pool().query(
+    `UPDATE admin_panel_trusted_devices
+        SET device_credential_hash = NULL,
+            force_otp_next = true,
+            trusted = false,
+            session_version = session_version + 1,
+            updated_at = now()
+      WHERE admin_user_id = $1
+        AND revoked_at IS NULL`,
+    [userId],
+  )
+}
+
+/**
+ * Global reset. Revokes every admin session and trusted-device credential.
+ * Does not delete admin users, security history, or customer records.
+ * @returns {{ sessions: number, devices: number }}
+ */
+export async function revokeAllAdminSessionsAndDevices() {
+  const sessions = await pool().query(
+    `UPDATE admin_panel_sessions
+        SET revoked_at = now()
+      WHERE revoked_at IS NULL`,
+  )
+  const devices = await pool().query(
+    `UPDATE admin_panel_trusted_devices
+        SET device_credential_hash = NULL,
+            trusted = false,
+            force_otp_next = true,
+            status = 'REVOKED',
+            revoked_at = COALESCE(revoked_at, now()),
+            session_version = session_version + 1,
+            updated_at = now()
+      WHERE revoked_at IS NULL
+         OR device_credential_hash IS NOT NULL
+         OR trusted = true`,
+  )
+  return {
+    sessions: Number(sessions.rowCount) || 0,
+    devices: Number(devices.rowCount) || 0,
+  }
+}
+
 export async function revokeAllSessionsForUser(userId) {
   await pool().query(
     `UPDATE admin_panel_sessions SET revoked_at = now()

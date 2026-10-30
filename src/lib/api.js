@@ -533,7 +533,8 @@ export function getSubscriptionStatus(input) {
 
 export const postSubscriptionVerify = (body) => apiPost('/subscription/verify', body)
 export const postSubscriptionRecover = (body) => apiPost('/subscription/recover', body)
-export const postSubscriptionRevoke = (body) => apiPost('/subscription/revoke', body)
+export const postSubscriptionRevoke = (body) =>
+  adminApiRequest('/subscription/revoke', { method: 'POST', body })
 export const postTransferRequest = (body) => apiPost('/transfer/request', body)
 export const postTransferConfirm = (body) => apiPost('/transfer/confirm', body)
 export const postAdminForceTransfer = (body) => adminApiPost('/transfer/admin-force', body)
@@ -570,14 +571,12 @@ export function clearAdminSecurityGateToken() {
   sessionStorage.removeItem(ADMIN_SECURITY_GATE_KEY)
 }
 
-/** Matches optional VITE_ADMIN_API_TOKEN + Bearer session + device identity for cookie/non-cookie clients. */
+/** Bearer session + device identity. The browser never sends a permanent admin API token. */
 export function adminPanelApiHeaders() {
   const h = {
     'Content-Type': 'application/json',
     'X-Admin-Device-Fingerprint': getAdminDeviceFingerprintRaw(),
   }
-  const envToken = String(import.meta.env.VITE_ADMIN_API_TOKEN ?? '').trim()
-  if (envToken) h['X-Admin-Token'] = envToken
   if (typeof localStorage !== 'undefined') {
     const jwt = getAdminSessionToken()
     if (jwt) h.Authorization = `Bearer ${jwt}`

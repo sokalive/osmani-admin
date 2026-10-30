@@ -33,8 +33,6 @@ export function getInstructionVideoIngestToken() {
   return String(
     process.env.INSTRUCTION_VIDEO_INGEST_TOKEN ||
       process.env.NOTIFICATION_IMAGE_INGEST_TOKEN ||
-      process.env.ADMIN_API_TOKEN ||
-      process.env.APP_UPDATE_ADMIN_TOKEN ||
       '',
   ).trim()
 }

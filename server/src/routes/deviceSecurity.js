@@ -1961,7 +1961,7 @@ deviceSecurityRouter.post('/subscription/recover', async (req, res) => {
   }
 })
 
-deviceSecurityRouter.post('/subscription/revoke', async (req, res) => {
+deviceSecurityRouter.post('/subscription/revoke', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ error: 'Database not configured' })

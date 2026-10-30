@@ -3,6 +3,7 @@ import * as billing from '../billingStore.js'
 import { getPool } from '../db/pool.js'
 import * as authStore from '../adminAuthStore.js'
 import { adminAuthAudit } from '../lib/adminAuthAudit.js'
+import { adminOtpDebugHint } from '../lib/adminOtpDebug.js'
 import { signAdminJwt, verifyAdminJwt } from '../lib/adminJwt.js'
 import {
   sendAdminOtpEmail,
@@ -31,7 +32,6 @@ import {
 import {
   clearAdminAuthCookies,
   clearAdminSessionCookie,
-  readAdminDeviceCredential,
   readAdminSessionToken,
   setAdminAuthCookies,
 } from '../lib/adminAuthCookies.js'
@@ -41,8 +41,6 @@ import {
 } from '../lib/adminLoginPin.js'
 import { defaultDeviceName, parseAdminUserAgent } from '../lib/adminUaParse.js'
 import { lookupIpGeo } from '../lib/ipGeoLookup.js'
-import { hashAdminDeviceCredential } from '../lib/adminDeviceCredential.js'
-
 export const adminAuthRouter = Router()
 
 const OTP_PENDING_TYP = 'otp_pending'
@@ -280,7 +278,6 @@ function securityPageGateJwt(userId, email, challengeId) {
 }
 
 function requireAdminSecurityPageGate(req, res, next) {
-  if (req.adminEmergency === true) return next()
   const gate = String(req.headers['x-admin-security-gate'] ?? '').trim()
   const payload = verifyAdminJwt(gate)
   if (
@@ -362,12 +359,14 @@ adminAuthRouter.get('/status', (_req, res) => {
   res.json({
     ok: true,
     panelAuthRequired: isAdminPanelAuthRequired(),
+    legacyTokenFallback: false,
+    trustedInstall: false,
+    permanentTokenGrantsAccess: false,
   })
 })
 
 /**
- * Restore session from HttpOnly session cookie, or re-issue from trusted device credential
- * (login once per trusted device).
+ * Restore an existing session JWT only. A device credential cannot mint a new session.
  */
 adminAuthRouter.get('/session', async (req, res) => {
   try {
@@ -435,63 +434,7 @@ adminAuthRouter.get('/session', async (req, res) => {
       }
     }
 
-    const deviceCred = readAdminDeviceCredential(req)
-    if (!deviceCred || !rawFp) {
-      return res.json({ ok: true, authenticated: false })
-    }
-
-    const credHash = hashAdminDeviceCredential(deviceCred)
-    const device = await authStore.getTrustedDeviceByCredentialHash(credHash)
-    if (!device) {
-      return res.json({ ok: true, authenticated: false })
-    }
-    if (device.blocked === true || device.status === 'BLOCKED') {
-      return res.status(403).json({
-        ok: false,
-        authenticated: false,
-        code: 'DEVICE_BLOCKED',
-        error: 'This device is blocked',
-      })
-    }
-    if (device.revoked_at || device.status === 'REVOKED') {
-      return res.json({ ok: true, authenticated: false, code: 'DEVICE_REVOKED' })
-    }
-    if (device.force_otp_next === true || device.trusted !== true) {
-      return res.json({ ok: true, authenticated: false, code: 'FORCE_OTP' })
-    }
-    if (authStore.isTrustedDeviceExpired(device)) {
-      return res.json({
-        ok: true,
-        authenticated: false,
-        code: 'TRUST_EXPIRED',
-        error: 'Trusted device expired — sign in again',
-      })
-    }
-    if (device.device_fingerprint_hash !== fpHash) {
-      return res.status(401).json({ ok: false, authenticated: false, error: 'Device mismatch' })
-    }
-
-    const user = await authStore.findAdminUserById(device.admin_user_id)
-    if (!user) {
-      return res.json({ ok: true, authenticated: false })
-    }
-
-    await authStore.touchTrustedDeviceLastUsed(device.id)
-    const { token } = await issueSession(res, req, {
-      user,
-      fpHash,
-      deviceRow: device,
-    })
-    adminAuthAudit('session_restore_device_cred', { email: user.email, device_id: device.id })
-    return res.json({
-      ok: true,
-      authenticated: true,
-      email: user.email,
-      emergency: false,
-      deviceId: device.id,
-      trustedExpiresAt: isoDate(device.trusted_expires_at),
-      token,
-    })
+    return res.json({ ok: true, authenticated: false })
   } catch (e) {
     console.error('[admin-auth session]', e)
     res.status(500).json({ ok: false, authenticated: false, error: String(e.message || e) })
@@ -625,10 +568,7 @@ adminAuthRouter.post('/login', async (req, res) => {
       pendingToken,
       email: user.email,
       message: emailed.skipped ? 'OTP generated (email not configured — check server logs / dev only)' : 'OTP sent to email',
-      devOtpHint:
-        process.env.ADMIN_OTP_DEBUG_RETURN === '1' && process.env.NODE_ENV !== 'production'
-          ? otpPlain
-          : undefined,
+      devOtpHint: adminOtpDebugHint(otpPlain),
     })
   } catch (e) {
     console.error('[admin-auth login]', e)
@@ -815,10 +755,7 @@ adminAuthRouter.post('/resend-otp', async (req, res) => {
     return res.json({
       ok: true,
       message: emailed.skipped ? 'OTP regenerated (email skipped)' : 'OTP resent',
-      devOtpHint:
-        process.env.ADMIN_OTP_DEBUG_RETURN === '1' && process.env.NODE_ENV !== 'production'
-          ? otpPlain
-          : undefined,
+      devOtpHint: adminOtpDebugHint(otpPlain),
     })
   } catch (e) {
     console.error('[admin-auth resend-otp]', e)
@@ -1524,24 +1461,18 @@ adminAuthRouter.post('/logout', async (req, res) => {
     const token = readAdminSessionToken(req)
     const payload = token ? verifyAdminJwt(token) : null
     const body = req.body && typeof req.body === 'object' ? req.body : {}
-    // Normal logout ends the session only. Trusted-device credential survives for the
-    // fixed 14-day window unless revoke_device / clear_device_credential is requested.
-    const clearDevice =
-      body.revoke_device === true ||
-      body.clear_device_credential === true ||
-      body.global === true
 
     if (body.global === true && payload?.sub) {
       await authStore.revokeAllSessionsForUser(payload.sub)
+      await authStore.invalidateAllTrustedDeviceCredentials(payload.sub)
     } else if (payload?.jti) {
       await authStore.revokeSessionByJti(payload.jti)
     }
-
-    if (clearDevice) {
-      clearAdminAuthCookies(res, req)
-    } else {
-      clearAdminSessionCookie(res, req)
+    if (payload?.sub && payload?.fp) {
+      await authStore.invalidateTrustedDeviceCredential(payload.sub, payload.fp)
     }
+
+    clearAdminAuthCookies(res, req)
     if (payload?.sub) {
       await authStore.recordSecurityEvent({
         adminUserId: payload.sub,
@@ -1549,10 +1480,10 @@ adminAuthRouter.post('/logout', async (req, res) => {
         result: 'ok',
         ip: clientIp(req),
         userAgent: String(req.headers['user-agent'] ?? ''),
-        metadata: { cleared_device_credential: clearDevice === true },
+        metadata: { cleared_device_credential: true },
       })
     }
-    res.json({ ok: true, clearedDeviceCredential: clearDevice === true })
+    res.json({ ok: true, clearedDeviceCredential: true })
   } catch (e) {
     try {
       clearAdminSessionCookie(res, req)

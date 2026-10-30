@@ -22,7 +22,6 @@ function requireIngestToken(req, res, next) {
   const provided = String(
     req.headers['x-instruction-ingest-token'] ||
       req.headers['x-notification-ingest-token'] ||
-      req.headers['x-admin-token'] ||
       '',
   ).trim()
   if (!provided || provided !== expected) {

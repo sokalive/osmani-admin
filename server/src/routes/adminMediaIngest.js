@@ -17,8 +17,6 @@ function expectedToken() {
   return String(
     process.env.ADMIN_MEDIA_INGEST_TOKEN ||
       process.env.NOTIFICATION_IMAGE_INGEST_TOKEN ||
-      process.env.APP_UPDATE_ADMIN_TOKEN ||
-      process.env.ADMIN_API_TOKEN ||
       '',
   ).trim()
 }
@@ -28,9 +26,7 @@ function requireIngestToken(req, res, next) {
   if (!expected) {
     return res.status(503).json({ ok: false, error: 'Admin media ingest token not configured' })
   }
-  const provided = String(
-    req.headers['x-admin-media-ingest-token'] || req.headers['x-admin-token'] || '',
-  ).trim()
+  const provided = String(req.headers['x-admin-media-ingest-token'] || '').trim()
   if (!provided || provided !== expected) {
     return res.status(401).json({ ok: false, error: 'Unauthorized' })
   }

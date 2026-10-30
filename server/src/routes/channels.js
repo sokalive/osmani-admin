@@ -418,7 +418,7 @@ channelsRouter.post(
       metadata = await collectInstructionVideoMetadata(diskPath, { sizeBytes: req.file.size })
     }
 
-    const uploadedBy = String(req.adminAuth?.email || req.headers['x-admin-token'] || 'admin').trim()
+    const uploadedBy = String(req.adminAuth?.email || 'admin').trim()
 
     const priorPaths = [existing.instructionVideoUrl, existing.url].filter(Boolean)
     for (const prior of priorPaths) {

@@ -1,45 +1,23 @@
 import * as authStore from '../adminAuthStore.js'
 import { verifyAdminJwt } from '../lib/adminJwt.js'
 import { readAdminSessionToken } from '../lib/adminAuthCookies.js'
+import { schedulePrivilegedAudit } from '../lib/privilegedAuditLog.js'
 
-function legacyTokenMatches(req) {
-  const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
-  if (!expected) return false
-  const got = String(req.headers['x-admin-token'] ?? '').trim()
-  return got === expected
-}
-
+/**
+ * Panel login is always required. ADMIN_PANEL_AUTH_REQUIRED=false, ADMIN_TRUSTED_INSTALL,
+ * LUQMAN_VPS, and X-Admin-Token cannot open privileged routes.
+ */
 export function isAdminPanelAuthRequired() {
-  return String(process.env.ADMIN_PANEL_AUTH_REQUIRED ?? '').trim().toLowerCase() === 'true'
+  return true
 }
 
 /**
- * Protects admin APIs.
- * When ADMIN_PANEL_AUTH_REQUIRED=true: Bearer JWT or HttpOnly session cookie (+ device fingerprint),
- * device must be trusted/active; blocked devices get 403 DEVICE_BLOCKED.
- * Optional ADMIN_PANEL_LEGACY_TOKEN_FALLBACK=true allows X-Admin-Token during migration only.
+ * Protects admin APIs with a server session JWT (Authorization bearer or HttpOnly cookie),
+ * a matching device fingerprint, and an active session row.
+ * A permanent X-Admin-Token is never accepted.
  */
 export async function requireAdminPanelAccess(req, res, next) {
   try {
-    if (!isAdminPanelAuthRequired()) {
-      const expected = String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
-      if (!expected) {
-        return res.status(503).json({ ok: false, error: 'ADMIN_API_TOKEN / APP_UPDATE_ADMIN_TOKEN is not configured' })
-      }
-      const got = String(req.headers['x-admin-token'] ?? '').trim()
-      if (got !== expected) {
-        return res.status(403).json({ ok: false, error: 'Invalid admin token' })
-      }
-      return next()
-    }
-
-    const fallback =
-      String(process.env.ADMIN_PANEL_LEGACY_TOKEN_FALLBACK ?? '').trim().toLowerCase() === 'true'
-    if (fallback && legacyTokenMatches(req)) {
-      req.adminAuth = { legacy: true }
-      return next()
-    }
-
     const token = readAdminSessionToken(req)
     if (!token) {
       return res.status(401).json({ ok: false, error: 'Admin session required', code: 'NO_SESSION' })
@@ -78,6 +56,7 @@ export async function requireAdminPanelAccess(req, res, next) {
         emergency: true,
         jti: payload.jti,
       }
+      schedulePrivilegedAudit(req, res)
       return next()
     }
 
@@ -123,6 +102,7 @@ export async function requireAdminPanelAccess(req, res, next) {
       deviceId: row.id,
       jti: payload.jti,
     }
+    schedulePrivilegedAudit(req, res)
     return next()
   } catch (e) {
     return next(e)

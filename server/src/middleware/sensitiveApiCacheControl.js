@@ -52,7 +52,7 @@ export function applySensitiveJsonGetNoStore(req, res, next) {
   if (noStore) {
     res.setHeader('Cache-Control', 'no-store, private, must-revalidate, proxy-revalidate')
     res.setHeader('Pragma', 'no-cache')
-    res.setHeader('Vary', 'Authorization, X-Admin-Token, Origin')
+    res.setHeader('Vary', 'Authorization, Origin')
   }
   next()
 }

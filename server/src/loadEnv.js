@@ -51,15 +51,15 @@ function shouldLoadCutoverEnv() {
 }
 
 /**
- * Trusted-install mode (open dashboard with shared X-Admin-Token only) is OFF by default.
- * It must be opted into explicitly via ADMIN_TRUSTED_INSTALL=1 — Contabo/Render no longer
- * auto-disable interactive email+PIN+OTP login. Production should keep ADMIN_TRUSTED_INSTALL=0
- * and ADMIN_PANEL_AUTH_REQUIRED=true.
+ * Copied-project flags must not disable Osmani admin authentication.
+ * ADMIN_TRUSTED_INSTALL, LUQMAN_VPS, and similar switches are ignored.
  */
-function isTrustedAdminInstall() {
-  const explicit = String(process.env.ADMIN_TRUSTED_INSTALL ?? '').trim().toLowerCase()
-  if (['1', 'true', 'yes', 'on'].includes(explicit)) return true
-  return false
+function copiedProjectAuthBypassRequested() {
+  const keys = ['ADMIN_TRUSTED_INSTALL', 'LUQMAN_VPS', 'LUQMAN_TRUSTED_INSTALL']
+  return keys.some((key) => {
+    const value = String(process.env[key] ?? '').trim().toLowerCase()
+    return ['1', 'true', 'yes', 'on'].includes(value)
+  })
 }
 
 /**
@@ -95,11 +95,15 @@ export function loadProcessEnv() {
     loadEnvFile(filePath, { override: true })
   }
 
-  // Applied after the secret files because server/.env may still carry
-  // ADMIN_PANEL_AUTH_REQUIRED=true from the pre-cutover install.
-  if (isTrustedAdminInstall()) {
-    process.env.ADMIN_PANEL_AUTH_REQUIRED = 'false'
+  // Mandatory session auth. Env files and copied-project flags cannot turn this off.
+  if (copiedProjectAuthBypassRequested()) {
+    console.warn(
+      '[admin-auth] ignored copied-project flag that would disable admin login (LUQMAN_VPS / ADMIN_TRUSTED_INSTALL)',
+    )
   }
+  process.env.ADMIN_PANEL_AUTH_REQUIRED = 'true'
+  process.env.ADMIN_PANEL_LEGACY_TOKEN_FALLBACK = 'false'
+  process.env.ADMIN_TRUSTED_INSTALL = '0'
 
   return [...loadedPaths]
 }

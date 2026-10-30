@@ -4,14 +4,13 @@
  */
 import crypto from 'node:crypto'
 
-const DEFAULT_PASSWORD = '3030'
-
 export function getAdminSensitiveActionPassword() {
-  return String(process.env.ADMIN_SENSITIVE_ACTION_PASSWORD ?? DEFAULT_PASSWORD).trim()
+  return String(process.env.ADMIN_SENSITIVE_ACTION_PASSWORD ?? '').trim()
 }
 
 export function verifyAdminSensitiveActionPassword(input) {
   const expected = getAdminSensitiveActionPassword()
+  if (!expected) return false
   const a = crypto.createHash('sha256').update(Buffer.from(expected, 'utf8')).digest()
   const b = crypto.createHash('sha256').update(Buffer.from(String(input ?? ''), 'utf8')).digest()
   try {

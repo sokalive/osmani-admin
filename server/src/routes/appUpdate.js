@@ -347,22 +347,6 @@ export function invalidateAppSettingsCache() {
   _appSettingsCacheAt = 0
 }
 
-function requireAdminToken(req, res, next) {
-  const expected =
-    String(process.env.APP_UPDATE_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || '').trim()
-  if (!expected) {
-    return res.status(503).json({ ok: false, error: 'APP_UPDATE_ADMIN_TOKEN is not configured' })
-  }
-  const bearer = String(req.headers.authorization || '')
-    .replace(/^bearer\s+/i, '')
-    .trim()
-  const header = String(req.headers['x-admin-token'] || '').trim()
-  const provided = bearer || header
-  if (!provided || provided !== expected) {
-    return res.status(403).json({ ok: false, error: 'admin token required' })
-  }
-  return next()
-}
 
 function validateHttpsUrl(value) {
   const u = text(value, 4000)
@@ -867,7 +851,7 @@ appUpdateRouter.post('/update-check', async (req, res) => {
   }
 })
 
-appUpdateRouter.post('/verify-apk-hash', requireAdminToken, async (req, res) => {
+appUpdateRouter.post('/verify-apk-hash', requireAdminPanelAccess, async (req, res) => {
   try {
     const pool = getPool()
     if (!pool) return res.status(503).json({ ok: false, error: 'Database not configured' })

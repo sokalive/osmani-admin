@@ -1,8 +1,5 @@
 /**
- * Regression: Contabo and Render keep interactive login by default.
- * Only ADMIN_TRUSTED_INSTALL=1 opens the dashboard without panel login.
- * Disabling the login screen must never disable X-Admin-Token enforcement.
- *
+ * Copied-project flags and a shared admin token cannot disable Osmani admin login.
  * Usage: node server/scripts/regression-trusted-admin-install.mjs
  */
 import { spawnSync } from 'node:child_process'
@@ -19,7 +16,6 @@ function check(name, actual, expected) {
   if (!ok) failures.push(name)
 }
 
-/** Boot loadEnv.js in a child process so each case gets a clean process.env. */
 function resolvePanelAuth(env) {
   const res = spawnSync(
     process.execPath,
@@ -30,7 +26,15 @@ function resolvePanelAuth(env) {
     {
       cwd: serverRoot,
       encoding: 'utf8',
-      env: { ...process.env, ADMIN_PANEL_AUTH_REQUIRED: 'true', OSMANI_VPS: '', RENDER: '', ADMIN_TRUSTED_INSTALL: '', ...env },
+      env: {
+        ...process.env,
+        ADMIN_PANEL_AUTH_REQUIRED: 'true',
+        OSMANI_VPS: '',
+        RENDER: '',
+        ADMIN_TRUSTED_INSTALL: '',
+        LUQMAN_VPS: '',
+        ...env,
+      },
     },
   )
   if (res.status !== 0) throw new Error(`loadEnv probe failed: ${res.stderr}`)
@@ -39,15 +43,13 @@ function resolvePanelAuth(env) {
 
 check('Contabo VPS keeps login required', resolvePanelAuth({ OSMANI_VPS: '1' }), 'true')
 check('Render keeps login required', resolvePanelAuth({ RENDER: 'true' }), 'true')
-check('Contabo and Render agree', resolvePanelAuth({ OSMANI_VPS: '1' }), resolvePanelAuth({ RENDER: 'true' }))
-check('Untrusted host keeps interactive login', resolvePanelAuth({}), 'true')
-check('ADMIN_TRUSTED_INSTALL=1 opens dashboard', resolvePanelAuth({ ADMIN_TRUSTED_INSTALL: '1' }), 'false')
-check('ADMIN_TRUSTED_INSTALL=1 on Contabo opens dashboard', resolvePanelAuth({ OSMANI_VPS: '1', ADMIN_TRUSTED_INSTALL: '1' }), 'false')
-check('ADMIN_TRUSTED_INSTALL=0 keeps login on Render', resolvePanelAuth({ RENDER: 'true', ADMIN_TRUSTED_INSTALL: '0' }), 'true')
-check('ADMIN_TRUSTED_INSTALL=0 keeps login on Contabo', resolvePanelAuth({ OSMANI_VPS: '1', ADMIN_TRUSTED_INSTALL: '0' }), 'true')
+check('LUQMAN_VPS cannot disable login', resolvePanelAuth({ LUQMAN_VPS: '1', ADMIN_PANEL_AUTH_REQUIRED: 'false' }), 'true')
+check('ADMIN_TRUSTED_INSTALL=1 cannot disable login', resolvePanelAuth({ ADMIN_TRUSTED_INSTALL: '1' }), 'true')
+check('Trusted install on Contabo cannot disable login', resolvePanelAuth({ OSMANI_VPS: '1', ADMIN_TRUSTED_INSTALL: '1' }), 'true')
+check('ADMIN_TRUSTED_INSTALL=0 keeps login', resolvePanelAuth({ ADMIN_TRUSTED_INSTALL: '0' }), 'true')
 
-// Trusted install must still reject requests without a valid X-Admin-Token.
 process.env.ADMIN_PANEL_AUTH_REQUIRED = 'false'
+process.env.ADMIN_PANEL_LEGACY_TOKEN_FALLBACK = 'true'
 process.env.ADMIN_API_TOKEN = 'regression-token'
 const { requireAdminPanelAccess } = await import('../src/middleware/adminPanelAuthGate.js')
 
@@ -55,6 +57,7 @@ function runGate(headers) {
   return new Promise((resolve) => {
     const res = {
       statusCode: 200,
+      locals: {},
       status(code) {
         this.statusCode = code
         return this
@@ -62,14 +65,15 @@ function runGate(headers) {
       json(body) {
         resolve({ status: this.statusCode, body })
       },
+      on() {},
     }
-    void requireAdminPanelAccess({ headers }, res, () => resolve({ status: 200, body: { passed: true } }))
+    void requireAdminPanelAccess({ headers, method: 'GET' }, res, () => resolve({ status: 200, body: { passed: true } }))
   })
 }
 
-check('missing token rejected', (await runGate({})).status, 403)
-check('wrong token rejected', (await runGate({ 'x-admin-token': 'nope' })).status, 403)
-check('valid token accepted', (await runGate({ 'x-admin-token': 'regression-token' })).status, 200)
+check('missing session rejected', (await runGate({})).status, 401)
+check('wrong token rejected', (await runGate({ 'x-admin-token': 'nope' })).status, 401)
+check('legacy token rejected', (await runGate({ 'x-admin-token': 'regression-token' })).status, 401)
 
 if (failures.length) {
   console.error(`\n${failures.length} regression check(s) failed: ${failures.join(', ')}`)

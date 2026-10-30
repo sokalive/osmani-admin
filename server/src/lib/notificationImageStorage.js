@@ -43,12 +43,7 @@ export function isNotificationImageStorageHost() {
 }
 
 export function getNotificationImageIngestToken() {
-  return String(
-    process.env.NOTIFICATION_IMAGE_INGEST_TOKEN ||
-      process.env.ADMIN_API_TOKEN ||
-      process.env.APP_UPDATE_ADMIN_TOKEN ||
-      '',
-  ).trim()
+  return String(process.env.NOTIFICATION_IMAGE_INGEST_TOKEN || '').trim()
 }
 
 export function getNotificationImageVpsIngestUrl() {
@@ -171,7 +166,7 @@ export async function uploadNotificationImageToVps(buffer, filename, { ext = 'jp
     throw new Error('NOTIFICATION_IMAGE_VPS_INGEST_URL is not configured')
   }
   if (!token) {
-    throw new Error('NOTIFICATION_IMAGE_INGEST_TOKEN (or ADMIN_API_TOKEN) is not configured')
+    throw new Error('NOTIFICATION_IMAGE_INGEST_TOKEN is not configured')
   }
 
   const name = path.basename(String(filename || '').trim())

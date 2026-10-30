@@ -33,7 +33,7 @@ jobs:
           host: 144.91.117.90
           username: root
           key: ${{ secrets.CONTABO_SSH_KEY }}
-          command_timeout: 8m
+          command_timeout: 15m
           script: |
             set -euo pipefail
             ROOT=/var/www/osmani-admin-api
@@ -44,7 +44,13 @@ jobs:
             echo "commit=$COMMIT"
             export OSMANI_GIT_COMMIT="$COMMIT"
             export OSMANI_ADMIN_ROOT="$ROOT"
+            node "$ROOT/deploy/contabo/enforce-admin-auth-env.mjs" "$ROOT"
             node "$ROOT/deploy/contabo/sync-database-url-env.cjs" "$ROOT" >/dev/null
+            if ! npx vite --version >/dev/null 2>&1; then
+              npm ci --include=dev
+            fi
+            VITE_API_BASE_URL= npm run build
+            test -f "$ROOT/dist/index.html"
             pm2 delete osmani-admin-api 2>/dev/null || true
             pm2 start "$ROOT/deploy/contabo/ecosystem.config.cjs" --update-env
             pm2 save
